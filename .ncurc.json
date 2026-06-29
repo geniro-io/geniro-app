@@ -1,0 +1,7 @@
+{
+  "upgrade": true,
+  "workspaces": true,
+  "root": true,
+  "dep": "prod,dev,optional",
+  "packageManager": "pnpm"
+}

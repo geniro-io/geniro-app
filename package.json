@@ -1,0 +1,43 @@
+{
+  "name": "@geniro/app-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "geniro — local-first macOS app for composing and running a DAG of CLI coding agents",
+  "scripts": {
+    "build": "turbo run build",
+    "check-types": "turbo run check-types",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint:fix",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:cov": "turbo run test:cov",
+    "full-check": "pnpm -s build && pnpm -s check-types && pnpm -s lint && pnpm -s test:unit",
+    "dev": "pnpm --filter @geniro/shell dev",
+    "daemon:dev": "pnpm --filter @packages/daemon dev",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "turbo": "^2.9.16"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.6",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.9.2",
+    "eslint": "^10.4.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-simple-import-sort": "^13.0.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.1",
+    "unplugin-swc": "^1.5.9",
+    "vitest": "^4.1.8"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

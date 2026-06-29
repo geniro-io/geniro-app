@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["src/**/*", "electron.vite.config.ts"],
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "paths": {
+      "@packages/types": ["../../packages/types/src/index.ts"],
+      "@packages/*": ["../../packages/*/src"]
+    }
+  }
+}

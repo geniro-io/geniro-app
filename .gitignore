@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+.pnp.*
+
+# build output
+dist/
+out/
+release/
+*.tsbuildinfo
+.turbo/
+
+# test / coverage
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+
+# env / local secrets (never commit)
+.env
+.env.*
+
+# editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# geniro plugin transient working files (durable spec/milestones stay tracked)
+.geniro/planning/*/state.md
+.geniro/planning/*/.kr-out.md
+.geniro/planning/*/.ce-out.md
+.geniro/planning/*/.tr-out.md
+.claude/worktrees/
+.claude/settings.local.json

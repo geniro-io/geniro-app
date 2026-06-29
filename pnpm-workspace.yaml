@@ -1,0 +1,22 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  electron: true
+  '@swc/core': true
+  '@scarf/scarf': false # install-time analytics — disabled (no telemetry)
+
+# Dependencies whose install/build scripts are allowed to run. pnpm blocks
+# build scripts by default; native and binary-downloading deps must opt in here.
+onlyBuiltDependencies:
+  - better-sqlite3 # native C++ addon (node-gyp / prebuild-install)
+  - electron # postinstall downloads the Electron binary
+  - esbuild # postinstall installs the platform binary (used by vite)
+
+# Force a single fastify so NestJS (platform-fastify) and our direct dep share
+# one copy — otherwise the @fastify/websocket type augmentation doesn't unify.
+overrides:
+  fastify: 5.9.0

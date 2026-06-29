@@ -1,0 +1,48 @@
+{
+  "name": "@packages/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "geniro local engine: NestJS (apps/api-style) loopback daemon over @packages/http-server + mikro-orm SQLite",
+  "main": "dist/main.js",
+  "bin": {
+    "geniro-daemon": "dist/main.js"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file .swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
+    "prebuild": "rm -rf ./dist || true",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "check-types": "tsc --noEmit -p tsconfig.build.json",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "test": "vitest run --passWithNoTests",
+    "test:unit": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.2.0",
+    "@mikro-orm/core": "^7.1.4",
+    "@mikro-orm/decorators": "^7.1.4",
+    "@mikro-orm/sqlite": "^7.1.4",
+    "@nestjs/common": "^11.1.27",
+    "@nestjs/core": "^11.1.27",
+    "@nestjs/platform-fastify": "^11.1.27",
+    "@packages/common": "workspace:*",
+    "@packages/http-server": "workspace:*",
+    "@packages/metrics": "workspace:*",
+    "@packages/mikroorm": "workspace:*",
+    "@packages/types": "workspace:*",
+    "fastify": "^5.9.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@swc/cli": "^0.8.1",
+    "@swc/core": "^1.15.43",
+    "@types/node": "^25.9.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

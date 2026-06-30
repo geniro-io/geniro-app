@@ -22,15 +22,19 @@ export class ItemDao extends BaseDao<Item> {
   ): Promise<Item[]> {
     return this.getRepo(txEm).find(
       { runId, seq: { $gt: afterSeq } },
-      { orderBy: { seq: 'asc' } },
+      // Read-only replay path: skip identity-map tracking so a long transcript
+      // doesn't accumulate managed entities in the forked EM.
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
     );
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
+    // Project ONLY `seq` — this runs on every sendMessage; hydrating the full
+    // newest Item (incl. its text payload) just to read one integer is wasteful.
     const last = await this.getRepo(txEm).findOne(
       { runId },
-      { orderBy: { seq: 'desc' } },
+      { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return last ? last.seq : -1;
   }

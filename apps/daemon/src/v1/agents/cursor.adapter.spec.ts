@@ -128,6 +128,12 @@ describe('mapCursorMessage', () => {
     expect(mapCursorMessage(null)).toEqual([]);
     expect(mapCursorMessage([1, 2, 3])).toEqual([]);
   });
+
+  it('degrades to a fresh session when a system event carries no recognized key', () => {
+    // No session/chat/thread id under any known key → no session event, so the
+    // turn starts fresh instead of resuming a bogus id.
+    expect(mapCursorMessage({ type: 'system', subtype: 'init' })).toEqual([]);
+  });
 });
 
 describe('CursorExecutor', () => {
@@ -177,6 +183,18 @@ describe('CursorExecutor', () => {
     expect(captured.args).toEqual(
       expect.arrayContaining(['--resume', 'c-prev']),
     );
+  });
+
+  it('puts the end-of-options separator before a dash-leading prompt', () => {
+    const { spawn, captured } = fakeSpawn();
+    new CursorExecutor({ spawn }).start(
+      { prompt: '--help', cwd: '/proj' },
+      () => {},
+    );
+    // `--` immediately precedes the prompt so the CLI treats `--help` as prompt
+    // text, not as one of its own flags.
+    expect(captured.args?.at(-2)).toBe('--');
+    expect(captured.args?.at(-1)).toBe('--help');
   });
 
   it('fails fast with an error event on a non-zero exit', async () => {

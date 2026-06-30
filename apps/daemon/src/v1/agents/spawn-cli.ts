@@ -9,6 +9,8 @@ import { NdjsonBuffer } from './ndjson-buffer';
  * interface — the real `spawn` result satisfies it structurally.
  */
 export interface SpawnedProcess {
+  /** Child PID. Doubles as the process-group id when spawned `detached`. */
+  readonly pid?: number;
   readonly stdout: NodeJS.ReadableStream | null;
   readonly stderr: NodeJS.ReadableStream | null;
   readonly stdin: NodeJS.WritableStream | null;
@@ -26,9 +28,18 @@ export type SpawnFn = (
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ) => SpawnedProcess;
 
-/** Default: node's `spawn` with all three stdio streams piped. */
+/**
+ * Default: node's `spawn` with all three stdio streams piped, and `detached` so
+ * the child becomes its own process-group leader. That lets {@link runHeadlessCli}
+ * signal the WHOLE group on cancel/shutdown (`process.kill(-pid, …)`) and reap the
+ * tool/MCP grandchildren a coding agent forks — a single-PID kill would orphan them.
+ */
 export const defaultSpawn: SpawnFn = (command, args, options) =>
-  nodeSpawn(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
+  nodeSpawn(command, args, {
+    ...options,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
+  });
 
 export interface RunCliOptions {
   command: string;
@@ -55,6 +66,37 @@ function errorMessage(err: unknown): string {
 
 function toUtf8(chunk: string | Buffer): string {
   return typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+}
+
+/** Bytes of a child's stderr retained for the failure message on a non-zero exit. */
+const STDERR_TAIL_BYTES = 2000;
+
+/** Grace after a SIGTERM cancel before the process group is force-killed (SIGKILL). */
+const SIGKILL_GRACE_MS = 2000;
+
+/**
+ * Signal the child's entire process group so the tool/MCP grandchildren a coding
+ * agent forks die with it. The child is spawned `detached` (a group leader), so
+ * its PID doubles as the group id and `process.kill(-pid, …)` reaches every
+ * descendant. Falls back to a direct `child.kill` when the PID is unavailable
+ * (e.g. a test fake) or the group is already gone — never throws.
+ */
+function killProcessTree(child: SpawnedProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (typeof pid === 'number' && pid > 0) {
+    try {
+      process.kill(-pid, signal); // negative pid → the whole process group
+      return;
+    } catch {
+      // Group already exited, or the child never became a leader — fall through
+      // to a best-effort direct kill.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Process already gone — nothing to kill.
+  }
 }
 
 /**
@@ -88,12 +130,17 @@ export function runHeadlessCli(opts: RunCliOptions): ExecutorHandle {
 
   let settled = false;
   let resolveDone!: () => void;
+  let killTimer: ReturnType<typeof setTimeout> | null = null;
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
   const settle = (): void => {
     if (!settled) {
       settled = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       resolveDone();
     }
   };
@@ -153,7 +200,7 @@ export function runHeadlessCli(opts: RunCliOptions): ExecutorHandle {
   let stderrTail = '';
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string | Buffer) => {
-    stderrTail = (stderrTail + toUtf8(chunk)).slice(-2000);
+    stderrTail = (stderrTail + toUtf8(chunk)).slice(-STDERR_TAIL_BYTES);
   });
 
   child.on('error', (err: Error) => {
@@ -226,12 +273,21 @@ export function runHeadlessCli(opts: RunCliOptions): ExecutorHandle {
   return {
     done,
     cancel: () => {
-      if (!settled) {
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          /* process already gone — nothing to kill */
-        }
+      if (settled) {
+        return;
+      }
+      // Kill the whole process group — the CLI plus any tool/MCP grandchildren —
+      // not just the direct child a single-PID SIGTERM would reach. Escalate to
+      // SIGKILL if the group is still alive after the grace window.
+      killProcessTree(child, 'SIGTERM');
+      if (!killTimer) {
+        killTimer = setTimeout(() => {
+          killTimer = null;
+          if (!settled) {
+            killProcessTree(child, 'SIGKILL');
+          }
+        }, SIGKILL_GRACE_MS);
+        killTimer.unref?.();
       }
     },
   };

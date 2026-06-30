@@ -203,7 +203,10 @@ export interface CursorExecutorOptions {
  * reads it from argv, not stdin), so stdin is closed immediately — this also
  * prevents the CLI from dropping into its interactive login TTY when
  * unauthenticated; it fails fast instead, surfacing a non-zero exit as an error
- * event. `CURSOR_API_KEY` is inherited from the daemon's environment.
+ * event. The Cursor key is NOT inherited from the daemon's environment —
+ * `spawn-cli` strips every `GENIRO_`-prefixed var (including `GENIRO_CURSOR_API_KEY`)
+ * from the child env, and this adapter re-injects it as `CURSOR_API_KEY` for its
+ * own child ONLY (see {@link CursorExecutor.start}).
  */
 export class CursorExecutor implements Executor {
   readonly kind = 'cursor-agent' as const;
@@ -221,8 +224,9 @@ export class CursorExecutor implements Executor {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
-    // Positional prompt last.
-    args.push(input.prompt);
+    // End-of-options separator before the positional prompt, so a prompt that
+    // starts with `-`/`--` is taken as prompt text rather than parsed as a flag.
+    args.push('--', input.prompt);
 
     // The daemon receives the Keychain-sourced Cursor key as GENIRO_CURSOR_API_KEY
     // (a GENIRO_-prefixed var that spawn-cli strips from every child env). Re-inject

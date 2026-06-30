@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent } from './executor.types';
 import type { SpawnedProcess, SpawnFn } from './spawn-cli';
@@ -137,5 +137,96 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
         spawn,
       }),
     ).not.toThrow();
+  });
+});
+
+describe('runHeadlessCli process-group cancellation', () => {
+  it('signals the whole process group on cancel and escalates to SIGKILL', async () => {
+    // The child is spawned `detached` (a group leader), so cancel must signal the
+    // GROUP (`process.kill(-pid)`) to reap the tool/MCP grandchildren a coding
+    // agent forks — a single-PID kill would orphan them — and force-kill the
+    // group if SIGTERM doesn't land within the grace window.
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      const child = new FakeChild();
+      Object.defineProperty(child, 'pid', { value: 4242 });
+      const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
+
+      const handle = runHeadlessCli({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        mapper: noopMapper,
+        onEvent: () => {},
+        spawn,
+      });
+
+      handle.cancel();
+      expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+
+      // Still alive after the grace window → escalate to a group SIGKILL.
+      vi.advanceTimersByTime(2000);
+      expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+
+      child.emit('close', null, 'SIGKILL');
+      await handle.done;
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('runHeadlessCli stream edge cases', () => {
+  it('flushes a final stdout line with no trailing newline on close', async () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const mapper = (obj: unknown): AgentEvent[] =>
+      obj &&
+      typeof obj === 'object' &&
+      (obj as { type?: string }).type === 'result'
+        ? [{ type: 'turn_complete', usage: null, stopReason: 'end_turn' }]
+        : [];
+
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    // Final result line arrives with NO trailing newline — the buffer must flush
+    // it on close rather than dropping the turn's terminal event.
+    child.stdout.emitData('{"type":"result","is_error":false}');
+    child.emit('close', 0, null);
+    await handle.done;
+
+    expect(events).toEqual([
+      { type: 'turn_complete', usage: null, stopReason: 'end_turn' },
+    ]);
+  });
+
+  it('surfaces an async stdin error (EPIPE) as a terminal error and settles', async () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinPayload: '{"type":"user"}\n',
+      mapper: noopMapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    child.stdin.emit('error', new Error('write EPIPE'));
+    await handle.done;
+
+    expect(events).toEqual([
+      { type: 'error', message: 'claude stdin error: write EPIPE' },
+    ]);
   });
 });

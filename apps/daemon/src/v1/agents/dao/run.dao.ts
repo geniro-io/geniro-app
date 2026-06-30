@@ -17,4 +17,12 @@ export class RunDao extends BaseDao<Run> {
       { orderBy: { createdAt: 'desc' } },
     );
   }
+
+  /**
+   * Chat runs stuck in a non-terminal `running` state — used by the boot-time
+   * reconcile to close runs a crash / SIGKILL / restart left mid-turn.
+   */
+  async listRunningChats(txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find({ workflowId: null, status: 'running' });
+  }
 }

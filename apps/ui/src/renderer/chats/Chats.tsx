@@ -138,6 +138,18 @@ export function Chats({
   // Highest seq rendered for the active run — the replay cursor used to fetch
   // only the items missed during a disconnect.
   const lastSeqRef = useRef(-1);
+  // Mirror `runs` into a ref so the stable activateRun callback can read the
+  // active run's current status without being re-created on every list change.
+  const runsRef = useRef<ChatRun[]>([]);
+  useEffect(() => {
+    runsRef.current = runs;
+  }, [runs]);
+  // True once a terminal item has been seen for the active run since the last
+  // activateRun. Guards the post-replay streaming derive from re-arming Stop on a
+  // turn that already ended — e.g. a terminal WS item that lands during the
+  // history fetch while the cached run.status is still 'running' and the history
+  // snapshot predates that terminal item.
+  const sawTerminalRef = useRef(false);
 
   const addItem = useCallback((item: ChatItem): void => {
     if (item.runId !== activeRunIdRef.current) {
@@ -153,6 +165,7 @@ export function Chats({
       lastSeqRef.current = item.seq;
     }
     if (TERMINAL_KINDS.has(item.kind)) {
+      sawTerminalRef.current = true;
       setStreaming(false);
     }
   }, []);
@@ -165,6 +178,7 @@ export function Chats({
       }
       activeRunIdRef.current = runId;
       lastSeqRef.current = -1;
+      sawTerminalRef.current = false;
       setActiveRunId(runId);
       setItems([]);
       setStreaming(false);
@@ -175,6 +189,19 @@ export function Chats({
       try {
         const history = await chatApi.getHistory(runId);
         history.forEach(addItem);
+        // Reconnecting/switching to an in-flight run must show the working state
+        // (Stop), not an enabled Send that a second message would race into a
+        // RUN_BUSY. Derive it from the run's status + whether the replayed
+        // transcript already ended on a terminal item.
+        const run = runsRef.current.find((r) => r.id === runId);
+        const last = history.at(-1);
+        if (
+          run?.status === 'running' &&
+          !sawTerminalRef.current &&
+          (!last || !TERMINAL_KINDS.has(last.kind))
+        ) {
+          setStreaming(true);
+        }
       } catch (err) {
         setError(String(err));
       }
@@ -276,11 +303,19 @@ export function Chats({
       return;
     }
     try {
-      await chatApi.cancel(runId);
+      const { cancelled } = await chatApi.cancel(runId);
+      // A live/claimed turn was cancelled → its terminal item arrives over WS and
+      // clears the working state. `cancelled: false` means nothing was in flight
+      // (the turn already finished), so clear it here rather than stay on Stop.
+      if (!cancelled) {
+        setStreaming(false);
+      }
     } catch (err) {
       setError(String(err));
     }
   }, [chatApi]);
+
+  const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
   return (
     <div className="chats">
@@ -289,7 +324,7 @@ export function Chats({
           <select
             value={agentKind}
             onChange={(event) => setAgentKind(event.target.value as CliKind)}
-            aria-label="Agent">
+            aria-label="Agent for new chat">
             {CLI_KINDS.map((kind) => (
               <option key={kind} value={kind}>
                 {kind}
@@ -308,7 +343,16 @@ export function Chats({
               <li
                 key={run.id}
                 className={run.id === activeRunId ? 'active' : ''}
-                onClick={() => void activateRun(run.id)}>
+                role="button"
+                tabIndex={0}
+                aria-current={run.id === activeRunId ? true : undefined}
+                onClick={() => void activateRun(run.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    void activateRun(run.id);
+                  }
+                }}>
                 <span className="chats-list-title">
                   {run.title ?? run.agentKind ?? 'chat'}
                 </span>
@@ -322,6 +366,11 @@ export function Chats({
       <section className="chats-main">
         {projectFolder && (
           <div className="chats-cwd muted">cwd: {projectFolder}</div>
+        )}
+        {activeRun?.agentKind && (
+          <div className="chats-agent-badge muted">
+            agent: {activeRun.agentKind}
+          </div>
         )}
         <div className="transcript">
           {activeRunId === null ? (
@@ -339,6 +388,7 @@ export function Chats({
         <div className="composer">
           <textarea
             value={input}
+            aria-label="Message the agent"
             placeholder={streaming ? 'Agent is working…' : 'Message the agent…'}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {

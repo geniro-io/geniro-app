@@ -122,6 +122,50 @@ export class ChatService {
     private readonly cursor: CursorExecutor,
   ) {}
 
+  /**
+   * Reconcile chat runs left `running` by a crash / SIGKILL / daemon restart
+   * mid-turn. The in-process finalizer and the graceful-SIGTERM shutdown hook are
+   * the only paths that flip a turn to a terminal status, and the UI's SIGKILL
+   * escalation bypasses both — so a killed daemon leaves the run permanently
+   * `running` with a dangling non-terminal transcript. On boot, any `running`
+   * chat run with no live registry handle is closed: a synthetic terminal `error`
+   * item so the transcript doesn't dangle, and the run is marked `failed`.
+   *
+   * Called from `main.ts` AFTER the schema sync (not via an OnApplicationBootstrap
+   * hook, which fires before the additive `schema.update` and would query tables
+   * that don't exist yet on a fresh install).
+   */
+  async reconcileOrphanedRuns(): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const stale = await this.runDao.listRunningChats(em);
+      let reconciled = 0;
+      for (const run of stale) {
+        if (this.registry.has(run.id)) {
+          continue; // an in-flight turn legitimately owns this run
+        }
+        const seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
+        await this.persist(em, run.id, seq, 'error', null, {
+          message:
+            'run interrupted — the daemon stopped before this turn finished',
+        });
+        await this.runDao.updateById(run.id, { status: 'failed' }, em);
+        reconciled += 1;
+      }
+      if (reconciled > 0) {
+        this.logger.warn(
+          `reconciled ${reconciled} orphaned running chat run(s) to failed on boot`,
+        );
+      }
+    } catch (err) {
+      // Best-effort cleanup — never block daemon boot (e.g. a fresh DB whose
+      // schema sync hasn't created the tables yet has nothing to reconcile).
+      this.logger.error(
+        `boot reconcile of orphaned running runs failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   async createChat(input: {
     agentKind: AgentKind;
     cwd: string;
@@ -268,8 +312,10 @@ export class ChatService {
             );
             const status = terminalStatus(event);
             if (status) {
-              sawTerminal = true;
               await this.runDao.updateById(runId, { status }, em);
+              // Set only after the write succeeds: if it throws, the finalizer
+              // still writes a synthetic completion rather than leaving 'running'.
+              sawTerminal = true;
             }
           });
         },
@@ -289,7 +335,11 @@ export class ChatService {
             });
             await this.runDao
               .updateById(runId, { status: 'completed' }, em)
-              .catch(() => undefined);
+              .catch((err: unknown) => {
+                this.logger.error(
+                  `run ${runId} synthetic-completion status write failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
           }
         })
         .catch((err: unknown) => {

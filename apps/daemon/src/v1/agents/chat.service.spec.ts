@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -52,6 +52,12 @@ class FakeRunDao {
   }
   async listChats(): Promise<Run[]> {
     return [...this.runs.values()];
+  }
+  async listRunningChats(): Promise<Run[]> {
+    // Mirrors the real query's chat-only scoping (workflowId null).
+    return [...this.runs.values()].filter(
+      (run) => run.status === 'running' && run.workflowId === null,
+    );
   }
 }
 
@@ -252,5 +258,80 @@ describe('ChatService', () => {
   it('rejects sendMessage for an unknown run', async () => {
     const { service } = setup();
     await expect(service.sendMessage('nope', 'hi')).rejects.toThrow();
+  });
+
+  it('maps an error event to failed, releases the slot, and accepts a follow-up send', async () => {
+    const { service, runDao, registry, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'error', message: 'boom' });
+    claude.finish();
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+    expect(registry.has(run.id)).toBe(false);
+    // Slot released → the next send is NOT rejected RUN_BUSY.
+    await expect(service.sendMessage(run.id, 'again')).resolves.toMatchObject({
+      role: 'user',
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('maps a turn_cancelled event to cancelled status', async () => {
+    const { service, runDao, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+  });
+
+  it('cancel() cancels the in-flight handle and reports it; an unknown run throws', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'go'); // turn in flight, registered
+    const started = claude.start.mock.results[0]?.value as {
+      cancel: ReturnType<typeof vi.fn>;
+    };
+
+    await expect(service.cancel(run.id)).resolves.toEqual({ cancelled: true });
+    expect(started.cancel).toHaveBeenCalledOnce();
+
+    await expect(service.cancel('nope')).rejects.toThrow();
+
+    claude.finish();
+    await drain();
+  });
+
+  it('createChat rejects a relative cwd and a path that is not a directory', async () => {
+    const { service } = setup();
+    await expect(
+      service.createChat({ agentKind: 'claude', cwd: 'relative/path' }),
+    ).rejects.toThrow();
+
+    const filePath = join(dir, 'not-a-dir.txt');
+    writeFileSync(filePath, 'x');
+    await expect(
+      service.createChat({ agentKind: 'claude', cwd: filePath }),
+    ).rejects.toThrow();
+  });
+
+  it('reconciles an orphaned running run to failed with a terminal item on boot', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    // Simulate a crash / SIGKILL mid-turn: left running, no registry handle.
+    await runDao.updateById(run.id, { status: 'running' });
+
+    await service.reconcileOrphanedRuns();
+
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+    const items = await itemDao.getByRun(run.id);
+    expect(items.at(-1)?.kind).toBe('error');
   });
 });

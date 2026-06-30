@@ -77,7 +77,7 @@ bundled Node, so its native `better-sqlite3` must be built for Electron's ABI
 
 ## Requirements
 
-macOS · Node ≥ 24 · pnpm 10 (via `corepack`) · Xcode Command Line Tools (for the
+macOS · Node ≥ 24 · pnpm 11 (via `corepack`) · Xcode Command Line Tools (for the
 native `better-sqlite3` build). Agent CLIs (`claude`, `cursor-agent`) are
 detected during onboarding; they're driven headlessly in M2.
 

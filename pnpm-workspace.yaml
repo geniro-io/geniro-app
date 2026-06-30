@@ -2,16 +2,32 @@ packages:
   - apps/*
   - packages/*
 
-# Dependencies whose install/build scripts pnpm is allowed to run. pnpm blocks
-# build scripts by default; only the native / binary-downloading deps below opt
-# in. Anything not listed (e.g. @scarf/scarf telemetry) never runs its scripts.
-onlyBuiltDependencies:
-  - '@swc/core' # postinstall links the platform-native swc binary
-  - better-sqlite3 # native C++ addon (node-gyp / prebuild-install)
-  - electron # postinstall downloads the Electron binary
-  - esbuild # postinstall installs the platform binary (used by vite)
+# Flat node_modules — the well-trodden layout for Electron + native modules
+# (electron-rebuild, electron-builder, and asar packaging all assume hoisting).
+# pnpm 11 reads this from here, NOT from .npmrc.
+nodeLinker: hoisted
+
+# React 19 / Electron toolchains carry loose peer ranges; don't fail install.
+strictPeerDependencies: false
+
+# Build scripts pnpm is allowed to run. pnpm blocks them by default; the native
+# / binary-downloading deps below opt in (true). @scarf/scarf telemetry stays
+# false. (pnpm 11 replaced the `onlyBuiltDependencies` allowlist array with this
+# per-package true/false map.)
+allowBuilds:
+  '@scarf/scarf': false
+  '@swc/core': true # postinstall links the platform-native swc binary
+  better-sqlite3: true # native C++ addon (node-gyp / prebuild-install)
+  electron: true # postinstall downloads the Electron binary
+  esbuild: true # postinstall installs the platform binary (used by vite)
 
 # Force a single fastify so NestJS (platform-fastify) and our direct dep share
 # one copy — otherwise the @fastify/websocket type augmentation doesn't unify.
 overrides:
   fastify: 5.9.0
+
+# pnpm 11 quarantines packages published within the last ~24h by default
+# (minimumReleaseAge). This repo deliberately tracks bleeding-edge latest deps
+# (see scripts/upgrade.sh) — fundamentally incompatible with a release-age
+# quarantine — so it is disabled here. Bump to e.g. 1440 (24h) to re-enable.
+minimumReleaseAge: 0

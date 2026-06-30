@@ -1,0 +1,125 @@
+name: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'develop'
+  workflow_dispatch:
+
+env:
+  # The single releasable artifact is the Electron app (@geniro/ui); the daemon
+  # is bundled inside it and the @packages/* are private. semantic-release tags
+  # it as `@geniro/<APP_NAME>@x.y.z` (see scripts/up-versions.sh + cliff.toml).
+  APP_NAME: ui
+  TAG_PREFIX: geniro
+  NODE_VERSION: 24
+
+# GITHUB_TOKEN needs write access to push the version tag and cut the release.
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    name: Version
+    outputs:
+      released: ${{ steps.semantic.outputs.released }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v3
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          HUSKY: 0
+
+      - name: Prepare repository
+        run: |
+          git config user.email "ci@geniro.app"
+          git config user.name "Geniro Bot"
+
+      - name: Up version
+        id: semantic
+        run: |
+          OUTPUT=$(pnpm run up-versions)
+          echo "$OUTPUT"
+
+          if echo "$OUTPUT" | grep -q "no new version is released"; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  create-release:
+    runs-on: ubuntu-22.04
+    name: Create Release
+    needs: [version]
+    if: ${{ needs.version.outputs.released == 'true' && github.ref_name == 'main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Get version tag
+        id: tags
+        run: |
+          git fetch --tags --force --prune
+
+          PATTERN="@${{ env.TAG_PREFIX }}/${{ env.APP_NAME }}@*"
+          CURRENT_TAG="$(git tag --merged HEAD --list "$PATTERN" | sort -V | tail -n 1)"
+          VERSION="${CURRENT_TAG##*@}"
+
+          if [[ -z "$VERSION" ]]; then
+            echo "No ${{ env.APP_NAME }} tag found, skipping release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "current_tag=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        if: steps.tags.outputs.skip != 'true'
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.tags.outputs.current_tag }} --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub Release
+        if: steps.tags.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tags.outputs.current_tag }}
+          name: "geniro v${{ steps.tags.outputs.version }}"
+          body_path: CHANGES.md
+          generate_release_notes: false
+
+  # NOTE: packaging the signed/notarized macOS app (electron-builder DMG) and
+  # publishing the auto-update feed land in M4 — add a `build-and-publish-app`
+  # job here, gated on `needs.version.outputs.released == 'true'`, then.

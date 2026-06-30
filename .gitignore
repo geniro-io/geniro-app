@@ -46,7 +46,9 @@ Thumbs.db
 
 # geniro working state — state.md and other generated files stay local; the
 # already-tracked plan/spec/milestones, workflow, and instructions are committed.
-.geniro/
+# Note: `.geniro/*` (not `.geniro/`) so the negations below can re-include subdirs.
+.geniro/*
+!.geniro/
 !.geniro/workflow/
 !.geniro/workflow/**
 !.geniro/instructions/

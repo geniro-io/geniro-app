@@ -67,7 +67,7 @@ Define the unified agent-adapter contract and drive Claude and Cursor headlessly
 
 ## 6. Steps
 
-- [ ] 1. Define `Executor` + event model + tool/event types in `packages/daemon` (mirror `inner/executor.py:96-260,518-596`). <!-- step-1 -->
+- [ ] 1. Define `Executor` + event model + tool/event types in `apps/daemon` (mirror `inner/executor.py:96-260,518-596`). <!-- step-1 -->
 - [ ] 2. Claude headless adapter: spawn + NDJSON parse + auth + model/resume (`code.claude.com/docs/en/headless`). <!-- step-2 -->
 - [ ] 3. Cursor headless adapter: spawn + defensive NDJSON parser + `CURSOR_API_KEY` + approval flags (`cursor.com/docs/cli/headless`). <!-- step-3 -->
 - [ ] 4. Persist normalized items + node_state to SQLite; in-proc pub-sub → WS to renderer (`session_stream.py:1-108`, `conversation.py:584-610`). <!-- step-4 -->

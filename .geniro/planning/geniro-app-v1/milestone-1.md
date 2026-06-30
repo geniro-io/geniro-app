@@ -44,7 +44,7 @@ Stand up the macOS app skeleton: an Electron shell that spawns and supervises a 
 
 ## 2. Scope — Included
 
-- Monorepo scaffold (pnpm): `apps/shell` (Electron main + React renderer), `packages/daemon` (TS), shared types.
+- Monorepo scaffold (pnpm): `apps/ui` (Electron main + React renderer), `apps/daemon` (TS).
 - Electron main: `app.whenReady` → spawn daemon child → wait for `/health` → load renderer (`host/local_server.py:437-520`).
 - Daemon sidecar: loopback HTTP+WS server (Fastify/`ws`) on a preferred port with free-port fallback; write `daemon.pid` (PID+port) + a bearer token; `/health` endpoint (`host/local_server.py:153-233`).
 - SQLite via `better-sqlite3` (WAL + busy_timeout); migrate-on-first-launch with a head-check (`db/utils.py:224-249,430-467`); initial schema: `runs`, `items`, `node_state`, plus a `settings` config file in userData (electron-store).
@@ -68,7 +68,7 @@ Stand up the macOS app skeleton: an Electron shell that spawns and supervises a 
 
 ## 6. Steps
 
-- [ ] 1. Scaffold pnpm monorepo: `apps/shell`, `packages/daemon`, shared `packages/types` (mirror Geniro layout `package.json`, `pnpm-workspace.yaml`). <!-- step-1 -->
+- [ ] 1. Scaffold pnpm monorepo: `apps/ui`, `apps/daemon` (mirror Geniro layout `package.json`, `pnpm-workspace.yaml`). <!-- step-1 -->
 - [ ] 2. Implement the daemon loopback server + `/health` + pidfile(PID+port)+token (`host/local_server.py:153-233`). <!-- step-2 -->
 - [ ] 3. SQLite store: `better-sqlite3` WAL + drizzle migrate-on-launch head-check; tables `runs`/`items`/`node_state` (`db/utils.py:430-467`). <!-- step-3 -->
 - [ ] 4. Settings config file in userData via electron-store; Keychain wrapper via `keytar`/`safeStorage`. <!-- step-4 -->

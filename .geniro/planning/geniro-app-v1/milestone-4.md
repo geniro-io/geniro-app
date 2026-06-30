@@ -83,7 +83,7 @@ Add the live PTY terminal mirror, the settings screen, signed packaging, and one
 
 ## 9. Validation
 
-- Open a live terminal for an agent and see the original TUI byte-for-byte; build a signed DMG; publish a new version and confirm `electron-updater` installs it. verify: pnpm --filter shell build:mac
+- Open a live terminal for an agent and see the original TUI byte-for-byte; build a signed DMG; publish a new version and confirm `electron-updater` installs it. verify: pnpm --filter ui build:mac
 
 ## 10. Rollback-Recovery
 

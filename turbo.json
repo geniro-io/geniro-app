@@ -1,0 +1,62 @@
+{
+  "$schema": "https://turborepo.org/schema.json",
+  "globalDependencies": ["tsconfig.json", "tsconfig.build.json", ".swcrc"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**",
+        "index.html",
+        "electron.vite.config.ts",
+        "package.json"
+      ],
+      "outputs": ["dist/**", "out/**"]
+    },
+    "check-types": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"],
+      "outputs": []
+    },
+    "lint": {
+      "outputs": [],
+      "inputs": ["src/**"]
+    },
+    "lint:fix": {
+      "outputs": [],
+      "inputs": ["src/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"]
+    },
+    "test:unit": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"]
+    },
+    "test:cov": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"]
+    },
+    "build:tests": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"],
+      "outputs": []
+    },
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"]
+    },
+    "test:e2e": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
+    "test:e2e:local": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

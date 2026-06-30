@@ -1,0 +1,96 @@
+import 'reflect-metadata';
+
+import { MikroORM } from '@mikro-orm/core';
+import type { MikroORM as SqliteMikroOrm } from '@mikro-orm/sqlite';
+import type { INestApplication } from '@nestjs/common';
+import { IoAdapter } from '@nestjs/platform-socket.io';
+import { buildBootstrapper } from '@packages/common';
+import { buildHttpServerExtension } from '@packages/http-server';
+import { buildMetricExtension } from '@packages/metrics';
+import { buildMikroOrmExtension } from '@packages/mikroorm';
+
+import { AppModule } from './app.module';
+import type { RuntimeInfo } from './auth/runtime';
+import mikroOrmConfig from './db/mikro-orm.config';
+import { environment } from './environments';
+import type { DaemonInfo } from './utils/handshake';
+import { mintToken, writePidfile } from './utils/pidfile';
+
+const startedAt = Date.now();
+const token = mintToken();
+const runtime: RuntimeInfo = {
+  token,
+  version: environment.version,
+  startedAt,
+};
+
+// Assembled exactly like Geniro's apps/api: a bootstrapper + extensions, started
+// via `init()`. The local-first specifics — bind 127.0.0.1 (never a routable
+// address), negotiate a free port if the preferred one is taken, and write the
+// pidfile only after a healthy listen — ride on the http-server extension's
+// `host` / `portFallback` / `onListening` options instead of a hand-rolled
+// bootstrap. Shutdown is Nest-owned (enableShutdownHooks); PidfileLifecycle
+// clears the pidfile on the way out, so main.ts needs no signal handling.
+const bootstrapper = buildBootstrapper({
+  environment: environment.env,
+  appName: environment.appName,
+  appVersion: environment.version,
+});
+
+bootstrapper.addExtension(
+  buildHttpServerExtension(
+    {
+      port: environment.preferredPort,
+      host: environment.host,
+      portFallback: true,
+      swagger: {},
+      corsOrigin: '',
+      onListening: ({ host, port }) => {
+        // Written only after the schema is migrated (appChangeCb) and the server
+        // is listening — a reader that sees the pidfile is guaranteed a healthy,
+        // migrated daemon. `port` is the actually-bound one (may differ from the
+        // preferred port when portFallback kicked in).
+        const info: DaemonInfo = {
+          pid: process.pid,
+          host,
+          port,
+          token,
+          version: environment.version,
+          startedAt: new Date(startedAt).toISOString(),
+        };
+        writePidfile(environment.pidfilePath, info);
+        process.stdout.write(
+          `GENIRO_DAEMON_READY ${JSON.stringify({ port })}\n`,
+        );
+      },
+    },
+    async (app: INestApplication) => {
+      // Migrate-on-launch: additively sync the SQLite schema from the entities
+      // before the server accepts traffic. `safe: true` never emits destructive
+      // DDL — a removed/renamed column won't drop user data; the full versioned
+      // Migrator workflow lands in M2.
+      const orm = app.get(MikroORM) as unknown as SqliteMikroOrm;
+      await orm.schema.update({ safe: true });
+
+      // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
+      // NotificationsGateway), mirroring how Geniro's apps/api installs its
+      // IoAdapter here — set before listen so the gateway binds to it.
+      app.useWebSocketAdapter(new IoAdapter(app));
+
+      return app;
+    },
+  ),
+);
+
+bootstrapper.addExtension(buildMikroOrmExtension(mikroOrmConfig));
+bootstrapper.addExtension(buildMetricExtension());
+bootstrapper.setupLogger({
+  prettyPrint: environment.prettyLog,
+  level: environment.logLevel,
+});
+bootstrapper.addModules([AppModule.forRoot({ runtime })]);
+
+bootstrapper.init().catch((err: unknown) => {
+  console.error('daemon failed to start', { err: String(err) });
+  process.exit(1);
+});

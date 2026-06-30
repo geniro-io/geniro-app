@@ -1,0 +1,35 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "rootDir": ".",
+    "sourceMap": true,
+    "declaration": true,
+    "strictFunctionTypes": true,
+    "declarationMap": true,
+    "moduleResolution": "Bundler",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "importHelpers": false,
+    "isolatedModules": true,
+    "allowJs": true,
+    "target": "ES2024",
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "removeComments": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "moduleDetection": "force",
+    "allowSyntheticDefaultImports": true,
+    "strictPropertyInitialization": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "types": ["node"],
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true,
+    "paths": {
+      "@packages/*": ["./packages/*/src"]
+    }
+  },
+  "exclude": ["node_modules", "tmp", "dist"]
+}

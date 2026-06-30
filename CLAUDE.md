@@ -87,15 +87,21 @@ apps/
   daemon/           @geniro/daemon   — NestJS loopback daemon (apps/api-style) over @packages/http-server + mikro-orm SQLite
 packages/
   common/           @packages/common — AppBootstrapper, pino logger, exceptions (vendored from Geniro; Sentry removed)
-  http-server/      @packages/http-server — NestJS + Fastify host: health, swagger/scalar, helmet, validation, jose (vendored; OIDC auth dormant)
+  http-server/      @packages/http-server — NestJS + Fastify host: health, swagger/scalar, helmet, validation, jose (vendored; OIDC auth dormant; + loopback listen opts host/portFallback/onListening)
   metrics/          @packages/metrics — Prometheus metrics (vendored from Geniro)
   mikroorm/         @packages/mikroorm — TimestampsEntity base, BaseDao, MikroOrmModule (vendored; driver swapped to @mikro-orm/sqlite)
 ```
 
 ### The daemon (`apps/daemon`)
-A standalone NestJS engine the UI spawns as a child process. Key files: `main.ts` (bootstrap), `app.module.ts`, `config.ts` (env → `DaemonConfig`), `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + port/pid validators), `token.guard.ts` + `safe-equal.ts` (loopback bearer-token gate), `ws.ts` (token-gated WebSocket), `pidfile.ts` (mint/write/reconcile), `db/mikro-orm.config.ts`, `entities/{run,item,node-state}.entity.ts` + `entities/types.ts` (status/kind enums).
+A standalone NestJS engine the UI spawns as a child process, laid out like Geniro's `apps/api/src`: `main.ts` (bootstrapper + extensions → `init()`) and `app.module.ts` at the root, then feature/infra dirs:
+- `auth/` — `runtime.ts` (per-launch `RuntimeInfo` + DI token) + global `runtime.module.ts`; `token.guard.ts` + `safe-equal.ts` (loopback bearer-token gate).
+- `environments/` — `environment.{prod,dev,test}.ts` + `index.ts` (picks by `NODE_ENV`, loads `.env` via dotenv).
+- `utils/` — `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + `isValidPort`/`parsePort`); `pidfile.ts` (mint/write/remove); `pidfile.lifecycle.ts` (Nest `OnApplicationShutdown` → removes the pidfile).
+- `db/mikro-orm.config.ts`.
+- `v1/runs/` — `runs.module.ts` + `entity/{run,item,node-state}.entity.ts` + `runs.types.ts` (status/kind enums).
+- `v1/notifications/` — `notifications.module.ts` + `gateways/notifications.gateway.ts` (the Socket.IO channel).
 
-- Binds **`127.0.0.1` only** (the cloned `http-server` bootstrapper hardcodes `0.0.0.0`, so the daemon assembles via `AppBootstrapper` + `buildHttpNestApp` and calls `app.listen` itself).
+- Binds **`127.0.0.1` only**. Assembled exactly like Geniro's `apps/api` (`buildBootstrapper(…)` → `addExtension(buildHttpServerExtension(…))` → `init()`); the loopback specifics ride on the extension's `host` / `portFallback` / `onListening` options — bind 127.0.0.1, negotiate a free port if the preferred one is taken, and write the pidfile from `onListening` after a healthy listen (the `http-server`'s own listen still defaults to `0.0.0.0`, preserving Geniro's behavior). Shutdown is Nest-owned (`enableShutdownHooks`); `utils/pidfile.lifecycle.ts` clears the pidfile on the way out, so `main.ts` needs no signal handling.
 - Writes the pidfile (`daemon.json`: `pid`, `host`, `port`, per-launch `token`, `version`, `startedAt`) **only after** the schema is synced and the server is listening, then prints `GENIRO_DAEMON_READY {port}` to stdout. The UI never assumes the host/port — it reads the bound values back from the pidfile (so it no longer passes `GENIRO_PORT`; the daemon owns that default).
 - Config env (set by the UI): `GENIRO_USER_DATA` (userData dir; fallback `~/.geniro`) and `GENIRO_PORT` (preferred port; falls back to a free port if taken). DB is `geniro.db`, pidfile `daemon.json`, both in the userData dir.
 
@@ -105,10 +111,10 @@ A standalone NestJS engine the UI spawns as a child process. Key files: `main.ts
 | `GET /health/check` | readiness probe (`{status, version}`) | public |
 | `GET /metrics` | Prometheus metrics | public |
 | `GET /swagger-api` · `/swagger-api/reference` | OpenAPI spec + Scalar UI | public |
-| `GET /ws?token=…` | renderer ⇄ daemon WebSocket (hello + echo in M1) | per-launch token |
+| `/ws` (Socket.IO) | renderer ⇄ daemon channel (hello + echo in M1) | per-launch token (handshake `auth`) |
 | (future M2+ routes) | runs / items / agents | bearer token (`LoopbackTokenGuard`) |
 
-The public allowlist (`/health`, `/metrics`, `/swagger-api`) is matched at segment boundaries; every other route requires the `Bearer <token>` header. WS auth uses a `token` query param (browsers can't set headers on a WS handshake), compared with `safeEqual` (constant-time).
+The public allowlist (`/health`, `/metrics`, `/swagger-api`) is matched at segment boundaries; every other route requires the `Bearer <token>` header. The WS channel is a NestJS Socket.IO gateway (`@WebSocketGateway({ path: '/ws' })`) installed via the `IoAdapter` in `main.ts`; the renderer (`socket.io-client`) sends the per-launch token in the Socket.IO handshake `auth` payload (browsers can't set headers on a WS handshake), compared with `safeEqual` (constant-time) in `handleConnection` — a mismatch disconnects the socket. The HTTP `LoopbackTokenGuard` doesn't see Socket.IO traffic (engine.io intercepts `/ws` before Nest routing), so the gateway owns WS auth.
 
 ### The UI (`apps/ui`)
 electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-supervisor.ts` (spawn/adopt/health-poll/orphan-sweep), `daemon-pidfile.ts` (reads + validates the daemon's pidfile), `settings.ts` (`settings.json`), `keychain.ts` (`@napi-rs/keyring`), `cli-detect.ts`, `ipc.ts`. `src/shared/contracts.ts` holds the IPC/Settings/CLI/Keychain contracts + `DaemonHandle`, shared across main/preload/renderer. `src/preload/index.ts` exposes a typed `window.geniro` via `contextBridge`. `src/renderer/` — React app (`App.tsx`, `onboarding/`, `daemon-client.ts` WS client).
@@ -167,4 +173,4 @@ These are hard rules for v1:
 
 ## A note on vendored packages
 
-`packages/{common,http-server,metrics,mikroorm}` are copied from the sibling Geniro repo (`/Users/sergeirazumovskij/Desktop/Projects/Geniro/geniro`) and adapted: Sentry stripped from `common` and the `http-server` exception path; the mikroorm driver swapped Postgres → `@mikro-orm/sqlite`; OIDC auth in `http-server` left dormant. Keep changes minimal and local-first; the goal is to stay close enough to Geniro that fixes can flow between the repos.
+`packages/{common,http-server,metrics,mikroorm}` are copied from the sibling Geniro repo (`/Users/sergeirazumovskij/Desktop/Projects/Geniro/geniro`) and adapted: Sentry stripped from `common` and the `http-server` exception path; the mikroorm driver swapped Postgres → `@mikro-orm/sqlite`; OIDC auth in `http-server` left dormant. `http-server`'s `runHttpApp` / `buildHttpServerExtension` also gained backward-compatible `host` / `portFallback` / `onListening` options (so the loopback daemon can bind 127.0.0.1, fall back to a free port, and learn the bound port) — the defaults preserve Geniro's `0.0.0.0` listen behavior, so it stays upstreamable. Keep changes minimal and local-first; the goal is to stay close enough to Geniro that fixes can flow between the repos.

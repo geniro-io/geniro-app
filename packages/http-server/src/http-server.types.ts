@@ -15,6 +15,25 @@ export interface IHttpServerParams {
   };
   apiDefaultVersion?: string;
   port?: number;
+  /**
+   * Host to bind. Defaults to `'0.0.0.0'` (all interfaces). Set a loopback
+   * address (e.g. `'127.0.0.1'`) for a local-only server.
+   */
+  host?: string;
+  /**
+   * When the requested `port` is already in use (`EADDRINUSE`), retry on an
+   * OS-assigned free port (`listen(0)`) instead of throwing. The actually-bound
+   * port is reported via {@link IHttpServerParams.onListening}. Default `false`
+   * (fail on conflict).
+   */
+  portFallback?: boolean;
+  /**
+   * Invoked once the server is listening, with the host and the actually-bound
+   * port (which differs from `port` when {@link IHttpServerParams.portFallback}
+   * kicked in). Use it to record the bound port — e.g. write a pidfile or print
+   * a ready marker.
+   */
+  onListening?: (info: { host: string; port: number }) => void | Promise<void>;
   fastifyOptions?: ConstructorParameters<typeof FastifyAdapter>[0];
   helmetOptions?: Parameters<typeof helmet>[0];
   // compression with @fastify/compress

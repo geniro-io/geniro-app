@@ -1,23 +1,23 @@
+import { io, type Socket } from 'socket.io-client';
+
 import { type DaemonHandle } from '../shared/contracts';
 
 export interface DaemonClientEvents {
   onOpen?: () => void;
-  onMessage?: (message: unknown) => void;
+  onMessage?: (event: string, data: unknown) => void;
   onClose?: () => void;
 }
 
-const RECONNECT_DELAY_MS = 1000;
-
 /**
- * Thin WebSocket client to the loopback daemon. Authenticates with the
- * per-launch token (query param — browsers can't set WS headers) and
- * auto-reconnects until explicitly closed. M1 uses it to prove the
- * renderer ⇄ daemon channel; real event streams arrive in M2.
+ * Thin Socket.IO client to the loopback daemon. Authenticates with the
+ * per-launch token via the handshake `auth` payload (browsers can't set WS
+ * headers) and lets Socket.IO own reconnection. Forces the `websocket`
+ * transport — no HTTP long-polling fallback is needed on loopback. M1 uses it
+ * to prove the renderer ⇄ daemon channel (hello + echo); real event streams
+ * arrive in M2.
  */
 export class DaemonClient {
-  private ws: WebSocket | null = null;
-  private closedByUser = false;
-  private reconnectTimer: number | null = null;
+  private socket: Socket | null = null;
 
   constructor(
     private readonly handle: DaemonHandle,
@@ -25,49 +25,26 @@ export class DaemonClient {
   ) {}
 
   connect(): void {
-    const url = `ws://${this.handle.host}:${this.handle.port}/ws?token=${encodeURIComponent(
-      this.handle.token,
-    )}`;
-    const ws = new WebSocket(url);
-    this.ws = ws;
+    const socket = io(`http://${this.handle.host}:${this.handle.port}`, {
+      path: '/ws',
+      transports: ['websocket'],
+      auth: { token: this.handle.token },
+    });
+    this.socket = socket;
 
-    ws.onopen = () => this.events.onOpen?.();
-    ws.onmessage = (event) => {
-      try {
-        this.events.onMessage?.(JSON.parse(String(event.data)));
-      } catch {
-        // ignore non-JSON frames
-      }
-    };
-    ws.onerror = () => ws.close();
-    ws.onclose = () => {
-      this.events.onClose?.();
-      if (!this.closedByUser) {
-        this.scheduleReconnect();
-      }
-    };
+    socket.on('connect', () => this.events.onOpen?.());
+    socket.on('disconnect', () => this.events.onClose?.());
+    socket.onAny((event: string, data: unknown) =>
+      this.events.onMessage?.(event, data),
+    );
   }
 
   send(data: string): void {
-    this.ws?.send(data);
-  }
-
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null) {
-      return;
-    }
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, RECONNECT_DELAY_MS);
+    this.socket?.emit('echo', data);
   }
 
   close(): void {
-    this.closedByUser = true;
-    if (this.reconnectTimer !== null) {
-      window.clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.ws?.close();
+    this.socket?.close();
+    this.socket = null;
   }
 }

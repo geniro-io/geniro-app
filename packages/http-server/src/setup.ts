@@ -1,3 +1,5 @@
+import type { AddressInfo } from 'node:net';
+
 import compress, { type FastifyCompressOptions } from '@fastify/compress';
 import multipart from '@fastify/multipart';
 import {
@@ -361,21 +363,50 @@ export const buildHttpNestApp = async (
   return app;
 };
 
+/** Read the actually-bound TCP port off the underlying Fastify server. */
+const resolveBoundPort = (app: INestApplication, fallback: number): number => {
+  const fastify = app
+    .getHttpAdapter()
+    .getInstance() as unknown as FastifyInstance;
+  const address = fastify.server.address() as AddressInfo | string | null;
+  return address && typeof address !== 'string' ? address.port : fallback;
+};
+
 export const runHttpApp = async (
   app: INestApplication,
   params: IHttpServerParams,
 ) => {
   const port = params.port || 3000;
-  await (<INestApplication>app).listen(port, '0.0.0.0');
+  const host = params.host ?? '0.0.0.0';
+
+  try {
+    await (<INestApplication>app).listen(port, host);
+  } catch (err) {
+    // With portFallback, a busy preferred port is recoverable: let the OS
+    // assign a free one rather than crashing. Any other error still propagates.
+    if (
+      !params.portFallback ||
+      (err as NodeJS.ErrnoException).code !== 'EADDRINUSE'
+    ) {
+      throw err;
+    }
+    await (<INestApplication>app).listen(0, host);
+  }
+
+  const boundPort = resolveBoundPort(app, port);
 
   const logger = app.get(DefaultLogger);
 
-  logger.log(`HTTP server init with port ${params.port}`);
+  logger.log(`HTTP server init with port ${boundPort}`);
+
+  await params.onListening?.({ host, port: boundPort });
 };
 
 export const buildHttpServerExtension = (
   params: IHttpServerParams,
-  appChangeCb?: (app: INestApplication) => INestApplication,
+  appChangeCb?: (
+    app: INestApplication,
+  ) => INestApplication | Promise<INestApplication>,
 ): IAppBootstrapperExtension => {
   return {
     modules: [HttpServerModule.forRoot(params)],
@@ -384,7 +415,7 @@ export const buildHttpServerExtension = (
       let app = await buildHttpNestApp(module, params);
 
       if (appChangeCb) {
-        app = appChangeCb(app);
+        app = await appChangeCb(app);
       }
 
       await runHttpApp(app, params);

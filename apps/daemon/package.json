@@ -19,13 +19,14 @@
     "test:unit": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@fastify/websocket": "^11.2.0",
     "@mikro-orm/core": "^7.1.5",
     "@mikro-orm/decorators": "^7.1.5",
     "@mikro-orm/sqlite": "^7.1.5",
     "@nestjs/common": "^11.1.27",
     "@nestjs/core": "^11.1.27",
     "@nestjs/platform-fastify": "^11.1.27",
+    "@nestjs/platform-socket.io": "^11.1.27",
+    "@nestjs/websockets": "^11.1.27",
     "@packages/common": "workspace:*",
     "@packages/http-server": "workspace:*",
     "@packages/metrics": "workspace:*",
@@ -34,13 +35,12 @@
     "fastify": "^5.9.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "ws": "^8.21.0"
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@swc/cli": "^0.8.1",
     "@swc/core": "^1.15.43",
     "@types/node": "^26.0.1",
-    "@types/ws": "^8.18.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"

@@ -5,30 +5,15 @@ import { Onboarding } from './onboarding/Onboarding';
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
-interface HelloMessage {
-  type: 'hello';
-  version: string;
-}
-
-interface EchoMessage {
-  type: 'echo';
-  data: string;
-}
-
-function isHello(message: unknown): message is HelloMessage {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    (message as { type?: unknown }).type === 'hello'
-  );
-}
-
-function isEcho(message: unknown): message is EchoMessage {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    (message as { type?: unknown }).type === 'echo'
-  );
+/** The daemon's `hello` event payload (`{ version }`), sent on connect. */
+function helloVersion(data: unknown): string | null {
+  if (typeof data === 'object' && data !== null) {
+    const version = (data as { version?: unknown }).version;
+    if (typeof version === 'string') {
+      return version;
+    }
+  }
+  return null;
 }
 
 export function App(): React.JSX.Element {
@@ -47,11 +32,14 @@ export function App(): React.JSX.Element {
     const client = new DaemonClient(handle, {
       onOpen: () => setConnected(true),
       onClose: () => setConnected(false),
-      onMessage: (message) => {
-        if (isHello(message)) {
-          setDaemonVersion(message.version);
-        } else if (isEcho(message)) {
-          setLastEcho(message.data);
+      onMessage: (event, data) => {
+        if (event === 'hello') {
+          const version = helloVersion(data);
+          if (version) {
+            setDaemonVersion(version);
+          }
+        } else if (event === 'echo') {
+          setLastEcho(typeof data === 'string' ? data : JSON.stringify(data));
         }
       },
     });

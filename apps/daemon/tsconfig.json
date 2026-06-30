@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig.json",
-  "include": ["src/**/*", "drizzle.config.ts"],
+  "include": ["src/**/*"],
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",

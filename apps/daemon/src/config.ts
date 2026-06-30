@@ -7,7 +7,7 @@ import {
   DAEMON_PIDFILE_NAME,
   DAEMON_PREFERRED_PORT,
   parsePort,
-} from '@packages/types';
+} from './handshake';
 
 /** Daemon package version, surfaced in `/health` and the pidfile. */
 export const DAEMON_VERSION = '0.1.0';

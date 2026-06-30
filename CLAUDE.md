@@ -56,7 +56,7 @@ pnpm lint:fix           # eslint + prettier auto-fix
 Always use the package.json scripts — never call `vitest` directly.
 ```bash
 pnpm test:unit                       # all unit tests (vitest, *.spec.{ts,tsx})
-pnpm --filter @packages/daemon test:unit   # one package
+pnpm --filter @geniro/daemon test:unit     # just the daemon
 pnpm --filter @geniro/shell test:unit      # the shell
 ```
 
@@ -84,15 +84,15 @@ A **pnpm + Turbo monorepo** whose root config and server packages are **cloned f
 ```
 apps/
   shell/            @geniro/shell    — Electron main + preload + React renderer (electron-vite)
+  daemon/           @geniro/daemon   — NestJS loopback daemon (apps/api-style) over @packages/http-server + mikro-orm SQLite
 packages/
-  daemon/           @packages/daemon — NestJS loopback daemon (apps/api-style) over @packages/http-server + mikro-orm SQLite
   common/           @packages/common — AppBootstrapper, pino logger, exceptions (vendored from Geniro; Sentry removed)
   http-server/      @packages/http-server — NestJS + Fastify host: health, swagger/scalar, helmet, validation, jose (vendored; OIDC auth dormant)
   metrics/          @packages/metrics — Prometheus metrics (vendored from Geniro)
   mikroorm/         @packages/mikroorm — TimestampsEntity base, BaseDao, MikroOrmModule (vendored; driver swapped to @mikro-orm/sqlite)
 ```
 
-### The daemon (`packages/daemon`)
+### The daemon (`apps/daemon`)
 A standalone NestJS engine the shell spawns as a child process. Key files: `main.ts` (bootstrap), `app.module.ts`, `config.ts` (env → `DaemonConfig`), `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + port/pid validators), `token.guard.ts` + `safe-equal.ts` (loopback bearer-token gate), `ws.ts` (token-gated WebSocket), `pidfile.ts` (mint/write/reconcile), `db/mikro-orm.config.ts`, `entities/{run,item,node-state}.entity.ts` + `entities/types.ts` (status/kind enums).
 
 - Binds **`127.0.0.1` only** (the cloned `http-server` bootstrapper hardcodes `0.0.0.0`, so the daemon assembles via `AppBootstrapper` + `buildHttpNestApp` and calls `app.listen` itself).
@@ -116,7 +116,7 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 `DaemonSupervisor.start()` reuses a still-healthy daemon left by a prior shell instance (pid + `/health/check` match), sweeps stale pidfiles, and only tears down the process it owns.
 
 ### Build toolchain
-- **swc** compiles the daemon and all `packages/*` to **CommonJS** (`dist/`), with decorator metadata (`legacyDecorator` + `decoratorMetadata`) — entities and Nest DI rely on it. Each has a `.swcrc`.
+- **swc** compiles the daemon and all `packages/*` to **CommonJS** (`dist/`), with decorator metadata (`legacyDecorator` + `decoratorMetadata`) — entities and Nest DI rely on it. All share one root `.swcrc` (each build script references it via `--config-file ../../.swcrc`).
 - **electron-vite** builds the shell (`out/`).
 - Internal `@packages/*` imports resolve to **TypeScript source** via the root tsconfig path alias (`@packages/* → packages/*/src`), so the packages ship **no `.d.ts`**. Type-checking is a separate `tsc --noEmit` (`pnpm check-types`), independent of the swc build.
 

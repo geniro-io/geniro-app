@@ -7,11 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 
-import {
-  type DaemonInfo,
-  isPlausiblePid,
-  parseDaemonInfo,
-} from '@packages/types';
+import { type DaemonInfo, isPlausiblePid, parseDaemonInfo } from './handshake';
 
 /** Mint a per-launch loopback session token (256 bits, hex). */
 export function mintToken(): string {

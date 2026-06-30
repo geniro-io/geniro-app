@@ -13,12 +13,12 @@ import {
 } from '@packages/http-server';
 import { buildMetricExtension } from '@packages/metrics';
 import { buildMikroOrmExtension } from '@packages/mikroorm';
-import type { DaemonInfo } from '@packages/types';
 import type { FastifyInstance } from 'fastify';
 
 import { AppModule } from './app.module';
 import { loadConfig } from './config';
 import mikroOrmConfig from './db/mikro-orm.config';
+import type { DaemonInfo } from './handshake';
 import { log } from './logger';
 import { mintToken, removePidfile, writePidfile } from './pidfile';
 import type { RuntimeInfo } from './runtime';
@@ -102,6 +102,7 @@ async function bootstrap(): Promise<void> {
   // a reader that sees the pidfile is guaranteed a healthy, migrated daemon.
   const info: DaemonInfo = {
     pid: process.pid,
+    host: config.host,
     port,
     token,
     version: config.version,

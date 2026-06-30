@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
-import type { RunStatus } from '@packages/types';
+
+import type { RunStatus } from './types';
 
 /** One execution of a workflow (graph) or a single-agent chat. */
 @Entity({ tableName: 'runs' })

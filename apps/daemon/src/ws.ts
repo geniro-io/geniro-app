@@ -1,8 +1,8 @@
 import websocket from '@fastify/websocket';
-import { DAEMON_HOST } from '@packages/types';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
+import { DAEMON_HOST } from './handshake';
 import { log } from './logger';
 import type { RuntimeInfo } from './runtime';
 import { safeEqual } from './safe-equal';

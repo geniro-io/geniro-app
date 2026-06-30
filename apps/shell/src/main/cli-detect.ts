@@ -9,7 +9,7 @@ import {
   type CliDetection,
   type CliKind,
   type Settings,
-} from '@packages/types';
+} from '../shared/contracts';
 
 const execFileAsync = promisify(execFile);
 

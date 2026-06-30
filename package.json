@@ -6,7 +6,7 @@
   "description": "geniro — local-first macOS app for composing and running a DAG of CLI coding agents",
   "scripts": {
     "dev": "pnpm --filter @geniro/shell dev",
-    "daemon:dev": "pnpm --filter @packages/daemon dev",
+    "daemon:dev": "pnpm --filter @geniro/daemon dev",
     "full-check": "pnpm -s build && pnpm -s check-types && pnpm -s build:tests && pnpm -s lint:fix && pnpm -s test:unit && pnpm -s test:integration",
     "build": "turbo run build",
     "build:tests": "turbo run build:tests",

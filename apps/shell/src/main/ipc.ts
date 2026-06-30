@@ -1,11 +1,11 @@
+import { dialog, ipcMain } from 'electron';
+
 import {
   IPC,
   type OnboardingInput,
   type SecretName,
   type Settings,
-} from '@packages/types';
-import { dialog, ipcMain } from 'electron';
-
+} from '../shared/contracts';
 import { detectClis } from './cli-detect';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import { deleteSecret, hasSecret, saveSecret } from './keychain';

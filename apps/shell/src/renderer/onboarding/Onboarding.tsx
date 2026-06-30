@@ -1,5 +1,6 @@
-import type { CliDetection } from '@packages/types';
 import { useEffect, useState } from 'react';
+
+import type { CliDetection } from '../../shared/contracts';
 
 export function Onboarding({
   onDone,

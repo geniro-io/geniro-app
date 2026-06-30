@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DAEMON_PREFERRED_PORT } from '@packages/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { loadConfig } from './config';
+import { DAEMON_PREFERRED_PORT } from './handshake';
 
 /**
  * loadConfig() reads process.env and creates userDataDir on disk. We point

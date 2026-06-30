@@ -1,6 +1,7 @@
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
-import type { NodeStatus } from '@packages/types';
+
+import type { NodeStatus } from './types';
 
 /** Per-node execution status within a run (composite PK: runId + nodeId). */
 @Entity({ tableName: 'node_state' })

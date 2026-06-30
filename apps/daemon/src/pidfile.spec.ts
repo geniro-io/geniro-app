@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { DaemonInfo } from '@packages/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { DaemonInfo } from './handshake';
 import {
   isProcessAlive,
   mintToken,
@@ -29,6 +29,7 @@ describe('pidfile', () => {
 
   const sample = (pid: number): DaemonInfo => ({
     pid,
+    host: '127.0.0.1',
     port: 47615,
     token: 'deadbeef',
     version: '0.1.0',
@@ -103,6 +104,7 @@ describe('pidfile', () => {
       path,
       JSON.stringify({
         pid: process.pid,
+        host: '127.0.0.1',
         port: 47615.7,
         token: 'deadbeef',
         version: '0.1.0',

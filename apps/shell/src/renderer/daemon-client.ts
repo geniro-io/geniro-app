@@ -1,4 +1,4 @@
-import { DAEMON_HOST, type DaemonHandle } from '@packages/types';
+import { type DaemonHandle } from '../shared/contracts';
 
 export interface DaemonClientEvents {
   onOpen?: () => void;
@@ -25,7 +25,7 @@ export class DaemonClient {
   ) {}
 
   connect(): void {
-    const url = `ws://${DAEMON_HOST}:${this.handle.port}/ws?token=${encodeURIComponent(
+    const url = `ws://${this.handle.host}:${this.handle.port}/ws?token=${encodeURIComponent(
       this.handle.token,
     )}`;
     const ws = new WebSocket(url);

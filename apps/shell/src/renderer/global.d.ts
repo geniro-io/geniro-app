@@ -1,4 +1,4 @@
-import type { GeniroApi } from '@packages/types';
+import type { GeniroApi } from '../shared/contracts';
 
 declare global {
   interface Window {

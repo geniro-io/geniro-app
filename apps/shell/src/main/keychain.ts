@@ -1,5 +1,6 @@
 import { Entry } from '@napi-rs/keyring';
-import { KEYCHAIN_SERVICE, type SecretName } from '@packages/types';
+
+import { KEYCHAIN_SERVICE, type SecretName } from '../shared/contracts';
 
 /**
  * Secret storage backed by the macOS Keychain (true Keychain items, via the

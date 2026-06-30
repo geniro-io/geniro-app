@@ -1,30 +1,29 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { app } from 'electron';
+
+import { type DaemonHandle } from '../shared/contracts';
 import {
-  DAEMON_HOST,
-  DAEMON_PIDFILE_NAME,
-  DAEMON_PREFERRED_PORT,
-  type DaemonHandle,
   type DaemonInfo,
   isPlausiblePid,
-  parseDaemonInfo,
-} from '@packages/types';
-import { app } from 'electron';
+  PIDFILE_NAME,
+  readDaemonInfo,
+} from './daemon-pidfile';
 
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
 const SHUTDOWN_GRACE_MS = 3_000;
 
 function pidfilePath(): string {
-  return join(app.getPath('userData'), DAEMON_PIDFILE_NAME);
+  return join(app.getPath('userData'), PIDFILE_NAME);
 }
 
 /**
  * Locate the built daemon entry. Resolved relative to the bundled main process
  * and the app path; M4 packaging will pin a definitive path. Building
- * @packages/daemon is a prerequisite (turbo build orders it first).
+ * @geniro/daemon is a prerequisite (turbo build orders it first).
  */
 function resolveDaemonEntry(): string {
   const candidates = [
@@ -34,34 +33,21 @@ function resolveDaemonEntry(): string {
       '..',
       '..',
       '..',
-      'packages',
+      'apps',
       'daemon',
       'dist',
       'main.js',
     ),
-    join(app.getAppPath(), '..', '..', 'packages', 'daemon', 'dist', 'main.js'),
-    join(process.cwd(), 'packages', 'daemon', 'dist', 'main.js'),
+    join(app.getAppPath(), '..', '..', 'apps', 'daemon', 'dist', 'main.js'),
+    join(process.cwd(), 'apps', 'daemon', 'dist', 'main.js'),
   ];
   const found = candidates.find((c) => existsSync(c));
   if (!found) {
     throw new Error(
-      'daemon entry not found — build @packages/daemon (pnpm build) first',
+      'daemon entry not found — build @geniro/daemon (pnpm build) first',
     );
   }
   return found;
-}
-
-function readDaemonInfo(): DaemonInfo | null {
-  const path = pidfilePath();
-  if (!existsSync(path)) {
-    return null;
-  }
-  try {
-    return parseDaemonInfo(JSON.parse(readFileSync(path, 'utf8')));
-  } catch {
-    // malformed pidfile → treat as absent
-    return null;
-  }
 }
 
 function isAlive(pid: number): boolean {
@@ -78,11 +64,11 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function checkHealth(port: number): Promise<boolean> {
+async function checkHealth(host: string, port: number): Promise<boolean> {
   try {
     // /health/check is the @packages/http-server readiness endpoint (cloned
     // from Geniro), unauthenticated and version-neutral.
-    const res = await fetch(`http://${DAEMON_HOST}:${port}/health/check`);
+    const res = await fetch(`http://${host}:${port}/health/check`);
     return res.ok;
   } catch {
     return false;
@@ -94,7 +80,12 @@ function delay(ms: number): Promise<void> {
 }
 
 function toHandle(info: DaemonInfo): DaemonHandle {
-  return { port: info.port, token: info.token, version: info.version };
+  return {
+    host: info.host,
+    port: info.port,
+    token: info.token,
+    version: info.version,
+  };
 }
 
 /**
@@ -108,11 +99,11 @@ export class DaemonSupervisor {
   private handle: DaemonHandle | null = null;
 
   async start(): Promise<DaemonHandle> {
-    const existing = readDaemonInfo();
+    const existing = readDaemonInfo(pidfilePath());
     if (
       existing &&
       isAlive(existing.pid) &&
-      (await checkHealth(existing.port))
+      (await checkHealth(existing.host, existing.port))
     ) {
       // Reuse a daemon another shell instance already started.
       this.owned = false;
@@ -139,7 +130,8 @@ export class DaemonSupervisor {
         // Run the daemon under Electron's bundled Node — no external runtime.
         ELECTRON_RUN_AS_NODE: '1',
         GENIRO_USER_DATA: app.getPath('userData'),
-        GENIRO_PORT: String(DAEMON_PREFERRED_PORT),
+        // No GENIRO_PORT: the daemon owns its default port and records the
+        // actual bound host + port in the pidfile, which we read back below.
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -162,8 +154,12 @@ export class DaemonSupervisor {
     while (Date.now() < deadline) {
       // Only adopt the pidfile OUR child wrote (pid match) — never a stale
       // descriptor that happens to still answer /health on another port.
-      const info = readDaemonInfo();
-      if (info && info.pid === child.pid && (await checkHealth(info.port))) {
+      const info = readDaemonInfo(pidfilePath());
+      if (
+        info &&
+        info.pid === child.pid &&
+        (await checkHealth(info.host, info.port))
+      ) {
         this.handle = toHandle(info);
         return this.handle;
       }

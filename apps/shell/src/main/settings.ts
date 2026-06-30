@@ -7,8 +7,9 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { DEFAULT_SETTINGS, type Settings } from '@packages/types';
 import { app } from 'electron';
+
+import { DEFAULT_SETTINGS, type Settings } from '../shared/contracts';
 
 /**
  * Non-secret app settings, persisted as a plain JSON file in Electron's

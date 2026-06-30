@@ -1,5 +1,5 @@
 {
-  "name": "@packages/daemon",
+  "name": "@geniro/daemon",
   "version": "0.1.0",
   "private": true,
   "description": "geniro local engine: NestJS (apps/api-style) loopback daemon over @packages/http-server + mikro-orm SQLite",
@@ -8,7 +8,7 @@
     "geniro-daemon": "dist/main.js"
   },
   "scripts": {
-    "build": "swc src -d dist --config-file .swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
+    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
     "prebuild": "rm -rf ./dist || true",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
-    "@mikro-orm/core": "^7.1.4",
-    "@mikro-orm/decorators": "^7.1.4",
-    "@mikro-orm/sqlite": "^7.1.4",
+    "@mikro-orm/core": "^7.1.5",
+    "@mikro-orm/decorators": "^7.1.5",
+    "@mikro-orm/sqlite": "^7.1.5",
     "@nestjs/common": "^11.1.27",
     "@nestjs/core": "^11.1.27",
     "@nestjs/platform-fastify": "^11.1.27",
@@ -30,7 +30,6 @@
     "@packages/http-server": "workspace:*",
     "@packages/metrics": "workspace:*",
     "@packages/mikroorm": "workspace:*",
-    "@packages/types": "workspace:*",
     "fastify": "^5.9.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
@@ -39,10 +38,10 @@
   "devDependencies": {
     "@swc/cli": "^0.8.1",
     "@swc/core": "^1.15.43",
-    "@types/node": "^25.9.2",
+    "@types/node": "^26.0.1",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.20.6",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   }
 }

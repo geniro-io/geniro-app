@@ -1,5 +1,6 @@
-import { type GeniroApi, IPC } from '@packages/types';
 import { contextBridge, ipcRenderer } from 'electron';
+
+import { type GeniroApi, IPC } from '../shared/contracts';
 
 /**
  * The only bridge between the sandboxed renderer and the privileged main

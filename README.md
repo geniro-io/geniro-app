@@ -19,8 +19,8 @@ Postgres, no cloud telemetry, loopback-only).
 ```
 apps/
   shell/            @geniro/shell    — Electron main + preload + React renderer (electron-vite)
+  daemon/           @geniro/daemon   — NestJS loopback daemon (apps/api-style) over @packages/http-server + mikro-orm SQLite
 packages/
-  daemon/           @packages/daemon — NestJS loopback daemon (apps/api-style) over @packages/http-server + mikro-orm SQLite
   common/           @packages/common — app bootstrapper, pino logger, exceptions (vendored from Geniro; Sentry removed)
   http-server/      @packages/http-server — NestJS + Fastify host: health, swagger/scalar, helmet, validation (vendored; OIDC auth dormant)
   metrics/          @packages/metrics — Prometheus metrics (vendored from Geniro)

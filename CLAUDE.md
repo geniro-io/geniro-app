@@ -131,6 +131,7 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 - **Settings → `settings.json`** in the Electron userData dir.
 - **Secrets → macOS Keychain only** (`@napi-rs/keyring`) — never SQLite, never a config file.
 - **SQLite (`geniro.db`) → runtime/history only** — `runs` / `items` / `node_state` rows.
+- **Persist-then-emit** for streamed-then-replayable data (chat `items` now, graph-node items in M3): allocate the monotonic `seq`, write the row, **then** publish on the RxJS bus / per-run Socket.IO room. SQLite is the source of truth and a reconnecting client replays via an `afterSeq` cursor, so nothing is emitted before it is durable.
 - The per-launch loopback **token on disk** (in `daemon.json`) is allowed — it is a local session token, not a user secret.
 
 ---
@@ -163,7 +164,8 @@ These are hard rules for v1:
 
 - **No cloud / remote / multi-machine code paths.** Everything is local.
 - **No Python runtime.** The entire stack — including the CLI-agent layer — is TypeScript.
-- **Secrets live in the macOS Keychain only** — never in SQLite, never in a file. (The loopback session token in `daemon.json` is not a user secret and is allowed on disk.)
+- **Secrets live in the macOS Keychain only** — never in SQLite, never in a file. (The loopback session token in `daemon.json` is not a user secret and is allowed on disk.) When the daemon spawns an agent/child process it builds the child env by **stripping every `GENIRO_`-prefixed key** — daemon config and secrets travel as `GENIRO_<NAME>` (e.g. the UI passes the Cursor key as `GENIRO_CURSOR_API_KEY`) — and **re-injects only the one secret that child needs** (the Cursor adapter maps it to `CURSOR_API_KEY` for its child alone). So no spawned agent inherits another agent's credential or the daemon's internal env.
+- **Every child process the daemon spawns registers with `ProcessRegistry`** (claim → register → auto-unregister on settle) so `OnApplicationShutdown` and explicit cancel terminate it — never spawn an unmanaged child. The M1 shutdown path only removes the pidfile and the UI's `SIGKILL` escalation bypasses Nest hooks, so an unregistered child orphans mid-turn (M3's graph engine spawns N agents — that is where this bites).
 - **Graph definitions are YAML** (the source of truth). SQLite holds runtime/history only — never graph definitions.
 - **The daemon binds loopback (`127.0.0.1`) only** and gates every non-public route with the per-launch bearer token.
 - **No tmux / PTY-scraping for graph execution** in v1 (a click-through PTY mirror for inspection is a later, separate concern).

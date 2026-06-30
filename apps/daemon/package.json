@@ -30,6 +30,7 @@
     "@packages/http-server": "workspace:*",
     "@packages/metrics": "workspace:*",
     "@packages/mikroorm": "workspace:*",
+    "dotenv": "^17.4.1",
     "fastify": "^5.9.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",

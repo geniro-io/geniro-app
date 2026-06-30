@@ -129,6 +129,9 @@ importers:
       '@packages/mikroorm':
         specifier: workspace:*
         version: link:../../packages/mikroorm
+      dotenv:
+        specifier: ^17.4.1
+        version: 17.4.1
       fastify:
         specifier: 5.9.0
         version: 5.9.0

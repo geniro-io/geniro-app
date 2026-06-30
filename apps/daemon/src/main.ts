@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { MikroORM } from '@mikro-orm/core';
 import type { MikroORM as SqliteMikroOrm } from '@mikro-orm/sqlite';
 import type { INestApplication } from '@nestjs/common';
-import { AppBootstrapper, type LogLevel } from '@packages/common';
+import { AppBootstrapper } from '@packages/common';
 import {
   buildHttpNestApp,
   HttpServerModule,
@@ -16,13 +16,12 @@ import { buildMikroOrmExtension } from '@packages/mikroorm';
 import type { FastifyInstance } from 'fastify';
 
 import { AppModule } from './app.module';
-import { loadConfig } from './config';
+import type { RuntimeInfo } from './auth/runtime';
 import mikroOrmConfig from './db/mikro-orm.config';
-import type { DaemonInfo } from './handshake';
-import { log } from './logger';
-import { mintToken, removePidfile, writePidfile } from './pidfile';
-import type { RuntimeInfo } from './runtime';
-import { registerWebsocket } from './ws';
+import { environment } from './environments';
+import type { DaemonInfo } from './utils/handshake';
+import { mintToken, removePidfile, writePidfile } from './utils/pidfile';
+import { registerWebsocket } from './v1/notifications/gateways/ws';
 
 /** Bind the preferred port on loopback, falling back to a free port if taken. */
 async function listenLoopback(
@@ -36,7 +35,7 @@ async function listenLoopback(
     if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
       throw err;
     }
-    log.warn('preferred port in use; falling back to a free port', {
+    console.error('preferred port in use; falling back to a free port', {
       preferredPort,
     });
     await app.listen(0, host);
@@ -50,12 +49,11 @@ async function listenLoopback(
 }
 
 async function bootstrap(): Promise<void> {
-  const config = loadConfig();
   const startedAt = Date.now();
   const token = mintToken();
   const runtime: RuntimeInfo = {
     token,
-    version: config.version,
+    version: environment.version,
     startedAt,
   };
 
@@ -63,15 +61,15 @@ async function bootstrap(): Promise<void> {
   // bootstrapper (runHttpApp) hardcodes 0.0.0.0, so we assemble via
   // AppBootstrapper + buildHttpNestApp and listen manually.
   const httpParams: IHttpServerParams = {
-    port: config.preferredPort,
+    port: environment.preferredPort,
     swagger: {},
     corsOrigin: '',
   };
 
   const bootstrapper = new AppBootstrapper({
-    environment: process.env.NODE_ENV ?? 'production',
-    appName: 'geniro-daemon',
-    appVersion: config.version,
+    environment: environment.env,
+    appName: environment.appName,
+    appVersion: environment.version,
   });
   bootstrapper.addExtension({
     modules: [HttpServerModule.forRoot(httpParams)],
@@ -79,7 +77,10 @@ async function bootstrap(): Promise<void> {
   bootstrapper.addExtension(buildMikroOrmExtension(mikroOrmConfig));
   bootstrapper.addExtension(buildMetricExtension());
   bootstrapper.addModules([AppModule.forRoot({ runtime })]);
-  bootstrapper.setupLogger({ prettyPrint: true, level: 'info' as LogLevel });
+  bootstrapper.setupLogger({
+    prettyPrint: environment.prettyLog,
+    level: environment.logLevel,
+  });
 
   const appModule = bootstrapper.buildModule();
   const app = await buildHttpNestApp(appModule, httpParams);
@@ -96,21 +97,25 @@ async function bootstrap(): Promise<void> {
     runtime,
   );
 
-  const port = await listenLoopback(app, config.host, config.preferredPort);
+  const port = await listenLoopback(
+    app,
+    environment.host,
+    environment.preferredPort,
+  );
 
   // Pidfile is written only after the schema is ready and the server listens —
   // a reader that sees the pidfile is guaranteed a healthy, migrated daemon.
   const info: DaemonInfo = {
     pid: process.pid,
-    host: config.host,
+    host: environment.host,
     port,
     token,
-    version: config.version,
+    version: environment.version,
     startedAt: new Date(startedAt).toISOString(),
   };
-  writePidfile(config.pidfilePath, info);
+  writePidfile(environment.pidfilePath, info);
 
-  log.info('daemon ready', { port, pid: process.pid });
+  console.error('daemon ready', { port, pid: process.pid });
   process.stdout.write(`GENIRO_DAEMON_READY ${JSON.stringify({ port })}\n`);
 
   let shuttingDown = false;
@@ -119,12 +124,12 @@ async function bootstrap(): Promise<void> {
       return;
     }
     shuttingDown = true;
-    log.info('daemon shutting down', { signal });
-    removePidfile(config.pidfilePath);
+    console.error('daemon shutting down', { signal });
+    removePidfile(environment.pidfilePath);
     try {
       await app.close();
     } catch (err) {
-      log.error('app close failed', { err: String(err) });
+      console.error('app close failed', { err: String(err) });
     }
     process.exit(0);
   };
@@ -134,6 +139,6 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((err: unknown) => {
-  log.error('daemon failed to start', { err: String(err) });
+  console.error('daemon failed to start', { err: String(err) });
   process.exit(1);
 });

@@ -8,7 +8,7 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { ItemKind } from './types';
+import type { ItemKind } from '../runs.types';
 
 /** A persisted transcript item belonging to a run. */
 @Entity({ tableName: 'items' })

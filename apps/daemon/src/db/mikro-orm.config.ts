@@ -2,9 +2,9 @@ import { join } from 'node:path';
 
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
-import { loadConfig } from '../config';
+import { environment } from '../environments';
 
-const { dbPath } = loadConfig();
+const { dbPath } = environment;
 
 /**
  * mikro-orm config, cloned from Geniro's apps/api and adapted to SQLite
@@ -14,8 +14,8 @@ const { dbPath } = loadConfig();
  */
 export default defineConfig({
   dbName: dbPath,
-  entities: [join(__dirname, '..', 'entities', '*.entity.js')],
-  entitiesTs: [join(__dirname, '..', 'entities', '*.entity.ts')],
+  entities: [join(__dirname, '..', '**', '*.entity.js')],
+  entitiesTs: [join(__dirname, '..', '**', '*.entity.ts')],
   // Spread optional DTO fields into FilterQuery without unwanted IS NULL.
   ignoreUndefinedInQuery: true,
   // NestJS request-scoping handles context isolation.

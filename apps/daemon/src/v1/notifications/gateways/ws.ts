@@ -2,16 +2,16 @@ import websocket from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import { DAEMON_HOST } from './handshake';
-import { log } from './logger';
-import type { RuntimeInfo } from './runtime';
-import { safeEqual } from './safe-equal';
+import type { RuntimeInfo } from '../../../auth/runtime';
+import { safeEqual } from '../../../auth/safe-equal';
+import { DAEMON_HOST } from '../../../utils/handshake';
 
 /**
  * Register the loopback WS endpoint on the underlying Fastify instance.
  * Browsers can't set an Authorization header on a WS handshake, so the renderer
  * passes the loopback token as a query param. M1 only proves the
- * renderer ⇄ daemon channel (hello + echo); real event streams arrive in M2.
+ * renderer ⇄ daemon channel (hello + echo); real event streams arrive in M2,
+ * when this gateway is wrapped in a NotificationsModule.
  */
 export async function registerWebsocket(
   fastify: FastifyInstance,
@@ -29,7 +29,7 @@ export async function registerWebsocket(
       socket.send(JSON.stringify({ type: 'echo', data: raw.toString() }));
     });
     socket.on('error', (err: Error) =>
-      log.warn('ws error', { err: String(err) }),
+      console.error('ws error', { err: String(err) }),
     );
   });
 }

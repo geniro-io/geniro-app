@@ -31,17 +31,17 @@ jobs:
       released: ${{ steps.semantic.outputs.released }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup PNPM
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4.4.0
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -78,7 +78,7 @@ jobs:
     if: ${{ needs.version.outputs.released == 'true' && github.ref_name == 'main' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -113,7 +113,7 @@ jobs:
 
       - name: Create GitHub Release
         if: steps.tags.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tags.outputs.current_tag }}
           name: "geniro v${{ steps.tags.outputs.version }}"

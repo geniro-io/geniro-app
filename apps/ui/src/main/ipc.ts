@@ -1,13 +1,14 @@
 import { dialog, ipcMain } from 'electron';
 
-import {
-  IPC,
-  type OnboardingInput,
-  type SecretName,
-  type Settings,
-} from '../shared/contracts';
+import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import {
+  onboardingInputSchema,
+  secretNameSchema,
+  secretValueSchema,
+  settingsPatchSchema,
+} from './ipc-schemas';
 import { deleteSecret, hasSecret, saveSecret } from './keychain';
 import { readSettings, updateSettings } from './settings';
 
@@ -39,29 +40,29 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
 
   ipcMain.handle(IPC.getSettings, () => readSettings());
 
-  ipcMain.handle(IPC.updateSettings, (_event, patch: Partial<Settings>) =>
-    updateSettings(patch),
+  ipcMain.handle(IPC.updateSettings, (_event, patch: unknown) =>
+    updateSettings(settingsPatchSchema.parse(patch)),
   );
 
   ipcMain.handle(IPC.detectClis, () => detectClis(readSettings()));
 
-  ipcMain.handle(IPC.saveSecret, (_event, name: SecretName, value: string) => {
-    saveSecret(name, value);
+  ipcMain.handle(IPC.saveSecret, (_event, name: unknown, value: unknown) => {
+    saveSecret(secretNameSchema.parse(name), secretValueSchema.parse(value));
   });
 
-  ipcMain.handle(IPC.hasSecret, (_event, name: SecretName) => hasSecret(name));
+  ipcMain.handle(IPC.hasSecret, (_event, name: unknown) =>
+    hasSecret(secretNameSchema.parse(name)),
+  );
 
-  ipcMain.handle(IPC.deleteSecret, (_event, name: SecretName) => {
-    deleteSecret(name);
+  ipcMain.handle(IPC.deleteSecret, (_event, name: unknown) => {
+    deleteSecret(secretNameSchema.parse(name));
   });
 
-  ipcMain.handle(IPC.completeOnboarding, (_event, input: OnboardingInput) => {
-    if (input.cursorApiKey) {
-      saveSecret('cursor.apiKey', input.cursorApiKey);
+  ipcMain.handle(IPC.completeOnboarding, (_event, input: unknown) => {
+    const { projectFolder, cursorApiKey } = onboardingInputSchema.parse(input);
+    if (cursorApiKey) {
+      saveSecret('cursor.apiKey', cursorApiKey);
     }
-    return updateSettings({
-      projectFolder: input.projectFolder,
-      onboardingComplete: true,
-    });
+    return updateSettings({ projectFolder, onboardingComplete: true });
   });
 }

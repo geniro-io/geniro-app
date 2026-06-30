@@ -1,0 +1,9 @@
+geniro-app
+Copyright 2026 Sergei Razumovskii
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+This project reuses code from the Geniro project (by the same author), used
+under the Apache License 2.0. Third-party Apache-licensed components vendored
+in later milestones (e.g. the Omnigent CLI-agent layer, M2) will have their
+attribution notices added to this file.

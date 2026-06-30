@@ -27,10 +27,9 @@
     "types": ["node"],
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true,
-    "ignoreDeprecations": "6.0",
     "paths": {
       "@packages/*": ["./packages/*/src"]
     }
   },
-  "exclude": ["node_modules", "tmp", "dist", "out"]
+  "exclude": ["node_modules", "tmp", "dist"]
 }

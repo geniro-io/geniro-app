@@ -5,29 +5,27 @@
   "exports": {
     ".": {
       "source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
     }
   },
   "dependencies": {
-    "@mikro-orm/core": "^7.1.4",
-    "@mikro-orm/decorators": "^7.1.4",
-    "@mikro-orm/migrations": "^7.1.4",
+    "@mikro-orm/core": "^7.1.5",
+    "@mikro-orm/decorators": "^7.1.5",
+    "@mikro-orm/migrations": "^7.1.5",
     "@mikro-orm/nestjs": "^7.0.2",
-    "@mikro-orm/sqlite": "^7.1.4",
-    "@nestjs/common": "^11.1.24",
-    "@nestjs/core": "^11.1.24",
+    "@mikro-orm/sqlite": "^7.1.5",
+    "@nestjs/common": "^11.1.27",
+    "@nestjs/core": "^11.1.27",
     "@packages/common": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^25.9.2",
-    "eslint": "^10.4.1",
+    "@types/node": "^26.0.1",
+    "eslint": "^10.6.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   },
   "main": "dist/index.js",
-  "module": "./dist/index.mjs",
   "peerDependencies": {
     "@mikro-orm/core": "^7.0.0",
     "@mikro-orm/sqlite": "^7.0.0",
@@ -38,10 +36,11 @@
   "scripts": {
     "lint:fix": "pnpm run lint --fix",
     "lint": "pnpm eslint src",
-    "build": "tsup",
+    "build": "swc src -d dist --config-file .swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
     "prebuild": "rm -rf ./dist || true",
+    "check-types": "tsc --noEmit -p tsconfig.build.json",
     "test": "vitest run --passWithNoTests",
     "test:unit": "vitest run --passWithNoTests --fileParallelism"
   },
-  "types": "dist/index.d.ts"
+  "types": "src/index.ts"
 }

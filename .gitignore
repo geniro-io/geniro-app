@@ -1,36 +1,53 @@
-# dependencies
-node_modules/
-.pnp.*
+# See http://help.github.com/ignore-files/ for more about ignoring files.
 
-# build output
+# Build output
+/dist
 dist/
 out/
-release/
-*.tsbuildinfo
+/tmp
 .turbo/
+tsconfig.build.tsbuildinfo
 
-# test / coverage
-coverage/
+# Dependencies
+node_modules
 
-# logs
-*.log
-npm-debug.log*
-
-# env / local secrets (never commit)
-.env
-.env.*
-
-# editors / OS
-.DS_Store
-Thumbs.db
-.idea/
+# IDEs and editors
+/.idea
 .vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
 !.vscode/extensions.json
 
-# geniro plugin transient working files (durable spec/milestones stay tracked)
-.geniro/planning/*/state.md
-.geniro/planning/*/.kr-out.md
-.geniro/planning/*/.ce-out.md
-.geniro/planning/*/.tr-out.md
-.claude/worktrees/
+# Test / coverage
+coverage/
+**/cypress/allure-results/
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Secrets / local env — never committed. User secrets live in the macOS Keychain;
+# .env.example is the tracked template.
+.env
+
+# JetBrains AI assistant
+.junie/
+
+# Claude Code local files (not committed)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
+# CodeGraph index (local-only, rebuilt per machine)
+.codegraph
+
+# geniro working state — state.md and other generated files stay local; the
+# already-tracked plan/spec/milestones, workflow, and instructions are committed.
+.geniro/
+!.geniro/workflow/
+!.geniro/workflow/**
+!.geniro/instructions/
+!.geniro/instructions/**

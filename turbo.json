@@ -8,10 +8,7 @@
         "src/**",
         "index.html",
         "electron.vite.config.ts",
-        "tsup.config.ts",
         ".swcrc",
-        "drizzle.config.ts",
-        "drizzle/**",
         "package.json"
       ],
       "outputs": ["dist/**", "out/**"]
@@ -40,6 +37,23 @@
     "test:cov": {
       "dependsOn": ["^build"],
       "inputs": ["src/**"]
+    },
+    "build:tests": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"],
+      "outputs": []
+    },
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**"]
+    },
+    "test:e2e": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
+    "test:e2e:local": {
+      "dependsOn": ["^build"],
+      "cache": false
     },
     "dev": {
       "cache": false,

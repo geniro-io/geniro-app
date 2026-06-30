@@ -1,26 +1,17 @@
-// eslint.config.mjs — flat config, mirrors the sibling geniro repo conventions.
+// eslint.config.mjs
 import pluginJs from '@eslint/js';
 import { defineConfig, globalIgnores } from 'eslint/config';
-import eslintConfigPrettier from 'eslint-config-prettier';
 import prettierRecommended from 'eslint-plugin-prettier/recommended';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
-/** @type {import('eslint').Linter.FlatConfig[]} */
+/** @type {import('eslint').Linter.Config[]} */
 const config = defineConfig([
-  globalIgnores([
-    '**/dist/**',
-    '**/out/**',
-    '**/node_modules/**',
-    '**/.turbo/**',
-    '**/*.gen.ts',
-    '**/*.js',
-    '**/*.mjs',
-    '**/*.cjs',
-  ]),
-  { languageOptions: { globals: { ...globals.node, ...globals.browser } } },
+  globalIgnores(['**/*.gen.ts', '**/*.js', '**/*.mjs', '**/*.cjs']),
+  { languageOptions: { globals: globals.node } },
   pluginJs.configs.recommended,
+  // Base TypeScript rules (non-type-aware).
   ...tseslint.configs.recommended,
   {
     files: ['**/*.{ts,tsx}'],
@@ -38,7 +29,6 @@ const config = defineConfig([
       'simple-import-sort/exports': 'error',
     },
   },
-  eslintConfigPrettier,
   prettierRecommended,
   {
     rules: {
@@ -97,9 +87,21 @@ const config = defineConfig([
     },
   },
   {
-    files: ['**/*.spec.ts', '**/*.int.ts'],
+    files: ['**/*.spec.ts', '**/*.spec.tsx', '**/*.int.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+  {
+    files: [
+      '**/*.spec.ts',
+      '**/*.spec.tsx',
+      '**/*.int.ts',
+      '**/*.cy.ts',
+      '**/cypress/**/*.{js,ts,tsx}',
+    ],
+    rules: {
+      // Tests frequently consume intentionally-untyped fixtures and API responses.
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
     },

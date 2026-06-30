@@ -7,7 +7,7 @@ export default defineConfig({
   test: {
     globals: true,
     silent: false,
-    projects: ['packages/*', 'apps/*', 'apps/api/vitest.integration.config.ts'],
+    projects: ['packages/*', 'apps/*'],
     fileParallelism: false,
     maxWorkers: 5,
     coverage: {

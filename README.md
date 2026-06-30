@@ -25,19 +25,25 @@ packages/
   http-server/      @packages/http-server — NestJS + Fastify host: health, swagger/scalar, helmet, validation (vendored; OIDC auth dormant)
   metrics/          @packages/metrics — Prometheus metrics (vendored from Geniro)
   mikroorm/         @packages/mikroorm — base entity/DAO + MikroORM module (vendored; driver swapped to @mikro-orm/sqlite)
-  types/            @packages/types  — shared daemon ⇄ shell wire/IPC contracts (geniro-app-specific)
 ```
 
 **The daemon is a separable engine.** The Electron shell spawns the built daemon
 as a child process (`ELECTRON_RUN_AS_NODE`) over loopback, waits for its
 `/health/check`, then loads the renderer. The daemon writes a pidfile
-(`daemon.json`: pid + port + per-launch bearer token) only after it is healthy;
-a relaunching shell reuses a still-running daemon and sweeps orphaned pidfiles.
+(`daemon.json`: pid + host + port + per-launch bearer token) only after it is
+healthy, and the shell discovers the bound host + port by reading it; a
+relaunching shell reuses a still-running daemon and sweeps orphaned pidfiles.
 
 **Local-first adaptations vs Geniro** (the sibling cloud app): SQLite via
 `@mikro-orm/sqlite` (better-sqlite3) instead of Postgres; no Sentry; no Redis /
 cloud / OIDC; the server binds `127.0.0.1` only and is gated by a per-launch
 loopback token.
+
+**Build toolchain:** the daemon and all `packages/*` compile with **swc** to
+CommonJS (`dist/`); the Electron shell builds with **electron-vite**. Internal
+`@packages/*` imports resolve to TypeScript source via a tsconfig path alias, so
+the packages ship no `.d.ts` and type-checking runs as a separate `tsc --noEmit`
+(`pnpm check-types`).
 
 **Storage split:** graph definitions → YAML (M3); settings → `settings.json` in
 userData; secrets → macOS Keychain (`@napi-rs/keyring`) only; SQLite holds
@@ -48,10 +54,11 @@ runtime/history only (`runs` / `items` / `node_state`).
 ```bash
 pnpm install          # install workspace deps
 pnpm rebuild:native   # rebuild better-sqlite3 against Electron's ABI (required)
-pnpm build            # build all packages (turbo)
+pnpm build            # build all packages + the shell (turbo → swc / electron-vite)
 pnpm dev              # launch the Electron app (electron-vite) — spawns the daemon
 
 pnpm full-check       # build + check-types + lint + unit tests
+pnpm upgrade          # bump every workspace dep to latest (ncu, peer-aware) + reinstall
 ```
 
 `pnpm rebuild:native` is required because the daemon runs under Electron's
@@ -70,6 +77,10 @@ bundled Node, so its native `better-sqlite3` must be built for Electron's ABI
 
 ## Requirements
 
-macOS · Node ≥ 22.12 · pnpm 11 · Xcode Command Line Tools (for the native
-`better-sqlite3` build). Agent CLIs (`claude`, `cursor-agent`) are detected
-during onboarding; they're driven headlessly in M2.
+macOS · Node ≥ 24 · pnpm 10 (via `corepack`) · Xcode Command Line Tools (for the
+native `better-sqlite3` build). Agent CLIs (`claude`, `cursor-agent`) are
+detected during onboarding; they're driven headlessly in M2.
+
+## License
+
+[Apache License 2.0](LICENSE) — see also [`NOTICE`](NOTICE) for attribution.

@@ -151,7 +151,7 @@ input {
   justify-content: flex-end;
 }
 
-/* ── Main shell ─────────────────────────────────────────── */
+/* ── Main UI ────────────────────────────────────────────── */
 .app {
   height: 100%;
   display: flex;

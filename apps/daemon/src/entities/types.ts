@@ -1,7 +1,7 @@
 /**
  * Persisted enum shapes for the SQLite entities. Daemon-internal — these model
  * runtime/history rows, not a wire contract. The HTTP/WS DTOs that expose this
- * data to the shell are generated from the daemon's OpenAPI spec (M2).
+ * data to the UI are generated from the daemon's OpenAPI spec (M2).
  */
 
 export type RunStatus =

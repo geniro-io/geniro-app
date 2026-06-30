@@ -11,7 +11,7 @@ import { safeEqual } from './safe-equal';
 
 /**
  * Path prefixes reachable without the loopback bearer token: the readiness
- * probe the shell polls, Prometheus metrics, and the local Swagger/Scalar docs.
+ * probe the UI polls, Prometheus metrics, and the local Swagger/Scalar docs.
  */
 const PUBLIC_PREFIXES = ['/health', '/metrics', '/swagger-api'];
 

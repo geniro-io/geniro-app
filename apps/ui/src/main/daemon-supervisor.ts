@@ -90,7 +90,7 @@ function toHandle(info: DaemonInfo): DaemonHandle {
 
 /**
  * Spawns and supervises the loopback daemon child. Reuses a healthy daemon left
- * running by a prior shell instance (via the pidfile), sweeps orphaned pidfiles,
+ * running by a prior UI instance (via the pidfile), sweeps orphaned pidfiles,
  * and tears down only the process it owns on quit.
  */
 export class DaemonSupervisor {
@@ -105,7 +105,7 @@ export class DaemonSupervisor {
       isAlive(existing.pid) &&
       (await checkHealth(existing.host, existing.port))
     ) {
-      // Reuse a daemon another shell instance already started.
+      // Reuse a daemon another UI instance already started.
       this.owned = false;
       this.handle = toHandle(existing);
       return this.handle;

@@ -2,7 +2,7 @@ type Level = 'info' | 'warn' | 'error';
 
 /**
  * Minimal structured logger. Writes JSON lines to STDERR so STDOUT stays clean
- * for the machine-readable readiness marker the shell parses on spawn.
+ * for the machine-readable readiness marker the UI parses on spawn.
  */
 function emit(
   level: Level,

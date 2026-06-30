@@ -47,7 +47,7 @@ void app.whenReady().then(async () => {
   } catch (err) {
     // Surface the failure but still open the window — the renderer renders a
     // disconnected state rather than the app failing to launch.
-    console.error('[shell] daemon failed to start:', err);
+    console.error('[ui] daemon failed to start:', err);
   }
 
   createWindow();

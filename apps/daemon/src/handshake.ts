@@ -1,12 +1,12 @@
 /**
- * Daemon ↔ shell handshake contract (daemon-internal).
+ * Daemon ↔ UI handshake contract (daemon-internal).
  *
  * The daemon is the source of truth for the loopback bind: it owns the
  * host/port defaults (overridable via env), binds, then writes the pidfile and
- * stamps the *actual* host + port into it. The Electron shell discovers
+ * stamps the *actual* host + port into it. The Electron UI discovers
  * everything by reading that pidfile — it does NOT import these constants. The
  * only thing both sides agree on out-of-band is the pidfile filename
- * ({@link DAEMON_PIDFILE_NAME}), mirrored by the shell's own reader.
+ * ({@link DAEMON_PIDFILE_NAME}), mirrored by the UI's own reader.
  */
 
 /** Host the daemon always binds to — loopback only, never a routable address. */
@@ -20,7 +20,7 @@ export const DAEMON_PREFERRED_PORT = 47615;
 
 /**
  * Pidfile name under the userData dir. MUST stay identical to the literal in
- * the shell's reader (`apps/shell/src/main/daemon-pidfile.ts`) — it is the
+ * the UI's reader (`apps/ui/src/main/daemon-pidfile.ts`) — it is the
  * bootstrap rendezvous point and cannot be discovered over HTTP.
  */
 export const DAEMON_PIDFILE_NAME = 'daemon.json';

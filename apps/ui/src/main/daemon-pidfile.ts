@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 /**
  * Reader side of the daemon handshake. The daemon (apps/daemon) is the
  * source of truth — it owns the bind defaults, writes this file, and stamps the
- * actual host + port into it. The shell discovers the daemon solely by reading
+ * actual host + port into it. The UI discovers the daemon solely by reading
  * the file here; it shares no constants with the daemon. The one value both
  * sides must agree on is {@link PIDFILE_NAME} — it is the bootstrap rendezvous
  * point and cannot be fetched over HTTP (you need it to find the port first).

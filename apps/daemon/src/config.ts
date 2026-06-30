@@ -27,7 +27,7 @@ export interface DaemonConfig {
 }
 
 /**
- * Resolve runtime config from the environment. The Electron shell passes
+ * Resolve runtime config from the environment. The Electron UI passes
  * `GENIRO_USER_DATA` (its userData path); standalone/dev runs fall back to
  * `~/.geniro`. The directory is created if missing.
  */

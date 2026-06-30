@@ -1,7 +1,7 @@
 /**
- * Contracts shared INSIDE the Electron shell (main ⇄ preload ⇄ renderer).
+ * Contracts shared INSIDE the Electron UI app (main ⇄ preload ⇄ renderer).
  *
- * These never cross to the daemon: the shell reaches the daemon only by reading
+ * These never cross to the daemon: the UI reaches the daemon only by reading
  * its pidfile (see `main/daemon-pidfile.ts`) and over loopback HTTP/WS. Daemon
  * wire shapes (M2) come from the daemon's generated OpenAPI client, not here.
  */

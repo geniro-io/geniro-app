@@ -5,8 +5,8 @@ agents** as a team. A from-scratch rewrite of Geniro that marries Geniro's
 graph engine with a local-first, CLI-agent execution layer — everything runs on
 your machine, no cloud.
 
-> **Milestone 1 — Shell + infrastructure.** This is the foundation: an Electron
-> shell that supervises a bundled local daemon over loopback, with a SQLite
+> **Milestone 1 — UI + infrastructure.** This is the foundation: an Electron
+> UI that supervises a bundled local daemon over loopback, with a SQLite
 > store and a first-run onboarding flow. Agents, the graph, chat, the terminal
 > mirror, and packaging arrive in M2–M4.
 
@@ -18,7 +18,7 @@ Postgres, no cloud telemetry, loopback-only).
 
 ```
 apps/
-  shell/            @geniro/shell    — Electron main + preload + React renderer (electron-vite)
+  ui/               @geniro/ui       — Electron main + preload + React renderer (electron-vite)
   daemon/           @geniro/daemon   — NestJS loopback daemon (apps/api-style) over @packages/http-server + mikro-orm SQLite
 packages/
   common/           @packages/common — app bootstrapper, pino logger, exceptions (vendored from Geniro; Sentry removed)
@@ -27,12 +27,12 @@ packages/
   mikroorm/         @packages/mikroorm — base entity/DAO + MikroORM module (vendored; driver swapped to @mikro-orm/sqlite)
 ```
 
-**The daemon is a separable engine.** The Electron shell spawns the built daemon
+**The daemon is a separable engine.** The Electron UI spawns the built daemon
 as a child process (`ELECTRON_RUN_AS_NODE`) over loopback, waits for its
 `/health/check`, then loads the renderer. The daemon writes a pidfile
 (`daemon.json`: pid + host + port + per-launch bearer token) only after it is
-healthy, and the shell discovers the bound host + port by reading it; a
-relaunching shell reuses a still-running daemon and sweeps orphaned pidfiles.
+healthy, and the UI discovers the bound host + port by reading it; a
+relaunching UI reuses a still-running daemon and sweeps orphaned pidfiles.
 
 **Local-first adaptations vs Geniro** (the sibling cloud app): SQLite via
 `@mikro-orm/sqlite` (better-sqlite3) instead of Postgres; no Sentry; no Redis /
@@ -40,7 +40,7 @@ cloud / OIDC; the server binds `127.0.0.1` only and is gated by a per-launch
 loopback token.
 
 **Build toolchain:** the daemon and all `packages/*` compile with **swc** to
-CommonJS (`dist/`); the Electron shell builds with **electron-vite**. Internal
+CommonJS (`dist/`); the Electron UI builds with **electron-vite**. Internal
 `@packages/*` imports resolve to TypeScript source via a tsconfig path alias, so
 the packages ship no `.d.ts` and type-checking runs as a separate `tsc --noEmit`
 (`pnpm check-types`).
@@ -54,7 +54,7 @@ runtime/history only (`runs` / `items` / `node_state`).
 ```bash
 pnpm install          # install workspace deps
 pnpm rebuild:native   # rebuild better-sqlite3 against Electron's ABI (required)
-pnpm build            # build all packages + the shell (turbo → swc / electron-vite)
+pnpm build            # build all packages + the UI (turbo → swc / electron-vite)
 pnpm dev              # launch the Electron app (electron-vite) — spawns the daemon
 
 pnpm full-check       # build + check-types + lint + unit tests

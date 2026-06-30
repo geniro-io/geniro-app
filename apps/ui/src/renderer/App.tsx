@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { DaemonHandle } from '../shared/contracts';
+import { Chats } from './chats/Chats';
 import { DaemonClient } from './daemon-client';
 import { Onboarding } from './onboarding/Onboarding';
 
@@ -20,16 +22,16 @@ export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>('loading');
   const [connected, setConnected] = useState(false);
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
-  const [lastEcho, setLastEcho] = useState<string | null>(null);
+  const [handle, setHandle] = useState<DaemonHandle | null>(null);
   const clientRef = useRef<DaemonClient | null>(null);
 
   const connectDaemon = useCallback(async (): Promise<void> => {
-    const handle = await window.geniro.getDaemonHandle();
-    if (!handle) {
+    const daemonHandle = await window.geniro.getDaemonHandle();
+    if (!daemonHandle) {
       setConnected(false);
       return;
     }
-    const client = new DaemonClient(handle, {
+    const client = new DaemonClient(daemonHandle, {
       onOpen: () => setConnected(true),
       onClose: () => setConnected(false),
       onMessage: (event, data) => {
@@ -38,13 +40,12 @@ export function App(): React.JSX.Element {
           if (version) {
             setDaemonVersion(version);
           }
-        } else if (event === 'echo') {
-          setLastEcho(typeof data === 'string' ? data : JSON.stringify(data));
         }
       },
     });
     clientRef.current = client;
     client.connect();
+    setHandle(daemonHandle); // triggers the render that mounts <Chats>
   }, []);
 
   useEffect(() => {
@@ -89,16 +90,12 @@ export function App(): React.JSX.Element {
             : '○ disconnected'}
         </span>
       </header>
-      <main className="center">
-        <h1>You&rsquo;re set up.</h1>
-        <p className="muted">
-          The daemon is running locally. Workflows and Chats arrive in the next
-          milestones.
-        </p>
-        <button onClick={() => clientRef.current?.send('ping')}>
-          Ping daemon
-        </button>
-        {lastEcho && <p className="muted">echo: {lastEcho}</p>}
+      <main className="app-body">
+        {handle && clientRef.current ? (
+          <Chats client={clientRef.current} handle={handle} />
+        ) : (
+          <div className="center muted">Connecting to the daemon…</div>
+        )}
       </main>
     </div>
   );

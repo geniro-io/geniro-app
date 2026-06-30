@@ -44,7 +44,12 @@ bootstrapper.addExtension(
       host: environment.host,
       portFallback: true,
       swagger: {},
-      corsOrigin: '',
+      // Allow the renderer (file://, or the electron-vite dev origin) to call
+      // the loopback REST API directly. Safe here: the daemon binds 127.0.0.1
+      // only and every non-public route is token-gated — same posture as the
+      // WS gateway's `cors.origin: '*'`. The bearer token, not the origin, is
+      // the gate.
+      corsOrigin: '*',
       onListening: ({ host, port }) => {
         // Written only after the schema is migrated (appChangeCb) and the server
         // is listening — a reader that sees the pidfile is guaranteed a healthy,

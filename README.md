@@ -75,23 +75,6 @@ bundled Node, so its native `better-sqlite3` must be built for Electron's ABI
 | `GET /ws?token=…` | renderer ⇄ daemon WebSocket | per-launch token |
 | (future M2+ routes) | runs / items / agents | bearer token (loopback guard) |
 
-## Repo conventions
-
-Project-specific rules for the Geniro pipeline skills (`/geniro:implement`,
-`/geniro:review`, `/geniro:plan`, `/geniro:debug`, …) live in
-[`.geniro/instructions/global.md`](.geniro/instructions/global.md) — the skills
-read it at the start of each run and at every phase-boundary refresh. The hard
-local-first/security rules there mirror `CLAUDE.md`. Its blocks:
-
-| Block | Holds |
-|---|---|
-| `## Rules` | Working rules — `pnpm full-check` before done, never `--no-verify`, no `any`, CodeGraph-before-grep/Read, minimal edits to vendored `@packages/*`, `pnpm rebuild:native` after ABI changes |
-| `## Additional Steps` | Phase-boundary steps: `After worktree-setup` (worktree-local CodeGraph index bootstrap), `Before ship`, `After implement` |
-| `## Constraints` | Hard local-first/security invariants — no cloud, no Python, Keychain-only secrets, loopback + per-launch token, YAML graph definitions |
-
-Edit it via `/geniro:instructions`; the block schema is owned by that skill, not
-this repo.
-
 ## Requirements
 
 macOS · Node ≥ 24 · pnpm 11 (via `corepack`) · Xcode Command Line Tools (for the

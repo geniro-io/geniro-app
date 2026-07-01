@@ -29,6 +29,52 @@ export interface DaemonStatus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Chat (daemon wire shapes — hand-mirrored from the daemon's chat.types until
+// an OpenAPI client is generated; keep in sync with apps/daemon v1/agents)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Run lifecycle status (mirrors the daemon `RunStatus`). */
+export type ChatRunStatus =
+  'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** Normalized transcript item kind (mirrors the daemon's 11-kind `ItemKind`). */
+export type ChatItemKind =
+  | 'message'
+  | 'reasoning'
+  | 'tool_call'
+  | 'tool_result'
+  | 'turn_complete'
+  | 'turn_cancelled'
+  | 'usage'
+  | 'system'
+  | 'error'
+  | 'attachment'
+  | 'status';
+
+/** A single-agent chat run. */
+export interface ChatRun {
+  id: string;
+  status: ChatRunStatus;
+  title: string | null;
+  agentKind: CliKind | null;
+  cwd: string | null;
+  model: string | null;
+  createdAt: string;
+}
+
+/** A persisted transcript item streamed over `/ws` and read back over REST. */
+export interface ChatItem {
+  id: string;
+  runId: string;
+  nodeId: string | null;
+  seq: number;
+  kind: ChatItemKind;
+  role: string | null;
+  payload: unknown;
+  createdAt: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Settings (non-secret app config — persisted as JSON in userData)
 // ─────────────────────────────────────────────────────────────────────────────
 

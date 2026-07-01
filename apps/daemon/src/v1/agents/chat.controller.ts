@@ -1,0 +1,46 @@
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+
+import { CreateChatDto, HistoryQueryDto, SendMessageDto } from './chat.dto';
+import { ChatService } from './chat.service';
+import type { ItemWire, RunWire } from './chat.types';
+
+/**
+ * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).
+ * Commands and history are HTTP; the streamed transcript arrives over the `/ws`
+ * Socket.IO channel. Inputs are validated by the global Zod pipe.
+ */
+@Controller('v1/chats')
+export class ChatController {
+  constructor(private readonly chatService: ChatService) {}
+
+  @Post()
+  createChat(@Body() dto: CreateChatDto): Promise<RunWire> {
+    return this.chatService.createChat(dto);
+  }
+
+  @Get()
+  listChats(): Promise<RunWire[]> {
+    return this.chatService.listChats();
+  }
+
+  @Get(':runId/items')
+  getHistory(
+    @Param('runId') runId: string,
+    @Query() query: HistoryQueryDto,
+  ): Promise<ItemWire[]> {
+    return this.chatService.getHistory(runId, query.afterSeq ?? -1);
+  }
+
+  @Post(':runId/messages')
+  sendMessage(
+    @Param('runId') runId: string,
+    @Body() dto: SendMessageDto,
+  ): Promise<ItemWire> {
+    return this.chatService.sendMessage(runId, dto.text);
+  }
+
+  @Post(':runId/cancel')
+  cancel(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
+    return this.chatService.cancel(runId);
+  }
+}

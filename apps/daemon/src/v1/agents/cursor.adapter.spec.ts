@@ -1,0 +1,218 @@
+import { EventEmitter } from 'node:events';
+
+import { describe, expect, it } from 'vitest';
+
+import { CursorExecutor, mapCursorMessage } from './cursor.adapter';
+import type { AgentEvent } from './executor.types';
+import type { SpawnedProcess, SpawnFn } from './spawn-cli';
+
+class FakeReadable extends EventEmitter {
+  setEncoding(): this {
+    return this;
+  }
+  emitData(chunk: string): void {
+    this.emit('data', chunk);
+  }
+}
+class FakeWritable extends EventEmitter {
+  written = '';
+  write(chunk: string): boolean {
+    this.written += chunk;
+    return true;
+  }
+  end(): this {
+    return this;
+  }
+}
+class FakeChild extends EventEmitter {
+  readonly stdout = new FakeReadable();
+  readonly stderr = new FakeReadable();
+  readonly stdin = new FakeWritable();
+  kill(): boolean {
+    return true;
+  }
+}
+
+function fakeSpawn(): {
+  spawn: SpawnFn;
+  child: FakeChild;
+  captured: { command?: string; args?: string[] };
+} {
+  const child = new FakeChild();
+  const captured: { command?: string; args?: string[] } = {};
+  const spawn: SpawnFn = (command, args) => {
+    captured.command = command;
+    captured.args = args;
+    return child as unknown as SpawnedProcess;
+  };
+  return { spawn, child, captured };
+}
+
+describe('mapCursorMessage', () => {
+  it('reads the session id from a system event under any known key', () => {
+    expect(mapCursorMessage({ type: 'system', chatId: 'c-9' })).toEqual([
+      { type: 'session', sessionId: 'c-9' },
+    ]);
+    expect(mapCursorMessage({ type: 'system', session_id: 's-9' })).toEqual([
+      { type: 'session', sessionId: 's-9' },
+    ]);
+  });
+
+  it('maps assistant nested content blocks', () => {
+    expect(
+      mapCursorMessage({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'hi' }] },
+      }),
+    ).toEqual([{ type: 'text', text: 'hi' }]);
+  });
+
+  it('maps a flat assistant text shape', () => {
+    expect(mapCursorMessage({ type: 'assistant', text: 'flat hi' })).toEqual([
+      { type: 'text', text: 'flat hi' },
+    ]);
+  });
+
+  it('surfaces a session id riding on a non-system event, then the payload', () => {
+    expect(
+      mapCursorMessage({ type: 'assistant', chat_id: 'c-1', text: 'yo' }),
+    ).toEqual([
+      { type: 'session', sessionId: 'c-1' },
+      { type: 'text', text: 'yo' },
+    ]);
+  });
+
+  it('maps a top-level tool_call', () => {
+    expect(
+      mapCursorMessage({
+        type: 'tool_call',
+        id: 't1',
+        name: 'Bash',
+        input: { cmd: 'ls' },
+      }),
+    ).toEqual([
+      { type: 'tool_call', id: 't1', name: 'Bash', input: { cmd: 'ls' } },
+    ]);
+  });
+
+  it('maps a successful result with a cost_usd variant', () => {
+    expect(
+      mapCursorMessage({
+        type: 'result',
+        is_error: false,
+        cost_usd: 0.02,
+        stop_reason: 'end_turn',
+        usage: { inputTokens: 5, outputTokens: 1 },
+      }),
+    ).toEqual([
+      {
+        type: 'turn_complete',
+        usage: { inputTokens: 5, outputTokens: 1, costUsd: 0.02 },
+        stopReason: 'end_turn',
+      },
+    ]);
+  });
+
+  it('maps an error result', () => {
+    expect(
+      mapCursorMessage({
+        type: 'result',
+        is_error: true,
+        error: 'rate limited',
+      }),
+    ).toEqual([{ type: 'error', message: 'rate limited' }]);
+  });
+
+  it('ignores unknown types and non-objects', () => {
+    expect(mapCursorMessage({ type: 'heartbeat' })).toEqual([]);
+    expect(mapCursorMessage(null)).toEqual([]);
+    expect(mapCursorMessage([1, 2, 3])).toEqual([]);
+  });
+
+  it('degrades to a fresh session when a system event carries no recognized key', () => {
+    // No session/chat/thread id under any known key → no session event, so the
+    // turn starts fresh instead of resuming a bogus id.
+    expect(mapCursorMessage({ type: 'system', subtype: 'init' })).toEqual([]);
+  });
+});
+
+describe('CursorExecutor', () => {
+  it('passes the prompt as a positional arg and streams a turn', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new CursorExecutor({ spawn }).start(
+      { prompt: 'list files', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+
+    child.stdout.emitData('{"type":"system","chatId":"c-1"}\n');
+    child.stdout.emitData('{"type":"assistant","text":"done"}\n');
+    child.stdout.emitData('{"type":"result","is_error":false}\n');
+    child.emit('close', 0, null);
+    await handle.done;
+
+    expect(captured.command).toBe('cursor-agent');
+    expect(captured.args).toEqual(
+      expect.arrayContaining([
+        '-p',
+        '--output-format',
+        'stream-json',
+        '--force',
+      ]),
+    );
+    expect(captured.args?.at(-1)).toBe('list files');
+    // Cursor reads the prompt from argv — stdin carries no payload.
+    expect(child.stdin.written).toBe('');
+    expect(events).toEqual([
+      { type: 'session', sessionId: 'c-1' },
+      { type: 'text', text: 'done' },
+      {
+        type: 'turn_complete',
+        usage: { inputTokens: null, outputTokens: null, costUsd: null },
+        stopReason: null,
+      },
+    ]);
+  });
+
+  it('passes --resume with the prior chat id', () => {
+    const { spawn, captured } = fakeSpawn();
+    new CursorExecutor({ spawn }).start(
+      { prompt: 'go', cwd: '/proj', resumeSessionId: 'c-prev' },
+      () => {},
+    );
+    expect(captured.args).toEqual(
+      expect.arrayContaining(['--resume', 'c-prev']),
+    );
+  });
+
+  it('puts the end-of-options separator before a dash-leading prompt', () => {
+    const { spawn, captured } = fakeSpawn();
+    new CursorExecutor({ spawn }).start(
+      { prompt: '--help', cwd: '/proj' },
+      () => {},
+    );
+    // `--` immediately precedes the prompt so the CLI treats `--help` as prompt
+    // text, not as one of its own flags.
+    expect(captured.args?.at(-2)).toBe('--');
+    expect(captured.args?.at(-1)).toBe('--help');
+  });
+
+  it('fails fast with an error event on a non-zero exit', async () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new CursorExecutor({ spawn }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    child.stderr.emitData('not logged in');
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events).toEqual([
+      {
+        type: 'error',
+        message: 'cursor-agent exited with code 1: not logged in',
+      },
+    ]);
+  });
+});

@@ -1,9 +1,10 @@
 import { cn } from './ui/utils';
 
-export type StatusTone = 'ok' | 'bad' | 'unknown';
+export type StatusTone = 'ok' | 'warn' | 'bad' | 'unknown';
 
 const TONE = {
   ok: 'bg-success',
+  warn: 'bg-warning',
   bad: 'bg-destructive',
   unknown: 'bg-muted-foreground/50',
 } as const satisfies Record<StatusTone, string>;

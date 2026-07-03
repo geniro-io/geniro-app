@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   CLI_KINDS,
@@ -16,19 +16,41 @@ import { Input } from '../components/ui/input';
 
 type AgentStatus = { label: string; tone: StatusTone };
 
-function agentStatus(clis: CliDetection[] | null, kind: CliKind): AgentStatus {
+/** Agents that can't run on the binary alone — they also need a saved secret. */
+function needsApiKey(kind: CliKind): boolean {
+  return kind === 'cursor-agent';
+}
+
+/**
+ * Readiness of one agent. "Ready" (green) means the app can actually drive it:
+ * the binary was detected AND, for key-gated agents, a key is present. A
+ * detected-but-keyless cursor-agent is amber, not green — it can't run yet.
+ */
+function statusFor(
+  clis: CliDetection[] | null,
+  kind: CliKind,
+  keyPresent: boolean,
+): AgentStatus {
   if (clis === null) {
     return { label: 'Checking…', tone: 'unknown' };
   }
   const detection = clis.find((c) => c.kind === kind) ?? null;
-  if (detection?.found) {
-    return {
-      label: `detected${detection.version ? ` · ${detection.version}` : ''}`,
-      tone: 'ok',
-    };
+  if (!detection?.found) {
+    return { label: 'not found on PATH', tone: 'bad' };
   }
-  return { label: 'not found on PATH', tone: 'bad' };
+  const version = detection.version ? ` · ${detection.version}` : '';
+  if (needsApiKey(kind) && !keyPresent) {
+    return { label: `detected${version} · needs API key`, tone: 'warn' };
+  }
+  return { label: `ready${version}`, tone: 'ok' };
 }
+
+const STATUS_TEXT: Record<StatusTone, string> = {
+  ok: 'text-sm text-success',
+  warn: 'text-sm text-warning',
+  bad: 'text-sm text-destructive',
+  unknown: 'text-sm text-muted-foreground',
+};
 
 export function Onboarding({
   onDone,
@@ -41,12 +63,56 @@ export function Onboarding({
     Partial<Record<CliKind, string>>
   >({});
   const [cursorKey, setCursorKey] = useState('');
+  // Whether a Cursor key is already saved in the Keychain (null = still loading).
+  const [hasStoredKey, setHasStoredKey] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const didAutoOpenRef = useRef(false);
+
+  const keyPresent = (hasStoredKey ?? false) || cursorKey.trim() !== '';
 
   useEffect(() => {
     void window.geniro.detectClis().then(setClis);
+    void window.geniro.hasSecret('cursor.apiKey').then(setHasStoredKey);
   }, []);
+
+  // Pre-fill each detected binary's resolved path into its (empty) field, so a
+  // found agent shows exactly which binary will be used. Seeding only empty
+  // fields never clobbers a path the user typed, and a re-check backfills any
+  // field still blank.
+  useEffect(() => {
+    if (!clis) {
+      return;
+    }
+    setBinaryPaths((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const d of clis) {
+        if (d.found && d.path && !next[d.kind]) {
+          next[d.kind] = d.path;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [clis]);
+
+  // Once, after the first detection + key probe settle, expand every agent that
+  // isn't ready — so the thing the user must fix (a missing binary path, a
+  // missing Cursor key) is visible without hunting for the disclosure.
+  useEffect(() => {
+    if (didAutoOpenRef.current || clis === null || hasStoredKey === null) {
+      return;
+    }
+    didAutoOpenRef.current = true;
+    const auto: Partial<Record<CliKind, boolean>> = {};
+    for (const kind of CLI_KINDS) {
+      if (statusFor(clis, kind, keyPresent).tone !== 'ok') {
+        auto[kind] = true;
+      }
+    }
+    setOpen((prev) => ({ ...auto, ...prev }));
+  }, [clis, hasStoredKey, keyPresent]);
 
   const refreshClis = async (): Promise<void> => {
     setClis(null);
@@ -103,9 +169,11 @@ export function Onboarding({
 
       <div className="flex flex-col gap-3">
         {CLI_KINDS.map((kind) => {
-          const status = agentStatus(clis, kind);
+          const detection = clis?.find((c) => c.kind === kind) ?? null;
+          const status = statusFor(clis, kind, keyPresent);
           const isOpen = Boolean(open[kind]);
           const pathId = `agent-path-${kind}`;
+          const found = Boolean(detection?.found);
           return (
             <CollapsibleCard
               key={kind}
@@ -115,14 +183,7 @@ export function Onboarding({
                 <>
                   <StatusDot tone={status.tone} />
                   <span className="font-medium">{kind}</span>
-                  <span
-                    className={
-                      status.tone === 'ok'
-                        ? 'text-sm text-success'
-                        : status.tone === 'bad'
-                          ? 'text-sm text-destructive'
-                          : 'text-sm text-muted-foreground'
-                    }>
+                  <span className={STATUS_TEXT[status.tone]}>
                     {status.label}
                   </span>
                 </>
@@ -130,7 +191,11 @@ export function Onboarding({
               <Field
                 label="Binary path"
                 htmlFor={pathId}
-                hint={`Set only if ${kind} isn't on your PATH.`}>
+                hint={
+                  found
+                    ? 'Detected here — edit to pin a different binary.'
+                    : `Set the full path to the ${kind} binary.`
+                }>
                 <div className="flex gap-2">
                   <Input
                     id={pathId}
@@ -153,15 +218,23 @@ export function Onboarding({
                 </div>
               </Field>
 
-              {kind === 'cursor-agent' ? (
+              {needsApiKey(kind) ? (
                 <Field
                   label="Cursor API key"
                   htmlFor="cursor-api-key"
-                  hint="Stored in your macOS Keychain — never written to disk.">
+                  hint={
+                    hasStoredKey
+                      ? 'A key is already saved in your Keychain — enter a new one to replace it.'
+                      : 'Required to run cursor-agent. Stored in your macOS Keychain — never written to disk.'
+                  }>
                   <Input
                     id="cursor-api-key"
                     type="password"
-                    placeholder="Cursor API key"
+                    placeholder={
+                      hasStoredKey
+                        ? 'Saved — enter a new key to replace'
+                        : 'Cursor API key'
+                    }
                     value={cursorKey}
                     onChange={(event) => setCursorKey(event.target.value)}
                   />

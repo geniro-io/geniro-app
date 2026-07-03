@@ -1,3 +1,4 @@
+import { FolderOpen } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
@@ -44,6 +45,12 @@ function pretty(value: unknown): string {
 }
 
 const PRE_CLASS = 'm-0 overflow-x-auto whitespace-pre-wrap font-mono text-xs';
+
+/** The trailing path segment of an absolute folder path (a compact label). */
+function folderName(path: string): string {
+  const parts = path.split('/').filter(Boolean);
+  return parts.at(-1) ?? path;
+}
 
 /** One transcript row, rendered by item kind. */
 function TranscriptItem({
@@ -132,7 +139,10 @@ export function Chats({
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState('');
   const [agentKind, setAgentKind] = useState<CliKind>('claude');
-  const [projectFolder, setProjectFolder] = useState<string | null>(null);
+  // Working directory for the NEXT new chat. Seeded from the last-used folder
+  // (persisted in settings); each chat records its own cwd, so this is only the
+  // default the picker starts from.
+  const [folder, setFolder] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -215,9 +225,7 @@ export function Chats({
   );
 
   useEffect(() => {
-    void window.geniro
-      .getSettings()
-      .then((s) => setProjectFolder(s.projectFolder));
+    void window.geniro.getSettings().then((s) => setFolder(s.projectFolder));
     void chatApi
       .listChats()
       .then(setRuns)
@@ -251,33 +259,60 @@ export function Chats({
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
 
+  // Persist a chosen folder as the last-used default for the next new chat.
+  const chooseFolder = useCallback((chosen: string): void => {
+    setFolder(chosen);
+    void window.geniro.updateSettings({ projectFolder: chosen });
+  }, []);
+
+  const pickFolder = useCallback(async (): Promise<void> => {
+    const chosen = await window.geniro.pickProjectFolder();
+    if (chosen) {
+      chooseFolder(chosen);
+    }
+  }, [chooseFolder]);
+
+  // Resolve the working directory for a new chat: reuse the default, else
+  // prompt. Returns null when the user cancels the picker.
+  const ensureFolder = useCallback(async (): Promise<string | null> => {
+    if (folder) {
+      return folder;
+    }
+    const chosen = await window.geniro.pickProjectFolder();
+    if (chosen) {
+      chooseFolder(chosen);
+    }
+    return chosen;
+  }, [folder, chooseFolder]);
+
   const ensureRun = useCallback(async (): Promise<string | null> => {
     if (activeRunIdRef.current) {
       return activeRunIdRef.current;
     }
-    if (!projectFolder) {
-      setError('Pick a project folder in onboarding before starting a chat.');
+    const cwd = await ensureFolder();
+    if (!cwd) {
+      setError('Choose a folder for this chat first.');
       return null;
     }
-    const run = await chatApi.createChat({ agentKind, cwd: projectFolder });
+    const run = await chatApi.createChat({ agentKind, cwd });
     setRuns((prev) => [run, ...prev]);
     await activateRun(run.id);
     return run.id;
-  }, [agentKind, projectFolder, chatApi, activateRun]);
+  }, [agentKind, ensureFolder, chatApi, activateRun]);
 
   const newChat = useCallback(async (): Promise<void> => {
-    if (!projectFolder) {
-      setError('Pick a project folder in onboarding before starting a chat.');
-      return;
-    }
     try {
-      const run = await chatApi.createChat({ agentKind, cwd: projectFolder });
+      const cwd = await ensureFolder();
+      if (!cwd) {
+        return;
+      }
+      const run = await chatApi.createChat({ agentKind, cwd });
       setRuns((prev) => [run, ...prev]);
       await activateRun(run.id);
     } catch (err) {
       setError(String(err));
     }
-  }, [agentKind, projectFolder, chatApi, activateRun]);
+  }, [agentKind, ensureFolder, chatApi, activateRun]);
 
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim();
@@ -325,7 +360,7 @@ export function Chats({
   return (
     <div className="grid h-full grid-cols-[260px_1fr]">
       <aside className="flex min-h-0 flex-col gap-3 border-r border-border bg-sidebar p-3">
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2">
           <Select
             value={agentKind}
             onChange={(event) => setAgentKind(event.target.value as CliKind)}
@@ -336,6 +371,18 @@ export function Chats({
               </option>
             ))}
           </Select>
+          <Button
+            type="button"
+            variant="outline"
+            className="justify-start gap-2 font-normal"
+            title={folder ?? undefined}
+            aria-label="Choose the folder for new chats"
+            onClick={() => void pickFolder()}>
+            <FolderOpen className="shrink-0" />
+            <span className="truncate">
+              {folder ? folderName(folder) : 'Choose folder…'}
+            </span>
+          </Button>
           <Button type="button" onClick={() => void newChat()}>
             New chat
           </Button>
@@ -384,9 +431,9 @@ export function Chats({
           {activeRun?.agentKind ? (
             <Badge variant="secondary">{activeRun.agentKind}</Badge>
           ) : null}
-          {projectFolder ? (
+          {activeRun?.cwd ? (
             <span className="truncate text-xs text-muted-foreground">
-              cwd: {projectFolder}
+              cwd: {activeRun.cwd}
             </span>
           ) : null}
         </div>

@@ -5,52 +5,10 @@ import {
   type CliDetection,
   type CliKind,
 } from '../../shared/contracts';
-import { CollapsibleCard } from '../components/collapsible-card';
+import { AgentConfigList, statusFor } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
-import { Field } from '../components/field';
 import { Logo } from '../components/logo';
-import { NoteBox } from '../components/note-box';
-import { StatusDot, type StatusTone } from '../components/status-dot';
 import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
-
-type AgentStatus = { label: string; tone: StatusTone };
-
-/** Agents that can't run on the binary alone — they also need a saved secret. */
-function needsApiKey(kind: CliKind): boolean {
-  return kind === 'cursor-agent';
-}
-
-/**
- * Readiness of one agent. "Ready" (green) means the app can actually drive it:
- * the binary was detected AND, for key-gated agents, a key is present. A
- * detected-but-keyless cursor-agent is amber, not green — it can't run yet.
- */
-function statusFor(
-  clis: CliDetection[] | null,
-  kind: CliKind,
-  keyPresent: boolean,
-): AgentStatus {
-  if (clis === null) {
-    return { label: 'Checking…', tone: 'unknown' };
-  }
-  const detection = clis.find((c) => c.kind === kind) ?? null;
-  if (!detection?.found) {
-    return { label: 'not found on PATH', tone: 'bad' };
-  }
-  const version = detection.version ? ` · ${detection.version}` : '';
-  if (needsApiKey(kind) && !keyPresent) {
-    return { label: `detected${version} · needs API key`, tone: 'warn' };
-  }
-  return { label: `ready${version}`, tone: 'ok' };
-}
-
-const STATUS_TEXT: Record<StatusTone, string> = {
-  ok: 'text-sm text-success',
-  warn: 'text-sm text-warning',
-  bad: 'text-sm text-destructive',
-  unknown: 'text-sm text-muted-foreground',
-};
 
 export function Onboarding({
   onDone,
@@ -167,87 +125,20 @@ export function Onboarding({
         Settings.
       </p>
 
-      <div className="flex flex-col gap-3">
-        {CLI_KINDS.map((kind) => {
-          const detection = clis?.find((c) => c.kind === kind) ?? null;
-          const status = statusFor(clis, kind, keyPresent);
-          const isOpen = Boolean(open[kind]);
-          const pathId = `agent-path-${kind}`;
-          const found = Boolean(detection?.found);
-          return (
-            <CollapsibleCard
-              key={kind}
-              open={isOpen}
-              onToggle={() => toggle(kind)}
-              header={
-                <>
-                  <StatusDot tone={status.tone} />
-                  <span className="font-medium">{kind}</span>
-                  <span className={STATUS_TEXT[status.tone]}>
-                    {status.label}
-                  </span>
-                </>
-              }>
-              <Field
-                label="Binary path"
-                htmlFor={pathId}
-                hint={
-                  found
-                    ? 'Detected here — edit to pin a different binary.'
-                    : `Set the full path to the ${kind} binary.`
-                }>
-                <div className="flex gap-2">
-                  <Input
-                    id={pathId}
-                    type="text"
-                    placeholder="Auto-detect on PATH"
-                    value={binaryPaths[kind] ?? ''}
-                    onChange={(event) =>
-                      setBinaryPaths((prev) => ({
-                        ...prev,
-                        [kind]: event.target.value,
-                      }))
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => void browse(kind)}>
-                    Browse…
-                  </Button>
-                </div>
-              </Field>
-
-              {needsApiKey(kind) ? (
-                <Field
-                  label="Cursor API key"
-                  htmlFor="cursor-api-key"
-                  hint={
-                    hasStoredKey
-                      ? 'A key is already saved in your Keychain — enter a new one to replace it.'
-                      : 'Required to run cursor-agent. Stored in your macOS Keychain — never written to disk.'
-                  }>
-                  <Input
-                    id="cursor-api-key"
-                    type="password"
-                    placeholder={
-                      hasStoredKey
-                        ? 'Saved — enter a new key to replace'
-                        : 'Cursor API key'
-                    }
-                    value={cursorKey}
-                    onChange={(event) => setCursorKey(event.target.value)}
-                  />
-                </Field>
-              ) : (
-                <NoteBox>
-                  Signs in through the {kind} CLI — no API key needed.
-                </NoteBox>
-              )}
-            </CollapsibleCard>
-          );
-        })}
-      </div>
+      <AgentConfigList
+        clis={clis}
+        open={open}
+        onToggle={toggle}
+        binaryPaths={binaryPaths}
+        onBinaryPathChange={(kind, value) =>
+          setBinaryPaths((prev) => ({ ...prev, [kind]: value }))
+        }
+        onBrowse={(kind) => void browse(kind)}
+        keyPresent={keyPresent}
+        cursorKey={cursorKey}
+        onCursorKeyChange={setCursorKey}
+        hasStoredKey={hasStoredKey}
+      />
 
       <footer className="mt-auto flex items-center gap-3 pt-2">
         {error ? <ErrorText className="mr-auto">{error}</ErrorText> : null}

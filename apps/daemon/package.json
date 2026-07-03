@@ -7,24 +7,10 @@
   "bin": {
     "geniro-daemon": "dist/main.js"
   },
-  "nodemonConfig": {
-    "watch": [
-      "src",
-      "../../packages/common/src",
-      "../../packages/http-server/src",
-      "../../packages/metrics/src",
-      "../../packages/mikroorm/src"
-    ],
-    "ext": "ts",
-    "ignore": [
-      "**/*.spec.ts"
-    ],
-    "exec": "turbo run build --filter=@geniro/daemon && ELECTRON_RUN_AS_NODE=1 electron dist/main.js"
-  },
   "scripts": {
     "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
     "prebuild": "rm -rf ./dist || true",
-    "dev": "nodemon",
+    "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
     "start": "node dist/main.js",
     "check-types": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint src",
@@ -54,10 +40,11 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@swc-node/register": "^1.11.1",
     "@swc/cli": "^0.8.1",
     "@swc/core": "^1.15.43",
     "@types/node": "^26.0.1",
-    "nodemon": "^3.1.14",
+    "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }

@@ -39,12 +39,12 @@ pnpm install            # install workspace deps
 pnpm rebuild:native     # rebuild better-sqlite3 against Electron's ABI (required; see note)
 pnpm build              # build everything (turbo → swc for packages+daemon, electron-vite for the UI)
 pnpm dev                # launch the Electron app (electron-vite) — spawns + supervises the daemon
-pnpm daemon:dev         # daemon-only watch loop: nodemon → turbo build (daemon + changed packages) → Electron-node
+pnpm daemon:dev         # daemon-only watch loop: runs TS source via @swc-node/register under Electron-node, restarts on save
 ```
 
 `pnpm rebuild:native` is required because the daemon runs under Electron's bundled Node (`ELECTRON_RUN_AS_NODE`), so its native `better-sqlite3` must be built for Electron's ABI, not the host Node ABI.
 
-`pnpm daemon:dev` runs the daemon exactly as production does — an swc build to `dist/`, executed under Electron's Node (`ELECTRON_RUN_AS_NODE=1 electron dist/main.js`) — wrapped in a nodemon watch loop (config in `apps/daemon/package.json` → `nodemonConfig`). It watches `apps/daemon/src` **and** all `packages/*/src` (specs excluded) and on each change reruns `turbo run build --filter=@geniro/daemon` (dependency-aware: a `packages/*` edit rebuilds that package, then the daemon; turbo-cached, ~1s cold) before restarting. It must **not** be moved to `tsx`/esbuild: esbuild's `emitDecoratorMetadata` is an intentional wontfix (no type system → no `design:paramtypes`), so NestJS type-based DI cannot resolve, and tsx runs under host Node whose ABI doesn't match the Electron-built `better-sqlite3`.
+`pnpm daemon:dev` mirrors Geniro `apps/api`'s `start:dev`: node's built-in `--watch` + `-r @swc-node/register -r tsconfig-paths/register` running `src/main.ts` directly (`TS_NODE_PROJECT` points at the **root** tsconfig so the inherited `@packages/*` paths resolve from the repo root). No build step and no `dist/` in dev — `@packages/*` resolve to TypeScript **source**, so edits to `apps/daemon/src` *and* `packages/*/src` restart the daemon (~2s) with fresh code. Two deliberate deviations from Geniro's line: the runtime is `ELECTRON_RUN_AS_NODE=1 electron` (host Node's ABI can't load the Electron-built `better-sqlite3`), and there is no `--watch-kill-signal=SIGKILL` (default SIGTERM lets Nest shutdown hooks run — pidfile cleanup + `ProcessRegistry` reaping of spawned agent children). It must **not** be moved to `tsx`/esbuild: esbuild's `emitDecoratorMetadata` is an intentional wontfix (no type system → no `design:paramtypes`), so NestJS type-based DI cannot resolve under it.
 
 ### Build, types, lint
 ```bash

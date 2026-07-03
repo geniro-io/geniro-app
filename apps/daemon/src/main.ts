@@ -16,6 +16,7 @@ import { environment } from './environments';
 import type { DaemonInfo } from './utils/handshake';
 import { mintToken, writePidfile } from './utils/pidfile';
 import { ChatService } from './v1/agents/services/chat.service';
+import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
 const startedAt = Date.now();
 const token = mintToken();
@@ -83,6 +84,7 @@ bootstrapper.addExtension(
       // hook, which fires before this sync and would hit not-yet-created tables on
       // a fresh install, so a logged reconcile error always means a real failure.
       await app.get(ChatService).reconcileOrphanedRuns();
+      await app.get(GraphExecutorService).reconcileOrphanedRuns();
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

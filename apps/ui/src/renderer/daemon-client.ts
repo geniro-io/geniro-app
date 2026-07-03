@@ -22,10 +22,16 @@ export interface DaemonClientEvents {
  * `onReconnect` so the renderer can fetch the items it missed while offline
  * (the room buffers nothing for an absent member).
  */
+export interface VerdictAck {
+  requestId: string | null;
+  applied: boolean;
+}
+
 export class DaemonClient {
   private socket: Socket | null = null;
   private readonly itemListeners = new Set<(item: ChatItem) => void>();
   private readonly reconnectListeners = new Set<() => void>();
+  private readonly verdictAckListeners = new Set<(ack: VerdictAck) => void>();
   private activeRunId: string | null = null;
   private hasConnected = false;
 
@@ -65,7 +71,24 @@ export class DaemonClient {
           listener(item);
         }
       }
+      if (event === 'verdict_ack') {
+        const ack = data as VerdictAck;
+        for (const listener of this.verdictAckListeners) {
+          listener(ack);
+        }
+      }
     });
+  }
+
+  /**
+   * Subscribe to verdict acknowledgments. `applied: false` means the request
+   * already settled (the node's turn ended first) — the card shows expired.
+   */
+  onVerdictAck(listener: (ack: VerdictAck) => void): () => void {
+    this.verdictAckListeners.add(listener);
+    return () => {
+      this.verdictAckListeners.delete(listener);
+    };
   }
 
   /** Subscribe to streamed run items; returns an unsubscribe function. */
@@ -99,6 +122,16 @@ export class DaemonClient {
       this.activeRunId = null;
     }
     this.socket?.emit('leave', { runId });
+  }
+
+  /**
+   * Answer an `ask`-node's approval card. The durable acknowledgment is the
+   * `approval_verdict` item the daemon persists-then-emits back to the room;
+   * the immediate `verdict_ack` reply only reports routing (`applied: false`
+   * = the request already settled, e.g. the node's turn ended first).
+   */
+  sendVerdict(runId: string, requestId: string, allow: boolean): void {
+    this.socket?.emit('verdict', { runId, requestId, allow });
   }
 
   close(): void {

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import type { AgentEvent } from '../adapter.types';
@@ -134,6 +134,7 @@ describe('mapClaudeMessage', () => {
         type: 'turn_complete',
         usage: { inputTokens: 12, outputTokens: 3, costUsd: 0.14 },
         stopReason: 'end_turn',
+        finalText: 'pong',
       },
     ]);
   });
@@ -187,6 +188,7 @@ describe('ClaudeAdapter', () => {
         type: 'turn_complete',
         usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 },
         stopReason: 'end_turn',
+        finalText: 'hi',
       },
     ]);
     expect(captured.command).toBe('claude');
@@ -249,5 +251,140 @@ describe('ClaudeAdapter', () => {
         message: 'claude exited with code 1: not authenticated',
       },
     ]);
+  });
+});
+
+describe('ClaudeAdapter approval seam (ask mode)', () => {
+  const CONTROL_REQUEST =
+    '{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"a.txt"}}}\n';
+
+  it('maps a can_use_tool control_request to an approval_request event', () => {
+    expect(mapClaudeMessage(JSON.parse(CONTROL_REQUEST))).toEqual([
+      {
+        type: 'approval_request',
+        id: 'req-1',
+        toolName: 'Write',
+        input: { file_path: 'a.txt' },
+      },
+    ]);
+  });
+
+  it('ignores control_requests that are not can_use_tool', () => {
+    expect(
+      mapClaudeMessage({
+        type: 'control_request',
+        request_id: 'r',
+        request: { subtype: 'initialize' },
+      }),
+    ).toEqual([]);
+  });
+
+  it('adds the stdio permission flags in ask mode and none in plain chat', () => {
+    const ask = fakeSpawn();
+    new ClaudeAdapter({ spawn: ask.spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
+      () => {},
+    );
+    expect(ask.captured.args).toEqual(
+      expect.arrayContaining([
+        '--permission-mode',
+        'default',
+        '--permission-prompt-tool',
+        'stdio',
+      ]),
+    );
+
+    const plain = fakeSpawn();
+    new ClaudeAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
+    expect(plain.captured.args).not.toEqual(
+      expect.arrayContaining(['--permission-prompt-tool']),
+    );
+    expect(plain.captured.args).not.toEqual(
+      expect.arrayContaining(['--dangerously-skip-permissions']),
+    );
+  });
+
+  it('bypasses permissions in auto mode and appends the system prompt', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        approvalMode: 'auto',
+        systemPrompt: 'You are the reviewer.',
+      },
+      () => {},
+    );
+    expect(captured.args).toEqual(
+      expect.arrayContaining(['--dangerously-skip-permissions']),
+    );
+    expect(captured.args).toEqual(
+      expect.arrayContaining([
+        '--append-system-prompt',
+        'You are the reviewer.',
+      ]),
+    );
+  });
+
+  it('keeps stdin open in ask mode, answers via control_response, closes on the terminal event', async () => {
+    const { spawn, child } = fakeSpawn();
+    const endSpy = vi.spyOn(child.stdin, 'end');
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
+      (e) => events.push(e),
+    );
+
+    // Prompt written, stdin still open for the control dialogue.
+    expect(child.stdin.written).toContain('"type":"user"');
+    expect(endSpy).not.toHaveBeenCalled();
+
+    child.stdout.emitData(CONTROL_REQUEST);
+    expect(events.at(-1)).toMatchObject({
+      type: 'approval_request',
+      id: 'req-1',
+    });
+
+    handle.respondApproval('req-1', true, { file_path: 'a.txt' });
+    const responseLine = child.stdin.written
+      .split('\n')
+      .filter(Boolean)
+      .at(-1)!;
+    expect(JSON.parse(responseLine)).toEqual({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: 'req-1',
+        response: { behavior: 'allow', updatedInput: { file_path: 'a.txt' } },
+      },
+    });
+
+    // Terminal result closes the kept-open stdin so the CLI can exit.
+    child.stdout.emitData(
+      '{"type":"result","is_error":false,"stop_reason":"end_turn"}\n',
+    );
+    expect(endSpy).toHaveBeenCalledOnce();
+    child.emit('close', 0, null);
+    await handle.done;
+  });
+
+  it('encodes a denial with behavior deny', async () => {
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
+      () => {},
+    );
+    child.stdout.emitData(CONTROL_REQUEST);
+    handle.respondApproval('req-1', false);
+    const responseLine = child.stdin.written
+      .split('\n')
+      .filter(Boolean)
+      .at(-1)!;
+    expect(JSON.parse(responseLine).response.response.behavior).toBe('deny');
+    child.emit('close', 0, null);
+    await handle.done;
   });
 });

@@ -104,7 +104,7 @@ export function App(): React.JSX.Element {
             <EmptyState>Connecting to the daemon…</EmptyState>
           )}
         </div>
-        {view === 'graphs' ? <Graphs /> : null}
+        {view === 'graphs' ? <Graphs handle={handle} /> : null}
         {view === 'settings' ? <Settings /> : null}
       </main>
     </div>

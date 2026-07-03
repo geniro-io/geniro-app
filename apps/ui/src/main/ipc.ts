@@ -65,6 +65,28 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
     deleteSecret(secretNameSchema.parse(name));
   });
 
+  ipcMain.handle(IPC.pickWorkflowImport, async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'Geniro workflow', extensions: ['yaml', 'yml'] }],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle(
+    IPC.pickWorkflowExport,
+    async (_event, defaultName: unknown) => {
+      const result = await dialog.showSaveDialog({
+        defaultPath:
+          typeof defaultName === 'string' && defaultName.length > 0
+            ? defaultName
+            : 'workflow.geniro.yaml',
+        filters: [{ name: 'Geniro workflow', extensions: ['yaml', 'yml'] }],
+      });
+      return result.canceled ? null : (result.filePath ?? null);
+    },
+  );
+
   ipcMain.handle(IPC.completeOnboarding, (_event, input: unknown) => {
     const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);
     if (cursorApiKey) {

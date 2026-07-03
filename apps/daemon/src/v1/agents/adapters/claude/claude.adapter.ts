@@ -15,6 +15,9 @@ import { AgentAdapter } from '../agent-adapter';
  * - `assistant.message.content[]` blocks: `text` / `thinking` / `tool_use`.
  * - `user.message.content[]` `tool_result` blocks close a tool call.
  * - `result` carries the final text, `usage`, `total_cost_usd`, `stop_reason`.
+ * - `control_request` (`can_use_tool`) is the permission pause of the stdin
+ *   control protocol (`--permission-prompt-tool stdio`, `ask` approval mode);
+ *   verified against a live 2.1.199 capture.
  * - Anything else (`hook_*`, `post_turn_summary`, `rate_limit_event`, …) is
  *   ignored — the stream legitimately includes event types this turn doesn't model.
  */
@@ -97,6 +100,22 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
       return events;
     }
 
+    case 'control_request': {
+      const request = asRecord(root.request);
+      const id = asString(root.request_id);
+      if (!request || !id || asString(request.subtype) !== 'can_use_tool') {
+        return [];
+      }
+      return [
+        {
+          type: 'approval_request',
+          id,
+          toolName: asString(request.tool_name) ?? '',
+          input: request.input ?? null,
+        },
+      ];
+    }
+
     case 'result': {
       if (asBoolean(root.is_error)) {
         return [
@@ -120,6 +139,7 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           type: 'turn_complete',
           usage,
           stopReason: asString(root.stop_reason),
+          finalText: asString(root.result) ?? null,
         },
       ];
     }
@@ -133,6 +153,13 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
  * Drives `claude` headlessly. The prompt is sent as a stream-json user-message
  * line on stdin (`--input-format stream-json`); `--verbose` is required for
  * stream-json output. Resume passes the prior `session_id` via `--resume`.
+ *
+ * Graph-node extras: `systemPrompt` rides `--append-system-prompt`;
+ * `approvalMode: 'ask'` switches on the stdin control protocol
+ * (`--permission-prompt-tool stdio` — the CLI pauses each permission-gated
+ * tool call as a `control_request` and resumes on our `control_response`),
+ * while `'auto'` bypasses permission checks for unattended team execution.
+ * Plain chat (no `approvalMode`) keeps the M2 argv byte-for-byte.
  */
 export class ClaudeAdapter extends AgentAdapter {
   readonly kind = 'claude' as const;
@@ -153,6 +180,15 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
+    if (input.systemPrompt) {
+      args.push('--append-system-prompt', input.systemPrompt);
+    }
+    if (input.approvalMode === 'ask') {
+      args.push('--permission-mode', 'default');
+      args.push('--permission-prompt-tool', 'stdio');
+    } else if (input.approvalMode === 'auto') {
+      args.push('--dangerously-skip-permissions');
+    }
     return args;
   }
 
@@ -162,6 +198,27 @@ export class ClaudeAdapter extends AgentAdapter {
       message: {
         role: 'user',
         content: [{ type: 'text', text: input.prompt }],
+      },
+    })}\n`;
+  }
+
+  protected override keepStdinOpen(input: AgentTurnInput): boolean {
+    return input.approvalMode === 'ask';
+  }
+
+  protected override buildApprovalResponse(
+    id: string,
+    allow: boolean,
+    updatedInput?: unknown,
+  ): string {
+    return `${JSON.stringify({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: id,
+        response: allow
+          ? { behavior: 'allow', updatedInput: updatedInput ?? {} }
+          : { behavior: 'deny', message: 'Denied by the user in Geniro' },
       },
     })}\n`;
   }

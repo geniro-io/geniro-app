@@ -13,7 +13,11 @@ function fakeHandle(): {
     resolve = r;
   });
   const cancel = vi.fn();
-  return { handle: { done, cancel }, resolve, cancel };
+  return {
+    handle: { done, cancel, respondApproval: vi.fn() },
+    resolve,
+    cancel,
+  };
 }
 
 describe('ProcessRegistry', () => {

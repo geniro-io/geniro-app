@@ -14,6 +14,31 @@ import type { Server, Socket } from 'socket.io';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { safeEqual } from '../../../auth/safe-equal';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ApprovalRegistry } from '../../agents/services/approval-registry';
+
+/** Defensively read a `verdict` payload: `{runId, requestId, allow}`. */
+function extractVerdict(
+  data: unknown,
+): { runId: string; requestId: string; allow: boolean } | null {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+  const { runId, requestId, allow } = data as {
+    runId?: unknown;
+    requestId?: unknown;
+    allow?: unknown;
+  };
+  if (
+    typeof runId !== 'string' ||
+    runId.length === 0 ||
+    typeof requestId !== 'string' ||
+    requestId.length === 0 ||
+    typeof allow !== 'boolean'
+  ) {
+    return null;
+  }
+  return { runId, requestId, allow };
+}
 
 /** Socket.IO room a client joins to receive one run's streamed items. */
 function runRoom(runId: string): string {
@@ -55,6 +80,7 @@ export class NotificationsGateway
   constructor(
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly bus: AgentEventBus,
+    private readonly approvals: ApprovalRegistry,
   ) {}
 
   afterInit(server: Server): void {
@@ -112,6 +138,35 @@ export class NotificationsGateway
       void client.leave(runRoom(runId));
     }
     return { event: 'left', data: { runId } };
+  }
+
+  /**
+   * The elicitation card's answer: routes a tool-approval verdict to the
+   * paused `ask`-node turn via the {@link ApprovalRegistry}. `applied: false`
+   * means the request is unknown or already settled (e.g. the node's turn
+   * ended first) — the card renders it as expired. The socket is already
+   * token-authenticated at `handleConnection`.
+   */
+  @SubscribeMessage('verdict')
+  verdict(
+    @MessageBody() data: unknown,
+  ): WsResponse<{ requestId: string | null; applied: boolean }> {
+    const parsed = extractVerdict(data);
+    if (!parsed) {
+      return {
+        event: 'verdict_ack',
+        data: { requestId: null, applied: false },
+      };
+    }
+    const applied = this.approvals.resolve(
+      parsed.runId,
+      parsed.requestId,
+      parsed.allow,
+    );
+    return {
+      event: 'verdict_ack',
+      data: { requestId: parsed.requestId, applied },
+    };
   }
 
   @SubscribeMessage('echo')

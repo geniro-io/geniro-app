@@ -31,10 +31,28 @@ export type AgentEvent =
       type: 'turn_complete';
       usage: AgentUsage | null;
       stopReason: string | null;
+      /**
+       * The agent's final answer text as the CLI's result line reports it —
+       * what a downstream graph node receives as its input context. Null when
+       * the CLI's result carries no text (callers fall back to concatenating
+       * the turn's `text` events).
+       */
+      finalText: string | null;
     }
   | { type: 'turn_cancelled' }
   | { type: 'error'; message: string }
-  | { type: 'session'; sessionId: string };
+  | { type: 'session'; sessionId: string }
+  | {
+      /**
+       * The CLI paused mid-turn asking permission for a tool call (`ask`
+       * approval mode). The turn stays blocked until the verdict goes back via
+       * `AgentTurnHandle.respondApproval(id, …)`.
+       */
+      type: 'approval_request';
+      id: string;
+      toolName: string;
+      input: unknown;
+    };
 
 /** Everything an adapter needs to drive one turn. */
 export interface AgentTurnInput {
@@ -50,6 +68,19 @@ export interface AgentTurnInput {
   model?: string | null;
   /** Prior CLI session id to resume; null/undefined starts a fresh session. */
   resumeSessionId?: string | null;
+  /**
+   * Role/system prompt for this turn (graph nodes). Claude appends it to the
+   * CLI system prompt (`--append-system-prompt`); Cursor has no such flag, so
+   * its adapter prepends it to the prompt text. Undefined for plain chat.
+   */
+  systemPrompt?: string | null;
+  /**
+   * Tool-approval mode for graph nodes. `ask` blocks each permission-gated
+   * tool call on a user verdict (elicitation card); `auto` runs unattended
+   * with permission checks bypassed. Undefined (plain chat) keeps the CLI's
+   * own defaults — no extra permission flags.
+   */
+  approvalMode?: 'auto' | 'ask';
   /**
    * Extra environment merged over `process.env` for the child process — e.g.
    * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).
@@ -67,4 +98,13 @@ export interface AgentTurnHandle {
   readonly done: Promise<void>;
   /** Terminate the underlying CLI process for this turn. */
   cancel(): void;
+  /**
+   * Answer an `approval_request` event: allow unblocks the tool call (echoing
+   * `updatedInput` — the input the request carried); deny rejects it and the
+   * agent continues without the tool. Returns whether the verdict was actually
+   * delivered — false once the turn has settled/ended (a late verdict must not
+   * be recorded as applied) and for adapters whose CLI has no approval
+   * protocol.
+   */
+  respondApproval(id: string, allow: boolean, updatedInput?: unknown): boolean;
 }

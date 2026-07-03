@@ -6,18 +6,26 @@ import type {
   ChatRun,
   CliKind,
   DaemonHandle,
+  WorkflowSummary,
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import { ChatApi } from '../chat-api';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
+import { NavListItem } from '../components/nav-list-item';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
-import { cn } from '../components/ui/utils';
 import { DaemonClient } from '../daemon-client';
-import { MessageBubble } from './message-bubble';
+import { WorkflowApi } from '../workflow-api';
+import { ApprovalCard } from './approval-card';
+import {
+  collectVerdicts,
+  expiredApprovalIds,
+  payloadString,
+  TranscriptItem,
+} from './transcript-item';
 
 /** Kinds that mark the end of a turn (re-enable the composer). */
 const TERMINAL_KINDS = new Set<ChatItem['kind']>([
@@ -26,103 +34,10 @@ const TERMINAL_KINDS = new Set<ChatItem['kind']>([
   'error',
 ]);
 
-function payloadString(payload: unknown, key: string): string | null {
-  if (payload && typeof payload === 'object' && key in payload) {
-    const value = (payload as Record<string, unknown>)[key];
-    if (typeof value === 'string') {
-      return value;
-    }
-  }
-  return null;
-}
-
-function pretty(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-const PRE_CLASS = 'm-0 overflow-x-auto whitespace-pre-wrap font-mono text-xs';
-
 /** The trailing path segment of an absolute folder path (a compact label). */
 function folderName(path: string): string {
   const parts = path.split('/').filter(Boolean);
   return parts.at(-1) ?? path;
-}
-
-/** One transcript row, rendered by item kind. */
-function TranscriptItem({
-  item,
-}: {
-  item: ChatItem;
-}): React.JSX.Element | null {
-  switch (item.kind) {
-    case 'message': {
-      const text = payloadString(item.payload, 'text') ?? '';
-      const who = item.role === 'user' ? 'user' : 'assistant';
-      return (
-        <MessageBubble variant={who} role={who}>
-          <div className="whitespace-pre-wrap">{text}</div>
-        </MessageBubble>
-      );
-    }
-    case 'reasoning':
-      return (
-        <MessageBubble variant="reasoning" role="thinking">
-          <div className="whitespace-pre-wrap italic">
-            {payloadString(item.payload, 'text') ?? ''}
-          </div>
-        </MessageBubble>
-      );
-    case 'tool_call':
-      return (
-        <MessageBubble
-          variant="tool"
-          role={`🔧 ${payloadString(item.payload, 'name') ?? 'tool'}`}>
-          <pre className={PRE_CLASS}>
-            {pretty(
-              (item.payload as { input?: unknown } | null)?.input ?? null,
-            )}
-          </pre>
-        </MessageBubble>
-      );
-    case 'tool_result':
-      return (
-        <MessageBubble variant="tool" role="⮑ result">
-          <pre className={PRE_CLASS}>
-            {pretty(
-              (item.payload as { result?: unknown } | null)?.result ?? null,
-            )}
-          </pre>
-        </MessageBubble>
-      );
-    case 'error':
-      return (
-        <MessageBubble variant="error" role="error">
-          <div className="whitespace-pre-wrap">
-            {payloadString(item.payload, 'message') ?? 'unknown error'}
-          </div>
-        </MessageBubble>
-      );
-    case 'turn_cancelled':
-      return <MessageBubble variant="note">⊘ cancelled</MessageBubble>;
-    case 'turn_complete': {
-      const usage = (item.payload as { usage?: unknown } | null)?.usage;
-      const cost =
-        usage && typeof usage === 'object' && 'costUsd' in usage
-          ? (usage as { costUsd: unknown }).costUsd
-          : null;
-      return (
-        <MessageBubble variant="note">
-          ✓ done{typeof cost === 'number' ? ` · $${cost.toFixed(4)}` : ''}
-        </MessageBubble>
-      );
-    }
-    default:
-      return null; // system / usage / attachment / status — not surfaced in M2
-  }
 }
 
 export function Chats({
@@ -133,12 +48,18 @@ export function Chats({
   handle: DaemonHandle;
 }): React.JSX.Element {
   const chatApi = useMemo(() => new ChatApi(handle), [handle]);
+  const workflowApi = useMemo(() => new WorkflowApi(handle), [handle]);
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState('');
-  const [agentKind, setAgentKind] = useState<CliKind>('claude');
+  // What the composer targets: a bare CLI kind for a single-agent chat, or
+  // `wf:<slug>` to run a library workflow as a team.
+  const [target, setTarget] = useState<string>('claude');
+  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
+  const workflowSlug = target.startsWith('wf:') ? target.slice(3) : null;
+  const agentKind = (workflowSlug ? 'claude' : target) as CliKind;
   // Working directory for the NEXT new chat. Seeded from the last-used folder
   // (persisted in settings); each chat records its own cwd, so this is only the
   // default the picker starts from.
@@ -179,7 +100,10 @@ export function Chats({
     if (item.seq > lastSeqRef.current) {
       lastSeqRef.current = item.seq;
     }
-    if (TERMINAL_KINDS.has(item.kind)) {
+    // Only a RUN-level terminal item ends the working state — a workflow's
+    // per-node turn_complete/error (nodeId set) must not re-enable the composer
+    // while sibling branches are still running.
+    if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
       sawTerminalRef.current = true;
       setStreaming(false);
     }
@@ -213,7 +137,7 @@ export function Chats({
         if (
           run?.status === 'running' &&
           !sawTerminalRef.current &&
-          (!last || !TERMINAL_KINDS.has(last.kind))
+          (!last || !(TERMINAL_KINDS.has(last.kind) && last.nodeId === null))
         ) {
           setStreaming(true);
         }
@@ -226,10 +150,19 @@ export function Chats({
 
   useEffect(() => {
     void window.geniro.getSettings().then((s) => setFolder(s.projectFolder));
-    void chatApi
-      .listChats()
-      .then(setRuns)
+    void Promise.all([chatApi.listChats(), workflowApi.listRuns()])
+      .then(([chats, workflowRuns]) =>
+        setRuns(
+          [...chats, ...workflowRuns].sort((a, b) =>
+            b.createdAt.localeCompare(a.createdAt),
+          ),
+        ),
+      )
       .catch((err: unknown) => setError(String(err)));
+    void workflowApi
+      .list()
+      .then(setWorkflows)
+      .catch(() => setWorkflows([]));
     const unsubscribeItem = client.onItem(addItem);
     // On reconnect the WS missed any items streamed while offline (the room
     // buffers nothing for an absent member); fetch just the delta past the last
@@ -253,7 +186,7 @@ export function Chats({
         client.leaveRun(active);
       }
     };
-  }, [client, chatApi, addItem]);
+  }, [client, chatApi, workflowApi, addItem]);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -302,6 +235,20 @@ export function Chats({
 
   const newChat = useCallback(async (): Promise<void> => {
     try {
+      if (workflowSlug) {
+        // A workflow run takes one task prompt: deselect so the composer
+        // seeds a fresh run on Send.
+        const previous = activeRunIdRef.current;
+        if (previous) {
+          client.leaveRun(previous);
+        }
+        activeRunIdRef.current = null;
+        setActiveRunId(null);
+        setItems([]);
+        setStreaming(false);
+        setError(null);
+        return;
+      }
       const cwd = await ensureFolder();
       if (!cwd) {
         return;
@@ -312,7 +259,7 @@ export function Chats({
     } catch (err) {
       setError(String(err));
     }
-  }, [agentKind, ensureFolder, chatApi, activateRun]);
+  }, [workflowSlug, client, agentKind, ensureFolder, chatApi, activateRun]);
 
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim();
@@ -321,6 +268,26 @@ export function Chats({
     }
     setError(null);
     try {
+      // A workflow target ALWAYS seeds a fresh run — never routes the task
+      // into whatever run happens to be open (activateRun leaves the old room).
+      if (workflowSlug) {
+        const cwd = await ensureFolder();
+        if (!cwd) {
+          setError('Choose a folder for this run first.');
+          return;
+        }
+        setInput('');
+        const run = await workflowApi.run(workflowSlug, { cwd, prompt: text });
+        setRuns((prev) => [run, ...prev]);
+        await activateRun(run.id);
+        // A run can fail-fast within the activation window (missing CLI →
+        // instant terminal item in the replayed history); re-arming Stop then
+        // would wedge the composer on a run that will emit nothing more.
+        if (!sawTerminalRef.current) {
+          setStreaming(true);
+        }
+        return;
+      }
       const runId = await ensureRun();
       if (!runId) {
         return;
@@ -335,7 +302,17 @@ export function Chats({
       setError(String(err));
       setStreaming(false);
     }
-  }, [input, streaming, ensureRun, chatApi, addItem]);
+  }, [
+    input,
+    streaming,
+    workflowSlug,
+    workflowApi,
+    ensureFolder,
+    activateRun,
+    ensureRun,
+    chatApi,
+    addItem,
+  ]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -343,7 +320,11 @@ export function Chats({
       return;
     }
     try {
-      const { cancelled } = await chatApi.cancel(runId);
+      const activeIsWorkflow =
+        runsRef.current.find((r) => r.id === runId)?.workflowId != null;
+      const { cancelled } = activeIsWorkflow
+        ? await workflowApi.cancelRun(runId)
+        : await chatApi.cancel(runId);
       // A live/claimed turn was cancelled → its terminal item arrives over WS and
       // clears the working state. `cancelled: false` means nothing was in flight
       // (the turn already finished), so clear it here rather than stay on Stop.
@@ -353,7 +334,37 @@ export function Chats({
     } catch (err) {
       setError(String(err));
     }
-  }, [chatApi]);
+  }, [chatApi, workflowApi]);
+
+  const respondApproval = useCallback(
+    (item: ChatItem, allow: boolean): void => {
+      const requestId = payloadString(item.payload, 'id');
+      if (requestId) {
+        client.sendVerdict(item.runId, requestId, allow);
+      }
+    },
+    [client],
+  );
+
+  // Requests the daemon reported as already settled (`verdict_ack` with
+  // applied: false) — the card renders expired instead of retrying forever.
+  const [deadRequestIds, setDeadRequestIds] = useState<Set<string>>(new Set());
+  useEffect(
+    () =>
+      client.onVerdictAck((ack) => {
+        if (!ack.applied && ack.requestId) {
+          const requestId = ack.requestId;
+          setDeadRequestIds((prev) => new Set(prev).add(requestId));
+        }
+      }),
+    [client],
+  );
+
+  const verdicts = useMemo(() => collectVerdicts(items), [items]);
+  const expiredIds = useMemo(
+    () => expiredApprovalIds(items, verdicts),
+    [items, verdicts],
+  );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
@@ -362,14 +373,25 @@ export function Chats({
       <aside className="flex min-h-0 flex-col gap-3 border-r border-border bg-sidebar p-3">
         <div className="flex flex-col gap-2">
           <Select
-            value={agentKind}
-            onChange={(event) => setAgentKind(event.target.value as CliKind)}
-            aria-label="Agent for new chat">
-            {CLI_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
+            value={target}
+            onChange={(event) => setTarget(event.target.value)}
+            aria-label="Agent or workflow for new runs">
+            <optgroup label="Agents">
+              {CLI_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kind}
+                </option>
+              ))}
+            </optgroup>
+            {workflows.length > 0 ? (
+              <optgroup label="Workflows">
+                {workflows.map((wf) => (
+                  <option key={wf.slug} value={`wf:${wf.slug}`}>
+                    {wf.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
           </Select>
           <Button
             type="button"
@@ -384,7 +406,7 @@ export function Chats({
             </span>
           </Button>
           <Button type="button" onClick={() => void newChat()}>
-            New chat
+            {workflowSlug ? 'New run' : 'New chat'}
           </Button>
         </div>
         <ul className="flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-0">
@@ -393,42 +415,26 @@ export function Chats({
               No chats yet
             </li>
           ) : (
-            runs.map((run) => {
-              const active = run.id === activeRunId;
-              return (
-                <li
-                  key={run.id}
-                  className={cn(
-                    'flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50',
-                    active &&
-                      'bg-accent shadow-[inset_0_0_0_1px_var(--border)]',
-                  )}
-                  role="button"
-                  tabIndex={0}
-                  aria-current={active ? true : undefined}
-                  onClick={() => void activateRun(run.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      void activateRun(run.id);
-                    }
-                  }}>
-                  <span className="truncate text-sm font-medium">
-                    {run.title ?? run.agentKind ?? 'chat'}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {run.status}
-                  </span>
-                </li>
-              );
-            })
+            runs.map((run) => (
+              <NavListItem
+                key={run.id}
+                active={run.id === activeRunId}
+                title={run.title ?? run.agentKind ?? 'chat'}
+                subtitle={
+                  run.workflowId ? `workflow · ${run.status}` : run.status
+                }
+                onActivate={() => void activateRun(run.id)}
+              />
+            ))
           )}
         </ul>
       </aside>
 
       <section className="flex min-h-0 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-          {activeRun?.agentKind ? (
+          {activeRun?.workflowId ? (
+            <Badge variant="secondary">workflow: {activeRun.workflowId}</Badge>
+          ) : activeRun?.agentKind ? (
             <Badge variant="secondary">{activeRun.agentKind}</Badge>
           ) : null}
           {activeRun?.cwd ? (
@@ -444,7 +450,27 @@ export function Chats({
               Start a new chat or pick one to view its transcript.
             </EmptyState>
           ) : (
-            items.map((item) => <TranscriptItem key={item.id} item={item} />)
+            items.map((item) => {
+              if (item.kind !== 'approval_request') {
+                return <TranscriptItem key={item.id} item={item} />;
+              }
+              const requestId = payloadString(item.payload, 'id');
+              return (
+                <ApprovalCard
+                  key={item.id}
+                  toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
+                  input={
+                    (item.payload as { input?: unknown } | null)?.input ?? null
+                  }
+                  verdict={requestId ? (verdicts.get(requestId) ?? null) : null}
+                  expired={
+                    requestId !== null &&
+                    (expiredIds.has(requestId) || deadRequestIds.has(requestId))
+                  }
+                  onRespond={(allow) => respondApproval(item, allow)}
+                />
+              );
+            })
           )}
           <div ref={transcriptEndRef} />
         </div>
@@ -459,7 +485,16 @@ export function Chats({
           <Textarea
             value={input}
             aria-label="Message the agent"
-            placeholder={streaming ? 'Agent is working…' : 'Message the agent…'}
+            disabled={activeRun?.workflowId != null && !workflowSlug}
+            placeholder={
+              workflowSlug
+                ? 'Describe the task for the workflow team (starts a new run)…'
+                : activeRun?.workflowId
+                  ? 'Workflow runs take one task — pick a workflow or an agent to start another.'
+                  : streaming
+                    ? 'Agent is working…'
+                    : 'Message the agent…'
+            }
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -478,7 +513,10 @@ export function Chats({
           ) : (
             <Button
               type="button"
-              disabled={!input.trim()}
+              disabled={
+                !input.trim() ||
+                (activeRun?.workflowId != null && !workflowSlug)
+              }
               onClick={() => void send()}>
               Send
             </Button>

@@ -101,8 +101,9 @@ A standalone NestJS engine the UI spawns as a child process, laid out like Genir
 - `utils/` — `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + `isValidPort`/`parsePort`); `pidfile.ts` (mint/write/remove); `pidfile.lifecycle.ts` (Nest `OnApplicationShutdown` → removes the pidfile).
 - `db/mikro-orm.config.ts`.
 - `v1/runs/` — `runs.module.ts` + `entity/{run,item,node-state}.entity.ts` + `runs.types.ts` (status/kind enums).
-- `v1/agents/` — the M2 single-agent chat module: `agents.module.ts` + `chat.types.ts` at the root, then `adapters/` (abstract `AgentAdapter` base + `claude/` and `cursor/` subdirectories — see `.claude/rules/agent-adapters.md`), `controllers/`, `services/` (chat service, event bus, process registry), `dao/`, `dto/`, `utils/` (json-util, ndjson-buffer, spawn-cli).
-- `v1/notifications/` — `notifications.module.ts` + `gateways/notifications.gateway.ts` (the Socket.IO channel).
+- `v1/agents/` — the shared agent-execution substrate (M2): `agents.module.ts` + `chat.types.ts` at the root, then `adapters/` (abstract `AgentAdapter` base + `claude/` and `cursor/` subdirectories — see `.claude/rules/agent-adapters.md`), `controllers/`, `services/` (chat service, event bus, process registry, approval registry), `dao/`, `dto/`, `utils/` (json-util, ndjson-buffer, spawn-cli, event-to-item, resolve-cwd). Exported to the graphs module (event bus, registries, DAOs, adapters).
+- `v1/graphs/` — the M3 workflow module: `graphs.module.ts` + `graphs.types.ts` (zod Workflow/node/edge/layout schemas) at the root, then `utils/` (ported graph validation + Kahn topo order, comment-preserving `workflow-yaml`), `services/` (`workflow-store` — the `*.geniro.yaml` library under `<userData>/workflows/`; `graph-executor` — the DAG fan-out over the M2 adapters), `controllers/`, `dto/`.
+- `v1/notifications/` — `notifications.module.ts` + `gateways/notifications.gateway.ts` (the Socket.IO channel: run rooms + the approval `verdict` round-trip).
 
 - Binds **`127.0.0.1` only**. Assembled exactly like Geniro's `apps/api` (`buildBootstrapper(…)` → `addExtension(buildHttpServerExtension(…))` → `init()`); the loopback specifics ride on the extension's `host` / `portFallback` / `onListening` options — bind 127.0.0.1, negotiate a free port if the preferred one is taken, and write the pidfile from `onListening` after a healthy listen (the `http-server`'s own listen still defaults to `0.0.0.0`, preserving Geniro's behavior). Shutdown is Nest-owned (`enableShutdownHooks`); `utils/pidfile.lifecycle.ts` clears the pidfile on the way out, so `main.ts` needs no signal handling.
 - Writes the pidfile (`daemon.json`: `pid`, `host`, `port`, per-launch `token`, `version`, `startedAt`) **only after** the schema is synced and the server is listening, then prints `GENIRO_DAEMON_READY {port}` to stdout. The UI never assumes the host/port — it reads the bound values back from the pidfile (so it no longer passes `GENIRO_PORT`; the daemon owns that default).
@@ -114,13 +115,14 @@ A standalone NestJS engine the UI spawns as a child process, laid out like Genir
 | `GET /health/check` | readiness probe (`{status, version}`) | public |
 | `GET /metrics` | Prometheus metrics | public |
 | `GET /swagger-api` · `/swagger-api/reference` | OpenAPI spec + Scalar UI | public |
-| `/ws` (Socket.IO) | renderer ⇄ daemon channel (hello + echo in M1) | per-launch token (handshake `auth`) |
-| (future M2+ routes) | runs / items / agents | bearer token (`LoopbackTokenGuard`) |
+| `/ws` (Socket.IO) | renderer ⇄ daemon channel: `join`/`leave` run rooms, streamed `item` events, approval `verdict` → `verdict_ack` | per-launch token (handshake `auth`) |
+| `POST/GET /v1/chats*` | single-agent chats: create/list, `:runId/items` history (`afterSeq` cursor, shared by workflow runs), `:runId/messages`, `:runId/cancel` | bearer token (`LoopbackTokenGuard`) |
+| `/v1/workflows*` | workflow library CRUD (`GET/POST /`, `GET/PUT/DELETE /:slug`, `POST /import`, `POST /:slug/export`) + runs (`POST /:slug/runs`, `GET /runs`, `GET /runs/:runId/nodes`, `POST /runs/:runId/cancel`) | bearer token (`LoopbackTokenGuard`) |
 
 The public allowlist (`/health`, `/metrics`, `/swagger-api`) is matched at segment boundaries; every other route requires the `Bearer <token>` header. The WS channel is a NestJS Socket.IO gateway (`@WebSocketGateway({ path: '/ws' })`) installed via the `IoAdapter` in `main.ts`; the renderer (`socket.io-client`) sends the per-launch token in the Socket.IO handshake `auth` payload (browsers can't set headers on a WS handshake), compared with `safeEqual` (constant-time) in `handleConnection` — a mismatch disconnects the socket. The HTTP `LoopbackTokenGuard` doesn't see Socket.IO traffic (engine.io intercepts `/ws` before Nest routing), so the gateway owns WS auth.
 
 ### The UI (`apps/ui`)
-electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-supervisor.ts` (spawn/adopt/health-poll/orphan-sweep), `daemon-pidfile.ts` (reads + validates the daemon's pidfile), `settings.ts` (`settings.json`), `keychain.ts` (`@napi-rs/keyring`), `cli-detect.ts`, `ipc.ts`. `src/shared/contracts.ts` holds the IPC/Settings/CLI/Keychain contracts + `DaemonHandle`, shared across main/preload/renderer. `src/preload/index.ts` exposes a typed `window.geniro` via `contextBridge`. `src/renderer/` — React app (`App.tsx`, `onboarding/`, `daemon-client.ts` WS client).
+electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-supervisor.ts` (spawn/adopt/health-poll/orphan-sweep), `daemon-pidfile.ts` (reads + validates the daemon's pidfile), `settings.ts` (`settings.json`), `keychain.ts` (`@napi-rs/keyring`), `cli-detect.ts`, `ipc.ts`. `src/shared/contracts.ts` holds the IPC/Settings/CLI/Keychain contracts + `DaemonHandle`, shared across main/preload/renderer. `src/preload/index.ts` exposes a typed `window.geniro` via `contextBridge`. `src/renderer/` — React app (`App.tsx`, `onboarding/`, `chats/` incl. `approval-card`, `graphs/` React Flow canvas, `chat-api.ts` + `workflow-api.ts` REST clients, `daemon-client.ts` WS client).
 
 `DaemonSupervisor.start()` reuses a still-healthy daemon left by a prior UI instance (pid + `/health/check` match), sweeps stale pidfiles, and only tears down the process it owns.
 
@@ -157,7 +159,7 @@ apps/ui/src/renderer/
 - **Settings → `settings.json`** in the Electron userData dir.
 - **Secrets → macOS Keychain only** (`@napi-rs/keyring`) — never SQLite, never a config file.
 - **SQLite (`geniro.db`) → runtime/history only** — `runs` / `items` / `node_state` rows.
-- **Persist-then-emit** for streamed-then-replayable data (chat `items` now, graph-node items in M3): allocate the monotonic `seq`, write the row, **then** publish on the RxJS bus / per-run Socket.IO room. SQLite is the source of truth and a reconnecting client replays via an `afterSeq` cursor, so nothing is emitted before it is durable.
+- **Persist-then-emit** for streamed-then-replayable data (chat `items` and graph-node items alike): allocate the monotonic `seq`, write the row, **then** publish on the RxJS bus / per-run Socket.IO room. SQLite is the source of truth and a reconnecting client replays via an `afterSeq` cursor, so nothing is emitted before it is durable.
 - The per-launch loopback **token on disk** (in `daemon.json`) is allowed — it is a local session token, not a user secret.
 
 ---

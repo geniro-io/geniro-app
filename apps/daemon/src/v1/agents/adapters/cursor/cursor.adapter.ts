@@ -178,6 +178,7 @@ export function mapCursorMessage(obj: unknown): AgentEvent[] {
         type: 'turn_complete',
         usage: readUsage(root),
         stopReason: asString(root.stop_reason) ?? asString(root.stopReason),
+        finalText: asString(root.result) ?? null,
       });
       return events;
     }
@@ -210,9 +211,16 @@ export class CursorAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
+    // cursor-agent has no system-prompt flag and no approval callback: a
+    // graph node's role is prepended to the prompt text, and `ask` approval
+    // degrades to auto-approve (`--force` — the executor surfaces the degrade
+    // to the user as a system item).
+    const prompt = input.systemPrompt
+      ? `${input.systemPrompt}\n\n${input.prompt}`
+      : input.prompt;
     // End-of-options separator before the positional prompt, so a prompt that
     // starts with `-`/`--` is taken as prompt text rather than parsed as a flag.
-    args.push('--', input.prompt);
+    args.push('--', prompt);
     return args;
   }
 

@@ -62,6 +62,27 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Whether the child's stdin stays open past the payload for a mid-turn
+   * dialogue. Default false (stdin closes immediately); the Claude adapter
+   * returns true in `ask` approval mode for its control protocol.
+   */
+  protected keepStdinOpen(_input: AgentTurnInput): boolean {
+    return false;
+  }
+
+  /**
+   * Encode one approval verdict as the stdin line the CLI expects. Default
+   * undefined — no approval protocol; `respondApproval` is then a no-op.
+   */
+  protected buildApprovalResponse(
+    _id: string,
+    _allow: boolean,
+    _updatedInput?: unknown,
+  ): string | undefined {
+    return undefined;
+  }
+
+  /**
    * Start a turn. Events are delivered to `onEvent` in stream order. The
    * returned handle settles via `done` and can `cancel` the turn.
    */
@@ -75,6 +96,9 @@ export abstract class AgentAdapter {
       cwd: input.cwd,
       env: this.buildEnv(input),
       stdinPayload: this.buildStdinPayload(input),
+      keepStdinOpen: this.keepStdinOpen(input),
+      buildApprovalResponse: (id, allow, updatedInput) =>
+        this.buildApprovalResponse(id, allow, updatedInput),
       mapper: (obj) => this.mapMessage(obj),
       onEvent,
       spawn: this.options.spawn,

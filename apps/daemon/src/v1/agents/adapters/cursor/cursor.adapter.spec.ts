@@ -109,6 +109,7 @@ describe('mapCursorMessage', () => {
         type: 'turn_complete',
         usage: { inputTokens: 5, outputTokens: 1, costUsd: 0.02 },
         stopReason: 'end_turn',
+        finalText: null,
       },
     ]);
   });
@@ -170,6 +171,7 @@ describe('CursorAdapter', () => {
         type: 'turn_complete',
         usage: { inputTokens: null, outputTokens: null, costUsd: null },
         stopReason: null,
+        finalText: null,
       },
     ]);
   });
@@ -214,5 +216,27 @@ describe('CursorAdapter', () => {
         message: 'cursor-agent exited with code 1: not logged in',
       },
     ]);
+  });
+});
+
+describe('CursorAdapter graph-node extras', () => {
+  it('prepends the system prompt to the positional prompt (no CLI flag exists)', () => {
+    const { spawn, captured } = fakeSpawn();
+    new CursorAdapter({ spawn }).start(
+      {
+        prompt: 'review the diff',
+        cwd: '/proj',
+        systemPrompt: 'You are the reviewer.',
+        approvalMode: 'ask',
+      },
+      () => {},
+    );
+    const sep = captured.args!.indexOf('--');
+    expect(captured.args!.slice(sep)).toEqual([
+      '--',
+      'You are the reviewer.\n\nreview the diff',
+    ]);
+    // ask degrades to --force (auto-approve) — cursor-agent has no callback.
+    expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });
 });

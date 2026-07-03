@@ -39,6 +39,13 @@ file at the start of each run and at every phase-boundary refresh via
   contract in CLAUDE.md → *Design system (renderer)*.
 - After moving native deps or switching ABIs, `pnpm rebuild:native` rebuilds
   better-sqlite3 against Electron's ABI.
+- **Guard added on one path — sweep sibling paths for bypasses.** When a change
+  adds a guard or cleanup obligation on one call path (a claim/release pair,
+  validation, dedup, an auth check), before finishing sweep every sibling path
+  that reaches the same protected operation — including failure branches that
+  exit before the happy path completes — and confirm each one passes through
+  the guard or releases the obligation. Both round-2 M3 self-review bugs were
+  exactly this shape: the guard existed, a caller path bypassed it.
 
 ## Additional Steps
 

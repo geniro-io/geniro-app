@@ -27,6 +27,7 @@ Everything else goes into a kind-directory:
 
 Rules:
 
+- **Cross-module logic is extracted, never mirrored.** When a module needs logic another module already implements, extract it into the owning module (`utils/` for pure helpers, `services/` for DI) and import it across the boundary — never copy-adapt it. `v1/agents` is the shared agent-execution substrate (adapters, event bus, registries, run DAOs, `utils/event-to-item`, `utils/persist-item`); `v1/graphs` and future consumers import from it. Mirroring is how an invariant fix silently misses one copy — the M3 review found the same code duplicated four times before extraction.
 - Unit tests (`*.spec.ts`) are co-located in the same directory as the file under test and move with it.
 - When adding a file to a module, place it in its kind-directory from the start; never park it at the module root "temporarily".
 - Only create the directories the module actually needs — no empty placeholder dirs.

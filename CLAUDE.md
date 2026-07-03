@@ -140,7 +140,7 @@ apps/ui/src/renderer/
   chats/message-bubble.tsx — the transcript-row component (cva variants per item kind).
 ```
 
-**Hard rules (mechanically enforced where possible — see the eslint override scoped to `apps/ui/src/renderer/**`):**
+**Hard rules (mechanized in `.claude/rules/renderer-design-system.md` + `.claude/rules/renderer-components.md`, enforced where possible by the eslint override scoped to `apps/ui/src/renderer/**`):**
 - **Never hardcode a colour.** Read every colour/radius/shadow from a token in `styles/global.css` — as a utility (`bg-primary`, `text-muted-foreground`, `border-border`, `shadow-panel-sm`) or `var(--token)`. A raw hex/`rgb()`/`hsl()` — including inside a Tailwind arbitrary value like `bg-[#…]` — is an eslint error. Non-colour arbitrary values (`ring-[3px]`, `size-[26px]`, `shadow-[…var(--border)]`) are fine.
 - **Never duplicate a component or pattern.** Before adding UI, reach for an existing primitive in `components/ui/` or shared component in `components/`; if a pattern (a button, a field, a status dot, a card, an error line, an empty state) recurs, it lives in a shared component and is imported everywhere — never re-implemented inline.
 - **New styled elements go through the layers**: a token in `global.css` → a primitive in `components/ui/` → an app component in `components/`. Compose with the `cn()` helper and, for variants, `cva`. Import directly (`./ui/button`), **no barrels**.
@@ -173,7 +173,7 @@ apps/ui/src/renderer/
 - **New daemon feature modules** follow the layered structure as they're added: Controller (route + validation only) → Service (business logic) → DAO (extends `BaseDao`, injects `EntityManager` from `@mikro-orm/sqlite`) → Entity. Use Zod DTOs via `createZodDto()` from `nestjs-zod` for HTTP input.
 - **Daemon module directory layout** (mechanized in `.claude/rules/daemon-module-structure.md`): a module keeps only `<name>.module.ts` + its types file at the root; every other file lives in its kind-directory — `controllers/`, `services/`, `dao/`, `entity/`, `dto/`, `utils/`, `adapters/`, `gateways/` — with specs co-located. Never a flat module.
 - **CLI agent adapters** (mechanized in `.claude/rules/agent-adapters.md`): every adapter extends the abstract `AgentAdapter` base (`v1/agents/adapters/agent-adapter.ts`) and lives in its own `adapters/<name>/` subdirectory with all of its classes/types/specs; shared contract types live in `adapters/adapter.types.ts`.
-- **Renderer UI follows the design system** (see *Design system (renderer)* above): colours come from tokens in `styles/global.css` only (never hardcoded), and reusable UI is a shared component in `components/ui/` or `components/` (never duplicated inline). Prefer an existing component; promote a recurring pattern into one.
+- **Renderer UI follows the design system** (see *Design system (renderer)* above; mechanized in `.claude/rules/renderer-design-system.md` + `.claude/rules/renderer-components.md`): colours come from tokens in `styles/global.css` only (never hardcoded), and reusable UI is a shared component in `components/ui/` or `components/` (never duplicated inline). Prefer an existing component; promote a recurring pattern into one.
 
 ---
 

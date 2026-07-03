@@ -138,7 +138,8 @@ export type SecretName = 'cursor.apiKey';
 
 /** Input captured by the onboarding flow and committed in one IPC call. */
 export interface OnboardingInput {
-  projectFolder: string;
+  /** Per-agent binary path overrides (absolute paths); omitted keys auto-detect. */
+  cliPaths?: Partial<Record<CliKind, string>>;
   /** Optional Cursor API key; stored in the Keychain, never echoed back. */
   cursorApiKey?: string;
 }
@@ -155,6 +156,8 @@ export interface GeniroApi {
   getDaemonHandle(): Promise<DaemonHandle | null>;
   /** Open the native folder picker; returns the chosen absolute path or null. */
   pickProjectFolder(): Promise<string | null>;
+  /** Open the native file picker for an agent binary; returns the path or null. */
+  pickAgentBinary(): Promise<string | null>;
   /** Read the persisted settings. */
   getSettings(): Promise<Settings>;
   /** Merge a partial patch into settings; returns the updated settings. */
@@ -176,6 +179,7 @@ export const IPC = {
   getStatus: 'geniro:getStatus',
   getDaemonHandle: 'geniro:getDaemonHandle',
   pickProjectFolder: 'geniro:pickProjectFolder',
+  pickAgentBinary: 'geniro:pickAgentBinary',
   getSettings: 'geniro:getSettings',
   updateSettings: 'geniro:updateSettings',
   detectClis: 'geniro:detectClis',

@@ -46,6 +46,8 @@ export const secretValueSchema = z.string().min(1);
 
 /** Onboarding payload committed in a single IPC call. */
 export const onboardingInputSchema = z.strictObject({
-  projectFolder: absolutePath,
+  // Per-agent binary overrides; each becomes an `execFile` target in
+  // cli-detect.ts, so it must be a validated absolute path.
+  cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
   cursorApiKey: z.string().min(1).optional(),
 });

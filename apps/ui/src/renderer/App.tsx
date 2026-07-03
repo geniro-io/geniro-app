@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DaemonHandle } from '../shared/contracts';
+import logoUrl from './assets/logo.png';
 import { Chats } from './chats/Chats';
 import { DaemonClient } from './daemon-client';
 import { Onboarding } from './onboarding/Onboarding';
@@ -83,7 +84,7 @@ export function App(): React.JSX.Element {
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">geniro</span>
+        <img className="brand-logo" src={logoUrl} alt="geniro" />
         <span className={`status ${connected ? 'ok' : 'bad'}`}>
           {connected
             ? `● connected${daemonVersion ? ` · daemon v${daemonVersion}` : ''}`

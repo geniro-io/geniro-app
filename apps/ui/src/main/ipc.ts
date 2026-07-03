@@ -38,6 +38,13 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
+  ipcMain.handle(IPC.pickAgentBinary, async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
   ipcMain.handle(IPC.getSettings, () => readSettings());
 
   ipcMain.handle(IPC.updateSettings, (_event, patch: unknown) =>
@@ -59,10 +66,16 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
   });
 
   ipcMain.handle(IPC.completeOnboarding, (_event, input: unknown) => {
-    const { projectFolder, cursorApiKey } = onboardingInputSchema.parse(input);
+    const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);
     if (cursorApiKey) {
       saveSecret('cursor.apiKey', cursorApiKey);
     }
-    return updateSettings({ projectFolder, onboardingComplete: true });
+    // Merge over existing overrides so a re-run of onboarding never clears a
+    // previously-set agent path the user didn't touch this time.
+    const current = readSettings();
+    return updateSettings({
+      onboardingComplete: true,
+      cliPaths: { ...current.cliPaths, ...(cliPaths ?? {}) },
+    });
   });
 }

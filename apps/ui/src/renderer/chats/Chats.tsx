@@ -43,9 +43,12 @@ function folderName(path: string): string {
 export function Chats({
   client,
   handle,
+  active = true,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
+  /** False while another view is shown (the tab stays mounted, hidden). */
+  active?: boolean;
 }): React.JSX.Element {
   const chatApi = useMemo(() => new ChatApi(handle), [handle]);
   const workflowApi = useMemo(() => new WorkflowApi(handle), [handle]);
@@ -109,6 +112,20 @@ export function Chats({
     }
   }, []);
 
+  // The workflow library is editable on the Graphs page while this tab stays
+  // mounted (hidden), so refetch it every time the tab becomes visible — a
+  // mount-only fetch would leave the target selector stale after a save or
+  // delete over there.
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    void workflowApi
+      .list()
+      .then(setWorkflows)
+      .catch(() => setWorkflows([]));
+  }, [active, workflowApi]);
+
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
       const previous = activeRunIdRef.current;
@@ -159,10 +176,6 @@ export function Chats({
         ),
       )
       .catch((err: unknown) => setError(String(err)));
-    void workflowApi
-      .list()
-      .then(setWorkflows)
-      .catch(() => setWorkflows([]));
     const unsubscribeItem = client.onItem(addItem);
     // On reconnect the WS missed any items streamed while offline (the room
     // buffers nothing for an absent member); fetch just the delta past the last

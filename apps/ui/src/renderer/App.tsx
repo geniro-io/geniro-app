@@ -99,7 +99,11 @@ export function App(): React.JSX.Element {
             and active-run selection survive a trip to Settings/Graphs. */}
         <div className={cn('h-full', view !== 'chats' && 'hidden')}>
           {handle && clientRef.current ? (
-            <Chats client={clientRef.current} handle={handle} />
+            <Chats
+              client={clientRef.current}
+              handle={handle}
+              active={view === 'chats'}
+            />
           ) : (
             <EmptyState>Connecting to the daemon…</EmptyState>
           )}

@@ -471,6 +471,48 @@ describe('Chats workflow runs', () => {
     expect(container.textContent).not.toContain('Stop');
   });
 
+  it('refetches the workflow library when the tab becomes active again', async () => {
+    // The tab stays mounted (hidden) while the user saves a workflow on the
+    // Graphs page — coming back must refresh the target selector, not serve
+    // the mount-time snapshot.
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    expect(workflowApi.list).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('select')!.textContent).not.toContain(
+      'demo-duo',
+    );
+
+    // Hidden behind the Graphs page (no refetch fires)…
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'demo-duo',
+        name: 'demo-duo',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    expect(workflowApi.list).toHaveBeenCalledTimes(1);
+
+    // …and back: the selector now offers the workflow saved over there.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    expect(workflowApi.list).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('select')!.textContent).toContain(
+      'demo-duo',
+    );
+  });
+
   it('routes Stop on a workflow run to the workflow cancel endpoint', async () => {
     workflowApi.listRuns.mockResolvedValue([wfRun]);
     const { client } = makeClient();

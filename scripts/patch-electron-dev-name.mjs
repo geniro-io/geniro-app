@@ -1,53 +1,82 @@
-// Dev-only: rename the Electron.app bundle used by `electron-vite dev` to
-// "Geniro" so the macOS menu bar / About / Force-Quit show the product name
-// instead of "Electron".
+// Dev-only: make the Electron.app bundle used by `electron-vite dev` present as
+// "Geniro" (menu bar, About, Force-Quit, Dock) instead of "Electron".
 //
-// Why this is needed: on macOS the application-menu title comes from the running
-// bundle's Info.plist CFBundleName — NOT from `app.setName()`. In dev the running
-// bundle is node_modules/electron/dist/Electron.app (CFBundleName "Electron"), so
-// the only way to fix the dev menu bar is to patch that plist. A packaged build
-// (M4) gets CFBundleName "Geniro" from electron-builder's productName, so this
-// script is dev-only.
+// Three things are required, and all three matter — dropping any one leaves the
+// old name showing somewhere:
+//   1. Rename the bundle DIRECTORY  dist/Electron.app → dist/Geniro.app. The Dock
+//      keys a running app's tile (name + tooltip) on the bundle PATH and caches
+//      it hard; a shared `…/Electron.app` path stays "Electron" no matter what
+//      the plist says. A Geniro-named path gives it a fresh tile.
+//   2. Set a distinct CFBundleIdentifier (io.geniro.desktop). LaunchServices
+//      caches the display name by identifier and refuses to re-read the plist for
+//      the well-known `com.github.Electron` id. Electron's own rename docs list
+//      CFBundleIdentifier alongside CFBundleName/CFBundleDisplayName.
+//   3. Set CFBundleName + CFBundleDisplayName = Geniro (the menu-bar title, read
+//      from the running bundle at launch — app.setName() does NOT change it).
 //
-// Modifying Info.plist invalidates the bundle's ad-hoc signature, and Apple
-// Silicon refuses to launch a bundle whose seal is broken — so we re-sign
-// ad-hoc afterwards. It runs from `predev`; it is idempotent (skips the slow
-// re-sign once already renamed) and a no-op off macOS or when Electron is absent.
+// The launcher (`require('electron')`) resolves `<electronDir>/dist/<path.txt>`,
+// so path.txt is repointed to the renamed bundle. Editing Info.plist breaks the
+// ad-hoc signature and Apple Silicon won't launch a broken seal, so we re-sign.
+// Runs from `predev`; idempotent (skips the costly work once done); no-op off
+// macOS or when Electron is absent. A packaged build (M4) gets its name from
+// electron-builder's productName, so none of this ships.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NAME = 'Geniro';
-// A distinct bundle id is load-bearing, not cosmetic: macOS LaunchServices caches
-// the Dock/Finder display name keyed on CFBundleIdentifier, and it will NOT
-// re-read the plist for the well-known `com.github.Electron` id even after an
-// edit + re-sign + `lsregister -f`. Giving the dev bundle its own id makes LS
-// treat it as a new app and read the current name. (Electron's own rename docs
-// list CFBundleIdentifier alongside CFBundleName/CFBundleDisplayName.)
 const BUNDLE_ID = 'io.geniro.desktop';
+const APP_DIR = `${NAME}.app`;
 
 if (process.platform !== 'darwin') {
   process.exit(0);
 }
 
-// Resolve the Electron binary from apps/ui regardless of this script's cwd, so
-// `predev` (cwd = apps/ui) and a manual run behave identically.
+// Resolve the electron package dir from apps/ui regardless of this script's cwd.
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-let electronExe;
+let electronDir;
 try {
   const require = createRequire(join(repoRoot, 'apps', 'ui', 'package.json'));
-  electronExe = require('electron'); // …/Electron.app/Contents/MacOS/Electron
+  electronDir = dirname(require.resolve('electron/package.json'));
 } catch {
   process.exit(0);
 }
-if (typeof electronExe !== 'string') {
+
+const distDir = join(electronDir, 'dist');
+const oldApp = join(distDir, 'Electron.app');
+const newApp = join(distDir, APP_DIR);
+const pathTxt = join(electronDir, 'path.txt');
+
+// (1) Rename the bundle directory.
+let renamed = false;
+if (existsSync(oldApp) && !existsSync(newApp)) {
+  renameSync(oldApp, newApp);
+  renamed = true;
+}
+const appBundle = existsSync(newApp) ? newApp : oldApp;
+if (!existsSync(appBundle)) {
   process.exit(0);
 }
 
-const appBundle = dirname(dirname(dirname(electronExe))); // …/Electron.app
+// Repoint the launcher. index.js joins `<electronDir>/dist/<path.txt>`, so the
+// value omits the dist/ prefix; the executable inside is still named "Electron".
+const wantPath = `${APP_DIR}/Contents/MacOS/Electron`;
+try {
+  if (readFileSync(pathTxt, 'utf8').trim() !== wantPath) {
+    writeFileSync(pathTxt, wantPath);
+  }
+} catch {
+  // Best-effort; a bad path.txt would surface immediately as a failed launch.
+}
+
 const plist = join(appBundle, 'Contents', 'Info.plist');
 if (!existsSync(plist)) {
   process.exit(0);
@@ -77,12 +106,8 @@ const LSREGISTER =
   '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/' +
   'LaunchServices.framework/Versions/A/Support/lsregister';
 
-/**
- * Refresh the LaunchServices record for the bundle. The Dock/menu name is
- * cached by LS keyed on the bundle path, so a plist edit alone leaves the old
- * "Electron" name showing until LS re-reads. Best-effort, always run (cheap) so
- * a stale cache self-heals on the next `pnpm dev`.
- */
+/** Force LaunchServices to re-read the (renamed) bundle so the Dock/menu name
+ *  isn't served from a stale cache. Best-effort. */
 function refreshLaunchServices() {
   if (!existsSync(LSREGISTER)) {
     return;
@@ -90,16 +115,17 @@ function refreshLaunchServices() {
   try {
     execFileSync(LSREGISTER, ['-f', appBundle], { stdio: 'ignore' });
   } catch {
-    // Non-fatal — a name-cache refresh isn't worth failing the dev launch.
+    // A name-cache refresh isn't worth failing the dev launch over.
   }
 }
 
-if (
+const alreadyNamed =
   plistGet('CFBundleName') === NAME &&
   plistGet('CFBundleDisplayName') === NAME &&
-  plistGet('CFBundleIdentifier') === BUNDLE_ID
-) {
-  refreshLaunchServices(); // already renamed — still keep the LS cache honest
+  plistGet('CFBundleIdentifier') === BUNDLE_ID;
+
+if (alreadyNamed && !renamed) {
+  refreshLaunchServices(); // steady state — keep LS honest, skip the re-sign
   process.exit(0);
 }
 
@@ -122,4 +148,4 @@ try {
 }
 
 refreshLaunchServices();
-console.log(`[patch-electron-dev-name] renamed dev Electron.app → ${NAME}`);
+console.log(`[patch-electron-dev-name] renamed dev bundle → ${APP_DIR} (${NAME})`);

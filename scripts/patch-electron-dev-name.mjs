@@ -21,6 +21,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NAME = 'Geniro';
+// A distinct bundle id is load-bearing, not cosmetic: macOS LaunchServices caches
+// the Dock/Finder display name keyed on CFBundleIdentifier, and it will NOT
+// re-read the plist for the well-known `com.github.Electron` id even after an
+// edit + re-sign + `lsregister -f`. Giving the dev bundle its own id makes LS
+// treat it as a new app and read the current name. (Electron's own rename docs
+// list CFBundleIdentifier alongside CFBundleName/CFBundleDisplayName.)
+const BUNDLE_ID = 'io.geniro.desktop';
 
 if (process.platform !== 'darwin') {
   process.exit(0);
@@ -66,12 +73,39 @@ function plistSet(key, value) {
   }
 }
 
-if (plistGet('CFBundleName') === NAME && plistGet('CFBundleDisplayName') === NAME) {
-  process.exit(0); // already renamed — skip the costly re-sign
+const LSREGISTER =
+  '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/' +
+  'LaunchServices.framework/Versions/A/Support/lsregister';
+
+/**
+ * Refresh the LaunchServices record for the bundle. The Dock/menu name is
+ * cached by LS keyed on the bundle path, so a plist edit alone leaves the old
+ * "Electron" name showing until LS re-reads. Best-effort, always run (cheap) so
+ * a stale cache self-heals on the next `pnpm dev`.
+ */
+function refreshLaunchServices() {
+  if (!existsSync(LSREGISTER)) {
+    return;
+  }
+  try {
+    execFileSync(LSREGISTER, ['-f', appBundle], { stdio: 'ignore' });
+  } catch {
+    // Non-fatal — a name-cache refresh isn't worth failing the dev launch.
+  }
+}
+
+if (
+  plistGet('CFBundleName') === NAME &&
+  plistGet('CFBundleDisplayName') === NAME &&
+  plistGet('CFBundleIdentifier') === BUNDLE_ID
+) {
+  refreshLaunchServices(); // already renamed — still keep the LS cache honest
+  process.exit(0);
 }
 
 plistSet('CFBundleName', NAME);
 plistSet('CFBundleDisplayName', NAME);
+plistSet('CFBundleIdentifier', BUNDLE_ID);
 
 // Re-seal the ad-hoc signature (the plist edit broke it). Without this, arm64
 // macOS SIGKILLs the bundle on launch.
@@ -87,4 +121,5 @@ try {
   );
 }
 
+refreshLaunchServices();
 console.log(`[patch-electron-dev-name] renamed dev Electron.app → ${NAME}`);

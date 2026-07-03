@@ -53,6 +53,23 @@ export interface RunCliOptions {
    * args never blocks waiting on stdin).
    */
   stdinPayload?: string;
+  /**
+   * Keep stdin open after the payload so the turn can carry a mid-turn
+   * dialogue (the approval control protocol). Stdin is closed as soon as a
+   * terminal event is emitted, letting the CLI exit; without that close a
+   * stream-json CLI waits on stdin forever.
+   */
+  keepStdinOpen?: boolean;
+  /**
+   * Encode one approval verdict as the stdin line the CLI expects (the
+   * adapter owns the wire format). Undefined = this CLI has no approval
+   * protocol and `respondApproval` is a no-op.
+   */
+  buildApprovalResponse?: (
+    id: string,
+    allow: boolean,
+    updatedInput?: unknown,
+  ) => string | undefined;
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
   onEvent: (event: AgentEvent) => void;
@@ -151,6 +168,9 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   // success `result` AND then exits non-zero (or fires `error` then `close`)
   // would emit two contradictory terminal items for one turn.
   let terminalEmitted = false;
+  // Assigned once the child's stdin is wired; a kept-open stdin is closed on
+  // the terminal event so the stream-json CLI stops waiting and exits.
+  let endStdin: (() => void) | null = null;
   const emit = (event: AgentEvent): void => {
     if (
       event.type === 'turn_complete' ||
@@ -161,6 +181,7 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         return;
       }
       terminalEmitted = true;
+      endStdin?.();
     }
     opts.onEvent(event);
   };
@@ -177,7 +198,7 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       message: `failed to spawn ${opts.command}: ${errorMessage(err)}`,
     });
     settle();
-    return { done, cancel: () => {} };
+    return { done, cancel: () => {}, respondApproval: () => false };
   }
 
   const buffer = new NdjsonBuffer({
@@ -245,6 +266,13 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       if (settled) {
         return;
       }
+      // After the terminal event the turn is already decided — a late EPIPE
+      // (e.g. closing a kept-open stdin as the child exits) must not settle
+      // early, or `close` would skip the final buffer flush and `done` would
+      // resolve before stdout drains.
+      if (terminalEmitted) {
+        return;
+      }
       emit({
         type: 'error',
         message: `${opts.command} stdin error: ${err.message}`,
@@ -258,7 +286,18 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       if (opts.stdinPayload !== undefined) {
         stdin.write(opts.stdinPayload);
       }
-      stdin.end();
+      if (opts.keepStdinOpen) {
+        endStdin = () => {
+          endStdin = null;
+          try {
+            stdin.end();
+          } catch {
+            // Already closed with the child's exit — nothing to end.
+          }
+        };
+      } else {
+        stdin.end();
+      }
     } catch (err) {
       if (!settled) {
         emit({
@@ -272,6 +311,23 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
 
   return {
     done,
+    respondApproval: (id, allow, updatedInput) => {
+      if (settled || terminalEmitted) {
+        return false;
+      }
+      const line = opts.buildApprovalResponse?.(id, allow, updatedInput);
+      const stdinStream = child.stdin;
+      if (line === undefined || !stdinStream) {
+        return false;
+      }
+      try {
+        stdinStream.write(line);
+        return true;
+      } catch {
+        // The child exited under us; its close handler owns the terminal event.
+        return false;
+      }
+    },
     cancel: () => {
       if (settled) {
         return;

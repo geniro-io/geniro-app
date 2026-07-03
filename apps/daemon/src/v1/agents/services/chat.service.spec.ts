@@ -123,7 +123,7 @@ function fakeAdapter(kind: AgentKind): {
       const done = new Promise<void>((resolve) => {
         resolveDone = resolve;
       });
-      return { done, cancel: vi.fn() };
+      return { done, cancel: vi.fn(), respondApproval: vi.fn() };
     },
   );
   return {

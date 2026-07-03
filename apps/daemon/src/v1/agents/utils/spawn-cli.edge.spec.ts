@@ -230,3 +230,51 @@ describe('runHeadlessCli stream edge cases', () => {
     ]);
   });
 });
+
+describe('approval seam edges', () => {
+  it('answers before the terminal event, refuses after it', () => {
+    const { spawn, child } = fakeSpawn();
+    const handle = runHeadlessCli({
+      command: 'x',
+      args: [],
+      cwd: '/tmp',
+      spawn,
+      keepStdinOpen: true,
+      buildApprovalResponse: (id, allow) => `${id}:${allow}\n`,
+      mapper: (obj) =>
+        (obj as { type?: string }).type === 'result'
+          ? [
+              {
+                type: 'turn_complete',
+                usage: null,
+                stopReason: null,
+                finalText: null,
+              },
+            ]
+          : [],
+      onEvent: () => {},
+    });
+
+    expect(handle.respondApproval('req-1', true)).toBe(true);
+    expect(child.stdin.written).toContain('req-1:true');
+
+    child.stdout.emitData('{"type":"result"}\n');
+    const before = child.stdin.written;
+    expect(handle.respondApproval('req-2', false)).toBe(false);
+    expect(child.stdin.written).toBe(before);
+  });
+
+  it('respondApproval is a no-op false without a buildApprovalResponse encoder', () => {
+    const { spawn: spawnFn, child } = fakeSpawn();
+    const handle = runHeadlessCli({
+      command: 'x',
+      args: [],
+      cwd: '/tmp',
+      spawn: spawnFn,
+      mapper: () => [],
+      onEvent: () => {},
+    });
+    expect(handle.respondApproval('req-1', true)).toBe(false);
+    expect(child.stdin.written).toBe('');
+  });
+});

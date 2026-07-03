@@ -30,6 +30,19 @@ vi.mock('../chat-api', () => ({
   }),
 }));
 
+// WorkflowApi is mocked the same way; the mount path lists workflows + runs.
+const workflowApi = vi.hoisted(() => ({
+  list: vi.fn(),
+  listRuns: vi.fn(),
+  run: vi.fn(),
+  cancelRun: vi.fn(),
+}));
+vi.mock('../workflow-api', () => ({
+  WorkflowApi: vi.fn(function WorkflowApiMock(this: Record<string, unknown>) {
+    Object.assign(this, workflowApi);
+  }),
+}));
+
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
 
 function msg(seq: number, role: 'user' | 'assistant', text: string): ChatItem {
@@ -63,6 +76,7 @@ const run1: ChatRun = {
   status: 'running',
   title: 'My chat',
   agentKind: 'claude',
+  workflowId: null,
   cwd: '/proj',
   model: null,
   createdAt: 'now',
@@ -89,8 +103,10 @@ function makeClient(): {
         reconnectListener = null;
       };
     },
+    onVerdictAck: () => () => {},
     joinRun: vi.fn(),
     leaveRun: vi.fn(),
+    sendVerdict: vi.fn(),
   } as unknown as DaemonClient;
   return {
     client,
@@ -138,6 +154,10 @@ beforeEach(() => {
   api.sendMessage.mockReset();
   api.cancel.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
+  workflowApi.list.mockReset().mockResolvedValue([]);
+  workflowApi.listRuns.mockReset().mockResolvedValue([]);
+  workflowApi.run.mockReset();
+  workflowApi.cancelRun.mockReset().mockResolvedValue({ cancelled: true });
 });
 
 afterEach(async () => {
@@ -301,5 +321,169 @@ describe('Chats reconnect seam', () => {
     );
     expect(active?.textContent).toContain('My chat');
     expect(container.textContent).toContain('hi');
+  });
+});
+
+describe('Chats workflow runs', () => {
+  const wfRun: ChatRun = {
+    id: 'w1',
+    status: 'running',
+    title: 'Review team',
+    agentKind: null,
+    workflowId: 'review-team',
+    cwd: '/proj',
+    model: null,
+    createdAt: 'later',
+  };
+
+  function wfItem(
+    seq: number,
+    kind: ChatItem['kind'],
+    nodeId: string | null,
+  ): ChatItem {
+    return {
+      id: `w-i${seq}`,
+      runId: 'w1',
+      nodeId,
+      seq,
+      kind,
+      role: null,
+      payload: kind === 'status' ? { status: 'completed' } : {},
+      createdAt: 'now',
+    };
+  }
+
+  it('keeps the working state past a NODE terminal item, clears it on the RUN terminal', async () => {
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    expect(container.textContent).toContain('Stop');
+
+    // A node's own turn_complete must NOT re-enable the composer…
+    await act(async () => {
+      emitItem(wfItem(5, 'turn_complete', 'coder'));
+    });
+    expect(container.textContent).toContain('Stop');
+
+    // …only the run-level terminal item does.
+    await act(async () => {
+      emitItem(wfItem(6, 'turn_complete', null));
+    });
+    expect(container.textContent).not.toContain('Stop');
+  });
+
+  it('starts a NEW workflow run on Send even while a chat run is open (never routes into the chat)', async () => {
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.run.mockResolvedValue({ ...wfRun, id: 'w2' });
+    // An ordinary FINISHED chat is open (an in-flight one would show Stop).
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'build it');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sendButton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Send',
+    )!;
+    await act(async () => {
+      sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(workflowApi.run).toHaveBeenCalledWith('review-team', {
+      cwd: '/proj',
+      prompt: 'build it',
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not arm Stop when the new workflow run already ended during activation', async () => {
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.run.mockResolvedValue({ ...wfRun, id: 'w3' });
+    // The run failed fast: its replayed history already carries the run-level
+    // terminal item (e.g. the CLI binary was missing).
+    api.getHistory.mockResolvedValue([
+      { ...wfItem(0, 'error', null), runId: 'w3' },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'doomed task');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sendButton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Send',
+    )!;
+    await act(async () => {
+      sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(workflowApi.run).toHaveBeenCalled();
+    expect(container.textContent).not.toContain('Stop');
+  });
+
+  it('routes Stop on a workflow run to the workflow cancel endpoint', async () => {
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const stop = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Stop',
+    )!;
+    await act(async () => {
+      stop.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(workflowApi.cancelRun).toHaveBeenCalledWith('w1');
+    expect(api.cancel).not.toHaveBeenCalled();
   });
 });

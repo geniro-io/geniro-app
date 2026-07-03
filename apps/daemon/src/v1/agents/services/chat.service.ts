@@ -1,6 +1,3 @@
-import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
-
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 import {
@@ -11,8 +8,7 @@ import {
 
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
-import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentKind, ItemKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
@@ -20,6 +16,9 @@ import type { ItemWire, RunWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
+import { persistItemAndEmit, runToWire } from '../utils/persist-item';
+import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentEventBus } from './agent-events.bus';
 import { ProcessRegistry } from './process-registry';
 
@@ -29,69 +28,6 @@ import { ProcessRegistry } from './process-registry';
  * null for single-agent transcript rows, per the entity contract.
  */
 const SINGLE_AGENT_NODE = 'agent';
-
-/** Map a normalized event to the persisted transcript item it becomes. */
-function mapEventToItem(
-  event: AgentEvent,
-): { kind: ItemKind; role: string | null; payload: unknown } | null {
-  switch (event.type) {
-    case 'session':
-      return null; // captured into node_state, not a transcript item
-    case 'text':
-      return {
-        kind: 'message',
-        role: 'assistant',
-        payload: { text: event.text },
-      };
-    case 'reasoning':
-      return {
-        kind: 'reasoning',
-        role: 'assistant',
-        payload: { text: event.text },
-      };
-    case 'tool_call':
-      return {
-        kind: 'tool_call',
-        role: 'assistant',
-        payload: { id: event.id, name: event.name, input: event.input },
-      };
-    case 'tool_result':
-      return {
-        kind: 'tool_result',
-        role: 'tool',
-        payload: {
-          id: event.id,
-          name: event.name,
-          result: event.result,
-          isError: event.isError,
-        },
-      };
-    case 'turn_complete':
-      return {
-        kind: 'turn_complete',
-        role: null,
-        payload: { usage: event.usage, stopReason: event.stopReason },
-      };
-    case 'turn_cancelled':
-      return { kind: 'turn_cancelled', role: null, payload: {} };
-    case 'error':
-      return { kind: 'error', role: null, payload: { message: event.message } };
-  }
-}
-
-/** The run status a terminal event implies, or null for a mid-turn event. */
-function terminalStatus(event: AgentEvent): RunStatus | null {
-  switch (event.type) {
-    case 'turn_complete':
-      return 'completed';
-    case 'error':
-      return 'failed';
-    case 'turn_cancelled':
-      return 'cancelled';
-    default:
-      return null;
-  }
-}
 
 function parsePayload(raw: string): unknown {
   try {
@@ -173,7 +109,7 @@ export class ChatService {
     model?: string;
     title?: string;
   }): Promise<RunWire> {
-    const cwd = this.resolveValidCwd(input.cwd);
+    const cwd = resolveValidCwd(input.cwd);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -249,7 +185,7 @@ export class ChatService {
       );
     }
     try {
-      const cwd = this.resolveValidCwd(run.cwd);
+      const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
       const model = run.model ?? undefined;
 
@@ -366,79 +302,18 @@ export class ChatService {
     role: string | null,
     payload: unknown,
   ): Promise<ItemWire> {
-    const item = await this.itemDao.create(
-      {
-        runId,
-        nodeId: null,
-        seq,
-        kind,
-        role,
-        payload: JSON.stringify(payload),
-      },
-      em,
-    );
-    const wire: ItemWire = {
-      id: item.id,
+    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
       runId,
       nodeId: null,
       seq,
       kind,
       role,
       payload,
-      createdAt: item.createdAt.toISOString(),
-    };
-    this.bus.publish({ runId, item: wire });
-    // A turn can stream many items through this one forked EM; detach the
-    // just-persisted entity so the identity map stays bounded over a long turn.
-    // The DAO helpers re-query by id, so later status/session writes are correct.
-    em.clear();
-    return wire;
-  }
-
-  /**
-   * Validate a working directory and return its canonical (symlink-resolved)
-   * absolute path. Canonicalizing closes the gap where a symlinked cwd is
-   * persisted un-resolved; the returned path is what gets stored and spawned in.
-   * The agent is scoped to the user's chosen folder (it never defaults to the
-   * daemon's own cwd, the app repo) — confining it further to an allowed root is
-   * out of scope for the local-first single-user model (the user picks their own
-   * project folder on their own machine).
-   */
-  private resolveValidCwd(cwd: string): string {
-    if (!isAbsolute(cwd)) {
-      throw new BadRequestException(
-        'INVALID_CWD',
-        'cwd must be an absolute path',
-      );
-    }
-    let canonical: string;
-    try {
-      canonical = realpathSync(cwd); // resolves symlinks; throws if missing
-    } catch {
-      throw new BadRequestException(
-        'INVALID_CWD',
-        `cwd does not exist: ${cwd}`,
-      );
-    }
-    if (!statSync(canonical).isDirectory()) {
-      throw new BadRequestException(
-        'INVALID_CWD',
-        `cwd is not a directory: ${cwd}`,
-      );
-    }
-    return canonical;
+    });
   }
 
   private toRunWire(run: Run): RunWire {
-    return {
-      id: run.id,
-      status: run.status,
-      title: run.title,
-      agentKind: run.agentKind,
-      cwd: run.cwd,
-      model: run.model,
-      createdAt: run.createdAt.toISOString(),
-    };
+    return runToWire(run);
   }
 
   private itemToWire(item: Item): ItemWire {

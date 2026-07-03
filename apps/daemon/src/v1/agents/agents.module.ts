@@ -7,6 +7,7 @@ import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { AgentEventBus } from './services/agent-events.bus';
+import { ApprovalRegistry } from './services/approval-registry';
 import { ChatService } from './services/chat.service';
 import { ProcessRegistry } from './services/process-registry';
 
@@ -24,6 +25,7 @@ import { ProcessRegistry } from './services/process-registry';
   providers: [
     ChatService,
     AgentEventBus,
+    ApprovalRegistry,
     ProcessRegistry,
     ItemDao,
     NodeStateDao,
@@ -31,6 +33,15 @@ import { ProcessRegistry } from './services/process-registry';
     { provide: ClaudeAdapter, useFactory: () => new ClaudeAdapter() },
     { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
   ],
-  exports: [AgentEventBus],
+  exports: [
+    AgentEventBus,
+    ApprovalRegistry,
+    ProcessRegistry,
+    ItemDao,
+    NodeStateDao,
+    RunDao,
+    ClaudeAdapter,
+    CursorAdapter,
+  ],
 })
 export class AgentsModule {}

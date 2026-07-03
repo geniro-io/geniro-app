@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RuntimeInfo } from '../../../auth/runtime';
 import type { ItemWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { NotificationsGateway } from './notifications.gateway';
 
 const runtime: RuntimeInfo = {
@@ -43,7 +44,11 @@ function wireItem(runId: string, seq: number): ItemWire {
 
 describe('NotificationsGateway', () => {
   it('disconnects a socket presenting a bad token and never says hello', () => {
-    const gw = new NotificationsGateway(runtime, new AgentEventBus());
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+    );
     const socket = fakeSocket('wrong-token');
 
     gw.handleConnection(socket as unknown as Socket);
@@ -53,7 +58,11 @@ describe('NotificationsGateway', () => {
   });
 
   it('greets a socket presenting the per-launch token', () => {
-    const gw = new NotificationsGateway(runtime, new AgentEventBus());
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+    );
     const socket = fakeSocket('good-token');
 
     gw.handleConnection(socket as unknown as Socket);
@@ -65,7 +74,11 @@ describe('NotificationsGateway', () => {
   });
 
   it('join reads the runId from {runId} and string payloads, ignores empty', () => {
-    const gw = new NotificationsGateway(runtime, new AgentEventBus());
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+    );
     const socket = fakeSocket('good-token');
 
     expect(gw.join(socket as unknown as Socket, { runId: 'r1' })).toEqual({
@@ -89,7 +102,11 @@ describe('NotificationsGateway', () => {
   });
 
   it('leave reads the runId and leaves the room', () => {
-    const gw = new NotificationsGateway(runtime, new AgentEventBus());
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+    );
     const socket = fakeSocket('good-token');
 
     expect(gw.leave(socket as unknown as Socket, { runId: 'r1' })).toEqual({
@@ -101,7 +118,7 @@ describe('NotificationsGateway', () => {
 
   it('isolates a per-emit failure so the bus subscription survives', () => {
     const bus = new AgentEventBus();
-    const gw = new NotificationsGateway(runtime, bus);
+    const gw = new NotificationsGateway(runtime, bus, new ApprovalRegistry());
     let calls = 0;
     const emit = vi.fn(() => {
       calls += 1;
@@ -124,5 +141,52 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(2);
 
     gw.onModuleDestroy();
+  });
+});
+
+describe('verdict round-trip', () => {
+  const runtime = {
+    token: 't',
+    version: '0',
+  } as unknown as import('../../../auth/runtime').RuntimeInfo;
+
+  it('routes a valid verdict to the approval registry and acks applied', () => {
+    const approvals = new ApprovalRegistry();
+    const respond = vi.fn(() => true);
+    approvals.track({
+      runId: 'r1',
+      nodeId: 'n1',
+      requestId: 'req-1',
+      toolName: 'Write',
+      input: {},
+      respond,
+    });
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      approvals,
+    );
+
+    const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
+    expect(ack).toEqual({
+      event: 'verdict_ack',
+      data: { requestId: 'req-1', applied: true },
+    });
+    expect(respond).toHaveBeenCalledWith(true);
+  });
+
+  it('acks applied=false for unknown or malformed verdicts', () => {
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+    );
+    expect(
+      gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
+    ).toEqual({ requestId: 'ghost', applied: false });
+    expect(gw.verdict({ nonsense: true }).data).toEqual({
+      requestId: null,
+      applied: false,
+    });
   });
 });

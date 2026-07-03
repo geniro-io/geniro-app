@@ -49,14 +49,18 @@ export type ChatItemKind =
   | 'system'
   | 'error'
   | 'attachment'
-  | 'status';
+  | 'status'
+  | 'approval_request'
+  | 'approval_verdict';
 
-/** A single-agent chat run. */
+/** A run — a single-agent chat or a workflow (graph) execution. */
 export interface ChatRun {
   id: string;
   status: ChatRunStatus;
   title: string | null;
   agentKind: CliKind | null;
+  /** Workflow slug for a graph run; null for a single-agent chat. */
+  workflowId: string | null;
   cwd: string | null;
   model: string | null;
   createdAt: string;
@@ -72,6 +76,70 @@ export interface ChatItem {
   role: string | null;
   payload: unknown;
   createdAt: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workflows (mirrors the daemon's v1/graphs wire shapes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Tool-approval mode of one workflow node. */
+export type WorkflowApproval = 'auto' | 'ask';
+
+/** One agent node of a workflow DAG. */
+export interface WorkflowNode {
+  id: string;
+  name?: string;
+  agent: CliKind;
+  model?: string;
+  role?: string;
+  approval: WorkflowApproval;
+}
+
+/** Directed edge: `from`'s final text feeds `to`'s prompt context. */
+export interface WorkflowEdge {
+  from: string;
+  to: string;
+  label?: string;
+}
+
+/** Canvas position per node id. */
+export type WorkflowLayout = Record<string, { x: number; y: number }>;
+
+/** A complete workflow definition (the `*.geniro.yaml` shape). */
+export interface Workflow {
+  name: string;
+  description?: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  layout?: WorkflowLayout;
+}
+
+/** A workflow as listed from the library. */
+export interface WorkflowSummary {
+  slug: string;
+  name: string;
+  description: string | null;
+  nodeCount: number;
+  updatedAt: string;
+}
+
+/** One workflow definition addressed by its library slug. */
+export interface WorkflowWire {
+  slug: string;
+  workflow: Workflow;
+}
+
+/** Node lifecycle status within a run (mirrors the daemon `NodeStatus`). */
+export type NodeRunStatus = ChatRunStatus | 'skipped';
+
+/** Per-node execution state of one workflow run. */
+export interface NodeStateWire {
+  runId: string;
+  nodeId: string;
+  status: NodeRunStatus;
+  startedAt: number | null;
+  endedAt: number | null;
+  error: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +240,10 @@ export interface GeniroApi {
   deleteSecret(name: SecretName): Promise<void>;
   /** Persist onboarding input and mark onboarding complete. */
   completeOnboarding(input: OnboardingInput): Promise<Settings>;
+  /** Open a native picker for a workflow YAML to import; path or null. */
+  pickWorkflowImport(): Promise<string | null>;
+  /** Open a native save dialog for a workflow export; target path or null. */
+  pickWorkflowExport(defaultName: string): Promise<string | null>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -187,4 +259,6 @@ export const IPC = {
   hasSecret: 'geniro:hasSecret',
   deleteSecret: 'geniro:deleteSecret',
   completeOnboarding: 'geniro:completeOnboarding',
+  pickWorkflowImport: 'geniro:pickWorkflowImport',
+  pickWorkflowExport: 'geniro:pickWorkflowExport',
 } as const satisfies Record<keyof GeniroApi, string>;

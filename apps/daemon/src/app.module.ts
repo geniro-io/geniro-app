@@ -6,6 +6,7 @@ import { RuntimeModule } from './auth/runtime.module';
 import { LoopbackTokenGuard } from './auth/token.guard';
 import { PidfileLifecycle } from './utils/pidfile.lifecycle';
 import { AgentsModule } from './v1/agents/agents.module';
+import { GraphsModule } from './v1/graphs/graphs.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { RunsModule } from './v1/runs/runs.module';
 
@@ -32,6 +33,7 @@ export class AppModule {
         RuntimeModule.forRoot(options.runtime),
         RunsModule,
         AgentsModule,
+        GraphsModule,
         NotificationsModule,
       ],
       providers: [

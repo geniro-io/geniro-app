@@ -23,12 +23,14 @@ export interface RunItemEvent {
   item: ItemWire;
 }
 
-/** A run projected to the wire. */
+/** A run projected to the wire (chat and workflow runs share the shape). */
 export interface RunWire {
   id: string;
   status: RunStatus;
   title: string | null;
   agentKind: AgentKind | null;
+  /** Workflow slug for a graph run; null for a single-agent chat. */
+  workflowId: string | null;
   cwd: string | null;
   model: string | null;
   createdAt: string;

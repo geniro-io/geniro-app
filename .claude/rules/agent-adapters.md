@@ -16,6 +16,11 @@ globs:
   - `mapMessage(obj)` — maps one parsed stream-json line to normalized `AgentEvent`s
   - override `buildStdinPayload(input)` only when the CLI reads its prompt from stdin
   - override `buildEnv(input)` only when the CLI needs a secret re-injected
+  - override `keepStdinOpen(input)` only when the CLI holds a mid-turn stdin
+    dialogue (Claude's `ask` approval mode — stdin closes on the terminal event)
+  - override `buildApprovalResponse(id, allow, updatedInput)` only when the CLI
+    has an approval wire protocol (Claude's stream-json `control_response`);
+    the default `undefined` makes `respondApproval` a no-op
 - Never wire `runHeadlessCli` (or `spawn`) directly from an adapter or service —
   the base class's `start()` is the single spawn path.
 - **Each adapter gets its own subdirectory** `adapters/<name>/` holding ALL of its

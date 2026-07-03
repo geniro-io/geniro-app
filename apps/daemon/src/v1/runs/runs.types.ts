@@ -10,12 +10,14 @@ export type RunStatus =
 export type NodeStatus = RunStatus | 'skipped';
 
 /**
- * Conversation item kind — the normalized 11-kind transcript taxonomy. M1
- * shipped the first 6; M2 widens it additively (a plain TEXT column, so the
- * `safe: true` schema sync needs no migration). `message` carries user and
- * assistant text (disambiguated by `Item.role`); `usage`/`status`/`attachment`
- * are defined here for the event model and forward-compat though M2 only
- * emits a subset.
+ * Conversation item kind — the normalized transcript taxonomy. M1 shipped the
+ * first 6; M2 widened it to 11; M3 adds the two approval kinds (a plain TEXT
+ * column, so the `safe: true` schema sync needs no migration). `message`
+ * carries user and assistant text (disambiguated by `Item.role`);
+ * `usage`/`status`/`attachment` are defined here for the event model and
+ * forward-compat though only a subset is emitted. `approval_request` is an
+ * `ask`-node's paused tool call awaiting a verdict; `approval_verdict` records
+ * the user's answer, closing the pair for reconnect replay.
  */
 export type ItemKind =
   | 'message'
@@ -28,7 +30,9 @@ export type ItemKind =
   | 'system'
   | 'error'
   | 'attachment'
-  | 'status';
+  | 'status'
+  | 'approval_request'
+  | 'approval_verdict';
 
 /** A CLI coding agent the daemon can drive headlessly (M2: one at a time). */
 export type AgentKind = 'claude' | 'cursor-agent';

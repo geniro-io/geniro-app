@@ -160,20 +160,26 @@ describe('Chats reconnect seam', () => {
     const container = await mount(client);
 
     await clickRun(container, 'My chat');
-    expect(container.querySelectorAll('.msg.assistant')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-role="assistant"]')).toHaveLength(
+      1,
+    );
 
     // A live WS copy of the seq-1 item arrives (the join/replay overlap).
     await act(async () => {
       emitItem(msg(1, 'assistant', 'hello'));
     });
     // Still one assistant row — de-duped by seq, not appended twice.
-    expect(container.querySelectorAll('.msg.assistant')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-role="assistant"]')).toHaveLength(
+      1,
+    );
 
     // A genuinely new seq DOES append.
     await act(async () => {
       emitItem(msg(2, 'assistant', 'more'));
     });
-    expect(container.querySelectorAll('.msg.assistant')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-role="assistant"]')).toHaveLength(
+      2,
+    );
   });
 
   it('ignores a live item addressed to a non-active run', async () => {
@@ -182,11 +188,11 @@ describe('Chats reconnect seam', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const before = container.querySelectorAll('.msg').length;
+    const before = container.querySelectorAll('[data-role]').length;
     await act(async () => {
       emitItem({ ...msg(5, 'assistant', 'other run'), runId: 'r2' });
     });
-    expect(container.querySelectorAll('.msg')).toHaveLength(before);
+    expect(container.querySelectorAll('[data-role]')).toHaveLength(before);
   });
 
   it('on reconnect fetches only the delta past the last rendered seq', async () => {
@@ -205,7 +211,9 @@ describe('Chats reconnect seam', () => {
     const { client, fireReconnect } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    expect(container.querySelectorAll('.msg.assistant')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-role="assistant"]')).toHaveLength(
+      1,
+    );
 
     await act(async () => {
       fireReconnect();
@@ -214,7 +222,9 @@ describe('Chats reconnect seam', () => {
     // onReconnect asked for items strictly after the last rendered seq (1)…
     expect(api.getHistory).toHaveBeenCalledWith('r1', 1);
     // …and merged the delta in.
-    expect(container.querySelectorAll('.msg.assistant')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-role="assistant"]')).toHaveLength(
+      2,
+    );
     expect(container.textContent).toContain('delta');
   });
 

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DaemonHandle } from '../shared/contracts';
-import logoUrl from './assets/logo.png';
 import { Chats } from './chats/Chats';
+import { EmptyState } from './components/empty-state';
+import { Logo } from './components/logo';
+import { StatusDot } from './components/status-dot';
 import { DaemonClient } from './daemon-client';
 import { Onboarding } from './onboarding/Onboarding';
 
@@ -74,7 +76,7 @@ export function App(): React.JSX.Element {
   }, [connectDaemon]);
 
   if (phase === 'loading') {
-    return <div className="center muted">Loading…</div>;
+    return <EmptyState>Loading…</EmptyState>;
   }
 
   if (phase === 'onboarding') {
@@ -82,20 +84,21 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <img className="brand-logo" src={logoUrl} alt="geniro" />
-        <span className={`status ${connected ? 'ok' : 'bad'}`}>
+    <div className="flex h-full flex-col">
+      <header className="flex items-center gap-3 border-b border-border bg-card px-4 py-2.5 shadow-panel-sm">
+        <Logo size="topbar" />
+        <span className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+          <StatusDot tone={connected ? 'ok' : 'bad'} />
           {connected
-            ? `● connected${daemonVersion ? ` · daemon v${daemonVersion}` : ''}`
-            : '○ disconnected'}
+            ? `connected${daemonVersion ? ` · daemon v${daemonVersion}` : ''}`
+            : 'disconnected'}
         </span>
       </header>
-      <main className="app-body">
+      <main className="min-h-0 flex-1">
         {handle && clientRef.current ? (
           <Chats client={clientRef.current} handle={handle} />
         ) : (
-          <div className="center muted">Connecting to the daemon…</div>
+          <EmptyState>Connecting to the daemon…</EmptyState>
         )}
       </main>
     </div>

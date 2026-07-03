@@ -26,6 +26,17 @@ file at the start of each run and at every phase-boundary refresh via
 - Vendored `@packages/{common,http-server,metrics,mikroorm}` track the sibling
   Geniro repo — keep changes minimal and local-first so fixes can flow between
   the two repos.
+- **Renderer design system** — the UI (`apps/ui/src/renderer`) is Tailwind v4 +
+  a token layer in `styles/global.css` that tracks the sibling Geniro web app.
+  Two hard rules, enforced by an eslint override on `apps/ui/src/renderer/**`:
+  (1) **never hardcode a colour** — every colour/radius/shadow comes from a token
+  (`bg-primary`, `text-muted-foreground`, `var(--token)`); a raw hex/`rgb()`/`hsl()`,
+  including inside a Tailwind arbitrary value (`bg-[#…]`), fails lint. (2) **never
+  duplicate a component** — reuse a primitive in `components/ui/` or a shared
+  component in `components/`; promote any recurring pattern into one rather than
+  re-implementing it inline. New styling flows token → `components/ui/` primitive
+  → `components/` app component (compose with `cn()`/`cva`, no barrels). Full
+  contract in CLAUDE.md → *Design system (renderer)*.
 - After moving native deps or switching ABIs, `pnpm rebuild:native` rebuilds
   better-sqlite3 against Electron's ABI.
 

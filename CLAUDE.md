@@ -123,6 +123,29 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 
 `DaemonSupervisor.start()` reuses a still-healthy daemon left by a prior UI instance (pid + `/health/check` match), sweeps stale pidfiles, and only tears down the process it owns.
 
+### Design system (renderer) — tokens + shared components
+
+The renderer is styled with **Tailwind CSS v4 (CSS-first `@theme`)** over a **token layer that is kept in lockstep with the sibling Geniro web app** — same warm cream/caramel palette, same shadcn/ui semantic-token vocabulary — so the desktop app and Geniro web look identical. Its structure is **authoritative**; every new screen builds from it rather than reinventing styles.
+
+```
+apps/ui/src/renderer/
+  styles/global.css        — the ONLY source of design tokens (:root + @theme inline) + base typography.
+                             All colours/radii/shadows live here; components never hardcode them.
+  components/
+    ui/                    — token-driven primitives, shadcn-v4 flavour (data-slot, cva variants):
+                             utils.ts (cn), button, input, textarea, select, label, card, badge.
+    logo, status-dot, field, note-box, error-text, empty-state, collapsible-card
+                           — app-level shared components composed from the primitives.
+  chats/message-bubble.tsx — the transcript-row component (cva variants per item kind).
+```
+
+**Hard rules (mechanically enforced where possible — see the eslint override scoped to `apps/ui/src/renderer/**`):**
+- **Never hardcode a colour.** Read every colour/radius/shadow from a token in `styles/global.css` — as a utility (`bg-primary`, `text-muted-foreground`, `border-border`, `shadow-panel-sm`) or `var(--token)`. A raw hex/`rgb()`/`hsl()` — including inside a Tailwind arbitrary value like `bg-[#…]` — is an eslint error. Non-colour arbitrary values (`ring-[3px]`, `size-[26px]`, `shadow-[…var(--border)]`) are fine.
+- **Never duplicate a component or pattern.** Before adding UI, reach for an existing primitive in `components/ui/` or shared component in `components/`; if a pattern (a button, a field, a status dot, a card, an error line, an empty state) recurs, it lives in a shared component and is imported everywhere — never re-implemented inline.
+- **New styled elements go through the layers**: a token in `global.css` → a primitive in `components/ui/` → an app component in `components/`. Compose with the `cn()` helper and, for variants, `cva`. Import directly (`./ui/button`), **no barrels**.
+- **Adding a token** (a new colour/shadow) means adding it in `global.css` (`:root` + `@theme inline`) once, then referencing it — never inlining the literal at the call site.
+- The palette tracks `geniro/apps/web/src/styles/global.css`; keep token names/values aligned so fixes flow between the repos (same spirit as the vendored `@packages/*`).
+
 ### Build toolchain
 - **swc** compiles the daemon and all `packages/*` to **CommonJS** (`dist/`), with decorator metadata (`legacyDecorator` + `decoratorMetadata`) — entities and Nest DI rely on it. All share one root `.swcrc` (each build script references it via `--config-file ../../.swcrc`).
 - **electron-vite** builds the UI (`out/`).
@@ -147,6 +170,7 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 - **Shared packages** are aliased as `@packages/*` (e.g. `import { … } from '@packages/common'`), resolving to each package's `src`.
 - **Entities** use `@mikro-orm/decorators/legacy` decorators, extend `TimestampsEntity` from `@packages/mikroorm`, and declare **explicit column types** (`@PrimaryKey({ type: 'string' })`, `@Property({ type: 'integer' | 'text' | … })`) — MikroORM's discovery needs them under swc.
 - **New daemon feature modules** follow the layered structure as they're added: Controller (route + validation only) → Service (business logic) → DAO (extends `BaseDao`, injects `EntityManager` from `@mikro-orm/sqlite`) → Entity. Use Zod DTOs via `createZodDto()` from `nestjs-zod` for HTTP input.
+- **Renderer UI follows the design system** (see *Design system (renderer)* above): colours come from tokens in `styles/global.css` only (never hardcoded), and reusable UI is a shared component in `components/ui/` or `components/` (never duplicated inline). Prefer an existing component; promote a recurring pattern into one.
 
 ---
 

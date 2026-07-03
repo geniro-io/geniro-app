@@ -8,7 +8,15 @@ import type {
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import { ChatApi } from '../chat-api';
+import { EmptyState } from '../components/empty-state';
+import { ErrorText } from '../components/error-text';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Select } from '../components/ui/select';
+import { Textarea } from '../components/ui/textarea';
+import { cn } from '../components/ui/utils';
 import { DaemonClient } from '../daemon-client';
+import { MessageBubble } from './message-bubble';
 
 /** Kinds that mark the end of a turn (re-enable the composer). */
 const TERMINAL_KINDS = new Set<ChatItem['kind']>([
@@ -35,6 +43,8 @@ function pretty(value: unknown): string {
   }
 }
 
+const PRE_CLASS = 'm-0 overflow-x-auto whitespace-pre-wrap font-mono text-xs';
+
 /** One transcript row, rendered by item kind. */
 function TranscriptItem({
   item,
@@ -46,56 +56,51 @@ function TranscriptItem({
       const text = payloadString(item.payload, 'text') ?? '';
       const who = item.role === 'user' ? 'user' : 'assistant';
       return (
-        <div className={`msg ${who}`}>
-          <span className="msg-role">{who}</span>
-          <div className="msg-text">{text}</div>
-        </div>
+        <MessageBubble variant={who} role={who}>
+          <div className="whitespace-pre-wrap">{text}</div>
+        </MessageBubble>
       );
     }
     case 'reasoning':
       return (
-        <div className="msg reasoning">
-          <span className="msg-role">thinking</span>
-          <div className="msg-text">
+        <MessageBubble variant="reasoning" role="thinking">
+          <div className="whitespace-pre-wrap italic">
             {payloadString(item.payload, 'text') ?? ''}
           </div>
-        </div>
+        </MessageBubble>
       );
     case 'tool_call':
       return (
-        <div className="msg tool">
-          <span className="msg-role">
-            🔧 {payloadString(item.payload, 'name') ?? 'tool'}
-          </span>
-          <pre className="msg-pre">
+        <MessageBubble
+          variant="tool"
+          role={`🔧 ${payloadString(item.payload, 'name') ?? 'tool'}`}>
+          <pre className={PRE_CLASS}>
             {pretty(
               (item.payload as { input?: unknown } | null)?.input ?? null,
             )}
           </pre>
-        </div>
+        </MessageBubble>
       );
     case 'tool_result':
       return (
-        <div className="msg tool">
-          <span className="msg-role">⮑ result</span>
-          <pre className="msg-pre">
+        <MessageBubble variant="tool" role="⮑ result">
+          <pre className={PRE_CLASS}>
             {pretty(
               (item.payload as { result?: unknown } | null)?.result ?? null,
             )}
           </pre>
-        </div>
+        </MessageBubble>
       );
     case 'error':
       return (
-        <div className="msg error">
-          <span className="msg-role">error</span>
-          <div className="msg-text">
+        <MessageBubble variant="error" role="error">
+          <div className="whitespace-pre-wrap">
             {payloadString(item.payload, 'message') ?? 'unknown error'}
           </div>
-        </div>
+        </MessageBubble>
       );
     case 'turn_cancelled':
-      return <div className="msg note">⊘ cancelled</div>;
+      return <MessageBubble variant="note">⊘ cancelled</MessageBubble>;
     case 'turn_complete': {
       const usage = (item.payload as { usage?: unknown } | null)?.usage;
       const cost =
@@ -103,9 +108,9 @@ function TranscriptItem({
           ? (usage as { costUsd: unknown }).costUsd
           : null;
       return (
-        <div className="msg note">
+        <MessageBubble variant="note">
           ✓ done{typeof cost === 'number' ? ` · $${cost.toFixed(4)}` : ''}
-        </div>
+        </MessageBubble>
       );
     }
     default:
@@ -318,10 +323,10 @@ export function Chats({
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
   return (
-    <div className="chats">
-      <aside className="chats-sidebar">
-        <div className="chats-new">
-          <select
+    <div className="grid h-full grid-cols-[260px_1fr]">
+      <aside className="flex min-h-0 flex-col gap-3 border-r border-border bg-sidebar p-3">
+        <div className="flex gap-2">
+          <Select
             value={agentKind}
             onChange={(event) => setAgentKind(event.target.value as CliKind)}
             aria-label="Agent for new chat">
@@ -330,63 +335,81 @@ export function Chats({
                 {kind}
               </option>
             ))}
-          </select>
-          <button className="primary" onClick={() => void newChat()}>
+          </Select>
+          <Button type="button" onClick={() => void newChat()}>
             New chat
-          </button>
+          </Button>
         </div>
-        <ul className="chats-list">
+        <ul className="flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-0">
           {runs.length === 0 ? (
-            <li className="muted">No chats yet</li>
+            <li className="px-2 py-1.5 text-sm text-muted-foreground">
+              No chats yet
+            </li>
           ) : (
-            runs.map((run) => (
-              <li
-                key={run.id}
-                className={run.id === activeRunId ? 'active' : ''}
-                role="button"
-                tabIndex={0}
-                aria-current={run.id === activeRunId ? true : undefined}
-                onClick={() => void activateRun(run.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    void activateRun(run.id);
-                  }
-                }}>
-                <span className="chats-list-title">
-                  {run.title ?? run.agentKind ?? 'chat'}
-                </span>
-                <span className="muted chats-list-meta">{run.status}</span>
-              </li>
-            ))
+            runs.map((run) => {
+              const active = run.id === activeRunId;
+              return (
+                <li
+                  key={run.id}
+                  className={cn(
+                    'flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50',
+                    active &&
+                      'bg-accent shadow-[inset_0_0_0_1px_var(--border)]',
+                  )}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={active ? true : undefined}
+                  onClick={() => void activateRun(run.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      void activateRun(run.id);
+                    }
+                  }}>
+                  <span className="truncate text-sm font-medium">
+                    {run.title ?? run.agentKind ?? 'chat'}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {run.status}
+                  </span>
+                </li>
+              );
+            })
           )}
         </ul>
       </aside>
 
-      <section className="chats-main">
-        {projectFolder && (
-          <div className="chats-cwd muted">cwd: {projectFolder}</div>
-        )}
-        {activeRun?.agentKind && (
-          <div className="chats-agent-badge muted">
-            agent: {activeRun.agentKind}
-          </div>
-        )}
-        <div className="transcript">
+      <section className="flex min-h-0 flex-col">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+          {activeRun?.agentKind ? (
+            <Badge variant="secondary">{activeRun.agentKind}</Badge>
+          ) : null}
+          {projectFolder ? (
+            <span className="truncate text-xs text-muted-foreground">
+              cwd: {projectFolder}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
           {activeRunId === null ? (
-            <div className="center muted">
+            <EmptyState>
               Start a new chat or pick one to view its transcript.
-            </div>
+            </EmptyState>
           ) : (
             items.map((item) => <TranscriptItem key={item.id} item={item} />)
           )}
           <div ref={transcriptEndRef} />
         </div>
 
-        {error && <div className="chats-error">{error}</div>}
+        {error ? (
+          <ErrorText className="border-t border-border px-4 py-2">
+            {error}
+          </ErrorText>
+        ) : null}
 
-        <div className="composer">
-          <textarea
+        <div className="flex items-end gap-2 border-t border-border p-3">
+          <Textarea
             value={input}
             aria-label="Message the agent"
             placeholder={streaming ? 'Agent is working…' : 'Message the agent…'}
@@ -399,14 +422,19 @@ export function Chats({
             }}
           />
           {streaming ? (
-            <button onClick={() => void cancel()}>Stop</button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void cancel()}>
+              Stop
+            </Button>
           ) : (
-            <button
-              className="primary"
+            <Button
+              type="button"
               disabled={!input.trim()}
               onClick={() => void send()}>
               Send
-            </button>
+            </Button>
           )}
         </div>
       </section>

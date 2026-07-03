@@ -5,25 +5,29 @@ import {
   type CliDetection,
   type CliKind,
 } from '../../shared/contracts';
-import logoUrl from '../assets/logo.png';
+import { CollapsibleCard } from '../components/collapsible-card';
+import { ErrorText } from '../components/error-text';
+import { Field } from '../components/field';
+import { Logo } from '../components/logo';
+import { NoteBox } from '../components/note-box';
+import { StatusDot, type StatusTone } from '../components/status-dot';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
 
-/** Collapse/expand affordance; CSS rotates it 180° when its card is open. */
-function Chevron(): React.JSX.Element {
-  return (
-    <svg
-      className="agent-chevron"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true">
-      <path d="M6 9l6 6 6-6" />
-    </svg>
-  );
+type AgentStatus = { label: string; tone: StatusTone };
+
+function agentStatus(clis: CliDetection[] | null, kind: CliKind): AgentStatus {
+  if (clis === null) {
+    return { label: 'Checking…', tone: 'unknown' };
+  }
+  const detection = clis.find((c) => c.kind === kind) ?? null;
+  if (detection?.found) {
+    return {
+      label: `detected${detection.version ? ` · ${detection.version}` : ''}`,
+      tone: 'ok',
+    };
+  }
+  return { label: 'not found on PATH', tone: 'bad' };
 }
 
 export function Onboarding({
@@ -84,111 +88,106 @@ export function Onboarding({
   };
 
   return (
-    <div className="onboarding">
-      <header className="onboarding-head">
-        <img className="onboarding-hero" src={logoUrl} alt="geniro" />
-        <p className="onboarding-tagline">
+    <div className="mx-auto flex h-full w-full max-w-xl flex-col gap-6 overflow-y-auto px-6 py-10">
+      <header className="flex flex-col items-center gap-3 text-center">
+        <Logo size="hero" />
+        <p className="text-muted-foreground">
           A local-first studio for teams of CLI coding agents.
         </p>
       </header>
 
-      <p className="onboarding-intro muted">
-        Set up the CLI agents geniro will drive. You can change this anytime in
+      <p className="text-sm text-muted-foreground">
+        Set up the CLI agents Geniro will drive. You can change this anytime in
         Settings.
       </p>
 
-      {CLI_KINDS.map((kind) => {
-        const detection = clis?.find((c) => c.kind === kind) ?? null;
-        const isOpen = Boolean(open[kind]);
-        const status =
-          clis === null
-            ? { label: 'Checking…', cls: '' }
-            : detection?.found
-              ? {
-                  label: `detected${detection.version ? ` · ${detection.version}` : ''}`,
-                  cls: 'found',
-                }
-              : { label: 'not found on PATH', cls: 'missing' };
-        const pathId = `agent-path-${kind}`;
-        return (
-          <div key={kind} className={`agent-card${isOpen ? ' open' : ''}`}>
-            <button
-              className="agent-head"
-              aria-expanded={isOpen}
-              onClick={() => toggle(kind)}>
-              <span className={`agent-dot ${status.cls}`} />
-              <span className="agent-title">{kind}</span>
-              <span className={`agent-status ${status.cls}`}>
-                {status.label}
-              </span>
-              <Chevron />
-            </button>
-
-            {isOpen && (
-              <div className="agent-body">
-                <div className="field">
-                  <label htmlFor={pathId}>Binary path</label>
-                  <div className="row">
-                    <input
-                      id={pathId}
-                      className="path-input"
-                      type="text"
-                      placeholder="Auto-detect on PATH"
-                      value={binaryPaths[kind] ?? ''}
-                      onChange={(event) =>
-                        setBinaryPaths((prev) => ({
-                          ...prev,
-                          [kind]: event.target.value,
-                        }))
-                      }
-                    />
-                    <button
-                      className="btn-choose"
-                      onClick={() => void browse(kind)}>
-                      Browse…
-                    </button>
-                  </div>
-                  <p className="field-hint">
-                    Set only if {kind} isn&apos;t on your PATH.
-                  </p>
+      <div className="flex flex-col gap-3">
+        {CLI_KINDS.map((kind) => {
+          const status = agentStatus(clis, kind);
+          const isOpen = Boolean(open[kind]);
+          const pathId = `agent-path-${kind}`;
+          return (
+            <CollapsibleCard
+              key={kind}
+              open={isOpen}
+              onToggle={() => toggle(kind)}
+              header={
+                <>
+                  <StatusDot tone={status.tone} />
+                  <span className="font-medium">{kind}</span>
+                  <span
+                    className={
+                      status.tone === 'ok'
+                        ? 'text-sm text-success'
+                        : status.tone === 'bad'
+                          ? 'text-sm text-destructive'
+                          : 'text-sm text-muted-foreground'
+                    }>
+                    {status.label}
+                  </span>
+                </>
+              }>
+              <Field
+                label="Binary path"
+                htmlFor={pathId}
+                hint={`Set only if ${kind} isn't on your PATH.`}>
+                <div className="flex gap-2">
+                  <Input
+                    id={pathId}
+                    type="text"
+                    placeholder="Auto-detect on PATH"
+                    value={binaryPaths[kind] ?? ''}
+                    onChange={(event) =>
+                      setBinaryPaths((prev) => ({
+                        ...prev,
+                        [kind]: event.target.value,
+                      }))
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void browse(kind)}>
+                    Browse…
+                  </Button>
                 </div>
+              </Field>
 
-                {kind === 'cursor-agent' ? (
-                  <div className="field">
-                    <label htmlFor="cursor-api-key">Cursor API key</label>
-                    <input
-                      id="cursor-api-key"
-                      type="password"
-                      placeholder="Cursor API key"
-                      value={cursorKey}
-                      onChange={(event) => setCursorKey(event.target.value)}
-                    />
-                    <p className="field-hint">
-                      Stored in your macOS Keychain — never written to disk.
-                    </p>
-                  </div>
-                ) : (
-                  <p className="agent-note">
-                    Signs in through the {kind} CLI — no API key needed.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+              {kind === 'cursor-agent' ? (
+                <Field
+                  label="Cursor API key"
+                  htmlFor="cursor-api-key"
+                  hint="Stored in your macOS Keychain — never written to disk.">
+                  <Input
+                    id="cursor-api-key"
+                    type="password"
+                    placeholder="Cursor API key"
+                    value={cursorKey}
+                    onChange={(event) => setCursorKey(event.target.value)}
+                  />
+                </Field>
+              ) : (
+                <NoteBox>
+                  Signs in through the {kind} CLI — no API key needed.
+                </NoteBox>
+              )}
+            </CollapsibleCard>
+          );
+        })}
+      </div>
 
-      <footer className="onboarding-footer">
-        {error && <span className="footer-error">{error}</span>}
-        <button className="link" onClick={() => void refreshClis()}>
+      <footer className="mt-auto flex items-center gap-3 pt-2">
+        {error ? <ErrorText className="mr-auto">{error}</ErrorText> : null}
+        <Button
+          type="button"
+          variant="ghost"
+          className={error ? '' : 'ml-auto'}
+          onClick={() => void refreshClis()}>
           Re-check
-        </button>
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() => void finish()}>
+        </Button>
+        <Button type="button" disabled={busy} onClick={() => void finish()}>
           {busy ? 'Finishing…' : 'Get started'}
-        </button>
+        </Button>
       </footer>
     </div>
   );

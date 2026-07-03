@@ -39,10 +39,12 @@ pnpm install            # install workspace deps
 pnpm rebuild:native     # rebuild better-sqlite3 against Electron's ABI (required; see note)
 pnpm build              # build everything (turbo → swc for packages+daemon, electron-vite for the UI)
 pnpm dev                # launch the Electron app (electron-vite) — spawns + supervises the daemon
-pnpm daemon:dev         # run the daemon alone (tsx watch) — useful for daemon-only iteration
+pnpm daemon:dev         # daemon-only watch loop: nodemon → turbo build (daemon + changed packages) → Electron-node
 ```
 
 `pnpm rebuild:native` is required because the daemon runs under Electron's bundled Node (`ELECTRON_RUN_AS_NODE`), so its native `better-sqlite3` must be built for Electron's ABI, not the host Node ABI.
+
+`pnpm daemon:dev` runs the daemon exactly as production does — an swc build to `dist/`, executed under Electron's Node (`ELECTRON_RUN_AS_NODE=1 electron dist/main.js`) — wrapped in a nodemon watch loop (config in `apps/daemon/package.json` → `nodemonConfig`). It watches `apps/daemon/src` **and** all `packages/*/src` (specs excluded) and on each change reruns `turbo run build --filter=@geniro/daemon` (dependency-aware: a `packages/*` edit rebuilds that package, then the daemon; turbo-cached, ~1s cold) before restarting. It must **not** be moved to `tsx`/esbuild: esbuild's `emitDecoratorMetadata` is an intentional wontfix (no type system → no `design:paramtypes`), so NestJS type-based DI cannot resolve, and tsx runs under host Node whose ABI doesn't match the Electron-built `better-sqlite3`.
 
 ### Build, types, lint
 ```bash

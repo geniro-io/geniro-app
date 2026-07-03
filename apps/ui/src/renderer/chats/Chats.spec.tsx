@@ -43,6 +43,32 @@ vi.mock('../workflow-api', () => ({
   }),
 }));
 
+// TerminalApi + TerminalPanel are mocked so opening a terminal never touches
+// xterm or a real socket; the panel stub renders its title for assertions.
+const terminalApi = vi.hoisted(() => ({
+  create: vi.fn(),
+  list: vi.fn(),
+  dispose: vi.fn(),
+}));
+vi.mock('../terminal-api', () => ({
+  TerminalApi: vi.fn(function TerminalApiMock(this: Record<string, unknown>) {
+    Object.assign(this, terminalApi);
+  }),
+}));
+vi.mock('../terminals/terminal-panel', () => ({
+  TerminalPanel: (props: {
+    title: string;
+    onClose: () => void;
+    onEndSession: () => void;
+  }) => (
+    <div data-testid="terminal-panel">
+      {props.title}
+      <button onClick={props.onEndSession}>stub-end-session</button>
+      <button onClick={props.onClose}>stub-close</button>
+    </div>
+  ),
+}));
+
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
 
 function msg(seq: number, role: 'user' | 'assistant', text: string): ChatItem {
@@ -158,6 +184,9 @@ beforeEach(() => {
   workflowApi.listRuns.mockReset().mockResolvedValue([]);
   workflowApi.run.mockReset();
   workflowApi.cancelRun.mockReset().mockResolvedValue({ cancelled: true });
+  terminalApi.create.mockReset();
+  terminalApi.list.mockReset().mockResolvedValue([]);
+  terminalApi.dispose.mockReset().mockResolvedValue({ disposed: true });
 });
 
 afterEach(async () => {
@@ -527,5 +556,237 @@ describe('Chats workflow runs', () => {
     });
     expect(workflowApi.cancelRun).toHaveBeenCalledWith('w1');
     expect(api.cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('Chats terminal mirror', () => {
+  const session = {
+    id: 't-1',
+    runId: 'r1',
+    nodeId: null,
+    cwd: '/proj',
+    status: 'running',
+    exitCode: null,
+    createdAt: 0,
+  };
+
+  it('opens a terminal panel for a claude chat run', async () => {
+    terminalApi.create.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    expect(button).toBeTruthy();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.create).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
+    ).toContain('My chat — terminal');
+  });
+
+  it('offers a per-node terminal on a workflow run and passes the nodeId', async () => {
+    const wfRun: ChatRun = {
+      id: 'w1',
+      status: 'running',
+      title: 'Review team',
+      agentKind: null,
+      workflowId: 'review-team',
+      cwd: '/proj',
+      model: null,
+      createdAt: 'later',
+    };
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    api.getHistory.mockResolvedValue([
+      {
+        id: 'w-i1',
+        runId: 'w1',
+        nodeId: 'agent-1',
+        seq: 1,
+        kind: 'message',
+        role: 'assistant',
+        payload: { text: 'planning' },
+        createdAt: 'now',
+      },
+    ]);
+    terminalApi.create.mockResolvedValue({
+      ...session,
+      runId: 'w1',
+      nodeId: 'agent-1',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const nodeButton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'agent-1',
+    );
+    expect(nodeButton).toBeTruthy();
+    await act(async () => {
+      nodeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.create).toHaveBeenCalledWith({
+      runId: 'w1',
+      nodeId: 'agent-1',
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
+    ).toContain('agent-1 — terminal');
+  });
+
+  it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
+    terminalApi.create.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    await clickRun(container, 'My chat');
+    const open = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+
+    // Hidden tab: the fixed-position drawer must NOT overlay Graphs/Settings —
+    // and hiding is a detach, never an End session.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+    expect(terminalApi.dispose).not.toHaveBeenCalled();
+
+    // Back to the tab: the kept session state re-mounts the panel.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+  });
+
+  it('re-attaches to a running session instead of creating a second one', async () => {
+    // The daemon keeps a detached session alive for exactly this re-open; a
+    // blind create() would leak one live claude REPL per open→close→open.
+    terminalApi.list.mockResolvedValue([session]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.create).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+  });
+
+  it('End session disposes the PTY and closes the panel; Close only detaches', async () => {
+    terminalApi.create.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const open = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const end = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'stub-end-session',
+    );
+    await act(async () => {
+      end?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.dispose).toHaveBeenCalledWith('t-1');
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+
+    // Re-open, then Close: the panel goes away but the session is NOT disposed.
+    terminalApi.dispose.mockClear();
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const close = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'stub-close',
+    );
+    await act(async () => {
+      close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(terminalApi.dispose).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+  });
+
+  it('surfaces a daemon rejection (unsupported agent) in the error line', async () => {
+    terminalApi.create.mockRejectedValue(
+      new Error('daemon POST /v1/terminals failed (400): TERMINAL_UNSUPPORTED'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('TERMINAL_UNSUPPORTED');
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+  });
+});
+
+describe('Chats defaults', () => {
+  it('applies the settings default model to a new chat', async () => {
+    (window as unknown as { geniro: Partial<GeniroApi> }).geniro.getSettings =
+      vi.fn().mockResolvedValue({
+        onboardingComplete: true,
+        projectFolder: '/proj',
+        defaultModel: 'claude-sonnet-5',
+        cliPaths: {},
+        checkForUpdates: true,
+      });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const newChat = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'New chat',
+    );
+    await act(async () => {
+      newChat?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-sonnet-5' }),
+    );
   });
 });

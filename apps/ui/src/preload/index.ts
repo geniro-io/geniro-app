@@ -55,6 +55,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.pickWorkflowExport, defaultName) as ReturnType<
       GeniroApi['pickWorkflowExport']
     >,
+  checkForUpdates: () =>
+    ipcRenderer.invoke(IPC.checkForUpdates) as ReturnType<
+      GeniroApi['checkForUpdates']
+    >,
 };
 
 contextBridge.exposeInMainWorld('geniro', api);

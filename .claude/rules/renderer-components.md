@@ -16,9 +16,12 @@ globs:
    `logo`, `status-dot`, `field`, `note-box`, `error-text`, `empty-state`,
    `collapsible-card`, `agent-config-list`, `nav-rail`
 4. **Feature screen** in its own directory: `chats/` (+ its row component
-   `message-bubble.tsx`), `onboarding/`, `settings/`, `graphs/`; app shell
-   (`App.tsx`, `main.tsx`) and daemon clients (`chat-api.ts`,
-   `daemon-client.ts`) at the renderer root.
+   `message-bubble.tsx`), `onboarding/`, `settings/`, `graphs/`, `terminals/`
+   (the xterm.js mirror panel); app shell (`App.tsx`, `main.tsx`) and daemon
+   clients at the renderer root — REST clients (`chat-api.ts`,
+   `workflow-api.ts`, `terminal-api.ts`) extend the shared `daemon-rest.ts`
+   transport (never re-implement `request()`); WS clients are
+   `daemon-client.ts` + `terminal-client.ts`.
 
 ## Reuse rules
 

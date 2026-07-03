@@ -11,6 +11,7 @@ import {
 } from './ipc-schemas';
 import { deleteSecret, hasSecret, saveSecret } from './keychain';
 import { readSettings, updateSettings } from './settings';
+import { checkForUpdates } from './updater';
 
 /**
  * Register every privileged channel the renderer can invoke. The renderer has
@@ -86,6 +87,8 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
       return result.canceled ? null : (result.filePath ?? null);
     },
   );
+
+  ipcMain.handle(IPC.checkForUpdates, () => checkForUpdates());
 
   ipcMain.handle(IPC.completeOnboarding, (_event, input: unknown) => {
     const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);

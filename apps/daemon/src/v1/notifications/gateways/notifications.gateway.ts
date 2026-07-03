@@ -12,9 +12,10 @@ import type { Subscription } from 'rxjs';
 import type { Server, Socket } from 'socket.io';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
-import { safeEqual } from '../../../auth/safe-equal';
+import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { extractStringField } from '../../agents/utils/ws-payload';
 
 /** Defensively read a `verdict` payload: `{runId, requestId, allow}`. */
 function extractVerdict(
@@ -47,14 +48,7 @@ function runRoom(runId: string): string {
 
 /** Defensively read a runId from a `join`/`leave` payload (string or `{runId}`). */
 function extractRunId(data: unknown): string | null {
-  if (typeof data === 'string') {
-    return data.length > 0 ? data : null;
-  }
-  if (data && typeof data === 'object' && 'runId' in data) {
-    const value = (data as { runId: unknown }).runId;
-    return typeof value === 'string' && value.length > 0 ? value : null;
-  }
-  return null;
+  return extractStringField(data, 'runId');
 }
 
 /**
@@ -107,10 +101,7 @@ export class NotificationsGateway
   }
 
   handleConnection(client: Socket): void {
-    const auth = client.handshake.auth as { token?: unknown };
-    const token = typeof auth.token === 'string' ? auth.token : '';
-    if (!safeEqual(token, this.runtime.token)) {
-      client.disconnect(true);
+    if (!enforceWsHandshakeAuth(client, this.runtime)) {
       return;
     }
     client.emit('hello', { version: this.runtime.version });

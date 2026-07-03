@@ -104,7 +104,13 @@ export class ProcessRegistry implements OnApplicationShutdown {
       (handle): handle is AgentTurnHandle => handle !== null,
     );
     for (const handle of live) {
-      handle.cancel();
+      // cancel() is a never-throws contract, but one misbehaving handle must
+      // not abort this loop — every child behind it would be orphaned.
+      try {
+        handle.cancel();
+      } catch {
+        // Best-effort: the drain below still waits on the handle's done.
+      }
     }
     if (live.length > 0) {
       const drained = Promise.allSettled(live.map((handle) => handle.done));

@@ -12,7 +12,7 @@ import type { AgentKind, ItemKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
-import type { ItemWire, RunWire } from '../chat.types';
+import { type ItemWire, type RunWire, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -21,13 +21,6 @@ import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentEventBus } from './agent-events.bus';
 import { ProcessRegistry } from './process-registry';
-
-/**
- * The single-agent chat has exactly one node; its CLI session id is keyed under
- * this constant in `node_state` (whose PK is runId+nodeId). `Item.nodeId` stays
- * null for single-agent transcript rows, per the entity contract.
- */
-const SINGLE_AGENT_NODE = 'agent';
 
 function parsePayload(raw: string): unknown {
   try {

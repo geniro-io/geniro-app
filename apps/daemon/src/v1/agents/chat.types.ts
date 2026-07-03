@@ -1,6 +1,15 @@
 import type { AgentKind, ItemKind, RunStatus } from '../runs/runs.types';
 
 /**
+ * The single-agent chat has exactly one node; its CLI session id is keyed
+ * under this constant in `node_state` (whose PK is runId+nodeId). `Item.nodeId`
+ * stays null for single-agent transcript rows, per the entity contract. Shared
+ * with the terminals module, which resolves the same key to `--resume` the
+ * chat's CLI session in a live TUI.
+ */
+export const SINGLE_AGENT_NODE = 'agent';
+
+/**
  * A persisted transcript item projected to the wire — `payload` is parsed back
  * from its stored JSON string so the renderer receives structured data, not a
  * doubly-encoded string. This is the shape the daemon emits over `/ws` and the

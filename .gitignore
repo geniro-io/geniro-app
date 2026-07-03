@@ -8,6 +8,11 @@ out/
 .turbo/
 tsconfig.build.tsbuildinfo
 
+# macOS packaging (scripts/build-mac.mjs): pnpm-deploy stagings + artifacts,
+# and the .icns generated from resources/icon.png at build time.
+/release/
+apps/ui/build/icon.icns
+
 # Dependencies
 node_modules
 

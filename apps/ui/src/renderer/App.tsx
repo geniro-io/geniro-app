@@ -94,7 +94,11 @@ export function App(): React.JSX.Element {
         connected={connected}
         daemonVersion={daemonVersion}
       />
-      <main className="min-h-0 flex-1">
+      {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
+          content, so one long unbreakable string (a cwd path) would otherwise
+          push the whole layout wider than the window and the transcript
+          auto-scroll would then drag the document sideways, clipping the rail. */}
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Graphs. */}
         <div className={cn('h-full', view !== 'chats' && 'hidden')}>

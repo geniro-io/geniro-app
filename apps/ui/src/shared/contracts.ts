@@ -143,6 +143,25 @@ export interface NodeStateWire {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Terminals (mirrors the daemon's v1/terminals wire shapes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Lifecycle of one live PTY mirror session. */
+export type TerminalStatus = 'running' | 'exited';
+
+/** A live terminal session mirroring an agent's CLI session as its real TUI. */
+export interface TerminalSession {
+  id: string;
+  runId: string;
+  /** Graph node within the run, or null for a single-agent chat. */
+  nodeId: string | null;
+  cwd: string;
+  status: TerminalStatus;
+  exitCode: number | null;
+  createdAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Settings (non-secret app config — persisted as JSON in userData)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -168,6 +187,17 @@ export const DEFAULT_SETTINGS: Settings = {
   cliPaths: {},
   checkForUpdates: true,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App updates (electron-updater; GitHub Releases feed — packaged builds only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Outcome of an app-update check. `dev` = unpackaged launch, checks disabled. */
+export interface UpdateCheckResult {
+  status: 'dev' | 'up-to-date' | 'available' | 'error';
+  version: string | null;
+  message: string | null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI detection
@@ -244,6 +274,8 @@ export interface GeniroApi {
   pickWorkflowImport(): Promise<string | null>;
   /** Open a native save dialog for a workflow export; target path or null. */
   pickWorkflowExport(defaultName: string): Promise<string | null>;
+  /** Check the GitHub Releases feed for an app update (no-op in dev). */
+  checkForUpdates(): Promise<UpdateCheckResult>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -261,4 +293,5 @@ export const IPC = {
   completeOnboarding: 'geniro:completeOnboarding',
   pickWorkflowImport: 'geniro:pickWorkflowImport',
   pickWorkflowExport: 'geniro:pickWorkflowExport',
+  checkForUpdates: 'geniro:checkForUpdates',
 } as const satisfies Record<keyof GeniroApi, string>;

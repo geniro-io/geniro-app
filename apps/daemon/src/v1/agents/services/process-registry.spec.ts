@@ -111,3 +111,34 @@ describe('ProcessRegistry', () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 });
+
+describe('ProcessRegistry shutdown isolation', () => {
+  it('a throwing cancel does not abort the reap loop — later handles still cancel', async () => {
+    const reg = new ProcessRegistry();
+    // cancel() is a never-throws contract, but a contract-violating handle
+    // (e.g. one whose backing session was already disposed) must not orphan
+    // every child registered after it.
+    let resolveBad!: () => void;
+    const badDone = new Promise<void>((r) => {
+      resolveBad = r;
+    });
+    const badCancel = vi.fn(() => {
+      throw new Error('misbehaving handle');
+    });
+    reg.register('run-bad', {
+      done: badDone,
+      cancel: badCancel,
+      respondApproval: vi.fn(),
+    });
+    const good = fakeHandle();
+    reg.register('run-good', good.handle);
+
+    const shutdown = reg.onApplicationShutdown();
+
+    expect(badCancel).toHaveBeenCalledOnce();
+    expect(good.cancel).toHaveBeenCalledOnce();
+    resolveBad();
+    good.resolve();
+    await expect(shutdown).resolves.toBeUndefined();
+  });
+});

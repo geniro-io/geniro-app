@@ -23,5 +23,6 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     },
     GraphExecutorService,
   ],
+  exports: [WorkflowStoreService],
 })
 export class GraphsModule {}

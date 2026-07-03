@@ -12,6 +12,7 @@ import {
   readDaemonInfo,
 } from './daemon-pidfile';
 import { getSecret } from './keychain';
+import { loginShellPath } from './login-shell-path';
 
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
@@ -22,12 +23,14 @@ function pidfilePath(): string {
 }
 
 /**
- * Locate the built daemon entry. Resolved relative to the bundled main process
- * and the app path; M4 packaging will pin a definitive path. Building
- * @geniro/daemon is a prerequisite (turbo build orders it first).
+ * Locate the built daemon entry. A packaged app ships the daemon as a
+ * self-contained tree under Resources/daemon (see scripts/build-mac.mjs);
+ * dev launches resolve the workspace dist relative to the bundled main
+ * process. Building @geniro/daemon is a dev prerequisite (turbo orders it).
  */
 function resolveDaemonEntry(): string {
   const candidates = [
+    join(process.resourcesPath ?? '', 'daemon', 'dist', 'main.js'),
     join(
       __dirname,
       '..',
@@ -133,9 +136,15 @@ export class DaemonSupervisor {
     // key → omit; a Cursor turn then surfaces an auth error rather than failing
     // the daemon's start.
     const cursorApiKey = getSecret('cursor.apiKey');
+    // A packaged app launched from Finder inherits launchd's minimal PATH,
+    // which is missing the user's CLI bin dirs — resolve the login-shell PATH
+    // so the daemon can find `claude` / `cursor-agent`. Dev launches already
+    // run from a terminal with the right PATH.
+    const shellPath = app.isPackaged ? await loginShellPath() : null;
     const child = spawn(process.execPath, [entry], {
       env: {
         ...process.env,
+        ...(shellPath ? { PATH: shellPath } : {}),
         // Run the daemon under Electron's bundled Node — no external runtime.
         ELECTRON_RUN_AS_NODE: '1',
         GENIRO_USER_DATA: app.getPath('userData'),

@@ -9,6 +9,7 @@ import { AgentsModule } from './v1/agents/agents.module';
 import { GraphsModule } from './v1/graphs/graphs.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { RunsModule } from './v1/runs/runs.module';
+import { TerminalsModule } from './v1/terminals/terminals.module';
 
 export interface AppModuleOptions {
   runtime: RuntimeInfo;
@@ -22,7 +23,8 @@ export interface AppModuleOptions {
  * the notifications gateway both read it); M1 registered the runs domain
  * (`v1/runs`) and the Socket.IO notifications channel (`v1/notifications`). M2
  * adds the single-agent chat feature (`v1/agents`: adapters, persistence, the
- * in-proc event bus); M3 adds the graph feature module alongside them.
+ * in-proc event bus); M3 adds the graph feature module alongside them; M4 adds
+ * the live PTY terminal mirror (`v1/terminals`).
  */
 @Module({})
 export class AppModule {
@@ -35,6 +37,7 @@ export class AppModule {
         AgentsModule,
         GraphsModule,
         NotificationsModule,
+        TerminalsModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

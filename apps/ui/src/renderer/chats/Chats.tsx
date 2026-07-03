@@ -1,4 +1,4 @@
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Terminal as TerminalIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
@@ -6,6 +6,7 @@ import type {
   ChatRun,
   CliKind,
   DaemonHandle,
+  TerminalSession,
   WorkflowSummary,
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
@@ -18,6 +19,8 @@ import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { DaemonClient } from '../daemon-client';
+import { TerminalApi } from '../terminal-api';
+import { TerminalPanel } from '../terminals/terminal-panel';
 import { WorkflowApi } from '../workflow-api';
 import { ApprovalCard } from './approval-card';
 import {
@@ -52,6 +55,7 @@ export function Chats({
 }): React.JSX.Element {
   const chatApi = useMemo(() => new ChatApi(handle), [handle]);
   const workflowApi = useMemo(() => new WorkflowApi(handle), [handle]);
+  const terminalApi = useMemo(() => new TerminalApi(handle), [handle]);
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -231,6 +235,20 @@ export function Chats({
     return chosen;
   }, [folder, chooseFolder]);
 
+  // Read settings at creation time (not mount) so a default model saved on the
+  // Settings tab applies to the very next chat without a tab round-trip.
+  const createChatRun = useCallback(
+    async (cwd: string) => {
+      const { defaultModel } = await window.geniro.getSettings();
+      return chatApi.createChat(
+        defaultModel
+          ? { agentKind, cwd, model: defaultModel }
+          : { agentKind, cwd },
+      );
+    },
+    [agentKind, chatApi],
+  );
+
   const ensureRun = useCallback(async (): Promise<string | null> => {
     if (activeRunIdRef.current) {
       return activeRunIdRef.current;
@@ -240,11 +258,11 @@ export function Chats({
       setError('Choose a folder for this chat first.');
       return null;
     }
-    const run = await chatApi.createChat({ agentKind, cwd });
+    const run = await createChatRun(cwd);
     setRuns((prev) => [run, ...prev]);
     await activateRun(run.id);
     return run.id;
-  }, [agentKind, ensureFolder, chatApi, activateRun]);
+  }, [ensureFolder, createChatRun, activateRun]);
 
   const newChat = useCallback(async (): Promise<void> => {
     try {
@@ -266,13 +284,13 @@ export function Chats({
       if (!cwd) {
         return;
       }
-      const run = await chatApi.createChat({ agentKind, cwd });
+      const run = await createChatRun(cwd);
       setRuns((prev) => [run, ...prev]);
       await activateRun(run.id);
     } catch (err) {
       setError(String(err));
     }
-  }, [workflowSlug, client, agentKind, ensureFolder, chatApi, activateRun]);
+  }, [workflowSlug, client, ensureFolder, createChatRun, activateRun]);
 
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim();
@@ -381,8 +399,76 @@ export function Chats({
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
+  // The open PTY mirror. Session-scoped, NOT run-scoped: switching to another
+  // run in the sidebar keeps the drawer open (the title names its session), so
+  // a mirror can be watched while browsing other transcripts. Closing the
+  // panel only detaches — the session keeps running and re-opens with a replay.
+  const [terminal, setTerminal] = useState<{
+    session: TerminalSession;
+    title: string;
+  } | null>(null);
+
+  /** Node ids seen in this run's transcript — the workflow "open terminal" targets. */
+  const runNodeIds = useMemo(
+    () => [
+      ...new Set(items.flatMap((item) => (item.nodeId ? [item.nodeId] : []))),
+    ],
+    [items],
+  );
+
+  const openTerminal = useCallback(
+    async (runId: string, nodeId?: string) => {
+      try {
+        setError(null);
+        // Re-attach to a still-running session for this (run, node) when one
+        // exists — the daemon keeps detached sessions alive for exactly this.
+        // The daemon's createForRun is itself idempotent per (run, node), so
+        // this pre-check is an optimization (skip a create round-trip), not
+        // the leak guard.
+        const existing = (await terminalApi.list()).find(
+          (s) =>
+            s.runId === runId &&
+            s.nodeId === (nodeId ?? null) &&
+            s.status === 'running',
+        );
+        const session =
+          existing ??
+          (await terminalApi.create(nodeId ? { runId, nodeId } : { runId }));
+        const run = runs.find((r) => r.id === runId);
+        setTerminal({
+          session,
+          title: nodeId
+            ? `${nodeId} — terminal`
+            : `${run?.title ?? run?.agentKind ?? 'agent'} — terminal`,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [terminalApi, runs],
+  );
+
+  const endTerminalSession = useCallback(() => {
+    if (!terminal) {
+      return;
+    }
+    const id = terminal.session.id;
+    setTerminal(null);
+    terminalApi.dispose(id).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      // A 404 means the daemon already reaped the session — nothing to end.
+      // Anything else (daemon restart, transient failure) must surface: the
+      // panel is already closed, but the REPL may still be running.
+      if (!message.includes('(404)')) {
+        setError(message);
+      }
+    });
+  }, [terminal, terminalApi]);
+
+  // minmax(0,1fr): the transcript column must be allowed to shrink below its
+  // content width, or a long cwd path widens the grid past the window.
   return (
-    <div className="grid h-full grid-cols-[260px_1fr]">
+    <div className="grid h-full grid-cols-[260px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col gap-3 border-r border-border bg-sidebar p-3">
         <div className="flex flex-col gap-2">
           <Select
@@ -451,8 +537,39 @@ export function Chats({
             <Badge variant="secondary">{activeRun.agentKind}</Badge>
           ) : null}
           {activeRun?.cwd ? (
-            <span className="truncate text-xs text-muted-foreground">
+            <span className="max-w-full min-w-0 truncate text-xs text-muted-foreground">
               cwd: {activeRun.cwd}
+            </span>
+          ) : null}
+          {/* Cursor's subscription TUI is deferred, so only claude gets a mirror. */}
+          {activeRun &&
+          !activeRun.workflowId &&
+          activeRun.agentKind === 'claude' ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto gap-1.5"
+              onClick={() => void openTerminal(activeRun.id)}>
+              <TerminalIcon className="size-3.5 shrink-0" />
+              Terminal
+            </Button>
+          ) : null}
+          {activeRun?.workflowId && runNodeIds.length > 0 ? (
+            <span className="ml-auto flex flex-wrap gap-1">
+              {runNodeIds.map((nodeId) => (
+                <Button
+                  key={nodeId}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  title={`Open a terminal mirroring ${nodeId}`}
+                  onClick={() => void openTerminal(activeRun.id, nodeId)}>
+                  <TerminalIcon className="size-3.5 shrink-0" />
+                  {nodeId}
+                </Button>
+              ))}
             </span>
           ) : null}
         </div>
@@ -536,6 +653,19 @@ export function Chats({
           )}
         </div>
       </section>
+
+      {/* Render only while this tab is visible — the panel is fixed-position
+          and would otherwise overlay Graphs/Settings from the hidden tab. */}
+      {active && terminal ? (
+        <TerminalPanel
+          key={terminal.session.id}
+          handle={handle}
+          session={terminal.session}
+          title={terminal.title}
+          onClose={() => setTerminal(null)}
+          onEndSession={endTerminalSession}
+        />
+      ) : null}
     </div>
   );
 }

@@ -7,11 +7,19 @@ import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
 
 /**
- * Product display name. Set before anything reads it: it drives the macOS menu
- * bar / About / Dock label AND `app.getPath('userData')`, so settings.json, the
- * daemon pidfile, and the DB all live under `…/Application Support/Geniro`.
+ * Product display name. Set before anything reads it: it drives
+ * `app.getPath('userData')` (settings.json, the daemon pidfile, and the DB all
+ * live under `…/Application Support/Geniro`), default menu-item strings, and
+ * the About panel. It does NOT rename the dev Dock tile / bold menu-bar title —
+ * macOS reads those from the running bundle's Info.plist, so under
+ * `electron-vite dev` they say "Electron" until the M4 packaged build
+ * (electron-builder `productName`) ships a real Geniro.app.
  */
 app.setName('Geniro');
+app.setAboutPanelOptions({
+  applicationName: 'Geniro',
+  applicationVersion: app.getVersion(),
+});
 
 /** Absolute path to the app icon (the lightbulb-robot mascot). */
 const ICON_PATH = join(app.getAppPath(), 'resources', 'icon.png');

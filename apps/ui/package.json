@@ -6,7 +6,6 @@
   "productName": "Geniro",
   "main": "out/main/index.js",
   "scripts": {
-    "predev": "node ../../scripts/patch-electron-dev-name.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

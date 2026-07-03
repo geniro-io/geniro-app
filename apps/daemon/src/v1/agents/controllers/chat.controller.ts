@@ -1,8 +1,12 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 
-import { CreateChatDto, HistoryQueryDto, SendMessageDto } from './chat.dto';
-import { ChatService } from './chat.service';
-import type { ItemWire, RunWire } from './chat.types';
+import type { ItemWire, RunWire } from '../chat.types';
+import {
+  CreateChatDto,
+  HistoryQueryDto,
+  SendMessageDto,
+} from '../dto/chat.dto';
+import { ChatService } from '../services/chat.service';
 
 /**
  * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).

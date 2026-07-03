@@ -9,17 +9,18 @@ import {
   NotFoundException,
 } from '@packages/common';
 
-import { Item } from '../runs/entity/item.entity';
-import { Run } from '../runs/entity/run.entity';
-import type { AgentKind, ItemKind, RunStatus } from '../runs/runs.types';
+import { Item } from '../../runs/entity/item.entity';
+import { Run } from '../../runs/entity/run.entity';
+import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
+import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import type { ItemWire, RunWire } from '../chat.types';
+import { ItemDao } from '../dao/item.dao';
+import { NodeStateDao } from '../dao/node-state.dao';
+import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
-import type { ItemWire, RunWire } from './chat.types';
-import { ClaudeExecutor } from './claude.adapter';
-import { CursorExecutor } from './cursor.adapter';
-import { ItemDao } from './dao/item.dao';
-import { NodeStateDao } from './dao/node-state.dao';
-import { RunDao } from './dao/run.dao';
-import type { AgentEvent, Executor } from './executor.types';
 import { ProcessRegistry } from './process-registry';
 
 /**
@@ -118,8 +119,8 @@ export class ChatService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
-    private readonly claude: ClaudeExecutor,
-    private readonly cursor: CursorExecutor,
+    private readonly claude: ClaudeAdapter,
+    private readonly cursor: CursorAdapter,
   ) {}
 
   /**
@@ -266,7 +267,7 @@ export class ChatService {
       let savedSessionId = resumeSessionId;
       await this.runDao.updateById(runId, { status: 'running' }, em);
 
-      const executor: Executor =
+      const adapter: AgentAdapter =
         agentKind === 'claude' ? this.claude : this.cursor;
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
@@ -278,7 +279,7 @@ export class ChatService {
         });
       };
 
-      const handle = executor.start(
+      const handle = adapter.start(
         { prompt: text, cwd, model, resumeSessionId },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even

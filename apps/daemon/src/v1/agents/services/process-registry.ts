@@ -1,6 +1,6 @@
 import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
 
-import type { ExecutorHandle } from './executor.types';
+import type { AgentTurnHandle } from '../adapters/adapter.types';
 
 /** Max time graceful shutdown waits for cancelled children to exit before clearing. */
 const SHUTDOWN_DRAIN_MS = 5000;
@@ -23,7 +23,7 @@ const SHUTDOWN_DRAIN_MS = 5000;
  */
 @Injectable()
 export class ProcessRegistry implements OnApplicationShutdown {
-  private readonly active = new Map<string, ExecutorHandle | null>();
+  private readonly active = new Map<string, AgentTurnHandle | null>();
   /**
    * Runs whose cancel arrived during the claim→register window (no live handle
    * yet). {@link register} consults this so a Stop pressed in that window isn't a
@@ -53,7 +53,7 @@ export class ProcessRegistry implements OnApplicationShutdown {
   }
 
   /** Upgrade a claim to the live handle; it auto-unregisters once it settles. */
-  register(runId: string, handle: ExecutorHandle): void {
+  register(runId: string, handle: AgentTurnHandle): void {
     this.active.set(runId, handle);
     // A cancel that landed during the claim→register window applies now, so the
     // just-spawned CLI is killed instead of running on after the user hit Stop.
@@ -101,7 +101,7 @@ export class ProcessRegistry implements OnApplicationShutdown {
    */
   async onApplicationShutdown(): Promise<void> {
     const live = [...this.active.values()].filter(
-      (handle): handle is ExecutorHandle => handle !== null,
+      (handle): handle is AgentTurnHandle => handle !== null,
     );
     for (const handle of live) {
       handle.cancel();

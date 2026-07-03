@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 
-import type { AgentEvent, ExecutorHandle } from './executor.types';
+import type { AgentEvent, AgentTurnHandle } from '../adapters/adapter.types';
 import { NdjsonBuffer } from './ndjson-buffer';
 
 /**
@@ -125,7 +125,7 @@ function buildChildEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
  * and a clean exit relies on the `result` line the mapper already turned into
  * `turn_complete`. `done` never rejects — every outcome is an event first.
  */
-export function runHeadlessCli(opts: RunCliOptions): ExecutorHandle {
+export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   const spawnFn = opts.spawn ?? defaultSpawn;
 
   let settled = false;

@@ -1,10 +1,3 @@
-import type {
-  AgentEvent,
-  AgentUsage,
-  Executor,
-  ExecutorHandle,
-  ExecutorInput,
-} from './executor.types';
 import {
   asArray,
   asBoolean,
@@ -12,8 +5,9 @@ import {
   asRecord,
   asString,
   firstString,
-} from './json-util';
-import { runHeadlessCli, type SpawnFn } from './spawn-cli';
+} from '../../utils/json-util';
+import type { AgentEvent, AgentTurnInput, AgentUsage } from '../adapter.types';
+import { AgentAdapter } from '../agent-adapter';
 
 /**
  * Field names `cursor-agent` may use for the resumable chat/session id, across
@@ -193,30 +187,22 @@ export function mapCursorMessage(obj: unknown): AgentEvent[] {
   }
 }
 
-export interface CursorExecutorOptions {
-  spawn?: SpawnFn;
-  logger?: { warn(message: string): void };
-}
-
 /**
  * Drives `cursor-agent` headlessly. The prompt is a positional argument (Cursor
- * reads it from argv, not stdin), so stdin is closed immediately — this also
- * prevents the CLI from dropping into its interactive login TTY when
- * unauthenticated; it fails fast instead, surfacing a non-zero exit as an error
- * event. The Cursor key is NOT inherited from the daemon's environment —
- * `spawn-cli` strips every `GENIRO_`-prefixed var (including `GENIRO_CURSOR_API_KEY`)
- * from the child env, and this adapter re-injects it as `CURSOR_API_KEY` for its
- * own child ONLY (see {@link CursorExecutor.start}).
+ * reads it from argv, not stdin), so stdin is closed immediately — the base
+ * class's no-payload default — which also prevents the CLI from dropping into
+ * its interactive login TTY when unauthenticated; it fails fast instead,
+ * surfacing a non-zero exit as an error event. The Cursor key is NOT inherited
+ * from the daemon's environment — `spawn-cli` strips every `GENIRO_`-prefixed
+ * var (including `GENIRO_CURSOR_API_KEY`) from the child env, and this adapter
+ * re-injects it as `CURSOR_API_KEY` for its own child ONLY (see
+ * {@link CursorAdapter.buildEnv}).
  */
-export class CursorExecutor implements Executor {
+export class CursorAdapter extends AgentAdapter {
   readonly kind = 'cursor-agent' as const;
+  protected readonly command = 'cursor-agent';
 
-  constructor(private readonly options: CursorExecutorOptions = {}) {}
-
-  start(
-    input: ExecutorInput,
-    onEvent: (event: AgentEvent) => void,
-  ): ExecutorHandle {
+  protected buildArgs(input: AgentTurnInput): string[] {
     const args = ['-p', '--output-format', 'stream-json', '--force'];
     if (input.model) {
       args.push('--model', input.model);
@@ -227,28 +213,22 @@ export class CursorExecutor implements Executor {
     // End-of-options separator before the positional prompt, so a prompt that
     // starts with `-`/`--` is taken as prompt text rather than parsed as a flag.
     args.push('--', input.prompt);
+    return args;
+  }
 
+  protected override buildEnv(input: AgentTurnInput): Record<string, string> {
     // The daemon receives the Keychain-sourced Cursor key as GENIRO_CURSOR_API_KEY
     // (a GENIRO_-prefixed var that spawn-cli strips from every child env). Re-inject
     // it as CURSOR_API_KEY for THIS child only, so the key never reaches the claude
     // agent. Honor an explicit per-call override in input.env if one is given.
     const cursorApiKey = process.env.GENIRO_CURSOR_API_KEY;
-    const env: Record<string, string> = {
+    return {
       ...(cursorApiKey ? { CURSOR_API_KEY: cursorApiKey } : {}),
       ...input.env,
     };
+  }
 
-    return runHeadlessCli({
-      command: 'cursor-agent',
-      args,
-      cwd: input.cwd,
-      env,
-      // No stdin payload — close stdin so an unauthenticated CLI fails fast
-      // instead of waiting on an interactive login prompt.
-      mapper: mapCursorMessage,
-      onEvent,
-      spawn: this.options.spawn,
-      logger: this.options.logger,
-    });
+  protected mapMessage(obj: unknown): AgentEvent[] {
+    return mapCursorMessage(obj);
   }
 }

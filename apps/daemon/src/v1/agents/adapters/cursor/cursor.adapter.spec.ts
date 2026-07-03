@@ -2,9 +2,9 @@ import { EventEmitter } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
-import { CursorExecutor, mapCursorMessage } from './cursor.adapter';
-import type { AgentEvent } from './executor.types';
-import type { SpawnedProcess, SpawnFn } from './spawn-cli';
+import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
+import type { AgentEvent } from '../adapter.types';
+import { CursorAdapter, mapCursorMessage } from './cursor.adapter';
 
 class FakeReadable extends EventEmitter {
   setEncoding(): this {
@@ -136,11 +136,11 @@ describe('mapCursorMessage', () => {
   });
 });
 
-describe('CursorExecutor', () => {
+describe('CursorAdapter', () => {
   it('passes the prompt as a positional arg and streams a turn', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new CursorExecutor({ spawn }).start(
+    const handle = new CursorAdapter({ spawn }).start(
       { prompt: 'list files', cwd: '/proj' },
       (e) => events.push(e),
     );
@@ -176,7 +176,7 @@ describe('CursorExecutor', () => {
 
   it('passes --resume with the prior chat id', () => {
     const { spawn, captured } = fakeSpawn();
-    new CursorExecutor({ spawn }).start(
+    new CursorAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj', resumeSessionId: 'c-prev' },
       () => {},
     );
@@ -187,7 +187,7 @@ describe('CursorExecutor', () => {
 
   it('puts the end-of-options separator before a dash-leading prompt', () => {
     const { spawn, captured } = fakeSpawn();
-    new CursorExecutor({ spawn }).start(
+    new CursorAdapter({ spawn }).start(
       { prompt: '--help', cwd: '/proj' },
       () => {},
     );
@@ -200,7 +200,7 @@ describe('CursorExecutor', () => {
   it('fails fast with an error event on a non-zero exit', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new CursorExecutor({ spawn }).start(
+    const handle = new CursorAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );

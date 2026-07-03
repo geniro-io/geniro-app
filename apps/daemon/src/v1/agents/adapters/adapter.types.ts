@@ -1,5 +1,3 @@
-import type { AgentKind } from '../runs/runs.types';
-
 /**
  * Token/cost accounting for a completed turn. Fields are nullable because not
  * every CLI version reports every figure — the defensive mappers fill what the
@@ -39,7 +37,7 @@ export type AgentEvent =
   | { type: 'session'; sessionId: string };
 
 /** Everything an adapter needs to drive one turn. */
-export interface ExecutorInput {
+export interface AgentTurnInput {
   /** The user's message text for this turn. */
   prompt: string;
   /**
@@ -60,7 +58,7 @@ export interface ExecutorInput {
 }
 
 /** Handle to an in-flight turn. */
-export interface ExecutorHandle {
+export interface AgentTurnHandle {
   /**
    * Resolves when the turn finishes by any path (the CLI exits, errors, or is
    * cancelled). Never rejects — terminal outcomes arrive as `error` /
@@ -69,20 +67,4 @@ export interface ExecutorHandle {
   readonly done: Promise<void>;
   /** Terminate the underlying CLI process for this turn. */
   cancel(): void;
-}
-
-/**
- * Drives one CLI coding agent headlessly, normalizing its NDJSON stream to
- * {@link AgentEvent}s. One instance per agent kind; `start` is called per turn.
- */
-export interface Executor {
-  readonly kind: AgentKind;
-  /**
-   * Start a turn. Events are delivered to `onEvent` in stream order. The
-   * returned handle settles via `done` and can `cancel` the turn.
-   */
-  start(
-    input: ExecutorInput,
-    onEvent: (event: AgentEvent) => void,
-  ): ExecutorHandle;
 }

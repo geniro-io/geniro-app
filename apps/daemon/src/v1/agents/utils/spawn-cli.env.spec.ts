@@ -2,8 +2,8 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ClaudeExecutor } from './claude.adapter';
-import { CursorExecutor } from './cursor.adapter';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import type { SpawnedProcess, SpawnFn } from './spawn-cli';
 import { runHeadlessCli } from './spawn-cli';
 
@@ -96,11 +96,11 @@ describe('spawned-agent env scoping', () => {
     expect('GENIRO_SECRET' in (captured.env ?? {})).toBe(false);
   });
 
-  it('CursorExecutor re-injects GENIRO_CURSOR_API_KEY as CURSOR_API_KEY for its child only', async () => {
+  it('CursorAdapter re-injects GENIRO_CURSOR_API_KEY as CURSOR_API_KEY for its child only', async () => {
     process.env.GENIRO_CURSOR_API_KEY = 'sk-cursor';
     const { spawn, child, captured } = fakeSpawn();
 
-    const handle = new CursorExecutor({ spawn }).start(
+    const handle = new CursorAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );
@@ -112,11 +112,11 @@ describe('spawned-agent env scoping', () => {
     expect('GENIRO_CURSOR_API_KEY' in (captured.env ?? {})).toBe(false);
   });
 
-  it("ClaudeExecutor's child never receives the Cursor credential", async () => {
+  it("ClaudeAdapter's child never receives the Cursor credential", async () => {
     process.env.GENIRO_CURSOR_API_KEY = 'sk-cursor';
     const { spawn, child, captured } = fakeSpawn();
 
-    const handle = new ClaudeExecutor({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );

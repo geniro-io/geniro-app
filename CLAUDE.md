@@ -12,7 +12,7 @@ The app is an **Electron UI** that also supervises a **bundled local daemon** ov
 
 **Tech stack**: TypeScript 6.x, Node.js 24+, NestJS 11 (Fastify), MikroORM (`@mikro-orm/sqlite` / better-sqlite3), React 19 (electron-vite renderer), pnpm + Turbo monorepo, swc (daemon + packages) / electron-vite (UI).
 
-**Status**: **Milestone 1 (UI + infrastructure) is built.** Agents, the graph engine, chat, the terminal mirror, and packaging arrive in M2–M4. The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing.
+**Status**: **Milestone 1 (UI + infrastructure) is built.** Agents, the graph engine, chat, the terminal mirror, and packaging arrive in M2–M4. The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing. (`.geniro/planning/` is local working state, gitignored — not committed.)
 
 **Agents (M2+)** are driven **headlessly via their CLIs only** — `claude -p` and `cursor-agent -p --output-format stream-json`. No SDKs, no LangGraph host-side, no Python.
 
@@ -101,6 +101,7 @@ A standalone NestJS engine the UI spawns as a child process, laid out like Genir
 - `utils/` — `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + `isValidPort`/`parsePort`); `pidfile.ts` (mint/write/remove); `pidfile.lifecycle.ts` (Nest `OnApplicationShutdown` → removes the pidfile).
 - `db/mikro-orm.config.ts`.
 - `v1/runs/` — `runs.module.ts` + `entity/{run,item,node-state}.entity.ts` + `runs.types.ts` (status/kind enums).
+- `v1/agents/` — the M2 single-agent chat module: `agents.module.ts` + `chat.types.ts` at the root, then `adapters/` (abstract `AgentAdapter` base + `claude/` and `cursor/` subdirectories — see `.claude/rules/agent-adapters.md`), `controllers/`, `services/` (chat service, event bus, process registry), `dao/`, `dto/`, `utils/` (json-util, ndjson-buffer, spawn-cli).
 - `v1/notifications/` — `notifications.module.ts` + `gateways/notifications.gateway.ts` (the Socket.IO channel).
 
 - Binds **`127.0.0.1` only**. Assembled exactly like Geniro's `apps/api` (`buildBootstrapper(…)` → `addExtension(buildHttpServerExtension(…))` → `init()`); the loopback specifics ride on the extension's `host` / `portFallback` / `onListening` options — bind 127.0.0.1, negotiate a free port if the preferred one is taken, and write the pidfile from `onListening` after a healthy listen (the `http-server`'s own listen still defaults to `0.0.0.0`, preserving Geniro's behavior). Shutdown is Nest-owned (`enableShutdownHooks`); `utils/pidfile.lifecycle.ts` clears the pidfile on the way out, so `main.ts` needs no signal handling.
@@ -170,6 +171,8 @@ apps/ui/src/renderer/
 - **Shared packages** are aliased as `@packages/*` (e.g. `import { … } from '@packages/common'`), resolving to each package's `src`.
 - **Entities** use `@mikro-orm/decorators/legacy` decorators, extend `TimestampsEntity` from `@packages/mikroorm`, and declare **explicit column types** (`@PrimaryKey({ type: 'string' })`, `@Property({ type: 'integer' | 'text' | … })`) — MikroORM's discovery needs them under swc.
 - **New daemon feature modules** follow the layered structure as they're added: Controller (route + validation only) → Service (business logic) → DAO (extends `BaseDao`, injects `EntityManager` from `@mikro-orm/sqlite`) → Entity. Use Zod DTOs via `createZodDto()` from `nestjs-zod` for HTTP input.
+- **Daemon module directory layout** (mechanized in `.claude/rules/daemon-module-structure.md`): a module keeps only `<name>.module.ts` + its types file at the root; every other file lives in its kind-directory — `controllers/`, `services/`, `dao/`, `entity/`, `dto/`, `utils/`, `adapters/`, `gateways/` — with specs co-located. Never a flat module.
+- **CLI agent adapters** (mechanized in `.claude/rules/agent-adapters.md`): every adapter extends the abstract `AgentAdapter` base (`v1/agents/adapters/agent-adapter.ts`) and lives in its own `adapters/<name>/` subdirectory with all of its classes/types/specs; shared contract types live in `adapters/adapter.types.ts`.
 - **Renderer UI follows the design system** (see *Design system (renderer)* above): colours come from tokens in `styles/global.css` only (never hardcoded), and reusable UI is a shared component in `components/ui/` or `components/` (never duplicated inline). Prefer an existing component; promote a recurring pattern into one.
 
 ---

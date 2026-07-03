@@ -2,8 +2,8 @@ import type { Server, Socket } from 'socket.io';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RuntimeInfo } from '../../../auth/runtime';
-import { AgentEventBus } from '../../agents/agent-events.bus';
 import type { ItemWire } from '../../agents/chat.types';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { NotificationsGateway } from './notifications.gateway';
 
 const runtime: RuntimeInfo = {

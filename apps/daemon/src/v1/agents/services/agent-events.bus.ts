@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { type Observable, Subject } from 'rxjs';
 
-import type { RunItemEvent } from './chat.types';
+import type { RunItemEvent } from '../chat.types';
 
 /**
  * In-process pub-sub for persisted run items — the `session_stream`-style bus.

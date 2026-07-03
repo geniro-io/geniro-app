@@ -5,19 +5,19 @@ import { join } from 'node:path';
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { Item } from '../runs/entity/item.entity';
-import { NodeState } from '../runs/entity/node-state.entity';
-import { Run } from '../runs/entity/run.entity';
-import type { AgentKind } from '../runs/runs.types';
+import { Item } from '../../runs/entity/item.entity';
+import { NodeState } from '../../runs/entity/node-state.entity';
+import { Run } from '../../runs/entity/run.entity';
+import type { AgentKind } from '../../runs/runs.types';
+import type { AgentEvent, AgentTurnInput } from '../adapters/adapter.types';
+import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import type { RunItemEvent } from '../chat.types';
+import { ItemDao } from '../dao/item.dao';
+import { NodeStateDao } from '../dao/node-state.dao';
+import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
-import type { RunItemEvent } from './chat.types';
-import { ClaudeExecutor } from './claude.adapter';
-import { CursorExecutor } from './cursor.adapter';
-import { ItemDao } from './dao/item.dao';
-import { NodeStateDao } from './dao/node-state.dao';
-import { RunDao } from './dao/run.dao';
-import type { AgentEvent, ExecutorInput } from './executor.types';
 import { ProcessRegistry } from './process-registry';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
@@ -108,8 +108,8 @@ class FakeNodeStateDao {
   }
 }
 
-function fakeExecutor(kind: AgentKind): {
-  executor: ClaudeExecutor;
+function fakeAdapter(kind: AgentKind): {
+  adapter: ClaudeAdapter;
   start: ReturnType<typeof vi.fn>;
   emit: (event: AgentEvent) => void;
   finish: () => void;
@@ -117,7 +117,7 @@ function fakeExecutor(kind: AgentKind): {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   let resolveDone: (() => void) | null = null;
   const start = vi.fn(
-    (input: ExecutorInput, cb: (event: AgentEvent) => void) => {
+    (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
       void input;
       onEvent = cb;
       const done = new Promise<void>((resolve) => {
@@ -127,7 +127,7 @@ function fakeExecutor(kind: AgentKind): {
     },
   );
   return {
-    executor: { kind, start } as unknown as ClaudeExecutor,
+    adapter: { kind, start } as unknown as ClaudeAdapter,
     start,
     emit: (event) => onEvent?.(event),
     finish: () => resolveDone?.(),
@@ -150,8 +150,8 @@ function setup() {
     publish: (event: RunItemEvent) => published.push(event),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
-  const claude = fakeExecutor('claude');
-  const cursor = fakeExecutor('cursor-agent');
+  const claude = fakeAdapter('claude');
+  const cursor = fakeAdapter('cursor-agent');
   const em = {
     fork: () => ({ clear: () => undefined }),
   } as unknown as EntityManager;
@@ -162,8 +162,8 @@ function setup() {
     nodeDao as unknown as NodeStateDao,
     bus,
     registry,
-    claude.executor,
-    cursor.executor as unknown as CursorExecutor,
+    claude.adapter,
+    cursor.adapter as unknown as CursorAdapter,
   );
   return { service, runDao, itemDao, nodeDao, published, registry, claude };
 }
@@ -197,7 +197,7 @@ describe('ChatService', () => {
     const userWire = await service.sendMessage(run.id, 'hello');
     expect(userWire).toMatchObject({ kind: 'message', role: 'user', seq: 0 });
     expect(claude.start).toHaveBeenCalledOnce();
-    const startArg = claude.start.mock.calls[0]?.[0] as ExecutorInput;
+    const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
     expect(startArg.cwd).toBe(realpathSync(dir));
     expect(startArg.prompt).toBe('hello');
 
@@ -229,7 +229,7 @@ describe('ChatService', () => {
     nodeDao.preset('prev-sid');
 
     await service.sendMessage(run.id, 'go');
-    const startArg = claude.start.mock.calls[0]?.[0] as ExecutorInput;
+    const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
     expect(startArg.resumeSessionId).toBe('prev-sid');
 
     claude.emit({ type: 'session', sessionId: 'prev-sid' }); // unchanged → skip

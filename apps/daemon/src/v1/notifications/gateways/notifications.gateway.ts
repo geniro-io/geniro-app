@@ -13,7 +13,7 @@ import type { Server, Socket } from 'socket.io';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { safeEqual } from '../../../auth/safe-equal';
-import { AgentEventBus } from '../../agents/agent-events.bus';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 
 /** Socket.IO room a client joins to receive one run's streamed items. */
 function runRoom(runId: string): string {

@@ -15,7 +15,7 @@ import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
 import type { DaemonInfo } from './utils/handshake';
 import { mintToken, writePidfile } from './utils/pidfile';
-import { ChatService } from './v1/agents/chat.service';
+import { ChatService } from './v1/agents/services/chat.service';
 
 const startedAt = Date.now();
 const token = mintToken();

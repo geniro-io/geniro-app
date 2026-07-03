@@ -1,17 +1,17 @@
 import { Module } from '@nestjs/common';
 
-import { AgentEventBus } from './agent-events.bus';
-import { ChatController } from './chat.controller';
-import { ChatService } from './chat.service';
-import { ClaudeExecutor } from './claude.adapter';
-import { CursorExecutor } from './cursor.adapter';
+import { ClaudeAdapter } from './adapters/claude/claude.adapter';
+import { CursorAdapter } from './adapters/cursor/cursor.adapter';
+import { ChatController } from './controllers/chat.controller';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
-import { ProcessRegistry } from './process-registry';
+import { AgentEventBus } from './services/agent-events.bus';
+import { ChatService } from './services/chat.service';
+import { ProcessRegistry } from './services/process-registry';
 
 /**
- * Single-agent chat (M2): the Executor adapters, persistence DAOs, the in-proc
+ * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
  * event bus, and the child-process registry. Entities are discovered globally
  * (mikro-orm config glob) and the EntityManager is provided app-wide by the
  * global MikroOrmModule, so no `forFeature` import is needed here. The adapters
@@ -28,8 +28,8 @@ import { ProcessRegistry } from './process-registry';
     ItemDao,
     NodeStateDao,
     RunDao,
-    { provide: ClaudeExecutor, useFactory: () => new ClaudeExecutor() },
-    { provide: CursorExecutor, useFactory: () => new CursorExecutor() },
+    { provide: ClaudeAdapter, useFactory: () => new ClaudeAdapter() },
+    { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
   ],
   exports: [AgentEventBus],
 })

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ExecutorHandle } from './executor.types';
+import type { AgentTurnHandle } from '../adapters/adapter.types';
 import { ProcessRegistry } from './process-registry';
 
 function fakeHandle(): {
-  handle: ExecutorHandle;
+  handle: AgentTurnHandle;
   resolve: () => void;
   cancel: ReturnType<typeof vi.fn>;
 } {

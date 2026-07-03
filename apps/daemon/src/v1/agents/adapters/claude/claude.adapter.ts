@@ -1,12 +1,12 @@
-import type {
-  AgentEvent,
-  AgentUsage,
-  Executor,
-  ExecutorHandle,
-  ExecutorInput,
-} from './executor.types';
-import { asArray, asBoolean, asNumber, asRecord, asString } from './json-util';
-import { runHeadlessCli, type SpawnFn } from './spawn-cli';
+import {
+  asArray,
+  asBoolean,
+  asNumber,
+  asRecord,
+  asString,
+} from '../../utils/json-util';
+import type { AgentEvent, AgentTurnInput, AgentUsage } from '../adapter.types';
+import { AgentAdapter } from '../agent-adapter';
 
 /**
  * Map one parsed line of `claude -p --output-format stream-json` to normalized
@@ -129,25 +129,16 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
   }
 }
 
-export interface ClaudeExecutorOptions {
-  spawn?: SpawnFn;
-  logger?: { warn(message: string): void };
-}
-
 /**
  * Drives `claude` headlessly. The prompt is sent as a stream-json user-message
  * line on stdin (`--input-format stream-json`); `--verbose` is required for
  * stream-json output. Resume passes the prior `session_id` via `--resume`.
  */
-export class ClaudeExecutor implements Executor {
+export class ClaudeAdapter extends AgentAdapter {
   readonly kind = 'claude' as const;
+  protected readonly command = 'claude';
 
-  constructor(private readonly options: ClaudeExecutorOptions = {}) {}
-
-  start(
-    input: ExecutorInput,
-    onEvent: (event: AgentEvent) => void,
-  ): ExecutorHandle {
+  protected buildArgs(input: AgentTurnInput): string[] {
     const args = [
       '-p',
       '--output-format',
@@ -162,25 +153,20 @@ export class ClaudeExecutor implements Executor {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
+    return args;
+  }
 
-    const stdinPayload = `${JSON.stringify({
+  protected override buildStdinPayload(input: AgentTurnInput): string {
+    return `${JSON.stringify({
       type: 'user',
       message: {
         role: 'user',
         content: [{ type: 'text', text: input.prompt }],
       },
     })}\n`;
+  }
 
-    return runHeadlessCli({
-      command: 'claude',
-      args,
-      cwd: input.cwd,
-      env: input.env,
-      stdinPayload,
-      mapper: mapClaudeMessage,
-      onEvent,
-      spawn: this.options.spawn,
-      logger: this.options.logger,
-    });
+  protected mapMessage(obj: unknown): AgentEvent[] {
+    return mapClaudeMessage(obj);
   }
 }

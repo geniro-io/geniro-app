@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ItemWire, RunItemEvent } from '../chat.types';
 import { AgentEventBus } from './agent-events.bus';
-import type { ItemWire, RunItemEvent } from './chat.types';
 
 function wireItem(runId: string, seq: number): ItemWire {
   return {

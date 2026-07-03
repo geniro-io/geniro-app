@@ -2,9 +2,9 @@ import { EventEmitter } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
-import { ClaudeExecutor, mapClaudeMessage } from './claude.adapter';
-import type { AgentEvent } from './executor.types';
-import type { SpawnedProcess, SpawnFn } from './spawn-cli';
+import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
+import type { AgentEvent } from '../adapter.types';
+import { ClaudeAdapter, mapClaudeMessage } from './claude.adapter';
 
 // ── Minimal synchronous child-process fake (no real I/O timing) ──────────────
 class FakeReadable extends EventEmitter {
@@ -158,11 +158,11 @@ describe('mapClaudeMessage', () => {
   });
 });
 
-describe('ClaudeExecutor', () => {
+describe('ClaudeAdapter', () => {
   it('spawns with stream-json flags, streams a turn, and sends the prompt on stdin', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeExecutor({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn }).start(
       { prompt: 'say hi', cwd: '/proj', model: 'opus' },
       (e) => events.push(e),
     );
@@ -208,7 +208,7 @@ describe('ClaudeExecutor', () => {
 
   it('passes --resume when a prior session id is supplied', () => {
     const { spawn, captured } = fakeSpawn();
-    new ClaudeExecutor({ spawn }).start(
+    new ClaudeAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj', resumeSessionId: 'prev-1' },
       () => {},
     );
@@ -220,7 +220,7 @@ describe('ClaudeExecutor', () => {
   it('emits turn_cancelled when the process is killed', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeExecutor({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );
@@ -235,7 +235,7 @@ describe('ClaudeExecutor', () => {
   it('emits an error event on a non-zero exit with the stderr tail', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeExecutor({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );

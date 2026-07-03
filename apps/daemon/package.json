@@ -10,7 +10,7 @@
   "scripts": {
     "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
     "prebuild": "rm -rf ./dist || true",
-    "dev": "tsx watch src/main.ts",
+    "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
     "start": "node dist/main.js",
     "check-types": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint src",
@@ -33,15 +33,18 @@
     "@packages/mikroorm": "workspace:*",
     "dotenv": "^17.4.1",
     "fastify": "^5.9.0",
+    "nestjs-zod": "^5.4.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@swc-node/register": "^1.11.1",
     "@swc/cli": "^0.8.1",
     "@swc/core": "^1.15.43",
     "@types/node": "^26.0.1",
-    "tsx": "^4.22.4",
+    "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }

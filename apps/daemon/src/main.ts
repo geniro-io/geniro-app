@@ -15,6 +15,7 @@ import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
 import type { DaemonInfo } from './utils/handshake';
 import { mintToken, writePidfile } from './utils/pidfile';
+import { ChatService } from './v1/agents/services/chat.service';
 
 const startedAt = Date.now();
 const token = mintToken();
@@ -44,7 +45,12 @@ bootstrapper.addExtension(
       host: environment.host,
       portFallback: true,
       swagger: {},
-      corsOrigin: '',
+      // Allow the renderer (file://, or the electron-vite dev origin) to call
+      // the loopback REST API directly. Safe here: the daemon binds 127.0.0.1
+      // only and every non-public route is token-gated — same posture as the
+      // WS gateway's `cors.origin: '*'`. The bearer token, not the origin, is
+      // the gate.
+      corsOrigin: '*',
       onListening: ({ host, port }) => {
         // Written only after the schema is migrated (appChangeCb) and the server
         // is listening — a reader that sees the pidfile is guaranteed a healthy,
@@ -71,6 +77,12 @@ bootstrapper.addExtension(
       // Migrator workflow lands in M2.
       const orm = app.get(MikroORM) as unknown as SqliteMikroOrm;
       await orm.schema.update({ safe: true });
+
+      // Reconcile chat runs left `running` by a prior crash / SIGKILL. Runs HERE
+      // (after the schema sync, before listen) — not via an OnApplicationBootstrap
+      // hook, which fires before this sync and would hit not-yet-created tables on
+      // a fresh install, so a logged reconcile error always means a real failure.
+      await app.get(ChatService).reconcileOrphanedRuns();
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

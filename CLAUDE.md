@@ -12,7 +12,7 @@ The app is an **Electron UI** that also supervises a **bundled local daemon** ov
 
 **Tech stack**: TypeScript 6.x, Node.js 24+, NestJS 11 (Fastify), MikroORM (`@mikro-orm/sqlite` / better-sqlite3), React 19 (electron-vite renderer), pnpm + Turbo monorepo, swc (daemon + packages) / electron-vite (UI).
 
-**Status**: **Milestone 1 (UI + infrastructure) is built.** Agents, the graph engine, chat, the terminal mirror, and packaging arrive in M2–M4. The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing.
+**Status**: **Milestone 1 (UI + infrastructure) is built.** Agents, the graph engine, chat, the terminal mirror, and packaging arrive in M2–M4. The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing. (`.geniro/planning/` is local working state, gitignored — not committed.)
 
 **Agents (M2+)** are driven **headlessly via their CLIs only** — `claude -p` and `cursor-agent -p --output-format stream-json`. No SDKs, no LangGraph host-side, no Python.
 
@@ -39,10 +39,12 @@ pnpm install            # install workspace deps
 pnpm rebuild:native     # rebuild better-sqlite3 against Electron's ABI (required; see note)
 pnpm build              # build everything (turbo → swc for packages+daemon, electron-vite for the UI)
 pnpm dev                # launch the Electron app (electron-vite) — spawns + supervises the daemon
-pnpm daemon:dev         # run the daemon alone (tsx watch) — useful for daemon-only iteration
+pnpm daemon:dev         # daemon-only watch loop: runs TS source via @swc-node/register under Electron-node, restarts on save
 ```
 
 `pnpm rebuild:native` is required because the daemon runs under Electron's bundled Node (`ELECTRON_RUN_AS_NODE`), so its native `better-sqlite3` must be built for Electron's ABI, not the host Node ABI.
+
+`pnpm daemon:dev` mirrors Geniro `apps/api`'s `start:dev`: node's built-in `--watch` + `-r @swc-node/register -r tsconfig-paths/register` running `src/main.ts` directly (`TS_NODE_PROJECT` points at the **root** tsconfig so the inherited `@packages/*` paths resolve from the repo root). No build step and no `dist/` in dev — `@packages/*` resolve to TypeScript **source**, so edits to `apps/daemon/src` *and* `packages/*/src` restart the daemon (~2s) with fresh code. Two deliberate deviations from Geniro's line: the runtime is `ELECTRON_RUN_AS_NODE=1 electron` (host Node's ABI can't load the Electron-built `better-sqlite3`), and there is no `--watch-kill-signal=SIGKILL` (default SIGTERM lets Nest shutdown hooks run — pidfile cleanup + `ProcessRegistry` reaping of spawned agent children). It must **not** be moved to `tsx`/esbuild: esbuild's `emitDecoratorMetadata` is an intentional wontfix (no type system → no `design:paramtypes`), so NestJS type-based DI cannot resolve under it.
 
 ### Build, types, lint
 ```bash
@@ -99,6 +101,7 @@ A standalone NestJS engine the UI spawns as a child process, laid out like Genir
 - `utils/` — `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + `isValidPort`/`parsePort`); `pidfile.ts` (mint/write/remove); `pidfile.lifecycle.ts` (Nest `OnApplicationShutdown` → removes the pidfile).
 - `db/mikro-orm.config.ts`.
 - `v1/runs/` — `runs.module.ts` + `entity/{run,item,node-state}.entity.ts` + `runs.types.ts` (status/kind enums).
+- `v1/agents/` — the M2 single-agent chat module: `agents.module.ts` + `chat.types.ts` at the root, then `adapters/` (abstract `AgentAdapter` base + `claude/` and `cursor/` subdirectories — see `.claude/rules/agent-adapters.md`), `controllers/`, `services/` (chat service, event bus, process registry), `dao/`, `dto/`, `utils/` (json-util, ndjson-buffer, spawn-cli).
 - `v1/notifications/` — `notifications.module.ts` + `gateways/notifications.gateway.ts` (the Socket.IO channel).
 
 - Binds **`127.0.0.1` only**. Assembled exactly like Geniro's `apps/api` (`buildBootstrapper(…)` → `addExtension(buildHttpServerExtension(…))` → `init()`); the loopback specifics ride on the extension's `host` / `portFallback` / `onListening` options — bind 127.0.0.1, negotiate a free port if the preferred one is taken, and write the pidfile from `onListening` after a healthy listen (the `http-server`'s own listen still defaults to `0.0.0.0`, preserving Geniro's behavior). Shutdown is Nest-owned (`enableShutdownHooks`); `utils/pidfile.lifecycle.ts` clears the pidfile on the way out, so `main.ts` needs no signal handling.
@@ -121,6 +124,29 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 
 `DaemonSupervisor.start()` reuses a still-healthy daemon left by a prior UI instance (pid + `/health/check` match), sweeps stale pidfiles, and only tears down the process it owns.
 
+### Design system (renderer) — tokens + shared components
+
+The renderer is styled with **Tailwind CSS v4 (CSS-first `@theme`)** over a **token layer that is kept in lockstep with the sibling Geniro web app** — same warm cream/caramel palette, same shadcn/ui semantic-token vocabulary — so the desktop app and Geniro web look identical. Its structure is **authoritative**; every new screen builds from it rather than reinventing styles.
+
+```
+apps/ui/src/renderer/
+  styles/global.css        — the ONLY source of design tokens (:root + @theme inline) + base typography.
+                             All colours/radii/shadows live here; components never hardcode them.
+  components/
+    ui/                    — token-driven primitives, shadcn-v4 flavour (data-slot, cva variants):
+                             utils.ts (cn), button, input, textarea, select, label, card, badge.
+    logo, status-dot, field, note-box, error-text, empty-state, collapsible-card
+                           — app-level shared components composed from the primitives.
+  chats/message-bubble.tsx — the transcript-row component (cva variants per item kind).
+```
+
+**Hard rules (mechanized in `.claude/rules/renderer-design-system.md` + `.claude/rules/renderer-components.md`, enforced where possible by the eslint override scoped to `apps/ui/src/renderer/**`):**
+- **Never hardcode a colour.** Read every colour/radius/shadow from a token in `styles/global.css` — as a utility (`bg-primary`, `text-muted-foreground`, `border-border`, `shadow-panel-sm`) or `var(--token)`. A raw hex/`rgb()`/`hsl()` — including inside a Tailwind arbitrary value like `bg-[#…]` — is an eslint error. Non-colour arbitrary values (`ring-[3px]`, `size-[26px]`, `shadow-[…var(--border)]`) are fine.
+- **Never duplicate a component or pattern.** Before adding UI, reach for an existing primitive in `components/ui/` or shared component in `components/`; if a pattern (a button, a field, a status dot, a card, an error line, an empty state) recurs, it lives in a shared component and is imported everywhere — never re-implemented inline.
+- **New styled elements go through the layers**: a token in `global.css` → a primitive in `components/ui/` → an app component in `components/`. Compose with the `cn()` helper and, for variants, `cva`. Import directly (`./ui/button`), **no barrels**.
+- **Adding a token** (a new colour/shadow) means adding it in `global.css` (`:root` + `@theme inline`) once, then referencing it — never inlining the literal at the call site.
+- The palette tracks `geniro/apps/web/src/styles/global.css`; keep token names/values aligned so fixes flow between the repos (same spirit as the vendored `@packages/*`).
+
 ### Build toolchain
 - **swc** compiles the daemon and all `packages/*` to **CommonJS** (`dist/`), with decorator metadata (`legacyDecorator` + `decoratorMetadata`) — entities and Nest DI rely on it. All share one root `.swcrc` (each build script references it via `--config-file ../../.swcrc`).
 - **electron-vite** builds the UI (`out/`).
@@ -131,6 +157,7 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 - **Settings → `settings.json`** in the Electron userData dir.
 - **Secrets → macOS Keychain only** (`@napi-rs/keyring`) — never SQLite, never a config file.
 - **SQLite (`geniro.db`) → runtime/history only** — `runs` / `items` / `node_state` rows.
+- **Persist-then-emit** for streamed-then-replayable data (chat `items` now, graph-node items in M3): allocate the monotonic `seq`, write the row, **then** publish on the RxJS bus / per-run Socket.IO room. SQLite is the source of truth and a reconnecting client replays via an `afterSeq` cursor, so nothing is emitted before it is durable.
 - The per-launch loopback **token on disk** (in `daemon.json`) is allowed — it is a local session token, not a user secret.
 
 ---
@@ -144,6 +171,9 @@ electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-super
 - **Shared packages** are aliased as `@packages/*` (e.g. `import { … } from '@packages/common'`), resolving to each package's `src`.
 - **Entities** use `@mikro-orm/decorators/legacy` decorators, extend `TimestampsEntity` from `@packages/mikroorm`, and declare **explicit column types** (`@PrimaryKey({ type: 'string' })`, `@Property({ type: 'integer' | 'text' | … })`) — MikroORM's discovery needs them under swc.
 - **New daemon feature modules** follow the layered structure as they're added: Controller (route + validation only) → Service (business logic) → DAO (extends `BaseDao`, injects `EntityManager` from `@mikro-orm/sqlite`) → Entity. Use Zod DTOs via `createZodDto()` from `nestjs-zod` for HTTP input.
+- **Daemon module directory layout** (mechanized in `.claude/rules/daemon-module-structure.md`): a module keeps only `<name>.module.ts` + its types file at the root; every other file lives in its kind-directory — `controllers/`, `services/`, `dao/`, `entity/`, `dto/`, `utils/`, `adapters/`, `gateways/` — with specs co-located. Never a flat module.
+- **CLI agent adapters** (mechanized in `.claude/rules/agent-adapters.md`): every adapter extends the abstract `AgentAdapter` base (`v1/agents/adapters/agent-adapter.ts`) and lives in its own `adapters/<name>/` subdirectory with all of its classes/types/specs; shared contract types live in `adapters/adapter.types.ts`.
+- **Renderer UI follows the design system** (see *Design system (renderer)* above; mechanized in `.claude/rules/renderer-design-system.md` + `.claude/rules/renderer-components.md`): colours come from tokens in `styles/global.css` only (never hardcoded), and reusable UI is a shared component in `components/ui/` or `components/` (never duplicated inline). Prefer an existing component; promote a recurring pattern into one.
 
 ---
 
@@ -163,7 +193,8 @@ These are hard rules for v1:
 
 - **No cloud / remote / multi-machine code paths.** Everything is local.
 - **No Python runtime.** The entire stack — including the CLI-agent layer — is TypeScript.
-- **Secrets live in the macOS Keychain only** — never in SQLite, never in a file. (The loopback session token in `daemon.json` is not a user secret and is allowed on disk.)
+- **Secrets live in the macOS Keychain only** — never in SQLite, never in a file. (The loopback session token in `daemon.json` is not a user secret and is allowed on disk.) When the daemon spawns an agent/child process it builds the child env by **stripping every `GENIRO_`-prefixed key** — daemon config and secrets travel as `GENIRO_<NAME>` (e.g. the UI passes the Cursor key as `GENIRO_CURSOR_API_KEY`) — and **re-injects only the one secret that child needs** (the Cursor adapter maps it to `CURSOR_API_KEY` for its child alone). So no spawned agent inherits another agent's credential or the daemon's internal env.
+- **Every child process the daemon spawns registers with `ProcessRegistry`** (claim → register → auto-unregister on settle) so `OnApplicationShutdown` and explicit cancel terminate it — never spawn an unmanaged child. The M1 shutdown path only removes the pidfile and the UI's `SIGKILL` escalation bypasses Nest hooks, so an unregistered child orphans mid-turn (M3's graph engine spawns N agents — that is where this bites).
 - **Graph definitions are YAML** (the source of truth). SQLite holds runtime/history only — never graph definitions.
 - **The daemon binds loopback (`127.0.0.1`) only** and gates every non-public route with the per-launch bearer token.
 - **No tmux / PTY-scraping for graph execution** in v1 (a click-through PTY mirror for inspection is a later, separate concern).

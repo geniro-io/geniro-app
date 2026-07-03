@@ -44,8 +44,8 @@ Thumbs.db
 # CodeGraph index (local-only, rebuilt per machine)
 .codegraph
 
-# geniro working state — state.md and other generated files stay local; the
-# already-tracked plan/spec/milestones, workflow, and instructions are committed.
+# geniro working state — planning (plans/specs/milestones/state.md) and other
+# generated files stay local; only workflow and instructions are committed.
 # Note: `.geniro/*` (not `.geniro/`) so the negations below can re-include subdirs.
 .geniro/*
 !.geniro/

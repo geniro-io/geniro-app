@@ -19,6 +19,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.pickProjectFolder) as ReturnType<
       GeniroApi['pickProjectFolder']
     >,
+  pickAgentBinary: () =>
+    ipcRenderer.invoke(IPC.pickAgentBinary) as ReturnType<
+      GeniroApi['pickAgentBinary']
+    >,
   getSettings: () =>
     ipcRenderer.invoke(IPC.getSettings) as ReturnType<GeniroApi['getSettings']>,
   updateSettings: (patch) =>

@@ -11,6 +11,7 @@ import {
   PIDFILE_NAME,
   readDaemonInfo,
 } from './daemon-pidfile';
+import { getSecret } from './keychain';
 
 const HEALTH_TIMEOUT_MS = 15_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
@@ -124,12 +125,21 @@ export class DaemonSupervisor {
 
   private async spawnDaemon(): Promise<DaemonHandle> {
     const entry = resolveDaemonEntry();
+    // Source the Cursor API key from the Keychain and hand it to the daemon in
+    // memory (env only — never persisted to disk/SQLite) so its Cursor adapter
+    // can authenticate `cursor-agent`. Passed under the GENIRO_-prefixed name so
+    // the daemon strips it from every spawned agent's env and re-injects it as
+    // CURSOR_API_KEY for the Cursor child ONLY (never the claude child). Absent
+    // key → omit; a Cursor turn then surfaces an auth error rather than failing
+    // the daemon's start.
+    const cursorApiKey = getSecret('cursor.apiKey');
     const child = spawn(process.execPath, [entry], {
       env: {
         ...process.env,
         // Run the daemon under Electron's bundled Node — no external runtime.
         ELECTRON_RUN_AS_NODE: '1',
         GENIRO_USER_DATA: app.getPath('userData'),
+        ...(cursorApiKey ? { GENIRO_CURSOR_API_KEY: cursorApiKey } : {}),
         // No GENIRO_PORT: the daemon owns its default port and records the
         // actual bound host + port in the pidfile, which we read back below.
       },

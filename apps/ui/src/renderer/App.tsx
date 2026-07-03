@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { DaemonHandle } from '../shared/contracts';
+import { Chats } from './chats/Chats';
+import { EmptyState } from './components/empty-state';
+import { type AppView, NavRail } from './components/nav-rail';
+import { cn } from './components/ui/utils';
 import { DaemonClient } from './daemon-client';
+import { Graphs } from './graphs/Graphs';
 import { Onboarding } from './onboarding/Onboarding';
+import { Settings } from './settings/Settings';
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -18,18 +25,19 @@ function helloVersion(data: unknown): string | null {
 
 export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>('loading');
+  const [view, setView] = useState<AppView>('chats');
   const [connected, setConnected] = useState(false);
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
-  const [lastEcho, setLastEcho] = useState<string | null>(null);
+  const [handle, setHandle] = useState<DaemonHandle | null>(null);
   const clientRef = useRef<DaemonClient | null>(null);
 
   const connectDaemon = useCallback(async (): Promise<void> => {
-    const handle = await window.geniro.getDaemonHandle();
-    if (!handle) {
+    const daemonHandle = await window.geniro.getDaemonHandle();
+    if (!daemonHandle) {
       setConnected(false);
       return;
     }
-    const client = new DaemonClient(handle, {
+    const client = new DaemonClient(daemonHandle, {
       onOpen: () => setConnected(true),
       onClose: () => setConnected(false),
       onMessage: (event, data) => {
@@ -38,13 +46,12 @@ export function App(): React.JSX.Element {
           if (version) {
             setDaemonVersion(version);
           }
-        } else if (event === 'echo') {
-          setLastEcho(typeof data === 'string' ? data : JSON.stringify(data));
         }
       },
     });
     clientRef.current = client;
     client.connect();
+    setHandle(daemonHandle); // triggers the render that mounts <Chats>
   }, []);
 
   useEffect(() => {
@@ -72,7 +79,7 @@ export function App(): React.JSX.Element {
   }, [connectDaemon]);
 
   if (phase === 'loading') {
-    return <div className="center muted">Loading…</div>;
+    return <EmptyState>Loading…</EmptyState>;
   }
 
   if (phase === 'onboarding') {
@@ -80,25 +87,25 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <span className="brand">geniro</span>
-        <span className={`status ${connected ? 'ok' : 'bad'}`}>
-          {connected
-            ? `● connected${daemonVersion ? ` · daemon v${daemonVersion}` : ''}`
-            : '○ disconnected'}
-        </span>
-      </header>
-      <main className="center">
-        <h1>You&rsquo;re set up.</h1>
-        <p className="muted">
-          The daemon is running locally. Workflows and Chats arrive in the next
-          milestones.
-        </p>
-        <button onClick={() => clientRef.current?.send('ping')}>
-          Ping daemon
-        </button>
-        {lastEcho && <p className="muted">echo: {lastEcho}</p>}
+    <div className="flex h-full">
+      <NavRail
+        view={view}
+        onNavigate={setView}
+        connected={connected}
+        daemonVersion={daemonVersion}
+      />
+      <main className="min-h-0 flex-1">
+        {/* Chats stays mounted (hidden) across nav switches so its live WS room
+            and active-run selection survive a trip to Settings/Graphs. */}
+        <div className={cn('h-full', view !== 'chats' && 'hidden')}>
+          {handle && clientRef.current ? (
+            <Chats client={clientRef.current} handle={handle} />
+          ) : (
+            <EmptyState>Connecting to the daemon…</EmptyState>
+          )}
+        </div>
+        {view === 'graphs' ? <Graphs /> : null}
+        {view === 'settings' ? <Settings /> : null}
       </main>
     </div>
   );

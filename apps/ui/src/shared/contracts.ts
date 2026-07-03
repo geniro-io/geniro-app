@@ -29,6 +29,52 @@ export interface DaemonStatus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Chat (daemon wire shapes — hand-mirrored from the daemon's chat.types until
+// an OpenAPI client is generated; keep in sync with apps/daemon v1/agents)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Run lifecycle status (mirrors the daemon `RunStatus`). */
+export type ChatRunStatus =
+  'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** Normalized transcript item kind (mirrors the daemon's 11-kind `ItemKind`). */
+export type ChatItemKind =
+  | 'message'
+  | 'reasoning'
+  | 'tool_call'
+  | 'tool_result'
+  | 'turn_complete'
+  | 'turn_cancelled'
+  | 'usage'
+  | 'system'
+  | 'error'
+  | 'attachment'
+  | 'status';
+
+/** A single-agent chat run. */
+export interface ChatRun {
+  id: string;
+  status: ChatRunStatus;
+  title: string | null;
+  agentKind: CliKind | null;
+  cwd: string | null;
+  model: string | null;
+  createdAt: string;
+}
+
+/** A persisted transcript item streamed over `/ws` and read back over REST. */
+export interface ChatItem {
+  id: string;
+  runId: string;
+  nodeId: string | null;
+  seq: number;
+  kind: ChatItemKind;
+  role: string | null;
+  payload: unknown;
+  createdAt: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Settings (non-secret app config — persisted as JSON in userData)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -92,7 +138,8 @@ export type SecretName = 'cursor.apiKey';
 
 /** Input captured by the onboarding flow and committed in one IPC call. */
 export interface OnboardingInput {
-  projectFolder: string;
+  /** Per-agent binary path overrides (absolute paths); omitted keys auto-detect. */
+  cliPaths?: Partial<Record<CliKind, string>>;
   /** Optional Cursor API key; stored in the Keychain, never echoed back. */
   cursorApiKey?: string;
 }
@@ -109,6 +156,8 @@ export interface GeniroApi {
   getDaemonHandle(): Promise<DaemonHandle | null>;
   /** Open the native folder picker; returns the chosen absolute path or null. */
   pickProjectFolder(): Promise<string | null>;
+  /** Open the native file picker for an agent binary; returns the path or null. */
+  pickAgentBinary(): Promise<string | null>;
   /** Read the persisted settings. */
   getSettings(): Promise<Settings>;
   /** Merge a partial patch into settings; returns the updated settings. */
@@ -130,6 +179,7 @@ export const IPC = {
   getStatus: 'geniro:getStatus',
   getDaemonHandle: 'geniro:getDaemonHandle',
   pickProjectFolder: 'geniro:pickProjectFolder',
+  pickAgentBinary: 'geniro:pickAgentBinary',
   getSettings: 'geniro:getSettings',
   updateSettings: 'geniro:updateSettings',
   detectClis: 'geniro:detectClis',

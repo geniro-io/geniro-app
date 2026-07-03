@@ -87,6 +87,36 @@ const config = defineConfig([
     },
   },
   {
+    // Design-system guard for the renderer: colours must come from semantic
+    // tokens (a `bg-primary` / `text-muted-foreground` utility, or `var(--…)`),
+    // never a raw hex/rgb/hsl. Non-colour arbitrary values (`ring-[3px]`,
+    // `size-[26px]`, `shadow-[…var(--border)]`) stay allowed — only colour
+    // literals are banned. See apps/ui/src/renderer/styles/global.css.
+    files: ['apps/ui/src/renderer/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            'Literal[value=/\\[#[0-9a-fA-F]{3,8}\\]/], Literal[value=/\\[(?:rgb|rgba|hsl|hsla|oklch|oklab)\\(/]',
+          message:
+            'No hardcoded colours in Tailwind arbitrary values — use a semantic token utility (bg-primary, text-muted-foreground, …) or var(--token). See styles/global.css.',
+        },
+        {
+          selector:
+            'TemplateElement[value.raw=/\\[#[0-9a-fA-F]{3,8}\\]/], TemplateElement[value.raw=/\\[(?:rgb|rgba|hsl|hsla|oklch|oklab)\\(/]',
+          message:
+            'No hardcoded colours in Tailwind arbitrary values — use a semantic token utility (bg-primary, text-muted-foreground, …) or var(--token). See styles/global.css.',
+        },
+        {
+          selector: 'Literal[value=/^#[0-9a-fA-F]{3,8}$/]',
+          message:
+            'No hardcoded hex colours in the renderer — add/reuse a token in styles/global.css and reference it via a utility or var(--token).',
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.spec.ts', '**/*.spec.tsx', '**/*.int.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

@@ -1,30 +1,84 @@
-import { Inject } from '@nestjs/common';
+import { Inject, Logger, type OnModuleDestroy } from '@nestjs/common';
 import {
+  ConnectedSocket,
   MessageBody,
   type OnGatewayConnection,
+  type OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   type WsResponse,
 } from '@nestjs/websockets';
-import type { Socket } from 'socket.io';
+import type { Subscription } from 'rxjs';
+import type { Server, Socket } from 'socket.io';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { safeEqual } from '../../../auth/safe-equal';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
+
+/** Socket.IO room a client joins to receive one run's streamed items. */
+function runRoom(runId: string): string {
+  return `run:${runId}`;
+}
+
+/** Defensively read a runId from a `join`/`leave` payload (string or `{runId}`). */
+function extractRunId(data: unknown): string | null {
+  if (typeof data === 'string') {
+    return data.length > 0 ? data : null;
+  }
+  if (data && typeof data === 'object' && 'runId' in data) {
+    const value = (data as { runId: unknown }).runId;
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+  return null;
+}
 
 /**
- * Loopback notifications gateway (Socket.IO), mirroring Geniro's apps/api
- * SocketGateway. The renderer authenticates with the per-launch loopback token
- * via the Socket.IO handshake `auth` payload (browsers can't set an
- * Authorization header on the WS upgrade; Socket.IO sends `auth` on connect
- * instead). `cors.origin: '*'` is safe here — the daemon binds 127.0.0.1 only
- * and the token is the real gate.
+ * Loopback notifications gateway (Socket.IO). The renderer authenticates with
+ * the per-launch loopback token via the handshake `auth` payload (browsers
+ * can't set an Authorization header on the WS upgrade). `cors.origin: '*'` is
+ * safe — the daemon binds 127.0.0.1 only and the token is the real gate.
  *
- * M1 only proves the renderer ⇄ daemon channel (a `hello` on connect + `echo`);
- * real event streams (rooms + emitters) arrive in M2 as this gateway grows.
+ * M2 grows the M1 hello/echo stub into the live run-event channel: a single
+ * subscription to {@link AgentEventBus} fans each persisted item out to its
+ * run's room, and clients `join`/`leave` a run to stream it. Because items are
+ * persisted before they reach the bus (persist-then-emit), a client that joins
+ * late replays the history over REST first, then attaches here for live items,
+ * de-duplicating on `seq`.
  */
 @WebSocketGateway({ path: '/ws', cors: { origin: '*' } })
-export class NotificationsGateway implements OnGatewayConnection {
-  constructor(@Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo) {}
+export class NotificationsGateway
+  implements OnGatewayConnection, OnGatewayInit, OnModuleDestroy
+{
+  private readonly logger = new Logger(NotificationsGateway.name);
+  private busSubscription?: Subscription;
+
+  constructor(
+    @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
+    private readonly bus: AgentEventBus,
+  ) {}
+
+  afterInit(server: Server): void {
+    // Isolate per-emit failures: a single throw from `emit` (or a bus error)
+    // must not terminate this subscription, or ALL live streaming would die
+    // silently for the rest of the daemon's life.
+    this.busSubscription = this.bus.all().subscribe({
+      next: ({ runId, item }) => {
+        try {
+          server.to(runRoom(runId)).emit('item', item);
+        } catch (err) {
+          this.logger.error(
+            `failed to emit item to ${runRoom(runId)}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`agent event bus errored: ${String(err)}`),
+    });
+  }
+
+  onModuleDestroy(): void {
+    this.busSubscription?.unsubscribe();
+  }
 
   handleConnection(client: Socket): void {
     const auth = client.handshake.auth as { token?: unknown };
@@ -34,6 +88,30 @@ export class NotificationsGateway implements OnGatewayConnection {
       return;
     }
     client.emit('hello', { version: this.runtime.version });
+  }
+
+  @SubscribeMessage('join')
+  join(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ): WsResponse<{ runId: string | null }> {
+    const runId = extractRunId(data);
+    if (runId) {
+      void client.join(runRoom(runId));
+    }
+    return { event: 'joined', data: { runId } };
+  }
+
+  @SubscribeMessage('leave')
+  leave(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ): WsResponse<{ runId: string | null }> {
+    const runId = extractRunId(data);
+    if (runId) {
+      void client.leave(runRoom(runId));
+    }
+    return { event: 'left', data: { runId } };
   }
 
   @SubscribeMessage('echo')

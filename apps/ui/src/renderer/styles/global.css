@@ -1,0 +1,177 @@
+@import 'tailwindcss' source(none);
+@source '../**/*.{ts,tsx}';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design tokens — the single source of truth for the Geniro desktop theme.
+ * Values are kept in lockstep with the sibling Geniro web app
+ * (geniro/apps/web/src/styles/global.css) so the two surfaces stay visually
+ * identical. NEVER hardcode a colour/radius in a component — read it from a
+ * token here (as a `bg-primary` / `text-muted-foreground` utility, or
+ * `var(--…)` when a utility doesn't exist).
+ */
+:root {
+  --font-size: 15px;
+
+  /* Warm cream / caramel palette (light-only today) */
+  --background: #f5f1eb;
+  --foreground: #3d2e1f;
+  --card: #fdfcfa;
+  --card-foreground: #3d2e1f;
+  --popover: #fdfcfa;
+  --popover-foreground: #3d2e1f;
+  --primary: #d4915e;
+  --primary-foreground: #ffffff;
+  --secondary: #e8a676;
+  --secondary-foreground: #ffffff;
+  --muted: #ebe5dc;
+  --muted-foreground: #7a6b5a;
+  --accent: #f4e5d3;
+  --accent-foreground: #3d2e1f;
+  --destructive: #c95d3f;
+  --destructive-foreground: #ffffff;
+  --success: #5f8f4e;
+  --success-foreground: #ffffff;
+  --warning: #b8801f;
+  --warning-foreground: #ffffff;
+  --border: #ddd4c8;
+  --input: transparent;
+  --input-background: #fdfcfa;
+  --switch-background: #d4c4b3;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #d4915e;
+  --chart-1: #d4915e;
+  --chart-2: #e8a676;
+  --chart-3: #b87d52;
+  --chart-4: #8a6947;
+  --chart-5: #c99167;
+  --radius: 0.5rem;
+
+  /* Elevation — desktop panels use these, web relies on Tailwind defaults */
+  --shadow-sm: 0 1px 2px rgba(61, 46, 31, 0.06);
+  --shadow-md: 0 4px 16px rgba(61, 46, 31, 0.08);
+
+  --sidebar: #fdfcfa;
+  --sidebar-foreground: #3d2e1f;
+  --sidebar-primary: #d4915e;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f9f6f1;
+  --sidebar-accent-foreground: #3d2e1f;
+  --sidebar-border: #ddd4c8;
+  --sidebar-ring: #d4915e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --shadow-panel-sm: var(--shadow-sm);
+  --shadow-panel-md: var(--shadow-md);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+}

@@ -1,9 +1,31 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, nativeImage, shell } from 'electron';
 
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
+
+/**
+ * Product display name. Set before anything reads it: it drives
+ * `app.getPath('userData')` (settings.json, the daemon pidfile, and the DB all
+ * live under `…/Application Support/Geniro`), default menu-item strings, and
+ * the About panel. It does NOT rename the dev Dock tile / bold menu-bar title —
+ * macOS reads those from the running bundle's Info.plist, so under
+ * `electron-vite dev` they say "Electron" until the M4 packaged build
+ * (electron-builder `productName`) ships a real Geniro.app.
+ */
+app.setName('Geniro');
+app.setAboutPanelOptions({
+  applicationName: 'Geniro',
+  applicationVersion: app.getVersion(),
+});
+
+/** Absolute path to the app icon (the lightbulb-robot mascot). */
+const ICON_PATH = join(app.getAppPath(), 'resources', 'icon.png');
+
+/** True under `electron-vite dev` (renderer served from a URL, not a file). */
+const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
 
 const supervisor = new DaemonSupervisor();
 let mainWindow: BrowserWindow | null = null;
@@ -38,7 +60,8 @@ function createWindow(): void {
     width: 1100,
     height: 760,
     show: false,
-    title: 'geniro',
+    title: 'Geniro',
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -108,6 +131,18 @@ function main(): void {
   app.on('second-instance', focusMainWindow);
 
   void app.whenReady().then(async () => {
+    // In dev the Dock shows Electron's default icon; override it with the Geniro
+    // mascot. A packaged build gets its icon from the bundled .icns (M4), so this
+    // only runs under `electron-vite dev`.
+    if (
+      isDev &&
+      process.platform === 'darwin' &&
+      app.dock &&
+      existsSync(ICON_PATH)
+    ) {
+      app.dock.setIcon(nativeImage.createFromPath(ICON_PATH));
+    }
+
     registerIpc(supervisor);
 
     try {

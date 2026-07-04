@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import type { DaemonHandle } from '../shared/contracts';
 import { Chats } from './chats/Chats';
@@ -6,9 +13,17 @@ import { EmptyState } from './components/empty-state';
 import { type AppView, NavRail } from './components/nav-rail';
 import { cn } from './components/ui/utils';
 import { DaemonClient } from './daemon-client';
-import { Graphs } from './graphs/Graphs';
 import { Onboarding } from './onboarding/Onboarding';
-import { Settings } from './settings/Settings';
+
+// Code-split the conditionally-rendered views: Graphs drags @xyflow/react +
+// elkjs and Settings its own tree — eager imports would put both in the
+// startup chunk of the always-mounted shell.
+const Graphs = lazy(() =>
+  import('./graphs/Graphs').then((m) => ({ default: m.Graphs })),
+);
+const Settings = lazy(() =>
+  import('./settings/Settings').then((m) => ({ default: m.Settings })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -112,8 +127,10 @@ export function App(): React.JSX.Element {
             <EmptyState>Connecting to the daemon…</EmptyState>
           )}
         </div>
-        {view === 'graphs' ? <Graphs handle={handle} /> : null}
-        {view === 'settings' ? <Settings /> : null}
+        <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
+          {view === 'graphs' ? <Graphs handle={handle} /> : null}
+          {view === 'settings' ? <Settings /> : null}
+        </Suspense>
       </main>
     </div>
   );

@@ -68,7 +68,9 @@ export class TerminalClient {
       }
       this.events.onSnapshot?.(
         typeof payload.snapshot === 'string' ? payload.snapshot : '',
-        payload.status === 'exited' ? 'exited' : 'running',
+        payload.status === 'exited' || payload.status === 'closing'
+          ? payload.status
+          : 'running',
         typeof payload.exitCode === 'number' ? payload.exitCode : null,
       );
     });

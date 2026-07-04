@@ -58,7 +58,7 @@ function NavButton({
         'hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
         collapsed ? 'justify-center px-0 py-2' : 'gap-3 px-3 py-2',
         active
-          ? 'bg-sidebar-accent text-sidebar-primary'
+          ? 'bg-sidebar-accent text-sidebar-primary-strong'
           : 'text-sidebar-foreground/75',
       )}>
       <Icon aria-hidden="true" className="size-4 shrink-0" />

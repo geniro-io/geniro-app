@@ -292,6 +292,100 @@ describe('Chats reconnect seam', () => {
     expect(buttons).not.toContain('Send');
   });
 
+  it('ignores a stale activateRun completion after switching to another run', async () => {
+    // Click running run A (slow history fetch), then idle run B before A's
+    // fetch resolves: A's late completion must not replay its items into B's
+    // transcript nor re-arm Stop/streaming for B.
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'completed',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    let resolveSlow!: (items: ChatItem[]) => void;
+    api.getHistory.mockImplementation((runId: string) => {
+      if (runId === 'r1') {
+        return new Promise<ChatItem[]>((resolve) => {
+          resolveSlow = resolve;
+        });
+      }
+      // No terminal item: B is idle via its `completed` status, so the
+      // stale-A derive (which checks sawTerminalRef) stays observable.
+      return Promise.resolve([
+        { ...msg(0, 'user', 'finished-B-transcript'), runId: 'r2' },
+      ]);
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat'); // A — fetch hangs
+    await clickRun(container, 'Second chat'); // B activates meanwhile
+
+    await act(async () => {
+      // A's fetch finally resolves: run A is `running` with a non-terminal
+      // transcript — exactly the shape that would arm Stop without the guard.
+      resolveSlow([msg(0, 'user', 'stale-A-item')]);
+    });
+
+    const buttons = [...container.querySelectorAll('button')].map(
+      (b) => b.textContent,
+    );
+    expect(buttons).not.toContain('Stop');
+    expect(container.textContent).not.toContain('stale-A-item');
+    expect(container.textContent).toContain('finished-B-transcript');
+  });
+
+  it('does not surface a failed reconnect fetch as an error on the run switched to meanwhile', async () => {
+    // Reconnect fires for run A and its delta fetch hangs; the user switches to
+    // run B before A's fetch settles, then A's fetch REJECTS. The rejection is
+    // addressed to the no-longer-active run A, so it must not paint an error
+    // banner over run B (the same cross-run contamination the activateRun
+    // fetch guards against on its own catch).
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'completed',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    let rejectReconnect!: (err: unknown) => void;
+    api.getHistory.mockImplementation((runId: string, afterSeq?: number) => {
+      // A's reconnect delta (afterSeq set) hangs until the test rejects it.
+      if (runId === 'r1' && afterSeq !== undefined) {
+        return new Promise<ChatItem[]>((_resolve, reject) => {
+          rejectReconnect = reject;
+        });
+      }
+      if (runId === 'r2') {
+        // msg() hardcodes runId 'r1'; addItem is run-scoped by item.runId, so
+        // B's own transcript item must carry runId 'r2' to render under run B.
+        return Promise.resolve([
+          { ...msg(0, 'user', 'B-transcript'), runId: 'r2' },
+        ]);
+      }
+      // A's initial activate history.
+      return Promise.resolve([msg(0, 'user', 'A-transcript')]);
+    });
+    const { client, fireReconnect } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat'); // A active
+    await act(async () => {
+      fireReconnect(); // A's delta fetch starts hanging
+    });
+    await clickRun(container, 'Second chat'); // switch to B while A's fetch hangs
+
+    await act(async () => {
+      rejectReconnect(new Error('reconnect delta failed for A'));
+      await Promise.resolve();
+    });
+
+    // The error belonged to run A, which is no longer active — B must not show it.
+    expect(container.textContent).not.toContain('reconnect delta failed for A');
+    expect(container.textContent).toContain('B-transcript');
+  });
+
   it('does not show the working state when an in-flight run already ended on a terminal item', async () => {
     // status 'running' but the replayed transcript ends on a terminal item → the
     // derive must NOT re-arm Stop.

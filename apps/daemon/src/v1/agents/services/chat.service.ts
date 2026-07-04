@@ -19,6 +19,8 @@ import { RunDao } from '../dao/run.dao';
 import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidCwd } from '../utils/resolve-cwd';
+import { assertChatRun } from '../utils/run-kind';
+import { createSessionIdSaver } from '../utils/session-saver';
 import { AgentEventBus } from './agent-events.bus';
 import { ProcessRegistry } from './process-registry';
 
@@ -136,10 +138,10 @@ export class ChatService {
 
   async cancel(runId: string): Promise<{ cancelled: boolean }> {
     const em = this.em.fork();
-    const run = await this.runDao.getById(runId, em);
-    if (!run) {
-      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
-    }
+    // Kind-guarded like sendMessage: this cancel and the graph executor's
+    // converge on the same registry key, so a wrong-endpoint call must 400
+    // instead of silently cancelling the other kind's run.
+    assertChatRun(await this.runDao.getById(runId, em), runId);
     return { cancelled: this.registry.cancel(runId) };
   }
 
@@ -151,16 +153,7 @@ export class ChatService {
    */
   async sendMessage(runId: string, text: string): Promise<ItemWire> {
     const em = this.em.fork();
-    const run = await this.runDao.getById(runId, em);
-    if (!run) {
-      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
-    }
-    if (run.workflowId) {
-      throw new BadRequestException(
-        'NOT_A_CHAT_RUN',
-        'run is not a single-agent chat',
-      );
-    }
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
     if (!run.cwd || !run.agentKind) {
       throw new BadRequestException(
         'RUN_NOT_CONFIGURED',
@@ -193,7 +186,13 @@ export class ChatService {
         em,
       );
       const resumeSessionId = node?.agentSessionId ?? null;
-      let savedSessionId = resumeSessionId;
+      const saveSessionId = createSessionIdSaver(
+        this.nodeStateDao,
+        runId,
+        SINGLE_AGENT_NODE,
+        resumeSessionId,
+        em,
+      );
       await this.runDao.updateById(runId, { status: 'running' }, em);
 
       const adapter: AgentAdapter =
@@ -215,17 +214,7 @@ export class ChatService {
           // though onEvent is a sync callback firing as stdout arrives.
           enqueue(async () => {
             if (event.type === 'session') {
-              // Some CLIs repeat the session id on every line; only persist when
-              // it actually changes to avoid a DB round-trip per chunk.
-              if (event.sessionId !== savedSessionId) {
-                savedSessionId = event.sessionId;
-                await this.nodeStateDao.saveSessionId(
-                  runId,
-                  SINGLE_AGENT_NODE,
-                  event.sessionId,
-                  em,
-                );
-              }
+              await saveSessionId(event.sessionId);
               return;
             }
             const mapped = mapEventToItem(event);

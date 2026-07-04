@@ -1,5 +1,10 @@
-/** Lifecycle of one live PTY mirror session (in-memory only — never SQLite). */
-export type TerminalStatus = 'running' | 'exited';
+/**
+ * Lifecycle of one live PTY mirror session (in-memory only — never SQLite).
+ * `closing` = kill requested, PTY not yet exited — the session stays mapped so
+ * an instant reopen can't race a second `--resume` onto the same CLI session.
+ * Mirrored in the UI wire contract (apps/ui/src/shared/contracts.ts).
+ */
+export type TerminalStatus = 'running' | 'closing' | 'exited';
 
 /** Wire shape of a terminal session as the HTTP/WS surfaces report it. */
 export interface TerminalSessionWire {

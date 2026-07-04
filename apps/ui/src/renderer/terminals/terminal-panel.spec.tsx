@@ -137,6 +137,20 @@ describe('TerminalPanel', () => {
     expect(client?.resize).toHaveBeenCalledWith(80, 24);
   });
 
+  it('shows a connecting state until the attach delivers its first payload', () => {
+    render();
+
+    expect(container.textContent).toContain('Connecting…');
+    expect(container.textContent).toContain('connecting');
+    expect(container.textContent).not.toContain('live');
+
+    const client = mocks.clients[0];
+    act(() => client?.events.onSnapshot?.('history', 'running', null));
+
+    expect(container.textContent).not.toContain('Connecting…');
+    expect(container.textContent).toContain('live');
+  });
+
   it('writes live data and flips the badge on exit', () => {
     render();
     const client = mocks.clients[0];
@@ -199,20 +213,24 @@ describe('TerminalPanel', () => {
     expect(mocks.term.dispose).toHaveBeenCalled();
   });
 
-  it('reports header actions to the caller', () => {
+  it('reports header actions to the caller (End session is two-step)', () => {
     const { onClose, onEndSession } = render();
 
-    const buttons = [...container.querySelectorAll('button')];
-    act(() => {
-      buttons
-        .find((b) => b.textContent === 'End session')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      buttons
-        .find((b) => b.textContent === 'Close')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    const click = (label: string): void => {
+      act(() => {
+        [...container.querySelectorAll('button')]
+          .find((b) => b.textContent === label)
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    };
 
+    // First click only ARMS the destructive control — nothing fires yet.
+    click('End session');
+    expect(onEndSession).not.toHaveBeenCalled();
+    click('End it?');
     expect(onEndSession).toHaveBeenCalled();
+
+    click('Close');
     expect(onClose).toHaveBeenCalled();
   });
 });

@@ -1,5 +1,13 @@
 import { FolderOpen, Terminal as TerminalIcon } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type {
   ChatItem,
@@ -20,7 +28,6 @@ import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { DaemonClient } from '../daemon-client';
 import { TerminalApi } from '../terminal-api';
-import { TerminalPanel } from '../terminals/terminal-panel';
 import { WorkflowApi } from '../workflow-api';
 import { ApprovalCard } from './approval-card';
 import {
@@ -29,6 +36,14 @@ import {
   payloadString,
   TranscriptItem,
 } from './transcript-item';
+
+// Code-split the terminal mirror: xterm.js (~250KB) must not ride the startup
+// chunk of the always-mounted Chats tab for a panel most sessions never open.
+const TerminalPanel = lazy(() =>
+  import('../terminals/terminal-panel').then((m) => ({
+    default: m.TerminalPanel,
+  })),
+);
 
 /** Kinds that mark the end of a turn (re-enable the composer). */
 const TERMINAL_KINDS = new Set<ChatItem['kind']>([
@@ -148,6 +163,12 @@ export function Chats({
       client.joinRun(runId);
       try {
         const history = await chatApi.getHistory(runId);
+        // The user may have switched runs while this fetch was in flight —
+        // a stale completion must not replay items or re-arm Stop/streaming
+        // (and cross-contaminate errors) for the CURRENTLY active run.
+        if (activeRunIdRef.current !== runId) {
+          return;
+        }
         history.forEach(addItem);
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
@@ -163,7 +184,9 @@ export function Chats({
           setStreaming(true);
         }
       } catch (err) {
-        setError(String(err));
+        if (activeRunIdRef.current === runId) {
+          setError(String(err));
+        }
       }
     },
     [client, chatApi, addItem],
@@ -193,7 +216,14 @@ export function Chats({
       void chatApi
         .getHistory(active, lastSeqRef.current)
         .then((items) => items.forEach(addItem))
-        .catch((err: unknown) => setError(String(err)));
+        // Same stale-run guard as activateRun's catch: if the user switched
+        // runs while this delta-fetch was in flight, A's error must not paint
+        // over B (addItem is already run-scoped by item.runId; setError is not).
+        .catch((err: unknown) => {
+          if (activeRunIdRef.current === active) {
+            setError(String(err));
+          }
+        });
     });
     return () => {
       unsubscribeItem();
@@ -657,14 +687,16 @@ export function Chats({
       {/* Render only while this tab is visible — the panel is fixed-position
           and would otherwise overlay Graphs/Settings from the hidden tab. */}
       {active && terminal ? (
-        <TerminalPanel
-          key={terminal.session.id}
-          handle={handle}
-          session={terminal.session}
-          title={terminal.title}
-          onClose={() => setTerminal(null)}
-          onEndSession={endTerminalSession}
-        />
+        <Suspense fallback={null}>
+          <TerminalPanel
+            key={terminal.session.id}
+            handle={handle}
+            session={terminal.session}
+            title={terminal.title}
+            onClose={() => setTerminal(null)}
+            onEndSession={endTerminalSession}
+          />
+        </Suspense>
       ) : null}
     </div>
   );

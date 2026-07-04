@@ -17,10 +17,13 @@ function build(overrides: {
       workflow: overrides.workflow ?? { nodes: [] },
     }),
   };
+  // Per-call unique ids: with a hardcoded id, the single-flight assertion
+  // `a.id === b.id` would hold even with the guard deleted (a false pin).
+  let ptySeq = 0;
   const pty = {
     findRunning: vi.fn().mockReturnValue(null),
     create: vi.fn((input: Record<string, unknown>) => ({
-      id: 't-1',
+      id: `t-${ptySeq++}`,
       runId: input.runId,
       nodeId: input.nodeId,
       cwd: input.cwd,

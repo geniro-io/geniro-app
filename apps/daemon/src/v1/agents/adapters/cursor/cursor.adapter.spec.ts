@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import type { AgentEvent } from '../adapter.types';
@@ -238,5 +238,18 @@ describe('CursorAdapter graph-node extras', () => {
     ]);
     // ask degrades to --force (auto-approve) — cursor-agent has no callback.
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
+  });
+});
+
+describe('CursorAdapter binary override', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('spawns the GENIRO_CURSOR_BIN override instead of the bare binary', () => {
+    vi.stubEnv('GENIRO_CURSOR_BIN', '/opt/tools/cursor-agent');
+    const { spawn, captured } = fakeSpawn();
+    new CursorAdapter({ spawn }).start({ prompt: 'p', cwd: '/proj' }, () => {});
+    expect(captured.command).toBe('/opt/tools/cursor-agent');
   });
 });

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import type { AgentEvent } from '../adapter.types';
@@ -386,5 +386,18 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(JSON.parse(responseLine).response.response.behavior).toBe('deny');
     child.emit('close', 0, null);
     await handle.done;
+  });
+});
+
+describe('ClaudeAdapter binary override', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('spawns the GENIRO_CLAUDE_BIN override instead of the bare binary', () => {
+    vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn }).start({ prompt: 'p', cwd: '/proj' }, () => {});
+    expect(captured.command).toBe('/opt/tools/claude');
   });
 });

@@ -58,7 +58,11 @@ export class TerminalsGateway implements OnGatewayConnection {
   ) {}
 
   handleConnection(client: Socket): void {
-    enforceWsHandshakeAuth(client, this.runtime);
+    // Mirror the sibling NotificationsGateway: branch on the guard's verdict so
+    // anything added after it can never run for a rejected socket.
+    if (!enforceWsHandshakeAuth(client, this.runtime)) {
+      return;
+    }
   }
 
   @SubscribeMessage('attach')

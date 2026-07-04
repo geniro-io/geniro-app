@@ -37,7 +37,7 @@ export interface DaemonStatus {
 export type ChatRunStatus =
   'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-/** Normalized transcript item kind (mirrors the daemon's 11-kind `ItemKind`). */
+/** Normalized transcript item kind (mirrors the daemon's `ItemKind`). */
 export type ChatItemKind =
   | 'message'
   | 'reasoning'
@@ -143,11 +143,13 @@ export interface NodeStateWire {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Terminals (mirrors the daemon's v1/terminals wire shapes)
+// Terminals (mirrors the daemon's v1/terminals wire shapes — keep in sync with
+// apps/daemon/src/v1/terminals/terminals.types.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Lifecycle of one live PTY mirror session. */
-export type TerminalStatus = 'running' | 'exited';
+/** Lifecycle of one live PTY mirror session. `closing` = kill requested, PTY
+ * not yet exited (the daemon holds the session so a reopen can't duplicate). */
+export type TerminalStatus = 'running' | 'closing' | 'exited';
 
 /** A live terminal session mirroring an agent's CLI session as its real TUI. */
 export interface TerminalSession {

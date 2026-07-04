@@ -19,7 +19,12 @@ import type {
 
 /** Max buffered scrollback per session (chars) replayed to a (re)attaching client. */
 const SCROLLBACK_CAP = 512 * 1024;
-/** Grace between the polite kill signal and the SIGKILL escalation. */
+/**
+ * Grace between the polite kill signal and the SIGKILL escalation. Coupled:
+ * must stay ≤ the registry drain (SHUTDOWN_DRAIN_MS = 5s,
+ * ../../agents/services/process-registry.ts) so the escalation can fire within
+ * a graceful daemon shutdown, which itself sits under the UI's 7s kill grace.
+ */
 const KILL_ESCALATION_MS = 3000;
 /** How long an exited session's final screen stays re-attachable before eviction. */
 const EXITED_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -233,9 +238,12 @@ export class PtyService {
   }
 
   /**
-   * The still-running session for a (run, node), or null. Lets the create path
+   * The still-active session for a (run, node), or null. Lets the create path
    * stay idempotent per mirror target — the daemon owns that invariant rather
-   * than trusting every client to do a list-then-create dance.
+   * than trusting every client to do a list-then-create dance. A `closing`
+   * session counts as busy: its PTY may live for up to the kill-escalation
+   * grace, and spawning a sibling would put two `--resume` TUIs on one CLI
+   * session file.
    */
   findRunning(
     runId: string,
@@ -245,7 +253,7 @@ export class PtyService {
       if (
         session.runId === runId &&
         session.nodeId === nodeId &&
-        session.status === 'running'
+        session.status !== 'exited'
       ) {
         return this.toWire(session);
       }
@@ -287,14 +295,15 @@ export class PtyService {
 
   /**
    * Polite kill (SIGHUP via the pty), escalating to a process-GROUP SIGKILL
-   * after the grace. Tolerates an unknown id: the registry handle's `cancel`
-   * can fire on daemon shutdown AFTER a dispose already forgot the session,
-   * and a throw here would abort the registry's cancel loop mid-way, orphaning
+   * after the grace. Idempotent for a `closing` session (dispose already sent
+   * the signal) and tolerates an unknown id: the registry handle's `cancel`
+   * can fire on daemon shutdown AFTER an exited session was disposed away, and
+   * a throw here would abort the registry's cancel loop mid-way, orphaning
    * every child behind it (cancel is a never-throws contract).
    */
   kill(id: string): void {
     const session = this.sessions.get(id);
-    if (!session || session.status !== 'running') {
+    if (!session || session.status === 'exited') {
       return;
     }
     try {
@@ -304,7 +313,7 @@ export class PtyService {
     }
     if (!session.killTimer) {
       session.killTimer = setTimeout(() => {
-        if (session.status === 'running') {
+        if (session.status !== 'exited') {
           killProcessGroup(session.pty.pid, 'SIGKILL', () =>
             process.kill(session.pty.pid, 'SIGKILL'),
           );
@@ -314,11 +323,22 @@ export class PtyService {
     }
   }
 
-  /** Kill (if running) and forget a session — the explicit close path. */
+  /**
+   * The explicit close path. A running session is killed but stays mapped as
+   * `closing` until its PTY actually exits — deleting here would make the
+   * dying PTY invisible to {@link findRunning}, letting an instant reopen race
+   * a second `--resume` onto the same CLI session. An exited session is
+   * forgotten immediately.
+   */
   dispose(id: string): void {
     const session = this.session(id);
     if (session.status === 'running') {
       this.kill(id);
+      session.status = 'closing';
+      return;
+    }
+    if (session.status === 'closing') {
+      return; // kill already in flight; onExit settles the session
     }
     if (session.evictTimer) {
       clearTimeout(session.evictTimer);

@@ -27,6 +27,7 @@ import type {
   WorkflowSummary,
 } from '../../shared/contracts';
 import { CLI_KINDS, type CliKind } from '../../shared/contracts';
+import { ConfirmButton } from '../components/confirm-button';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { Field } from '../components/field';
@@ -396,14 +397,14 @@ export function Graphs({
                       onClick={() => void exportWorkflow()}>
                       <Download className="shrink-0" /> Export
                     </Button>
-                    <Button
-                      type="button"
+                    <ConfirmButton
                       variant="outline"
                       className="gap-1.5"
                       aria-label="Delete workflow"
-                      onClick={() => void remove()}>
+                      confirmLabel="Delete?"
+                      onConfirm={remove}>
                       <Trash2 className="shrink-0" />
-                    </Button>
+                    </ConfirmButton>
                   </>
                 ) : null}
                 <Button type="button" onClick={() => void save()}>

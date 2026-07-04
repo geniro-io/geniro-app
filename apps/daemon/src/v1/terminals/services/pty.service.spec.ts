@@ -161,8 +161,9 @@ describe('PtyService', () => {
     // would be orphaned if the first handle's cancel threw.
     service.create({ ...INPUT, runId: 'run-2' });
 
-    // Dispose forgets the session while its PTY is still dying; the handle
-    // stays registered until onExit settles it.
+    // Dispose leaves the session mapped as `closing` while its PTY dies; the
+    // handle stays registered until onExit settles it, and its shutdown cancel
+    // (a second kill on the closing session) must stay a no-throw no-op.
     service.dispose(first.id);
 
     const shutdown = registry.onApplicationShutdown();
@@ -277,13 +278,34 @@ describe('PtyService', () => {
     await shutdown;
   });
 
-  it('dispose kills and forgets the session', () => {
+  it('dispose holds a running session as closing until its PTY exits', () => {
     const { service, ptys } = build();
     const { id } = service.create(INPUT);
 
     service.dispose(id);
 
     expect(ptys[0]?.killed.length).toBeGreaterThan(0);
+    expect(service.get(id).status).toBe('closing');
+    // The dying PTY still counts as busy — an instant reopen for the same
+    // (run, node) must get THIS session back, not a second `--resume` spawn.
+    expect(service.findRunning(INPUT.runId, INPUT.nodeId)?.id).toBe(id);
+    // Idempotent while closing: no double-kill, no premature forget.
+    const killsAfterFirst = ptys[0]?.killed.length;
+    service.dispose(id);
+    expect(ptys[0]?.killed.length).toBe(killsAfterFirst);
+
+    ptys[0]?.emitExit(1);
+    expect(service.get(id).status).toBe('exited');
+    expect(service.findRunning(INPUT.runId, INPUT.nodeId)).toBeNull();
+  });
+
+  it('dispose forgets an exited session immediately', () => {
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+    ptys[0]?.emitExit(0);
+
+    service.dispose(id);
+
     expect(() => service.get(id)).toThrowError(
       /TERMINAL_NOT_FOUND|no terminal/,
     );

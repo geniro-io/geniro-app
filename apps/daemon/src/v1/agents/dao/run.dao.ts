@@ -14,7 +14,9 @@ export class RunDao extends BaseDao<Run> {
   async listChats(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
       { workflowId: null },
-      { orderBy: { createdAt: 'desc' } },
+      // Read-only list paths: skip identity-map tracking so a long run history
+      // doesn't accumulate managed entities in the forked EM (see item.dao).
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
   }
 
@@ -23,14 +25,17 @@ export class RunDao extends BaseDao<Run> {
    * reconcile to close runs a crash / SIGKILL / restart left mid-turn.
    */
   async listRunningChats(txEm?: EntityManager): Promise<Run[]> {
-    return this.getRepo(txEm).find({ workflowId: null, status: 'running' });
+    return this.getRepo(txEm).find(
+      { workflowId: null, status: 'running' },
+      { disableIdentityMap: true },
+    );
   }
 
   /** Workflow runs (graph executions), newest first. */
   async listWorkflowRuns(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
       { workflowId: { $ne: null } },
-      { orderBy: { createdAt: 'desc' } },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
   }
 
@@ -40,9 +45,12 @@ export class RunDao extends BaseDao<Run> {
    * workflow run is created `running`, so anything non-terminal is orphaned).
    */
   async listRunningWorkflowRuns(txEm?: EntityManager): Promise<Run[]> {
-    return this.getRepo(txEm).find({
-      workflowId: { $ne: null },
-      status: { $in: ['pending', 'running'] },
-    });
+    return this.getRepo(txEm).find(
+      {
+        workflowId: { $ne: null },
+        status: { $in: ['pending', 'running'] },
+      },
+      { disableIdentityMap: true },
+    );
   }
 }

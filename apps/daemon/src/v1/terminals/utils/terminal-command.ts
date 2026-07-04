@@ -1,5 +1,6 @@
 import { BadRequestException } from '@packages/common';
 
+import { resolveAgentBinary } from '../../agents/utils/agent-binary';
 import type { AgentKind } from '../../runs/runs.types';
 
 /**
@@ -15,7 +16,7 @@ export function terminalCommand(
 ): { command: string; args: string[] } {
   if (agentKind === 'claude') {
     return {
-      command: 'claude',
+      command: resolveAgentBinary('claude'),
       args: resumeSessionId ? ['--resume', resumeSessionId] : [],
     };
   }

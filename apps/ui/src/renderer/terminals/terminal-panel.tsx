@@ -4,7 +4,12 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
 
-import type { DaemonHandle, TerminalSession } from '../../shared/contracts';
+import type {
+  DaemonHandle,
+  TerminalSession,
+  TerminalStatus,
+} from '../../shared/contracts';
+import { ConfirmButton } from '../components/confirm-button';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { TerminalClient } from '../terminal-client';
@@ -41,14 +46,20 @@ export function TerminalPanel({
 }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
-  const [exited, setExited] = useState(session.status === 'exited');
+  const [status, setStatus] = useState<TerminalStatus>(session.status);
   const [gone, setGone] = useState(false);
+  // False until the attach delivers its first snapshot/data/exit — a blank
+  // card under a "live" badge reads as broken, so surface "Connecting…".
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
       return;
     }
+    // A session swap re-runs this effect with a fresh client — back to
+    // connecting until the new attach replies.
+    setConnected(false);
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
@@ -66,7 +77,8 @@ export function TerminalPanel({
     fit.fit();
 
     const client = new TerminalClient(handle, session.id, {
-      onSnapshot: (snapshot, status, code) => {
+      onSnapshot: (snapshot, snapshotStatus, code) => {
+        setConnected(true);
         setGone(false);
         // A reconnect replays the full buffer — reset so nothing doubles.
         term.reset();
@@ -74,14 +86,17 @@ export function TerminalPanel({
         // Set (not just flip) the badge from the snapshot's status: Chats can
         // swap the session prop in place, and a fresh running session must not
         // inherit the previous session's "exited" badge.
-        const isExited = status === 'exited';
-        setExited(isExited);
-        setExitCode(isExited ? code : null);
+        setStatus(snapshotStatus);
+        setExitCode(snapshotStatus === 'exited' ? code : null);
         client.resize(term.cols, term.rows);
       },
-      onData: (data) => term.write(data),
+      onData: (data) => {
+        setConnected(true);
+        term.write(data);
+      },
       onExit: (code) => {
-        setExited(true);
+        setConnected(true);
+        setStatus('exited');
         setExitCode(code);
       },
       // The session was disposed/reaped before this attach — flag it so the
@@ -113,16 +128,24 @@ export function TerminalPanel({
         </span>
         {gone ? (
           <Badge variant="secondary">gone</Badge>
-        ) : exited ? (
+        ) : !connected ? (
+          <Badge variant="secondary">connecting</Badge>
+        ) : status === 'exited' ? (
           <Badge variant="secondary">
             exited{exitCode !== null ? ` (${exitCode})` : ''}
           </Badge>
+        ) : status === 'closing' ? (
+          <Badge variant="secondary">closing</Badge>
         ) : (
           <Badge>live</Badge>
         )}
-        <Button variant="outline" size="sm" onClick={onEndSession}>
+        <ConfirmButton
+          variant="outline"
+          size="sm"
+          confirmLabel="End it?"
+          onConfirm={onEndSession}>
           End session
-        </Button>
+        </ConfirmButton>
         <Button
           variant="ghost"
           size="sm"
@@ -131,7 +154,14 @@ export function TerminalPanel({
           Close
         </Button>
       </header>
-      <div ref={containerRef} className="min-h-0 flex-1 bg-card p-2" />
+      <div className="relative min-h-0 flex-1">
+        {!connected && !gone ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-muted-foreground">
+            Connecting…
+          </div>
+        ) : null}
+        <div ref={containerRef} className="h-full bg-card p-2" />
+      </div>
     </div>
   );
 }

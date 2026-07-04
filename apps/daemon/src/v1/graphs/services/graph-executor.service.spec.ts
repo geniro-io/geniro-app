@@ -426,6 +426,68 @@ describe('GraphExecutorService', () => {
     expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
   });
 
+  it('caps parallel node launches at 4 and drains the queue as slots free', async () => {
+    const { service, claude } = setup();
+    const wide: Workflow = {
+      name: 'wide',
+      nodes: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({
+        id,
+        agent: 'claude' as const,
+        approval: 'auto' as const,
+      })),
+      edges: [],
+    };
+    await service.startRun({
+      slug: 'wide',
+      workflow: wide,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    // Six ready roots, only four live CLI processes.
+    expect(claude.starts).toHaveLength(4);
+
+    completeTurn(claude.starts[0]!, 'done-a');
+    await drain();
+    expect(claude.starts).toHaveLength(5);
+
+    completeTurn(claude.starts[1]!, 'done-b');
+    await drain();
+    expect(claude.starts).toHaveLength(6);
+
+    for (const turn of claude.starts.slice(2)) {
+      completeTurn(turn, 'done');
+    }
+    await drain();
+    expect(claude.starts).toHaveLength(6);
+  });
+
+  it('cancel and getNodeStates reject unknown runs and chat runs (kind guard)', async () => {
+    const { service, runDao, registry } = setup();
+
+    await expect(service.cancel('nope')).rejects.toThrow(
+      /RUN_NOT_FOUND|not found/,
+    );
+    await expect(service.getNodeStates('nope')).rejects.toThrow(
+      /RUN_NOT_FOUND|not found/,
+    );
+
+    const chat = await runDao.create({ workflowId: null, status: 'running' });
+    registry.tryClaim(chat.id);
+    const cancelled = vi.fn();
+    registry.register(chat.id, {
+      done: Promise.resolve(),
+      cancel: cancelled,
+      respondApproval: () => false,
+    });
+
+    await expect(service.cancel(chat.id)).rejects.toThrow(
+      /NOT_A_WORKFLOW_RUN|not a workflow/,
+    );
+    expect(cancelled).not.toHaveBeenCalled();
+  });
+
   it('does not report a completed run when a node dies to an external kill (turn_cancelled without cancel())', async () => {
     const { service, claude, runDao, nodeDao, itemDao } = setup();
     const run = await service.startRun({

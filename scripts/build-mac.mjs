@@ -116,12 +116,23 @@ try {
   run('find', [daemonModules, '(', '-name', '*.o', '-o', '-name', '*.a', ')',
     '-type', 'f', '-delete']);
 
-  // 6. Package. electronVersion/electronDist are injected because the --prod
-  // staging carries no electron devDep (and the local dist skips a re-download).
+  // 6. Package. electronVersion is injected because the --prod staging carries
+  // no electron devDep; electronDist is injected only when a local dist exists
+  // (below) to skip a re-download, else electron-builder fetches it by version.
   // Entitlements are passed absolute: electron-builder hands the yml's
   // relative path verbatim to some nested codesign invocations, whose cwd is
   // not the project dir ("cannot read entitlement data").
   const entitlements = join(root, 'apps', 'ui', 'build', 'entitlements.mac.plist');
+  // Reuse the locally-downloaded Electron dist when it exists (skips a
+  // re-download); on a fresh CI runner where electron's postinstall left no
+  // dist/ (a pnpm store-cache side-effect — the binary download isn't kept in
+  // the content-addressable store, so a cache hit skips it), omit the override
+  // so electron-builder fetches Electron itself by version. Passing a
+  // non-existent electronDist aborts the build ("electronDist does not exist").
+  const electronDist = join(root, 'node_modules', 'electron', 'dist');
+  const electronDistArgs = existsSync(electronDist)
+    ? [`-c.electronDist=${electronDist}`]
+    : [];
   // Auto-update is only safe on a Developer-ID-signed build: Squirrel.Mac
   // validates the download against the running app's designated requirement, so
   // an ad-hoc build has no trust chain. The GitHub feed is therefore injected
@@ -137,7 +148,7 @@ try {
     '--projectDir', appDir,
     '--publish', 'never',
     `-c.electronVersion=${electronVersion}`,
-    `-c.electronDist=${join(root, 'node_modules', 'electron', 'dist')}`,
+    ...electronDistArgs,
     `-c.mac.entitlements=${entitlements}`,
     `-c.mac.entitlementsInherit=${entitlements}`,
     // The ad-hoc identity is injected HERE (not pinned in the yml): a yml

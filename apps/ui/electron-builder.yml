@@ -1,0 +1,71 @@
+# macOS packaging (M4). Invoked by scripts/build-mac.mjs with
+# --projectDir <repo>/release/app — a self-contained staging assembled by
+# `pnpm deploy` (real node_modules, no workspace symlinks), so every relative
+# path here resolves against that staging dir. electronVersion + electronDist
+# are injected by the script (the --prod staging has no electron devDep).
+appId: io.geniro.desktop
+productName: Geniro
+electronLanguages: [en]
+
+directories:
+  # apps/ui/build/ (icon.icns + entitlements) is copied into the staging by
+  # `pnpm deploy`, so plain "build" resolves correctly under --projectDir.
+  buildResources: build
+  output: ../dist
+
+files:
+  - out/**
+  - package.json
+  - resources/**
+
+# The bundled daemon: a second self-contained `pnpm deploy` staging, spawned by
+# the shell via ELECTRON_RUN_AS_NODE from Resources/daemon/dist/main.js — one
+# artifact carries shell + daemon, so updates are inherently version-locked.
+# node_modules is copied as its own entry — the file copier silently skips
+# node_modules inside a from-directory (default ignore), which would strip the
+# daemon's entire runtime tree.
+extraResources:
+  - from: ../daemon/dist
+    to: daemon/dist
+  - from: ../daemon/package.json
+    to: daemon/package.json
+  - from: ../daemon/node_modules
+    to: daemon/node_modules
+
+asar: true
+asarUnpack:
+  - '**/*.node' # native binaries (@napi-rs/keyring) must exist as real files
+
+# Native deps are N-API prebuilds (keyring) or already Electron-ABI rebuilt by
+# the build script (better-sqlite3 in the daemon staging) — nothing to rebuild.
+npmRebuild: false
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # No `identity` here on purpose: scripts/build-mac.mjs injects the ad-hoc
+  # identity ('-') ONLY for unsigned builds — pinning it in this file would
+  # shadow CSC_NAME/CSC_LINK inside electron-builder's identity resolution and
+  # silently ad-hoc-sign a build that also got the update feed. Notarization +
+  # a real Developer ID are distribution-time steps.
+  notarize: false
+  # Don't walk the daemon's ~200MB node_modules signing every binary-looking
+  # file (codesign chokes on gyp leftovers and misdetected assets). The shell
+  # binary carries disable-library-validation, so the daemon child loads its
+  # native addons regardless. NOTE for the Developer-ID path: notarization
+  # requires every Mach-O to be signed, so this ignore must be revisited (sign
+  # the daemon tree or prune it to signed binaries) at distribution time.
+  signIgnore:
+    - 'Resources/daemon/'
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip # electron-updater's feed artifact (Squirrel.Mac uses the zip)
+      arch: [arm64]
+
+# No `publish` block here on purpose: scripts/build-mac.mjs injects the GitHub
+# Releases feed ONLY for Developer-ID-signed builds. An ad-hoc build gets no
+# feed (no app-update.yml), so auto-update fails closed without a trust chain.

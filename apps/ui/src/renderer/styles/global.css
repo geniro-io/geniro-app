@@ -29,11 +29,16 @@
   --muted-foreground: #7a6b5a;
   --accent: #f4e5d3;
   --accent-foreground: #3d2e1f;
-  --destructive: #c95d3f;
+  /* Status colours deliberately darker than the web values
+     (#c95d3f/#5f8f4e/#b8801f): these read as TEXT on the card/background
+     surfaces, where the web tones fail WCAG AA — these clear ≥4.5:1 there (and
+     white-on-them ≥4.5 for the button/badge fills). A known divergence from the
+     sibling web palette, traded for contrast. */
+  --destructive: #b44f33;
   --destructive-foreground: #ffffff;
-  --success: #5f8f4e;
+  --success: #507841;
   --success-foreground: #ffffff;
-  --warning: #b8801f;
+  --warning: #916518;
   --warning-foreground: #ffffff;
   --border: #ddd4c8;
   --input: transparent;
@@ -56,6 +61,10 @@
   --sidebar: #fdfcfa;
   --sidebar-foreground: #3d2e1f;
   --sidebar-primary: #d4915e;
+  /* Text-safe caramel for the ACTIVE nav label/icon: #d4915e reads 2.43:1 on
+     --sidebar-accent (fails AA); this hue-matched darker step reads 4.52:1.
+     A desktop-only token — no web-palette equivalent. */
+  --sidebar-primary-strong: #a5602c;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #f9f6f1;
   --sidebar-accent-foreground: #3d2e1f;
@@ -103,6 +112,7 @@
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-strong: var(--sidebar-primary-strong);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

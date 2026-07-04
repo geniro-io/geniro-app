@@ -22,6 +22,8 @@ import {
 } from '../../agents/utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
+import { assertWorkflowRun } from '../../agents/utils/run-kind';
+import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import type { ItemKind } from '../../runs/runs.types';
 import type { NodeStateWire, Workflow, WorkflowNode } from '../graphs.types';
 import { buildEdgeMaps, computeRunOrder } from '../utils/graph-order';
@@ -29,6 +31,14 @@ import { validateWorkflowGraph } from '../utils/graph-validate';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
 type NodeOutcome = 'completed' | 'failed' | 'cancelled' | 'skipped';
+
+/**
+ * Max CLI agent processes one workflow run drives at once. A wide DAG level
+ * would otherwise spawn every ready node simultaneously — N full CLI agents on
+ * one machine. Ready nodes beyond the cap stay queued; each settling node
+ * re-enters schedule(), which launches them as slots free up.
+ */
+const MAX_PARALLEL_NODES = 4;
 
 export interface StartWorkflowRunInput {
   /** Library slug — persisted as `Run.workflowId`. */
@@ -114,6 +124,10 @@ export class GraphExecutorService {
   }
 
   async cancel(runId: string): Promise<{ cancelled: boolean }> {
+    const em = this.em.fork();
+    // Kind-guarded mirror of ChatService.cancel (shared assert — the two
+    // cancels converge on one registry key) + the 404 the chat siblings return.
+    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     return { cancelled: this.registry.cancel(runId) };
   }
 
@@ -127,6 +141,7 @@ export class GraphExecutorService {
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
   async getNodeStates(runId: string): Promise<NodeStateWire[]> {
     const em = this.em.fork();
+    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
     return rows.map((row) => ({
       runId: row.runId,
@@ -314,6 +329,13 @@ export class GraphExecutorService {
         finalTexts,
       );
 
+      const saveSessionId = createSessionIdSaver(
+        this.nodeStateDao,
+        runId,
+        node.id,
+        null,
+        em,
+      );
       const handle = adapter.start(
         {
           prompt,
@@ -326,12 +348,7 @@ export class GraphExecutorService {
         (event: AgentEvent) => {
           enqueue(async () => {
             if (event.type === 'session') {
-              await this.nodeStateDao.saveSessionId(
-                runId,
-                node.id,
-                event.sessionId,
-                em,
-              );
+              await saveSessionId(event.sessionId);
               return;
             }
             if (event.type === 'text') {
@@ -466,6 +483,11 @@ export class GraphExecutorService {
             (id) => settled.get(id) === 'completed',
           );
           if (allCompleted) {
+            if (runningHandles.size >= MAX_PARALLEL_NODES) {
+              // Concurrency cap reached — leave the node ready; the
+              // schedule() pass each settling node fires launches it later.
+              continue;
+            }
             launchNode(node);
             changed = true;
           } else {

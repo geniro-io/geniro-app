@@ -309,6 +309,23 @@ describe('ChatService', () => {
     await drain();
   });
 
+  it('cancel() rejects a workflow run — never cancels the other kind silently', async () => {
+    const { service, runDao, registry } = setup();
+    const run = await runDao.create({ workflowId: 'wf-1', status: 'running' });
+    registry.tryClaim(run.id);
+    const cancelled = vi.fn();
+    registry.register(run.id, {
+      done: Promise.resolve(),
+      cancel: cancelled,
+      respondApproval: () => false,
+    });
+
+    await expect(service.cancel(run.id)).rejects.toThrow(
+      /NOT_A_CHAT_RUN|not a single-agent chat/,
+    );
+    expect(cancelled).not.toHaveBeenCalled();
+  });
+
   it('createChat rejects a relative cwd and a path that is not a directory', async () => {
     const { service } = setup();
     await expect(

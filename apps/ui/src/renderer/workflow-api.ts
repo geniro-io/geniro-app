@@ -1,49 +1,19 @@
 import type {
   ChatRun,
-  DaemonHandle,
   NodeStateWire,
   Workflow,
   WorkflowSummary,
   WorkflowWire,
 } from '../shared/contracts';
+import { DaemonRestApi } from './daemon-rest';
 
 /**
  * Thin REST client to the loopback daemon's workflow routes (library CRUD +
- * runs), mirroring {@link ChatApi}'s transport: loopback HTTP with the
- * per-launch bearer token. Run transcripts stream over the WS channel and
- * replay via the chats history read — both run-scoped, shared with chats.
+ * runs) over loopback HTTP with the per-launch bearer token. Run transcripts
+ * stream over the WS channel and replay via the chats history read — both
+ * run-scoped, shared with chats.
  */
-export class WorkflowApi {
-  private readonly base: string;
-  private readonly token: string;
-
-  constructor(handle: DaemonHandle) {
-    this.base = `http://${handle.host}:${handle.port}`;
-    this.token = handle.token;
-  }
-
-  private async request<T>(
-    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
-    path: string,
-    body?: unknown,
-  ): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
-      method,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.token}`,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(
-        `daemon ${method} ${path} failed (${res.status})${detail ? `: ${detail}` : ''}`,
-      );
-    }
-    return (await res.json()) as T;
-  }
-
+export class WorkflowApi extends DaemonRestApi {
   list(): Promise<WorkflowSummary[]> {
     return this.request('GET', '/v1/workflows');
   }

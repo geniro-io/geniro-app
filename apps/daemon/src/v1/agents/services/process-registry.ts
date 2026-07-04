@@ -2,7 +2,13 @@ import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
 
 import type { AgentTurnHandle } from '../adapters/adapter.types';
 
-/** Max time graceful shutdown waits for cancelled children to exit before clearing. */
+/**
+ * Max time graceful shutdown waits for cancelled children to exit before
+ * clearing. Coupled across the process boundary: must stay ≥ the PTY SIGKILL
+ * escalation (KILL_ESCALATION_MS = 3s, ../../terminals/services/pty.service.ts)
+ * and < the UI's kill grace (SHUTDOWN_GRACE_MS = 7s, apps/ui …/daemon-supervisor.ts),
+ * or the UI guillotines the daemon mid-drain.
+ */
 const SHUTDOWN_DRAIN_MS = 5000;
 
 /**
@@ -104,7 +110,13 @@ export class ProcessRegistry implements OnApplicationShutdown {
       (handle): handle is AgentTurnHandle => handle !== null,
     );
     for (const handle of live) {
-      handle.cancel();
+      // cancel() is a never-throws contract, but one misbehaving handle must
+      // not abort this loop — every child behind it would be orphaned.
+      try {
+        handle.cancel();
+      } catch {
+        // Best-effort: the drain below still waits on the handle's done.
+      }
     }
     if (live.length > 0) {
       const drained = Promise.allSettled(live.map((handle) => handle.done));

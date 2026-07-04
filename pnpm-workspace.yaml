@@ -19,7 +19,9 @@ allowBuilds:
   '@swc/core': true # postinstall links the platform-native swc binary
   better-sqlite3: true # native C++ addon (node-gyp / prebuild-install)
   electron: true # postinstall downloads the Electron binary
+  electron-winstaller: false # Windows Squirrel installer — macOS-only targets here
   esbuild: true # postinstall installs the platform binary (used by vite)
+  node-pty: true # native addon; ships an N-API prebuild, ABI-stable — deliberately NOT in rebuild:native (postinstall only restores spawn-helper's exec bit)
 
 # Force a single fastify so NestJS (platform-fastify) and our direct dep share
 # one copy — otherwise the @fastify/websocket type augmentation doesn't unify.

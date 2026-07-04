@@ -43,6 +43,32 @@ vi.mock('../workflow-api', () => ({
   }),
 }));
 
+// TerminalApi + TerminalPanel are mocked so opening a terminal never touches
+// xterm or a real socket; the panel stub renders its title for assertions.
+const terminalApi = vi.hoisted(() => ({
+  create: vi.fn(),
+  list: vi.fn(),
+  dispose: vi.fn(),
+}));
+vi.mock('../terminal-api', () => ({
+  TerminalApi: vi.fn(function TerminalApiMock(this: Record<string, unknown>) {
+    Object.assign(this, terminalApi);
+  }),
+}));
+vi.mock('../terminals/terminal-panel', () => ({
+  TerminalPanel: (props: {
+    title: string;
+    onClose: () => void;
+    onEndSession: () => void;
+  }) => (
+    <div data-testid="terminal-panel">
+      {props.title}
+      <button onClick={props.onEndSession}>stub-end-session</button>
+      <button onClick={props.onClose}>stub-close</button>
+    </div>
+  ),
+}));
+
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
 
 function msg(seq: number, role: 'user' | 'assistant', text: string): ChatItem {
@@ -158,6 +184,9 @@ beforeEach(() => {
   workflowApi.listRuns.mockReset().mockResolvedValue([]);
   workflowApi.run.mockReset();
   workflowApi.cancelRun.mockReset().mockResolvedValue({ cancelled: true });
+  terminalApi.create.mockReset();
+  terminalApi.list.mockReset().mockResolvedValue([]);
+  terminalApi.dispose.mockReset().mockResolvedValue({ disposed: true });
 });
 
 afterEach(async () => {
@@ -261,6 +290,100 @@ describe('Chats reconnect seam', () => {
     );
     expect(buttons).toContain('Stop');
     expect(buttons).not.toContain('Send');
+  });
+
+  it('ignores a stale activateRun completion after switching to another run', async () => {
+    // Click running run A (slow history fetch), then idle run B before A's
+    // fetch resolves: A's late completion must not replay its items into B's
+    // transcript nor re-arm Stop/streaming for B.
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'completed',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    let resolveSlow!: (items: ChatItem[]) => void;
+    api.getHistory.mockImplementation((runId: string) => {
+      if (runId === 'r1') {
+        return new Promise<ChatItem[]>((resolve) => {
+          resolveSlow = resolve;
+        });
+      }
+      // No terminal item: B is idle via its `completed` status, so the
+      // stale-A derive (which checks sawTerminalRef) stays observable.
+      return Promise.resolve([
+        { ...msg(0, 'user', 'finished-B-transcript'), runId: 'r2' },
+      ]);
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat'); // A — fetch hangs
+    await clickRun(container, 'Second chat'); // B activates meanwhile
+
+    await act(async () => {
+      // A's fetch finally resolves: run A is `running` with a non-terminal
+      // transcript — exactly the shape that would arm Stop without the guard.
+      resolveSlow([msg(0, 'user', 'stale-A-item')]);
+    });
+
+    const buttons = [...container.querySelectorAll('button')].map(
+      (b) => b.textContent,
+    );
+    expect(buttons).not.toContain('Stop');
+    expect(container.textContent).not.toContain('stale-A-item');
+    expect(container.textContent).toContain('finished-B-transcript');
+  });
+
+  it('does not surface a failed reconnect fetch as an error on the run switched to meanwhile', async () => {
+    // Reconnect fires for run A and its delta fetch hangs; the user switches to
+    // run B before A's fetch settles, then A's fetch REJECTS. The rejection is
+    // addressed to the no-longer-active run A, so it must not paint an error
+    // banner over run B (the same cross-run contamination the activateRun
+    // fetch guards against on its own catch).
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'completed',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    let rejectReconnect!: (err: unknown) => void;
+    api.getHistory.mockImplementation((runId: string, afterSeq?: number) => {
+      // A's reconnect delta (afterSeq set) hangs until the test rejects it.
+      if (runId === 'r1' && afterSeq !== undefined) {
+        return new Promise<ChatItem[]>((_resolve, reject) => {
+          rejectReconnect = reject;
+        });
+      }
+      if (runId === 'r2') {
+        // msg() hardcodes runId 'r1'; addItem is run-scoped by item.runId, so
+        // B's own transcript item must carry runId 'r2' to render under run B.
+        return Promise.resolve([
+          { ...msg(0, 'user', 'B-transcript'), runId: 'r2' },
+        ]);
+      }
+      // A's initial activate history.
+      return Promise.resolve([msg(0, 'user', 'A-transcript')]);
+    });
+    const { client, fireReconnect } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat'); // A active
+    await act(async () => {
+      fireReconnect(); // A's delta fetch starts hanging
+    });
+    await clickRun(container, 'Second chat'); // switch to B while A's fetch hangs
+
+    await act(async () => {
+      rejectReconnect(new Error('reconnect delta failed for A'));
+      await Promise.resolve();
+    });
+
+    // The error belonged to run A, which is no longer active — B must not show it.
+    expect(container.textContent).not.toContain('reconnect delta failed for A');
+    expect(container.textContent).toContain('B-transcript');
   });
 
   it('does not show the working state when an in-flight run already ended on a terminal item', async () => {
@@ -471,6 +594,48 @@ describe('Chats workflow runs', () => {
     expect(container.textContent).not.toContain('Stop');
   });
 
+  it('refetches the workflow library when the tab becomes active again', async () => {
+    // The tab stays mounted (hidden) while the user saves a workflow on the
+    // Graphs page — coming back must refresh the target selector, not serve
+    // the mount-time snapshot.
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    expect(workflowApi.list).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('select')!.textContent).not.toContain(
+      'demo-duo',
+    );
+
+    // Hidden behind the Graphs page (no refetch fires)…
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'demo-duo',
+        name: 'demo-duo',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    expect(workflowApi.list).toHaveBeenCalledTimes(1);
+
+    // …and back: the selector now offers the workflow saved over there.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    expect(workflowApi.list).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('select')!.textContent).toContain(
+      'demo-duo',
+    );
+  });
+
   it('routes Stop on a workflow run to the workflow cancel endpoint', async () => {
     workflowApi.listRuns.mockResolvedValue([wfRun]);
     const { client } = makeClient();
@@ -485,5 +650,237 @@ describe('Chats workflow runs', () => {
     });
     expect(workflowApi.cancelRun).toHaveBeenCalledWith('w1');
     expect(api.cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('Chats terminal mirror', () => {
+  const session = {
+    id: 't-1',
+    runId: 'r1',
+    nodeId: null,
+    cwd: '/proj',
+    status: 'running',
+    exitCode: null,
+    createdAt: 0,
+  };
+
+  it('opens a terminal panel for a claude chat run', async () => {
+    terminalApi.create.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    expect(button).toBeTruthy();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.create).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
+    ).toContain('My chat — terminal');
+  });
+
+  it('offers a per-node terminal on a workflow run and passes the nodeId', async () => {
+    const wfRun: ChatRun = {
+      id: 'w1',
+      status: 'running',
+      title: 'Review team',
+      agentKind: null,
+      workflowId: 'review-team',
+      cwd: '/proj',
+      model: null,
+      createdAt: 'later',
+    };
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    api.getHistory.mockResolvedValue([
+      {
+        id: 'w-i1',
+        runId: 'w1',
+        nodeId: 'agent-1',
+        seq: 1,
+        kind: 'message',
+        role: 'assistant',
+        payload: { text: 'planning' },
+        createdAt: 'now',
+      },
+    ]);
+    terminalApi.create.mockResolvedValue({
+      ...session,
+      runId: 'w1',
+      nodeId: 'agent-1',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const nodeButton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'agent-1',
+    );
+    expect(nodeButton).toBeTruthy();
+    await act(async () => {
+      nodeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.create).toHaveBeenCalledWith({
+      runId: 'w1',
+      nodeId: 'agent-1',
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
+    ).toContain('agent-1 — terminal');
+  });
+
+  it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
+    terminalApi.create.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    await clickRun(container, 'My chat');
+    const open = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+
+    // Hidden tab: the fixed-position drawer must NOT overlay Graphs/Settings —
+    // and hiding is a detach, never an End session.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active={false} />);
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+    expect(terminalApi.dispose).not.toHaveBeenCalled();
+
+    // Back to the tab: the kept session state re-mounts the panel.
+    await act(async () => {
+      root.render(<Chats client={client} handle={handle} active />);
+    });
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+  });
+
+  it('re-attaches to a running session instead of creating a second one', async () => {
+    // The daemon keeps a detached session alive for exactly this re-open; a
+    // blind create() would leak one live claude REPL per open→close→open.
+    terminalApi.list.mockResolvedValue([session]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.create).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+  });
+
+  it('End session disposes the PTY and closes the panel; Close only detaches', async () => {
+    terminalApi.create.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const open = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const end = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'stub-end-session',
+    );
+    await act(async () => {
+      end?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.dispose).toHaveBeenCalledWith('t-1');
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+
+    // Re-open, then Close: the panel goes away but the session is NOT disposed.
+    terminalApi.dispose.mockClear();
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const close = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'stub-close',
+    );
+    await act(async () => {
+      close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(terminalApi.dispose).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+  });
+
+  it('surfaces a daemon rejection (unsupported agent) in the error line', async () => {
+    terminalApi.create.mockRejectedValue(
+      new Error('daemon POST /v1/terminals failed (400): TERMINAL_UNSUPPORTED'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Terminal'),
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('TERMINAL_UNSUPPORTED');
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeNull();
+  });
+});
+
+describe('Chats defaults', () => {
+  it('applies the settings default model to a new chat', async () => {
+    (window as unknown as { geniro: Partial<GeniroApi> }).geniro.getSettings =
+      vi.fn().mockResolvedValue({
+        onboardingComplete: true,
+        projectFolder: '/proj',
+        defaultModel: 'claude-sonnet-5',
+        cliPaths: {},
+        checkForUpdates: true,
+      });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const newChat = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'New chat',
+    );
+    await act(async () => {
+      newChat?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-sonnet-5' }),
+    );
   });
 });

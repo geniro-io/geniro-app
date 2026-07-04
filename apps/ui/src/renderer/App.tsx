@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import type { DaemonHandle } from '../shared/contracts';
 import { Chats } from './chats/Chats';
@@ -6,9 +13,17 @@ import { EmptyState } from './components/empty-state';
 import { type AppView, NavRail } from './components/nav-rail';
 import { cn } from './components/ui/utils';
 import { DaemonClient } from './daemon-client';
-import { Graphs } from './graphs/Graphs';
 import { Onboarding } from './onboarding/Onboarding';
-import { Settings } from './settings/Settings';
+
+// Code-split the conditionally-rendered views: Graphs drags @xyflow/react +
+// elkjs and Settings its own tree — eager imports would put both in the
+// startup chunk of the always-mounted shell.
+const Graphs = lazy(() =>
+  import('./graphs/Graphs').then((m) => ({ default: m.Graphs })),
+);
+const Settings = lazy(() =>
+  import('./settings/Settings').then((m) => ({ default: m.Settings })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -94,18 +109,28 @@ export function App(): React.JSX.Element {
         connected={connected}
         daemonVersion={daemonVersion}
       />
-      <main className="min-h-0 flex-1">
+      {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
+          content, so one long unbreakable string (a cwd path) would otherwise
+          push the whole layout wider than the window and the transcript
+          auto-scroll would then drag the document sideways, clipping the rail. */}
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Graphs. */}
         <div className={cn('h-full', view !== 'chats' && 'hidden')}>
           {handle && clientRef.current ? (
-            <Chats client={clientRef.current} handle={handle} />
+            <Chats
+              client={clientRef.current}
+              handle={handle}
+              active={view === 'chats'}
+            />
           ) : (
             <EmptyState>Connecting to the daemon…</EmptyState>
           )}
         </div>
-        {view === 'graphs' ? <Graphs handle={handle} /> : null}
-        {view === 'settings' ? <Settings /> : null}
+        <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
+          {view === 'graphs' ? <Graphs handle={handle} /> : null}
+          {view === 'settings' ? <Settings /> : null}
+        </Suspense>
       </main>
     </div>
   );

@@ -1,6 +1,8 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 
 import type { AgentEvent, AgentTurnHandle } from '../adapters/adapter.types';
+import { buildChildEnv } from './child-env';
+import { killProcessGroup } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 
 /**
@@ -99,39 +101,7 @@ const SIGKILL_GRACE_MS = 2000;
  * (e.g. a test fake) or the group is already gone — never throws.
  */
 function killProcessTree(child: SpawnedProcess, signal: NodeJS.Signals): void {
-  const pid = child.pid;
-  if (typeof pid === 'number' && pid > 0) {
-    try {
-      process.kill(-pid, signal); // negative pid → the whole process group
-      return;
-    } catch {
-      // Group already exited, or the child never became a leader — fall through
-      // to a best-effort direct kill.
-    }
-  }
-  try {
-    child.kill(signal);
-  } catch {
-    // Process already gone — nothing to kill.
-  }
-}
-
-/**
- * Build the spawned agent's environment from the daemon's, stripping every
- * `GENIRO_`-prefixed key. Those carry the daemon's own config and secrets — most
- * importantly the Cursor key, which the daemon receives as `GENIRO_CURSOR_API_KEY`
- * and the Cursor adapter re-injects as `CURSOR_API_KEY` via `extra` for its child
- * ONLY. Stripping them means the claude child (and any tool it spawns) never
- * inherits another agent's credential or the daemon's internal env.
- */
-function buildChildEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith('GENIRO_')) {
-      env[key] = value;
-    }
-  }
-  return { ...env, ...extra };
+  killProcessGroup(child.pid, signal, () => child.kill(signal));
 }
 
 /**

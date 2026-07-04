@@ -1,11 +1,20 @@
-import { FolderOpen } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FolderOpen, Terminal as TerminalIcon } from 'lucide-react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type {
   ChatItem,
   ChatRun,
   CliKind,
   DaemonHandle,
+  TerminalSession,
   WorkflowSummary,
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
@@ -18,6 +27,7 @@ import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { DaemonClient } from '../daemon-client';
+import { TerminalApi } from '../terminal-api';
 import { WorkflowApi } from '../workflow-api';
 import { ApprovalCard } from './approval-card';
 import {
@@ -26,6 +36,14 @@ import {
   payloadString,
   TranscriptItem,
 } from './transcript-item';
+
+// Code-split the terminal mirror: xterm.js (~250KB) must not ride the startup
+// chunk of the always-mounted Chats tab for a panel most sessions never open.
+const TerminalPanel = lazy(() =>
+  import('../terminals/terminal-panel').then((m) => ({
+    default: m.TerminalPanel,
+  })),
+);
 
 /** Kinds that mark the end of a turn (re-enable the composer). */
 const TERMINAL_KINDS = new Set<ChatItem['kind']>([
@@ -43,12 +61,16 @@ function folderName(path: string): string {
 export function Chats({
   client,
   handle,
+  active = true,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
+  /** False while another view is shown (the tab stays mounted, hidden). */
+  active?: boolean;
 }): React.JSX.Element {
   const chatApi = useMemo(() => new ChatApi(handle), [handle]);
   const workflowApi = useMemo(() => new WorkflowApi(handle), [handle]);
+  const terminalApi = useMemo(() => new TerminalApi(handle), [handle]);
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -109,6 +131,20 @@ export function Chats({
     }
   }, []);
 
+  // The workflow library is editable on the Graphs page while this tab stays
+  // mounted (hidden), so refetch it every time the tab becomes visible — a
+  // mount-only fetch would leave the target selector stale after a save or
+  // delete over there.
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    void workflowApi
+      .list()
+      .then(setWorkflows)
+      .catch(() => setWorkflows([]));
+  }, [active, workflowApi]);
+
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
       const previous = activeRunIdRef.current;
@@ -127,6 +163,12 @@ export function Chats({
       client.joinRun(runId);
       try {
         const history = await chatApi.getHistory(runId);
+        // The user may have switched runs while this fetch was in flight —
+        // a stale completion must not replay items or re-arm Stop/streaming
+        // (and cross-contaminate errors) for the CURRENTLY active run.
+        if (activeRunIdRef.current !== runId) {
+          return;
+        }
         history.forEach(addItem);
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
@@ -142,7 +184,9 @@ export function Chats({
           setStreaming(true);
         }
       } catch (err) {
-        setError(String(err));
+        if (activeRunIdRef.current === runId) {
+          setError(String(err));
+        }
       }
     },
     [client, chatApi, addItem],
@@ -159,10 +203,6 @@ export function Chats({
         ),
       )
       .catch((err: unknown) => setError(String(err)));
-    void workflowApi
-      .list()
-      .then(setWorkflows)
-      .catch(() => setWorkflows([]));
     const unsubscribeItem = client.onItem(addItem);
     // On reconnect the WS missed any items streamed while offline (the room
     // buffers nothing for an absent member); fetch just the delta past the last
@@ -176,7 +216,14 @@ export function Chats({
       void chatApi
         .getHistory(active, lastSeqRef.current)
         .then((items) => items.forEach(addItem))
-        .catch((err: unknown) => setError(String(err)));
+        // Same stale-run guard as activateRun's catch: if the user switched
+        // runs while this delta-fetch was in flight, A's error must not paint
+        // over B (addItem is already run-scoped by item.runId; setError is not).
+        .catch((err: unknown) => {
+          if (activeRunIdRef.current === active) {
+            setError(String(err));
+          }
+        });
     });
     return () => {
       unsubscribeItem();
@@ -218,6 +265,20 @@ export function Chats({
     return chosen;
   }, [folder, chooseFolder]);
 
+  // Read settings at creation time (not mount) so a default model saved on the
+  // Settings tab applies to the very next chat without a tab round-trip.
+  const createChatRun = useCallback(
+    async (cwd: string) => {
+      const { defaultModel } = await window.geniro.getSettings();
+      return chatApi.createChat(
+        defaultModel
+          ? { agentKind, cwd, model: defaultModel }
+          : { agentKind, cwd },
+      );
+    },
+    [agentKind, chatApi],
+  );
+
   const ensureRun = useCallback(async (): Promise<string | null> => {
     if (activeRunIdRef.current) {
       return activeRunIdRef.current;
@@ -227,11 +288,11 @@ export function Chats({
       setError('Choose a folder for this chat first.');
       return null;
     }
-    const run = await chatApi.createChat({ agentKind, cwd });
+    const run = await createChatRun(cwd);
     setRuns((prev) => [run, ...prev]);
     await activateRun(run.id);
     return run.id;
-  }, [agentKind, ensureFolder, chatApi, activateRun]);
+  }, [ensureFolder, createChatRun, activateRun]);
 
   const newChat = useCallback(async (): Promise<void> => {
     try {
@@ -253,13 +314,13 @@ export function Chats({
       if (!cwd) {
         return;
       }
-      const run = await chatApi.createChat({ agentKind, cwd });
+      const run = await createChatRun(cwd);
       setRuns((prev) => [run, ...prev]);
       await activateRun(run.id);
     } catch (err) {
       setError(String(err));
     }
-  }, [workflowSlug, client, agentKind, ensureFolder, chatApi, activateRun]);
+  }, [workflowSlug, client, ensureFolder, createChatRun, activateRun]);
 
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim();
@@ -368,8 +429,76 @@ export function Chats({
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
+  // The open PTY mirror. Session-scoped, NOT run-scoped: switching to another
+  // run in the sidebar keeps the drawer open (the title names its session), so
+  // a mirror can be watched while browsing other transcripts. Closing the
+  // panel only detaches — the session keeps running and re-opens with a replay.
+  const [terminal, setTerminal] = useState<{
+    session: TerminalSession;
+    title: string;
+  } | null>(null);
+
+  /** Node ids seen in this run's transcript — the workflow "open terminal" targets. */
+  const runNodeIds = useMemo(
+    () => [
+      ...new Set(items.flatMap((item) => (item.nodeId ? [item.nodeId] : []))),
+    ],
+    [items],
+  );
+
+  const openTerminal = useCallback(
+    async (runId: string, nodeId?: string) => {
+      try {
+        setError(null);
+        // Re-attach to a still-running session for this (run, node) when one
+        // exists — the daemon keeps detached sessions alive for exactly this.
+        // The daemon's createForRun is itself idempotent per (run, node), so
+        // this pre-check is an optimization (skip a create round-trip), not
+        // the leak guard.
+        const existing = (await terminalApi.list()).find(
+          (s) =>
+            s.runId === runId &&
+            s.nodeId === (nodeId ?? null) &&
+            s.status === 'running',
+        );
+        const session =
+          existing ??
+          (await terminalApi.create(nodeId ? { runId, nodeId } : { runId }));
+        const run = runs.find((r) => r.id === runId);
+        setTerminal({
+          session,
+          title: nodeId
+            ? `${nodeId} — terminal`
+            : `${run?.title ?? run?.agentKind ?? 'agent'} — terminal`,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [terminalApi, runs],
+  );
+
+  const endTerminalSession = useCallback(() => {
+    if (!terminal) {
+      return;
+    }
+    const id = terminal.session.id;
+    setTerminal(null);
+    terminalApi.dispose(id).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      // A 404 means the daemon already reaped the session — nothing to end.
+      // Anything else (daemon restart, transient failure) must surface: the
+      // panel is already closed, but the REPL may still be running.
+      if (!message.includes('(404)')) {
+        setError(message);
+      }
+    });
+  }, [terminal, terminalApi]);
+
+  // minmax(0,1fr): the transcript column must be allowed to shrink below its
+  // content width, or a long cwd path widens the grid past the window.
   return (
-    <div className="grid h-full grid-cols-[260px_1fr]">
+    <div className="grid h-full grid-cols-[260px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col gap-3 border-r border-border bg-sidebar p-3">
         <div className="flex flex-col gap-2">
           <Select
@@ -438,8 +567,39 @@ export function Chats({
             <Badge variant="secondary">{activeRun.agentKind}</Badge>
           ) : null}
           {activeRun?.cwd ? (
-            <span className="truncate text-xs text-muted-foreground">
+            <span className="max-w-full min-w-0 truncate text-xs text-muted-foreground">
               cwd: {activeRun.cwd}
+            </span>
+          ) : null}
+          {/* Cursor's subscription TUI is deferred, so only claude gets a mirror. */}
+          {activeRun &&
+          !activeRun.workflowId &&
+          activeRun.agentKind === 'claude' ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto gap-1.5"
+              onClick={() => void openTerminal(activeRun.id)}>
+              <TerminalIcon className="size-3.5 shrink-0" />
+              Terminal
+            </Button>
+          ) : null}
+          {activeRun?.workflowId && runNodeIds.length > 0 ? (
+            <span className="ml-auto flex flex-wrap gap-1">
+              {runNodeIds.map((nodeId) => (
+                <Button
+                  key={nodeId}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  title={`Open a terminal mirroring ${nodeId}`}
+                  onClick={() => void openTerminal(activeRun.id, nodeId)}>
+                  <TerminalIcon className="size-3.5 shrink-0" />
+                  {nodeId}
+                </Button>
+              ))}
             </span>
           ) : null}
         </div>
@@ -523,6 +683,21 @@ export function Chats({
           )}
         </div>
       </section>
+
+      {/* Render only while this tab is visible — the panel is fixed-position
+          and would otherwise overlay Graphs/Settings from the hidden tab. */}
+      {active && terminal ? (
+        <Suspense fallback={null}>
+          <TerminalPanel
+            key={terminal.session.id}
+            handle={handle}
+            session={terminal.session}
+            title={terminal.title}
+            onClose={() => setTerminal(null)}
+            onEndSession={endTerminalSession}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

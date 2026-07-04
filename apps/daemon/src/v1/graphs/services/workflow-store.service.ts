@@ -1,10 +1,12 @@
 import {
+  link,
   mkdir,
   readdir,
   readFile,
   rename,
   rm,
   stat,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -107,8 +109,9 @@ export class WorkflowStoreService {
 
   /**
    * Create a new workflow; slug derived from the name when not supplied.
-   * The file is written with an exclusive-create flag, so concurrent creates
-   * can never share or clobber one file: an explicit-slug collision surfaces
+   * The file lands via an exclusive atomic commit ({@link atomicCreate}), so
+   * concurrent creates can never share or clobber one file and a crash never
+   * leaves a half-written library entry: an explicit-slug collision surfaces
    * as WORKFLOW_EXISTS, a derived-slug collision retries the next suffix.
    */
   async create(workflow: Workflow, slug?: string): Promise<WorkflowWire> {
@@ -119,10 +122,7 @@ export class WorkflowStoreService {
     let candidate = base;
     for (let attempt = 2; ; attempt++) {
       try {
-        await writeFile(this.fileFor(candidate), content, {
-          encoding: 'utf8',
-          flag: 'wx',
-        });
+        await this.atomicCreate(this.fileFor(candidate), content);
         return { slug: candidate, workflow };
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
@@ -232,6 +232,24 @@ export class WorkflowStoreService {
     const tmp = `${path}.${process.pid}.${WorkflowStoreService.tmpSeq++}.tmp`;
     await writeFile(tmp, content, 'utf8');
     await rename(tmp, path);
+  }
+
+  /**
+   * Exclusive sibling of {@link atomicWrite}: stage to a unique tmp file, then
+   * hard-link it to the final path. `link` fails with EEXIST when the slug is
+   * taken (the `wx` exclusivity a plain rename would lose) and never exposes a
+   * half-written file (the atomicity a direct `wx` write lacked).
+   */
+  private async atomicCreate(path: string, content: string): Promise<void> {
+    const tmp = `${path}.${process.pid}.${WorkflowStoreService.tmpSeq++}.tmp`;
+    // writeFile inside the try so a failed stage (disk full, EACCES) still
+    // cleans up any partial tmp — the finally must guard the write too.
+    try {
+      await writeFile(tmp, content, 'utf8');
+      await link(tmp, path);
+    } finally {
+      await unlink(tmp).catch(() => {});
+    }
   }
 
   private static tmpSeq = 0;

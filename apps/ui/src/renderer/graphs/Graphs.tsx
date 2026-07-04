@@ -27,6 +27,7 @@ import type {
   WorkflowSummary,
 } from '../../shared/contracts';
 import { CLI_KINDS, type CliKind } from '../../shared/contracts';
+import { ConfirmButton } from '../components/confirm-button';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { Field } from '../components/field';
@@ -90,6 +91,14 @@ export function Graphs({
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Seeded once per mount (the page unmounts on every tab switch, so a model
+  // saved in Settings is picked up on the next visit).
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
+  useEffect(() => {
+    void window.geniro
+      .getSettings()
+      .then((s) => setDefaultModel(s.defaultModel));
+  }, []);
 
   const refreshList = useCallback(async (): Promise<void> => {
     if (!api) {
@@ -225,11 +234,18 @@ export function Graphs({
       id,
       type: 'agent',
       position: { x: maxX + 260, y: 40 },
-      data: { node: { id, agent: 'claude', approval: 'auto' } },
+      data: {
+        node: {
+          id,
+          agent: 'claude',
+          approval: 'auto',
+          ...(defaultModel ? { model: defaultModel } : {}),
+        },
+      },
     };
     setNodes((prev) => [...prev, node]);
     setSelectedNodeId(id);
-  }, [nodes, setNodes]);
+  }, [nodes, setNodes, defaultModel]);
 
   const deleteSelected = useCallback((): void => {
     if (!selectedNodeId) {
@@ -381,14 +397,14 @@ export function Graphs({
                       onClick={() => void exportWorkflow()}>
                       <Download className="shrink-0" /> Export
                     </Button>
-                    <Button
-                      type="button"
+                    <ConfirmButton
                       variant="outline"
                       className="gap-1.5"
                       aria-label="Delete workflow"
-                      onClick={() => void remove()}>
+                      confirmLabel="Delete?"
+                      onConfirm={remove}>
                       <Trash2 className="shrink-0" />
-                    </Button>
+                    </ConfirmButton>
                   </>
                 ) : null}
                 <Button type="button" onClick={() => void save()}>

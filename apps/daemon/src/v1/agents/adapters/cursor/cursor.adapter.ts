@@ -1,3 +1,4 @@
+import { resolveAgentBinary } from '../../utils/agent-binary';
 import {
   asArray,
   asBoolean,
@@ -201,7 +202,12 @@ export function mapCursorMessage(obj: unknown): AgentEvent[] {
  */
 export class CursorAdapter extends AgentAdapter {
   readonly kind = 'cursor-agent' as const;
-  protected readonly command = 'cursor-agent';
+
+  // Resolved per turn so the Settings cliPaths override (GENIRO_CURSOR_BIN on
+  // the daemon env) takes effect without reconstructing the adapter.
+  protected get command(): string {
+    return resolveAgentBinary('cursor-agent');
+  }
 
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = ['-p', '--output-format', 'stream-json', '--force'];

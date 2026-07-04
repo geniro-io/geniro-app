@@ -8,7 +8,10 @@ import {
 } from '../../shared/contracts';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
+import { Field } from '../components/field';
 import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 
 /**
  * Post-onboarding configuration. Reuses the onboarding agent-config UI
@@ -24,6 +27,10 @@ export function Settings(): React.JSX.Element {
   >({});
   const [cursorKey, setCursorKey] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState<boolean | null>(null);
+  const [defaultModel, setDefaultModel] = useState('');
+  const [checkForUpdates, setCheckForUpdates] = useState(true);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -34,6 +41,8 @@ export function Settings(): React.JSX.Element {
     void window.geniro.getSettings().then((s) => {
       // Seed saved overrides; the detection effect backfills the rest.
       setBinaryPaths((prev) => ({ ...s.cliPaths, ...prev }));
+      setDefaultModel(s.defaultModel ?? '');
+      setCheckForUpdates(s.checkForUpdates);
     });
     void window.geniro.detectClis().then(setClis);
     void window.geniro.hasSecret('cursor.apiKey').then(setHasStoredKey);
@@ -81,6 +90,25 @@ export function Settings(): React.JSX.Element {
     setCursorKey('');
   }, []);
 
+  const checkNow = useCallback(async (): Promise<void> => {
+    setCheckingUpdates(true);
+    setUpdateStatus(null);
+    try {
+      const result = await window.geniro.checkForUpdates();
+      setUpdateStatus(
+        result.status === 'up-to-date'
+          ? `Up to date (v${result.version ?? '?'})`
+          : result.status === 'available'
+            ? `Update available: v${result.version ?? '?'} — ${result.message ?? ''}`
+            : (result.message ?? result.status),
+      );
+    } catch (err) {
+      setUpdateStatus(String(err));
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }, []);
+
   const save = useCallback(async (): Promise<void> => {
     setBusy(true);
     setError(null);
@@ -99,14 +127,18 @@ export function Settings(): React.JSX.Element {
           cliPaths[kind] = path;
         }
       }
-      await window.geniro.updateSettings({ cliPaths });
+      await window.geniro.updateSettings({
+        cliPaths,
+        defaultModel: defaultModel.trim() || null,
+        checkForUpdates,
+      });
       setSaved(true);
     } catch (err) {
       setError(String(err));
     } finally {
       setBusy(false);
     }
-  }, [cursorKey, binaryPaths]);
+  }, [cursorKey, binaryPaths, defaultModel, checkForUpdates]);
 
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col gap-6 overflow-y-auto px-6 py-8">
@@ -143,6 +175,45 @@ export function Settings(): React.JSX.Element {
           hasStoredKey={hasStoredKey}
           onRemoveKey={() => void removeKey()}
         />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Defaults</h2>
+        <Field
+          label="Default model"
+          htmlFor="default-model"
+          hint="Applied to new chats and new workflow nodes; empty keeps each CLI's own default.">
+          <Input
+            id="default-model"
+            value={defaultModel}
+            placeholder="e.g. claude-sonnet-5"
+            onChange={(event) => setDefaultModel(event.target.value)}
+          />
+        </Field>
+        <div className="flex items-center gap-2">
+          <input
+            id="check-for-updates"
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={checkForUpdates}
+            onChange={(event) => setCheckForUpdates(event.target.checked)}
+          />
+          <Label htmlFor="check-for-updates">
+            Check for app updates on launch
+          </Label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            disabled={checkingUpdates}
+            onClick={() => void checkNow()}>
+            {checkingUpdates ? 'Checking…' : 'Check now'}
+          </Button>
+        </div>
+        {updateStatus ? (
+          <p className="text-xs text-muted-foreground">{updateStatus}</p>
+        ) : null}
       </section>
 
       <footer className="mt-auto flex items-center gap-3 border-t border-border pt-4">

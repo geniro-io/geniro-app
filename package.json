@@ -24,6 +24,7 @@
     "test:e2e": "turbo run test:e2e --concurrency=1",
     "test:e2e:local": "turbo run test:e2e:local",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
     "commit": "pnpm cz",
     "prepare": "husky",
     "upgrade": "./scripts/upgrade.sh",

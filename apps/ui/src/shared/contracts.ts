@@ -37,7 +37,7 @@ export interface DaemonStatus {
 export type ChatRunStatus =
   'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-/** Normalized transcript item kind (mirrors the daemon's 11-kind `ItemKind`). */
+/** Normalized transcript item kind (mirrors the daemon's `ItemKind`). */
 export type ChatItemKind =
   | 'message'
   | 'reasoning'
@@ -143,6 +143,27 @@ export interface NodeStateWire {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Terminals (mirrors the daemon's v1/terminals wire shapes — keep in sync with
+// apps/daemon/src/v1/terminals/terminals.types.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Lifecycle of one live PTY mirror session. `closing` = kill requested, PTY
+ * not yet exited (the daemon holds the session so a reopen can't duplicate). */
+export type TerminalStatus = 'running' | 'closing' | 'exited';
+
+/** A live terminal session mirroring an agent's CLI session as its real TUI. */
+export interface TerminalSession {
+  id: string;
+  runId: string;
+  /** Graph node within the run, or null for a single-agent chat. */
+  nodeId: string | null;
+  cwd: string;
+  status: TerminalStatus;
+  exitCode: number | null;
+  createdAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Settings (non-secret app config — persisted as JSON in userData)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -168,6 +189,17 @@ export const DEFAULT_SETTINGS: Settings = {
   cliPaths: {},
   checkForUpdates: true,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App updates (electron-updater; GitHub Releases feed — packaged builds only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Outcome of an app-update check. `dev` = unpackaged launch, checks disabled. */
+export interface UpdateCheckResult {
+  status: 'dev' | 'up-to-date' | 'available' | 'error';
+  version: string | null;
+  message: string | null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI detection
@@ -244,6 +276,8 @@ export interface GeniroApi {
   pickWorkflowImport(): Promise<string | null>;
   /** Open a native save dialog for a workflow export; target path or null. */
   pickWorkflowExport(defaultName: string): Promise<string | null>;
+  /** Check the GitHub Releases feed for an app update (no-op in dev). */
+  checkForUpdates(): Promise<UpdateCheckResult>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -261,4 +295,5 @@ export const IPC = {
   completeOnboarding: 'geniro:completeOnboarding',
   pickWorkflowImport: 'geniro:pickWorkflowImport',
   pickWorkflowExport: 'geniro:pickWorkflowExport',
+  checkForUpdates: 'geniro:checkForUpdates',
 } as const satisfies Record<keyof GeniroApi, string>;

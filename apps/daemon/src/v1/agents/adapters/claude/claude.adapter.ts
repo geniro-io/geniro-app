@@ -1,3 +1,4 @@
+import { resolveAgentBinary } from '../../utils/agent-binary';
 import {
   asArray,
   asBoolean,
@@ -163,7 +164,12 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
  */
 export class ClaudeAdapter extends AgentAdapter {
   readonly kind = 'claude' as const;
-  protected readonly command = 'claude';
+
+  // Resolved per turn so the Settings cliPaths override (GENIRO_CLAUDE_BIN on
+  // the daemon env) takes effect without reconstructing the adapter.
+  protected get command(): string {
+    return resolveAgentBinary('claude');
+  }
 
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = [

@@ -20,7 +20,8 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   async listByRun(runId: string, txEm?: EntityManager): Promise<NodeState[]> {
-    return this.getRepo(txEm).find({ runId });
+    // Read-only snapshot path — no identity-map tracking needed (see item.dao).
+    return this.getRepo(txEm).find({ runId }, { disableIdentityMap: true });
   }
 
   /** Seed one `pending` row per graph node when a workflow run starts. */

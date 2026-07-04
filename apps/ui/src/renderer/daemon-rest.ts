@@ -1,0 +1,44 @@
+import type { DaemonHandle } from '../shared/contracts';
+
+/** HTTP verbs the loopback REST clients use. */
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+/**
+ * Base for every loopback-daemon REST client. Owns the one transport concern —
+ * bearer-token auth, JSON encoding, and the uniform error shape
+ * (`daemon <METHOD> <path> failed (<status>): <detail>`, which the renderer
+ * tests parse) — so ChatApi / WorkflowApi / TerminalApi contribute only their
+ * typed route methods. Extracted per the renderer "promote a pattern on its
+ * second occurrence" rule; a transport fix now lands in exactly one place.
+ */
+export abstract class DaemonRestApi {
+  private readonly base: string;
+  private readonly token: string;
+
+  constructor(handle: DaemonHandle) {
+    this.base = `http://${handle.host}:${handle.port}`;
+    this.token = handle.token;
+  }
+
+  protected async request<T>(
+    method: HttpMethod,
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const res = await fetch(`${this.base}${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${this.token}`,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(
+        `daemon ${method} ${path} failed (${res.status})${detail ? `: ${detail}` : ''}`,
+      );
+    }
+    return (await res.json()) as T;
+  }
+}

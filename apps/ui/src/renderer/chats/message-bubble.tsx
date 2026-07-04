@@ -45,7 +45,13 @@ export function MessageBubble({
       data-role={variant}
       className={cn(bubbleVariants({ variant }), className)}>
       {role ? (
-        <span className="text-[11px] font-medium uppercase tracking-wide opacity-70">
+        <span
+          className={cn(
+            'text-[11px] font-medium uppercase tracking-wide',
+            // The user bubble's white-on-caramel is already the low-contrast
+            // pairing — a further 70% fade drops its caption to ~2:1.
+            variant !== 'user' && 'opacity-70',
+          )}>
           {role}
         </span>
       ) : null}

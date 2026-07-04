@@ -5,6 +5,8 @@ import { app, BrowserWindow, nativeImage, shell } from 'electron';
 
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
+import { readSettings } from './settings';
+import { checkOnLaunch } from './updater';
 
 /**
  * Product display name. Set before anything reads it: it drives
@@ -144,6 +146,7 @@ function main(): void {
     }
 
     registerIpc(supervisor);
+    checkOnLaunch(readSettings().checkForUpdates);
 
     try {
       await supervisor.start();

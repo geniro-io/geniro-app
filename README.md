@@ -12,17 +12,18 @@ your machine, no cloud.
 
 ## Install (macOS, Apple Silicon)
 
-Builds are **ad-hoc signed** (no Apple Developer ID), so install them one of
-these two ways — both fetch the app *without* the macOS quarantine flag, so
-Gatekeeper does not block it. (A DMG downloaded from a browser **would** be
-blocked — use brew or the script.)
+Builds are **ad-hoc signed** (no Apple Developer ID). Both install paths strip
+the macOS quarantine flag so Gatekeeper doesn't block the app — the Homebrew
+cask does it in a `postflight`, the install script via `xattr`. (A DMG opened
+straight from a browser download **would** be blocked — use brew or the script.)
 
 **Homebrew (recommended):**
 
 ```sh
 brew tap geniro-io/tap
-brew install --cask --no-quarantine geniro   # --no-quarantine: the build is unsigned
-brew upgrade --cask geniro                    # later, to update
+brew trust geniro-io/tap       # third-party taps need an explicit trust (Homebrew 6+)
+brew install --cask geniro     # ad-hoc/unsigned; the cask strips the quarantine bit post-install
+brew upgrade --cask geniro     # later, to update
 ```
 
 **Install script:**

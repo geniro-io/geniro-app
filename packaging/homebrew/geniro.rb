@@ -6,11 +6,15 @@
 # This file is the initial content to seed that repo with, and a place to review
 # cask changes in PRs.
 #
-# Install (ad-hoc build — pass --no-quarantine so Gatekeeper doesn't block the
-# unsigned app; the `quarantine false` stanza no longer exists in Homebrew Cask):
+# Install (ad-hoc build). Modern Homebrew (6.x) always quarantines a cask
+# artifact and dropped `--no-quarantine`, so a quarantined ad-hoc app can't
+# spawn its bundled daemon (Gatekeeper blocks the child) and hangs on launch —
+# the `postflight` below strips the quarantine bit. Third-party taps also need
+# an explicit `brew trust`:
 #
 #   brew tap geniro-io/tap
-#   brew install --cask --no-quarantine geniro
+#   brew trust geniro-io/tap
+#   brew install --cask geniro
 #   brew upgrade --cask geniro          # later, to update
 #
 cask "geniro" do
@@ -26,6 +30,14 @@ cask "geniro" do
   depends_on macos: ">= :sonoma"
 
   app "Geniro.app"
+
+  # Strip com.apple.quarantine so the ad-hoc (unsigned) app can spawn its
+  # bundled daemon subprocess instead of being Gatekeeper-blocked on launch.
+  # (Homebrew 6.x always quarantines and no longer offers `--no-quarantine`.)
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Geniro.app"]
+  end
 
   zap trash: [
     "~/Library/Application Support/Geniro",

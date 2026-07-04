@@ -118,6 +118,138 @@ jobs:
           body_path: CHANGES.md
           generate_release_notes: false
 
-  # NOTE: packaging the signed/notarized macOS app (electron-builder DMG) and
-  # publishing the auto-update feed land in M4 — add a `build-and-publish-app`
-  # job here, gated on `needs.version.outputs.released == 'true'`, then.
+  # Build the ad-hoc macOS app (no Apple Developer ID) and attach the .dmg + .zip
+  # to the release, so it can be installed via Homebrew or the install script.
+  # This is NOT signed/notarized: the .zip/.dmg are meant to be fetched by
+  # `brew`/`curl` (which don't set the quarantine bit), not opened straight from
+  # a browser download. In-app silent auto-update stays disabled (it needs a real
+  # Developer ID) — the app only reports newer releases and points at brew/curl.
+  build-app:
+    runs-on: macos-14 # arm64 runner — the only published arch
+    name: Build & attach macOS app
+    needs: [version, create-release]
+    if: ${{ needs.version.outputs.released == 'true' && github.ref_name == 'main' }}
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      sha256: ${{ steps.sha.outputs.sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          git fetch --tags --force --prune
+          CURRENT_TAG="$(git tag --merged HEAD --list 'v[0-9]*' | sort -V | tail -n 1)"
+          echo "current_tag=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${CURRENT_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          HUSKY: 0
+
+      - name: Sync the packaged app version to the tag
+        run: node scripts/sync-app-version.mjs "${{ steps.tag.outputs.version }}"
+
+      - name: Build macOS app (ad-hoc)
+        # No CSC_NAME/CSC_LINK in env → build-mac.mjs produces an ad-hoc build
+        # with no auto-update feed (fails closed), exactly as intended here.
+        run: pnpm --filter @geniro/ui build:mac
+
+      - name: Attach artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.tag.outputs.version }}
+        run: |
+          gh release upload "v${V}" \
+            "release/dist/Geniro-${V}-arm64.dmg" \
+            "release/dist/Geniro-${V}-arm64-mac.zip" \
+            --clobber
+
+      - name: Compute the zip sha256 (for the Homebrew cask)
+        id: sha
+        env:
+          V: ${{ steps.tag.outputs.version }}
+        run: |
+          SHA="$(shasum -a 256 "release/dist/Geniro-${V}-arm64-mac.zip" | awk '{print $1}')"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+  # Update the Homebrew cask in the tap repo. Opt-in: gated on the repo variable
+  # HOMEBREW_TAP_REPO (e.g. "geniro-io/homebrew-tap"); until it and the
+  # HOMEBREW_TAP_TOKEN secret (a PAT with write to that repo — GITHUB_TOKEN can't
+  # push cross-repo) are set, this job is skipped and the release still ships the
+  # .dmg/.zip for the install script.
+  bump-cask:
+    runs-on: ubuntu-22.04
+    name: Bump Homebrew cask
+    needs: [build-app]
+    if: ${{ needs.build-app.result == 'success' && vars.HOMEBREW_TAP_REPO != '' }}
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ vars.HOMEBREW_TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Render cask
+        env:
+          V: ${{ needs.build-app.outputs.version }}
+          SHA: ${{ needs.build-app.outputs.sha256 }}
+        run: |
+          mkdir -p tap/Casks
+          cat > tap/Casks/geniro.rb <<EOF
+          cask "geniro" do
+            version "${V}"
+            sha256 "${SHA}"
+
+            url "https://github.com/geniro-io/geniro-app/releases/download/v#{version}/Geniro-#{version}-arm64-mac.zip"
+            name "Geniro"
+            desc "Local-first desktop app for composing and running a DAG of CLI coding agents"
+            homepage "https://github.com/geniro-io/geniro-app"
+
+            depends_on arch: :arm64
+            depends_on macos: ">= :sonoma"
+
+            app "Geniro.app"
+
+            zap trash: [
+              "~/Library/Application Support/Geniro",
+              "~/Library/Application Support/geniro",
+              "~/Library/Preferences/io.geniro.desktop.plist",
+              "~/Library/Logs/Geniro",
+              "~/Library/Saved Application State/io.geniro.desktop.savedState",
+            ]
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: tap
+        env:
+          V: ${{ needs.build-app.outputs.version }}
+        run: |
+          git config user.email "ci@geniro.app"
+          git config user.name "Geniro Bot"
+          git add Casks/geniro.rb
+          if git diff --cached --quiet; then
+            echo "cask already up to date"
+          else
+            git commit -m "geniro ${V}"
+            git push
+          fi

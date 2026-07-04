@@ -1,40 +1,59 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: false, getVersion: vi.fn(() => '1.0.0') },
-  autoUpdater: {
-    autoDownload: false,
-    autoInstallOnAppQuit: false,
-    allowDowngrade: false,
-    on: vi.fn(),
-    checkForUpdates: vi.fn(),
-  },
 }));
 
 vi.mock('electron', () => ({ app: mocks.app }));
-vi.mock('electron-updater', () => ({ autoUpdater: mocks.autoUpdater }));
 
-import { checkForUpdates, checkOnLaunch } from './updater';
+import { checkForUpdates, checkOnLaunch, UPDATE_COMMAND } from './updater';
+
+function mockFetch(impl: (url: string) => Promise<Response> | Response): void {
+  vi.stubGlobal('fetch', vi.fn(impl as typeof fetch));
+}
+
+function releaseResponse(tag: string, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: async () => ({ tag_name: tag }),
+  } as unknown as Response;
+}
 
 beforeEach(() => {
   mocks.app.isPackaged = false;
-  mocks.autoUpdater.checkForUpdates.mockReset();
+  mocks.app.getVersion.mockReturnValue('1.0.0');
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('checkForUpdates', () => {
-  it('short-circuits in dev without touching electron-updater', async () => {
+  it('short-circuits in dev without touching the network', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
     const result = await checkForUpdates();
 
     expect(result.status).toBe('dev');
-    expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('reports up-to-date when the feed matches the running version', async () => {
+  it('reports an available update and names the update command', async () => {
     mocks.app.isPackaged = true;
-    mocks.autoUpdater.checkForUpdates.mockResolvedValue({
-      isUpdateAvailable: false,
-      updateInfo: { version: '1.0.0' },
-    });
+    mockFetch(() => releaseResponse('v1.1.0'));
+
+    const result = await checkForUpdates();
+
+    expect(result.status).toBe('available');
+    expect(result.version).toBe('1.1.0');
+    expect(result.message).toContain(UPDATE_COMMAND);
+  });
+
+  it('reports up-to-date when the latest release matches the running version', async () => {
+    mocks.app.isPackaged = true;
+    mockFetch(() => releaseResponse('v1.0.0'));
 
     const result = await checkForUpdates();
 
@@ -43,89 +62,88 @@ describe('checkForUpdates', () => {
       version: '1.0.0',
       message: null,
     });
-    expect(mocks.autoUpdater.autoInstallOnAppQuit).toBe(true);
-    expect(mocks.autoUpdater.allowDowngrade).toBe(true);
   });
 
-  it('reports an available version (downloaded in the background)', async () => {
+  it('does NOT offer a downgrade when the feed is older than the running app', async () => {
     mocks.app.isPackaged = true;
-    const downloadPromise = Promise.resolve([]);
-    mocks.autoUpdater.checkForUpdates.mockResolvedValue({
-      isUpdateAvailable: true,
-      updateInfo: { version: '1.1.0' },
-      downloadPromise,
-    });
+    mockFetch(() => releaseResponse('v0.9.0'));
 
     const result = await checkForUpdates();
 
-    expect(result.status).toBe('available');
-    expect(result.version).toBe('1.1.0');
-  });
-
-  it('swallows a background download rejection (never an unhandled rejection)', async () => {
-    mocks.app.isPackaged = true;
-    mocks.autoUpdater.checkForUpdates.mockResolvedValue({
-      isUpdateAvailable: true,
-      updateInfo: { version: '1.1.0' },
-      downloadPromise: Promise.reject(new Error('mid-download drop')),
-    });
-
-    const result = await checkForUpdates();
-
-    expect(result.status).toBe('available');
-    // The catch attached to downloadPromise keeps the rejection from surfacing.
-    await new Promise((r) => setTimeout(r, 0));
-  });
-
-  it('reports up-to-date when the updater declines the feed version (rollback feed)', async () => {
-    mocks.app.isPackaged = true;
-    // A rollback publishes an OLDER version to the feed. electron-updater
-    // refuses downgrades by default (allowDowngrade=false): its result carries
-    // isUpdateAvailable=false and it downloads nothing — so reporting
-    // 'available' with a "downloading … installs on the next launch" message
-    // would leave Settings promising an install that never happens.
-    mocks.autoUpdater.checkForUpdates.mockResolvedValue({
-      isUpdateAvailable: false,
-      updateInfo: { version: '0.9.0' },
-    });
-
-    const result = await checkForUpdates();
-
+    // An ad-hoc install never auto-downgrades; an older release is just
+    // "up to date" from the app's perspective (nothing to pull).
     expect(result.status).toBe('up-to-date');
   });
 
-  it('maps a feed failure to a structured error, never a throw', async () => {
+  it('compares versions numerically, not lexically (v1.10.0 > v1.9.0)', async () => {
     mocks.app.isPackaged = true;
-    mocks.autoUpdater.checkForUpdates.mockRejectedValue(
-      new Error('feed unreachable'),
+    mocks.app.getVersion.mockReturnValue('1.9.0');
+    mockFetch(() => releaseResponse('v1.10.0'));
+
+    const result = await checkForUpdates();
+
+    expect(result.status).toBe('available');
+    expect(result.version).toBe('1.10.0');
+  });
+
+  it('sends a User-Agent (GitHub rejects the API without one)', async () => {
+    mocks.app.isPackaged = true;
+    let sentHeaders: Record<string, string> | undefined;
+    mockFetch((_url) => releaseResponse('v1.0.0'));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        sentHeaders = init?.headers as Record<string, string>;
+        return Promise.resolve(releaseResponse('v1.0.0'));
+      }) as typeof fetch,
     );
+
+    await checkForUpdates();
+
+    expect(sentHeaders?.['User-Agent']).toBeTruthy();
+  });
+
+  it('maps a non-OK feed response to a structured error, never a throw', async () => {
+    mocks.app.isPackaged = true;
+    mockFetch(() => releaseResponse('v1.1.0', false, 503));
 
     const result = await checkForUpdates();
 
     expect(result.status).toBe('error');
-    expect(result.message).toContain('feed unreachable');
+    expect(result.message).toContain('503');
+  });
+
+  it('maps a network failure to a structured error, never a throw', async () => {
+    mocks.app.isPackaged = true;
+    mockFetch(() => {
+      throw new Error('network down');
+    });
+
+    const result = await checkForUpdates();
+
+    expect(result.status).toBe('error');
+    expect(result.message).toContain('network down');
   });
 });
 
 describe('checkOnLaunch', () => {
   it('does nothing when the settings toggle is off', () => {
     mocks.app.isPackaged = true;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
 
     checkOnLaunch(false);
 
-    expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('fires the check when enabled on a packaged app', async () => {
     mocks.app.isPackaged = true;
-    mocks.autoUpdater.checkForUpdates.mockResolvedValue({
-      isUpdateAvailable: false,
-      updateInfo: { version: '1.0.0' },
-    });
+    const fetchSpy = vi.fn(() => Promise.resolve(releaseResponse('v1.0.0')));
+    vi.stubGlobal('fetch', fetchSpy as typeof fetch);
 
     checkOnLaunch(true);
-    await vi.waitFor(() =>
-      expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalled(),
-    );
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
   });
 });

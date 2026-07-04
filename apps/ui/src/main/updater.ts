@@ -2,26 +2,43 @@ import { app } from 'electron';
 
 import type { UpdateCheckResult } from '../shared/contracts';
 
-/** Registered once so a background download rejection never goes unhandled. */
-let errorListenerAttached = false;
-
 /**
- * electron-updater wiring. The feed is GitHub Releases (electron-builder's
- * `publish` config, baked into the packaged app-update.yml). The whole app —
- * shell + bundled daemon — ships as ONE artifact, so every update is
- * inherently version-locked: shell and daemon can never skew. A check
- * downloads in the background and installs on the next quit
- * (autoInstallOnAppQuit).
+ * Update checker for the ad-hoc (unsigned) distribution model. The app is
+ * installed via Homebrew (`brew upgrade --cask geniro`) or the install script,
+ * NOT via macOS silent auto-update — Squirrel.Mac validates an update against
+ * the running app's code signature, which an ad-hoc build cannot provide. So
+ * this only *reports* whether a newer GitHub release exists and tells the user
+ * the one command to run; it never downloads or installs anything.
  *
- * `allowDowngrade` is on so a rollback works as documented: publishing an
- * OLDER version to the feed makes the updater follow it. Availability is read
- * from electron-updater's own `isUpdateAvailable` (semver-aware, downgrade-aware)
- * — NOT a raw version-string compare, which would mislabel a refused downgrade
- * as "available" and promise an install that never happens.
- *
- * Dev launches short-circuit before the module loads: an unpackaged app has
- * no app-update.yml to read, and electron-updater throws on it.
+ * (Re-enabling in-app silent auto-update via electron-updater requires a real
+ * Developer ID + notarization — see scripts/build-mac.mjs and the packaging
+ * docs. The distribution channel and the update instruction would change here.)
  */
+const RELEASES_API =
+  'https://api.github.com/repos/geniro-io/geniro-app/releases/latest';
+const CHECK_TIMEOUT_MS = 5_000;
+/** The single command that actually updates an installed app. */
+export const UPDATE_COMMAND = 'brew upgrade --cask geniro';
+
+/** Parse `1.2.3` / `v1.2.3` into a `[major, minor, patch]` tuple, or null. */
+function parseVersion(value: string): [number, number, number] | null {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(value.trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function isNewer(
+  [lMaj, lMin, lPatch]: [number, number, number],
+  [cMaj, cMin, cPatch]: [number, number, number],
+): boolean {
+  if (lMaj !== cMaj) {
+    return lMaj > cMaj;
+  }
+  if (lMin !== cMin) {
+    return lMin > cMin;
+  }
+  return lPatch > cPatch;
+}
+
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
   if (!app.isPackaged) {
     return {
@@ -30,46 +47,43 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
       message: 'update checks are disabled in dev',
     };
   }
+  const current = parseVersion(app.getVersion());
   try {
-    const { autoUpdater } = await import('electron-updater');
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
-    // The v1 rollback story (spec §10): publishing an OLDER release makes
-    // every client follow the feed down. Accepted trade-off: whoever can write
-    // releases can also downgrade a signed fleet to a validly-signed old
-    // version — tighten (explicit rollback affordance / version floor) when
-    // distribution signing lands.
-    autoUpdater.allowDowngrade = true;
-    if (!errorListenerAttached) {
-      // With autoDownload the download continues past checkForUpdates() and
-      // rejects on the returned downloadPromise AND emits 'error'; without a
-      // listener that becomes an unhandled main-process rejection.
-      autoUpdater.on('error', (err) =>
-        console.error(
-          '[ui] updater error:',
-          err instanceof Error ? err.message : err,
-        ),
-      );
-      errorListenerAttached = true;
+    // GitHub's REST API requires a User-Agent; /releases/latest already
+    // excludes drafts and pre-releases, so the newest stable tag wins.
+    const res = await fetch(RELEASES_API, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'geniro-app',
+      },
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      return {
+        status: 'error',
+        version: null,
+        message: `release feed returned HTTP ${res.status}`,
+      };
     }
-    const result = await autoUpdater.checkForUpdates();
-    if (!result?.isUpdateAvailable) {
-      return { status: 'up-to-date', version: app.getVersion(), message: null };
+    const body = (await res.json()) as { tag_name?: unknown };
+    const latest =
+      typeof body.tag_name === 'string' ? parseVersion(body.tag_name) : null;
+    if (!latest || !current) {
+      return {
+        status: 'error',
+        version: null,
+        message: 'could not read the latest release version',
+      };
     }
-    const version = result.updateInfo.version;
-    // Surface a failed background download instead of leaving the user with a
-    // "downloading…" message that silently never installs.
-    result.downloadPromise?.catch((err) =>
-      console.error(
-        '[ui] update download failed:',
-        err instanceof Error ? err.message : err,
-      ),
-    );
-    return {
-      status: 'available',
-      version,
-      message: `downloading v${version} — it installs on the next launch`,
-    };
+    if (isNewer(latest, current)) {
+      const version = latest.join('.');
+      return {
+        status: 'available',
+        version,
+        message: `v${version} is available — update with: ${UPDATE_COMMAND} (or re-run the install script)`,
+      };
+    }
+    return { status: 'up-to-date', version: app.getVersion(), message: null };
   } catch (err) {
     return {
       status: 'error',

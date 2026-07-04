@@ -141,11 +141,11 @@ describe('Settings defaults section', () => {
     expect(container.textContent).toContain('Up to date (v0.1.0)');
   });
 
-  it('renders the available-update message and a failed check', async () => {
+  it('renders the available-update message (with the update command) and a failed check', async () => {
     geniro.checkForUpdates.mockResolvedValueOnce({
       status: 'available',
       version: '0.2.0',
-      message: 'downloading v0.2.0 — it installs on the next launch',
+      message: 'v0.2.0 is available — update with: brew upgrade --cask geniro',
     });
     await mount();
     const check = [...container.querySelectorAll('button')].find((b) =>
@@ -155,7 +155,9 @@ describe('Settings defaults section', () => {
     await act(async () => {
       check.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(container.textContent).toContain('Update available: v0.2.0');
+    // Assert on text unique to the check RESULT, not the always-present static
+    // hint (which also mentions brew) — else this passes with the result unshown.
+    expect(container.textContent).toContain('v0.2.0 is available');
 
     geniro.checkForUpdates.mockRejectedValueOnce(new Error('ipc broke'));
     await act(async () => {

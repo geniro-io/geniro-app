@@ -10,6 +10,56 @@ your machine, no cloud.
 > store and a first-run onboarding flow. Agents, the graph, chat, the terminal
 > mirror, and packaging arrive in M2–M4.
 
+## Install (macOS, Apple Silicon)
+
+Builds are **ad-hoc signed** (no Apple Developer ID), so install them one of
+these two ways — both fetch the app *without* the macOS quarantine flag, so
+Gatekeeper does not block it. (A DMG downloaded from a browser **would** be
+blocked — use brew or the script.)
+
+**Homebrew (recommended):**
+
+```sh
+brew tap geniro-io/tap
+brew install --cask --no-quarantine geniro   # --no-quarantine: the build is unsigned
+brew upgrade --cask geniro                    # later, to update
+```
+
+**Install script:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/geniro-io/geniro-app/main/scripts/install.sh -o /tmp/geniro-install.sh
+bash /tmp/geniro-install.sh                    # re-run to update
+```
+
+Geniro **notifies** you when a newer release exists (Settings → Check now) but
+does not silently self-update — you update via `brew upgrade` or by re-running
+the script. Silent in-app auto-update requires a real Developer ID + notarization
+(see *Releasing* below); the code path for it is retained but disabled.
+
+## Releasing
+
+Pushing to `main` runs `.github/workflows/release.yaml`: `semantic-release`
+determines the version and tags `v<x.y.z>`, a GitHub Release is cut, then the
+`build-app` job (macOS runner) syncs `apps/ui` to the tag, runs
+`build:mac` (ad-hoc), and attaches `Geniro-<v>-arm64.dmg` + `-arm64-mac.zip`.
+
+**To enable the Homebrew tap** (optional — the `.dmg`/`.zip` + install script
+work without it): create a `geniro-io/homebrew-tap` repo (seed it with
+[`packaging/homebrew/geniro.rb`](packaging/homebrew/geniro.rb)), then set the
+repo **variable** `HOMEBREW_TAP_REPO=geniro-io/homebrew-tap` and the **secret**
+`HOMEBREW_TAP_TOKEN` (a PAT with write access to the tap). The `bump-cask` job
+then rewrites the cask's version + sha256 on each release; until both are set it
+is skipped.
+
+**To switch to a signed build with silent auto-update** (needs a paid Apple
+Developer account): add the `CSC_LINK` / `CSC_KEY_PASSWORD` / `CSC_NAME` and
+notarization secrets, flip `mac.notarize` to `true` and revisit the
+`signIgnore: Resources/daemon/` entry in `apps/ui/electron-builder.yml`
+(notarization requires every Mach-O signed). `scripts/build-mac.mjs` already
+injects the GitHub update feed only when `CSC_*` is present, so signing and the
+in-app updater turn on together.
+
 ## Architecture
 
 A pnpm + turbo monorepo whose configuration and server packages are **cloned

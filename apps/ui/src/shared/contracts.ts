@@ -191,10 +191,15 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// App updates (electron-updater; GitHub Releases feed — packaged builds only)
+// App updates (GitHub Releases version check — the ad-hoc build reports a newer
+// release but does not self-install; the user updates via brew / the script)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Outcome of an app-update check. `dev` = unpackaged launch, checks disabled. */
+/**
+ * Outcome of an app-update check. `dev` = unpackaged launch, checks disabled;
+ * `available` carries the update command in `message` (Geniro notifies but does
+ * not self-update — see main/updater.ts).
+ */
 export interface UpdateCheckResult {
   status: 'dev' | 'up-to-date' | 'available' | 'error';
   version: string | null;

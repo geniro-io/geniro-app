@@ -98,9 +98,9 @@ export function Settings(): React.JSX.Element {
       setUpdateStatus(
         result.status === 'up-to-date'
           ? `Up to date (v${result.version ?? '?'})`
-          : result.status === 'available'
-            ? `Update available: v${result.version ?? '?'} — ${result.message ?? ''}`
-            : (result.message ?? result.status),
+          : // 'available' / 'dev' / 'error' all carry a ready-to-show message
+            // (for 'available' it names the brew/script update command).
+            (result.message ?? result.status),
       );
     } catch (err) {
       setUpdateStatus(String(err));
@@ -211,6 +211,14 @@ export function Settings(): React.JSX.Element {
             {checkingUpdates ? 'Checking…' : 'Check now'}
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Geniro notifies you of a new release but does not self-update —
+          install updates with{' '}
+          <code className="rounded bg-muted px-1 py-0.5">
+            brew upgrade --cask geniro
+          </code>{' '}
+          or by re-running the install script.
+        </p>
         {updateStatus ? (
           <p className="text-xs text-muted-foreground">{updateStatus}</p>
         ) : null}

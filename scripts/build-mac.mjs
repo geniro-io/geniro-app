@@ -133,16 +133,12 @@ try {
   const electronDistArgs = existsSync(electronDist)
     ? [`-c.electronDist=${electronDist}`]
     : [];
-  // Auto-update is only safe on a Developer-ID-signed build: Squirrel.Mac
-  // validates the download against the running app's designated requirement, so
-  // an ad-hoc build has no trust chain. The GitHub feed is therefore injected
-  // HERE and only for signed builds — an ad-hoc build gets no publish config,
-  // hence no app-update.yml, and checkForUpdates fails closed. This makes the
-  // "auto-update + ad-hoc" combination unrepresentable rather than a process rule.
-  const signed = Boolean(process.env.CSC_NAME || process.env.CSC_LINK);
-  if (!signed) {
-    console.log('\n[build] no Developer ID (CSC_NAME/CSC_LINK) — ad-hoc build: disabling the auto-update feed');
-  }
+  // Ad-hoc build only. Geniro ships unsigned (no Apple Developer ID) and is
+  // distributed via Homebrew + the install script; it never silently
+  // self-updates — it polls GitHub Releases and points at `brew upgrade` (see
+  // apps/ui/src/main/updater.ts). So there is no publish feed / app-update.yml
+  // and no notarization. The ad-hoc identity ('-') is injected here rather than
+  // pinned in electron-builder.yml (keep identity out of the config file).
   run(bin('electron-builder'), ['--mac',
     '--config', join(root, 'apps', 'ui', 'electron-builder.yml'),
     '--projectDir', appDir,
@@ -151,16 +147,7 @@ try {
     ...electronDistArgs,
     `-c.mac.entitlements=${entitlements}`,
     `-c.mac.entitlementsInherit=${entitlements}`,
-    // The ad-hoc identity is injected HERE (not pinned in the yml): a yml
-    // `identity: '-'` would shadow CSC_NAME/CSC_LINK inside electron-builder's
-    // identity resolution, producing an ad-hoc artifact that still got the
-    // feed. Keeping identity and feed in one ternary pair keeps
-    // signed ⇔ real identity ⇔ update feed a single coupled decision.
-    ...(signed
-      ? ['-c.publish.provider=github',
-        '-c.publish.owner=geniro-io',
-        '-c.publish.repo=geniro-app']
-      : ['-c.mac.identity=-']),
+    '-c.mac.identity=-',
   ]);
 
   console.log(`\nPackaged: ${join(release, 'dist')}`);

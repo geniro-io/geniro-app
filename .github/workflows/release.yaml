@@ -14,8 +14,7 @@ on:
 env:
   # geniro-app ships as ONE product (the Electron app bundles the daemon; the
   # @packages/* are private), so it carries a single app-level version tagged
-  # `v${version}` — semantic-release's default format, and what electron-builder
-  # / electron-updater expect for the M4 auto-update feed.
+  # `v${version}` — semantic-release's default format.
   NODE_VERSION: 24
 
 # GITHUB_TOKEN needs write access to push the version tag and cut the release.
@@ -120,10 +119,9 @@ jobs:
 
   # Build the ad-hoc macOS app (no Apple Developer ID) and attach the .dmg + .zip
   # to the release, so it can be installed via Homebrew or the install script.
-  # This is NOT signed/notarized: the .zip/.dmg are meant to be fetched by
-  # `brew`/`curl` (which don't set the quarantine bit), not opened straight from
-  # a browser download. In-app silent auto-update stays disabled (it needs a real
-  # Developer ID) — the app only reports newer releases and points at brew/curl.
+  # This is NOT signed/notarized — the cask/install script strip the quarantine
+  # bit so the ad-hoc app launches. The app never silently self-updates; it only
+  # reports newer releases and points at `brew upgrade` / the install script.
   build-app:
     runs-on: macos-14 # arm64 runner — the only published arch
     name: Build & attach macOS app
@@ -168,8 +166,8 @@ jobs:
         run: node scripts/sync-app-version.mjs "${{ steps.tag.outputs.version }}"
 
       - name: Build macOS app (ad-hoc)
-        # No CSC_NAME/CSC_LINK in env → build-mac.mjs produces an ad-hoc build
-        # with no auto-update feed (fails closed), exactly as intended here.
+        # build-mac.mjs always produces an ad-hoc (unsigned) build with no
+        # publish feed — the app reports updates and points at brew/curl.
         run: pnpm --filter @geniro/ui build:mac
 
       - name: Attach artifacts to the release

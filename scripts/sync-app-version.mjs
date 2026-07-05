@@ -5,8 +5,8 @@
  *   node scripts/sync-app-version.mjs 1.2.3   (or v1.2.3)
  *
  * electron-builder packages apps/ui, so `app.getVersion()` in the shipped app
- * reads apps/ui/package.json's version — and electron-updater / the install
- * script / the Homebrew cask all compare against it. semantic-release cuts the
+ * reads apps/ui/package.json's version — and the update check, the install
+ * script, and the Homebrew cask all compare against it. semantic-release cuts the
  * git tag but does not write the version back into apps/ui, so CI runs this to
  * make the shipped version match the tag. Idempotent; no-op if already in sync.
  */

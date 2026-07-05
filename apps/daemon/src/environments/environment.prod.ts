@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,8 +11,32 @@ import {
   parsePort,
 } from '../utils/handshake';
 
-/** Daemon version, surfaced in `/health` and the pidfile. */
-export const DAEMON_VERSION = '0.1.0';
+/**
+ * Daemon version — surfaced in `/health`, the pidfile, and the UI status line.
+ * Read from the daemon's own package.json rather than a hardcoded literal: it
+ * sits one level above `environments/` in every layout (source `apps/daemon`,
+ * built `dist`, and the packaged `Resources/daemon`), so the tag that
+ * scripts/sync-app-version.mjs stamps into it on release is what actually
+ * ships — a hardcoded constant silently kept reporting 0.1.0 on tagged builds.
+ */
+export function readDaemonVersion(
+  pkgPath: string = join(__dirname, '..', '..', 'package.json'),
+): string {
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+      version?: unknown;
+    };
+    if (typeof pkg.version === 'string' && pkg.version.length > 0) {
+      return pkg.version;
+    }
+  } catch {
+    // Fall through to the safe default (an unreadable package.json shouldn't
+    // crash the daemon; the version is informational).
+  }
+  return '0.0.0';
+}
+
+export const DAEMON_VERSION = readDaemonVersion();
 
 export interface DaemonEnvironment {
   /** Deployment env name (`production` | `development` | `test`). */

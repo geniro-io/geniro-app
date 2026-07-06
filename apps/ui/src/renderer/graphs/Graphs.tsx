@@ -38,6 +38,7 @@ import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { Field } from '../components/field';
 import { NoteBox } from '../components/note-box';
+import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
@@ -102,6 +103,15 @@ export function Graphs({
   > | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The right inspector only exists while a node is selected; its width is
+  // drag-resizable from its left edge and persists like the palette's.
+  const inspector = usePanelWidth({
+    storageKey: 'geniro.builder.inspectorWidth',
+    defaultWidth: 300,
+    minWidth: 240,
+    maxWidth: 480,
+    handleEdge: 'left',
+  });
 
   const refreshList = useCallback(async (): Promise<void> => {
     if (!api) {
@@ -613,9 +623,16 @@ export function Graphs({
           </ReactFlow>
         </div>
 
-        <aside className="flex min-h-0 w-[280px] shrink-0 flex-col overflow-y-auto border-l border-border bg-muted/30">
-          {selected ? (
-            <>
+        {selected ? (
+          <aside
+            style={{ width: inspector.width }}
+            className="relative flex min-h-0 shrink-0 flex-col border-l border-border bg-muted/30">
+            <PanelResizeHandle
+              edge="left"
+              label="Resize inspector"
+              onMouseDown={inspector.startResize}
+            />
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">
                 {selected.kind === 'trigger' ? (
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
@@ -729,17 +746,9 @@ export function Graphs({
                   <Trash2 className="shrink-0" /> Delete node
                 </Button>
               </div>
-            </>
-          ) : (
-            <div className="flex flex-1 items-center justify-center p-6 text-center">
-              <p className="text-sm text-muted-foreground">
-                Select a node to edit it, or drag a trigger or agent from the
-                palette. Every run enters through a trigger; connect a node's
-                right port to another's left to feed its answer forward.
-              </p>
             </div>
-          )}
-        </aside>
+          </aside>
+        ) : null}
       </div>
     </section>
   );

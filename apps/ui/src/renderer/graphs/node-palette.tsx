@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { CliKind, NodeKind, TriggerKind } from '../../shared/contracts';
 import { CLI_KINDS, TRIGGER_KINDS } from '../../shared/contracts';
+import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Badge } from '../components/ui/badge';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
@@ -113,14 +114,6 @@ const LS_WIDTH = 'geniro.builder.paletteWidth';
 const LS_COLLAPSED = 'geniro.builder.paletteCollapsed';
 const LS_AGENTS_OPEN = 'geniro.builder.paletteAgentsOpen';
 const LS_TRIGGERS_OPEN = 'geniro.builder.paletteTriggersOpen';
-const MIN_WIDTH = 180;
-const MAX_WIDTH = 400;
-const DEFAULT_WIDTH = 240;
-
-function readNum(key: string, fallback: number): number {
-  const value = Number(localStorage.getItem(key));
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
 
 function readBool(key: string, fallback: boolean): boolean {
   const value = localStorage.getItem(key);
@@ -261,7 +254,13 @@ export function NodePalette(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(() =>
     readBool(LS_COLLAPSED, false),
   );
-  const [width, setWidth] = useState(() => readNum(LS_WIDTH, DEFAULT_WIDTH));
+  const { width, startResize } = usePanelWidth({
+    storageKey: LS_WIDTH,
+    defaultWidth: 240,
+    minWidth: 180,
+    maxWidth: 400,
+    handleEdge: 'right',
+  });
   const [agentsOpen, setAgentsOpen] = useState(() =>
     readBool(LS_AGENTS_OPEN, true),
   );
@@ -274,9 +273,6 @@ export function NodePalette(): React.JSX.Element {
     localStorage.setItem(LS_COLLAPSED, collapsed ? '1' : '0');
   }, [collapsed]);
   useEffect(() => {
-    localStorage.setItem(LS_WIDTH, String(Math.round(width)));
-  }, [width]);
-  useEffect(() => {
     localStorage.setItem(LS_AGENTS_OPEN, agentsOpen ? '1' : '0');
   }, [agentsOpen]);
   useEffect(() => {
@@ -284,32 +280,6 @@ export function NodePalette(): React.JSX.Element {
   }, [triggersOpen]);
 
   const closeInfo = useCallback(() => setInfoItem(null), []);
-
-  const startResize = useCallback(
-    (event: React.MouseEvent): void => {
-      event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = width;
-      const onMove = (move: MouseEvent): void => {
-        const next = Math.min(
-          MAX_WIDTH,
-          Math.max(MIN_WIDTH, startWidth + move.clientX - startX),
-        );
-        setWidth(next);
-      };
-      const onUp = (): void => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-      };
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    },
-    [width],
-  );
 
   const infoMeta = infoItem ? metaOf(infoItem) : null;
   const infoRules = infoItem ? NODE_CONNECTION_RULES[infoItem.kind] : null;
@@ -503,12 +473,10 @@ export function NodePalette(): React.JSX.Element {
         </CategoryBlock>
       </div>
 
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize palette"
+      <PanelResizeHandle
+        edge="right"
+        label="Resize palette"
         onMouseDown={startResize}
-        className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize transition-colors hover:bg-primary/30 active:bg-primary/40"
       />
 
       {infoDialog}

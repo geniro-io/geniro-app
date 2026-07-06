@@ -64,6 +64,7 @@ import {
 } from './node-palette';
 import { canConnect, makeHandleId } from './node-schema';
 import { TriggerNode } from './trigger-node';
+import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 
 const NODE_TYPES = { agent: AgentNode, trigger: TriggerNode };
@@ -233,6 +234,7 @@ export function Graphs({
     setError(null);
     try {
       await api.delete(activeSlug);
+      clearViewport(activeSlug);
       setActiveSlug(null);
       setNodes([]);
       setEdges([]);
@@ -459,6 +461,13 @@ export function Graphs({
   const selected =
     nodes.find((n) => n.id === selectedNodeId)?.data.node ?? null;
 
+  // The last pan/zoom of this workflow, restored on open. Only read when the
+  // builder (re)mounts its ReactFlow — one instance per opened workflow.
+  const savedViewport = useMemo(
+    () => (activeSlug ? loadViewport(activeSlug) : null),
+    [activeSlug],
+  );
+
   if (!handle) {
     return <EmptyState>Connecting to the daemon…</EmptyState>;
   }
@@ -628,7 +637,16 @@ export function Graphs({
             onSelectionChange={({ nodes: sel }) =>
               setSelectedNodeId(sel[0]?.id ?? null)
             }
-            fitView
+            // Reopen where the user left off; only a never-seen workflow gets
+            // the automatic fit. Every finished pan/zoom gesture persists.
+            {...(savedViewport
+              ? { defaultViewport: savedViewport }
+              : { fitView: true })}
+            onMoveEnd={(_event, viewport) => {
+              if (activeSlug) {
+                saveViewport(activeSlug, viewport);
+              }
+            }}
             deleteKeyCode={['Delete', 'Backspace']}
             minZoom={0.1}
             maxZoom={4}

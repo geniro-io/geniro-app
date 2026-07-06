@@ -79,8 +79,22 @@ export function validateNode(
 ): NodeValidationError[] {
   const errors: NodeValidationError[] = [];
 
+  // A kind outside the registries (a daemon/renderer version skew, or a
+  // hand-written file) is reported, never thrown — a node card must degrade
+  // to its red state, not blank the app (mirrors GRAPH_UNKNOWN_NODE_KIND).
+  const schema = NODE_TYPE_SCHEMAS[node.kind];
+  const rules = NODE_CONNECTION_RULES[node.kind];
+  if (!schema || !rules) {
+    return [
+      {
+        type: 'config',
+        message: `Unknown node kind '${String(node.kind)}' — this app version does not support it.`,
+      },
+    ];
+  }
+
   const record = node as unknown as Record<string, unknown>;
-  for (const field of NODE_TYPE_SCHEMAS[node.kind]) {
+  for (const field of schema) {
     const value = record[field.key];
     if (
       field.required &&
@@ -93,7 +107,6 @@ export function validateNode(
     }
   }
 
-  const rules = NODE_CONNECTION_RULES[node.kind];
   const incoming = countByPeerKind(
     edges.filter((e) => e.target === node.id).map((e) => e.source),
     kindById,

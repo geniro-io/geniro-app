@@ -69,8 +69,11 @@ function PortsSide({
   expanded: boolean;
   missing: boolean;
 }): React.JSX.Element | null {
+  // An unknown kind (daemon/renderer version skew) has no rules — render no
+  // ports rather than crash; the card's validation strip names the problem.
   const rules =
-    NODE_CONNECTION_RULES[kind][side === 'input' ? 'inputs' : 'outputs'];
+    NODE_CONNECTION_RULES[kind]?.[side === 'input' ? 'inputs' : 'outputs'] ??
+    [];
   if (rules.length === 0) {
     return null;
   }

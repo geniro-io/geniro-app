@@ -101,6 +101,20 @@ describe('validateNode', () => {
     ]);
   });
 
+  it('reports an unknown node kind instead of throwing', () => {
+    // An older daemon (or a hand-written file) can hand the renderer a node
+    // whose kind the registries don't know — the card must degrade to its
+    // red state, never crash the canvas.
+    const legacy = { id: 'x1', agent: 'claude' } as unknown as WorkflowNode;
+    expect(validateNode(legacy, KINDS, [])).toEqual([
+      {
+        type: 'config',
+        message:
+          "Unknown node kind 'undefined' — this app version does not support it.",
+      },
+    ]);
+  });
+
   it('ignores dangling edges whose peer is not on the canvas', () => {
     // The ghost edge neither satisfies the input requirement nor produces an
     // illegal-kind error — it is skipped entirely.

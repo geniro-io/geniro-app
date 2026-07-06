@@ -107,6 +107,18 @@ describe('NodeCard', () => {
     );
   });
 
+  it('degrades to the red state for a node with no kind (old-daemon data)', () => {
+    // A pre-kind daemon serves nodes without `kind`; the card must render
+    // its error strip — not throw and blank the whole app (the M-blank bug).
+    const legacy = { id: 'x1', agent: 'claude' } as unknown as WorkflowNode;
+    mocks.nodes = [{ id: 'x1', data: { node: {} as { kind: string } } }];
+    render(legacy);
+    expect(card().className).toContain('border-destructive');
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Unknown node kind 'undefined'",
+    );
+  });
+
   it('revalidates live as edges change', () => {
     canvas(TRIGGER, AGENT);
     render(AGENT);

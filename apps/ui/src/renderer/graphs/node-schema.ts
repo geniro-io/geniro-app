@@ -1,4 +1,4 @@
-import type { NodeKind } from '../../shared/contracts';
+import type { CliKind, NodeKind } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 
 /**
@@ -45,7 +45,8 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
       key: 'agent',
       type: CLI_KINDS.join(' | '),
       required: true,
-      description: 'CLI agent that runs this node.',
+      description:
+        'CLI agent that runs this node — fixed by the palette tile it was added from.',
     },
     {
       key: 'model',
@@ -76,6 +77,19 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
         'How this trigger fires — manual: you submit the run prompt by hand.',
     },
   ],
+};
+
+/**
+ * Model choices offered per CLI agent in the inspector — the aliases each
+ * CLI's own `--model` help documents (claude: aliases resolving to the latest
+ * model of each tier; cursor-agent: the ids its help lists). Not exhaustive
+ * by design: an empty model means the CLI's default, and any full model id
+ * goes through the inspector's Custom entry, so this list never gates what
+ * `--model` can receive.
+ */
+export const AGENT_MODEL_OPTIONS: Record<CliKind, readonly string[]> = {
+  claude: ['fable', 'opus', 'sonnet', 'haiku'],
+  'cursor-agent': ['gpt-5', 'sonnet-4', 'sonnet-4-thinking'],
 };
 
 /**

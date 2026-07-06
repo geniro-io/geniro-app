@@ -33,7 +33,6 @@ import type {
   WorkflowSummary,
   WorkflowTriggerNode,
 } from '../../shared/contracts';
-import { CLI_KINDS, type CliKind } from '../../shared/contracts';
 import { ConfirmButton } from '../components/confirm-button';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
@@ -56,6 +55,7 @@ import {
   nextNodeId,
   toFlow,
 } from './graph-doc';
+import { ModelSelect } from './model-select';
 import {
   NODE_DND_MIME,
   NodePalette,
@@ -568,13 +568,6 @@ export function Graphs({
           type="button"
           variant="outline"
           className="gap-1.5"
-          onClick={() => addNode({ kind: 'agent', agent: 'claude' })}>
-          <Plus className="shrink-0" /> Node
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="gap-1.5"
           onClick={() => void layout()}>
           <Wand2 className="shrink-0" /> Auto-layout
         </Button>
@@ -711,34 +704,16 @@ export function Graphs({
                   </NoteBox>
                 ) : (
                   <>
-                    <Field label="Agent" htmlFor="node-agent">
-                      <Select
-                        id="node-agent"
-                        value={selected.agent}
-                        onChange={(event) =>
-                          patchSelected({
-                            agent: event.target.value as CliKind,
-                          })
-                        }>
-                        {CLI_KINDS.map((kind) => (
-                          <option key={kind} value={kind}>
-                            {kind}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
                     <Field
                       label="Model"
                       htmlFor="node-model"
-                      hint="Empty = the CLI's default model.">
-                      <Input
+                      hint="Custom… accepts a full model id.">
+                      <ModelSelect
+                        key={selected.id}
                         id="node-model"
+                        agent={selected.agent}
                         value={selected.model ?? ''}
-                        onChange={(event) =>
-                          patchSelected({
-                            model: event.target.value || undefined,
-                          })
-                        }
+                        onChange={(model) => patchSelected({ model })}
                       />
                     </Field>
                     <Field

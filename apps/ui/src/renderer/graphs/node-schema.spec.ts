@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { canConnect, makeHandleId, NODE_TYPE_SCHEMAS } from './node-schema';
+import {
+  AGENT_MODEL_OPTIONS,
+  canConnect,
+  makeHandleId,
+  NODE_TYPE_SCHEMAS,
+} from './node-schema';
 
 describe('canConnect (real registry)', () => {
   it('allows agent → agent and trigger → agent', () => {
@@ -44,6 +49,24 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'approval',
     ]);
     expect(triggerKeys).toEqual(['id', 'kind', 'name', 'trigger']);
+  });
+});
+
+describe('AGENT_MODEL_OPTIONS', () => {
+  it('offers each CLI its own documented model aliases', () => {
+    // Pinned literally: these are the aliases each CLI's `--model` help
+    // documents — the select passes them straight through to the flag.
+    expect(AGENT_MODEL_OPTIONS.claude).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
+    expect(AGENT_MODEL_OPTIONS['cursor-agent']).toEqual([
+      'gpt-5',
+      'sonnet-4',
+      'sonnet-4-thinking',
+    ]);
   });
 });
 

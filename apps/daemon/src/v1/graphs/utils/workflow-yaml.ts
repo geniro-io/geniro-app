@@ -51,11 +51,28 @@ function setOrDelete(map: YAMLMap, key: string, value: unknown): void {
   }
 }
 
-const NODE_FIELDS = ['name', 'agent', 'model', 'role', 'approval'] as const;
+const AGENT_ONLY_FIELDS = ['agent', 'model', 'role', 'approval'] as const;
+const TRIGGER_ONLY_FIELDS = ['trigger'] as const;
 
 function patchNodeItem(item: YAMLMap, node: WorkflowNode): void {
-  for (const field of NODE_FIELDS) {
-    setOrDelete(item, field, node[field]);
+  item.set('kind', node.kind);
+  setOrDelete(item, 'name', node.name);
+  // Patch this kind's fields and drop the other kind's — a hand-edited file
+  // that flipped a node's kind must not keep stale cross-kind keys.
+  if (node.kind === 'agent') {
+    for (const field of TRIGGER_ONLY_FIELDS) {
+      setOrDelete(item, field, undefined);
+    }
+    for (const field of AGENT_ONLY_FIELDS) {
+      setOrDelete(item, field, node[field]);
+    }
+  } else {
+    for (const field of AGENT_ONLY_FIELDS) {
+      setOrDelete(item, field, undefined);
+    }
+    for (const field of TRIGGER_ONLY_FIELDS) {
+      setOrDelete(item, field, node[field]);
+    }
   }
 }
 

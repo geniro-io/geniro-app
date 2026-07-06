@@ -19,7 +19,13 @@ import {
 } from '@packages/common';
 
 import { environment } from '../../../environments';
-import type { Workflow, WorkflowSummary, WorkflowWire } from '../graphs.types';
+import type { AgentKind } from '../../runs/runs.types';
+import {
+  type Workflow,
+  WORKFLOW_AGENT_KINDS,
+  type WorkflowSummary,
+  type WorkflowWire,
+} from '../graphs.types';
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
 import {
@@ -32,6 +38,26 @@ const WORKFLOW_SUFFIX = '.geniro.yaml';
 
 /** Slug charset — a plain file-name segment, so no path traversal is possible. */
 const SLUG_RE = /^[a-z0-9][a-z0-9-_]*$/i;
+
+/**
+ * Tally a workflow's nodes by agent kind for the library summary. Only kinds
+ * actually present appear, ordered by `WORKFLOW_AGENT_KINDS` so the card badges
+ * render in a stable order regardless of node declaration order.
+ */
+function agentCountsOf(
+  workflow: Workflow,
+): { kind: AgentKind; count: number }[] {
+  const counts = new Map<AgentKind, number>();
+  for (const node of workflow.nodes) {
+    if (node.kind === 'agent') {
+      counts.set(node.agent, (counts.get(node.agent) ?? 0) + 1);
+    }
+  }
+  return WORKFLOW_AGENT_KINDS.flatMap((kind) => {
+    const count = counts.get(kind);
+    return count ? [{ kind, count }] : [];
+  });
+}
 
 export interface WorkflowStoreOptions {
   /** Library directory override (test seam); default `<userData>/workflows`. */
@@ -88,6 +114,8 @@ export class WorkflowStoreService {
           name: workflow.name,
           description: workflow.description ?? null,
           nodeCount: workflow.nodes.length,
+          edgeCount: workflow.edges.length,
+          agentCounts: agentCountsOf(workflow),
           updatedAt: stats.mtime.toISOString(),
         });
       } catch (err) {
@@ -98,7 +126,12 @@ export class WorkflowStoreService {
         );
       }
     }
-    return summaries.sort((a, b) => a.slug.localeCompare(b.slug));
+    // Newest-updated first (ISO strings compare chronologically); slug breaks
+    // ties so same-mtime files keep a stable order between listings.
+    return summaries.sort(
+      (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) || a.slug.localeCompare(b.slug),
+    );
   }
 
   async get(slug: string): Promise<WorkflowWire> {

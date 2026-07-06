@@ -6,8 +6,14 @@ import { autoLayout, edgeId, fromFlow, nextNodeId, toFlow } from './graph-doc';
 const WF: Workflow = {
   name: 'team',
   nodes: [
-    { id: 'coder', agent: 'claude', approval: 'auto', role: 'You code.' },
-    { id: 'reviewer', agent: 'cursor-agent', approval: 'ask' },
+    {
+      id: 'coder',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+      role: 'You code.',
+    },
+    { id: 'reviewer', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
   ],
   edges: [{ from: 'coder', to: 'reviewer' }],
   layout: { coder: { x: 10, y: 20 } },
@@ -39,6 +45,25 @@ describe('toFlow / fromFlow', () => {
     });
   });
 
+  it('maps node kinds to their RF component types and round-trips a trigger', () => {
+    const flow = toFlow({
+      name: 'triggered',
+      nodes: [{ id: 'start', kind: 'trigger', trigger: 'manual' }, ...WF.nodes],
+      edges: [{ from: 'start', to: 'coder' }, ...WF.edges],
+    });
+    expect(flow.nodes.map((n) => n.type)).toEqual([
+      'trigger',
+      'agent',
+      'agent',
+    ]);
+    const back = fromFlow({ name: 'triggered' }, flow.nodes, flow.edges);
+    expect(back.nodes[0]).toEqual({
+      id: 'start',
+      kind: 'trigger',
+      trigger: 'manual',
+    });
+  });
+
   it('keeps edge labels when present', () => {
     const flow = toFlow({
       ...WF,
@@ -57,6 +82,11 @@ describe('nextNodeId', () => {
   it('skips taken ids', () => {
     expect(nextNodeId(new Set(['agent-1', 'agent-2']))).toBe('agent-3');
     expect(nextNodeId(new Set())).toBe('agent-1');
+  });
+
+  it('prefixes by node kind', () => {
+    expect(nextNodeId(new Set(['agent-1']), 'trigger')).toBe('trigger-1');
+    expect(nextNodeId(new Set(['trigger-1']), 'trigger')).toBe('trigger-2');
   });
 });
 

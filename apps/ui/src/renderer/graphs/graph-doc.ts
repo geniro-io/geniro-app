@@ -2,9 +2,12 @@ import type { Edge, Node } from '@xyflow/react';
 import ELK from 'elkjs/lib/elk.bundled.js';
 
 import type {
+  NodeKind,
   Workflow,
+  WorkflowAgentNode,
   WorkflowLayout,
   WorkflowNode,
+  WorkflowTriggerNode,
 } from '../../shared/contracts';
 
 /**
@@ -14,8 +17,11 @@ import type {
  * hand-written file still opens readably.
  */
 
-/** React Flow node carrying its workflow node as data. */
-export type AgentFlowNode = Node<{ node: WorkflowNode }, 'agent'>;
+/** React Flow nodes carrying their workflow node as data, typed per kind —
+ *  the RF `type` string doubles as the node kind and selects the component. */
+export type AgentFlowNode = Node<{ node: WorkflowAgentNode }, 'agent'>;
+export type TriggerFlowNode = Node<{ node: WorkflowTriggerNode }, 'trigger'>;
+export type GraphFlowNode = AgentFlowNode | TriggerFlowNode;
 
 const GRID_X = 260;
 const GRID_Y = 120;
@@ -30,15 +36,15 @@ export function edgeId(from: string, to: string): string {
 }
 
 export function toFlow(workflow: Workflow): {
-  nodes: AgentFlowNode[];
+  nodes: GraphFlowNode[];
   edges: Edge[];
 } {
-  const nodes = workflow.nodes.map((node, index) => ({
-    id: node.id,
-    type: 'agent' as const,
-    position: workflow.layout?.[node.id] ?? fallbackPosition(index),
-    data: { node },
-  }));
+  const nodes = workflow.nodes.map((node, index): GraphFlowNode => {
+    const position = workflow.layout?.[node.id] ?? fallbackPosition(index);
+    return node.kind === 'trigger'
+      ? { id: node.id, type: 'trigger', position, data: { node } }
+      : { id: node.id, type: 'agent', position, data: { node } };
+  });
   const edges = workflow.edges.map((edge) => ({
     id: edgeId(edge.from, edge.to),
     source: edge.from,
@@ -50,7 +56,7 @@ export function toFlow(workflow: Workflow): {
 
 export function fromFlow(
   meta: { name: string; description?: string },
-  nodes: readonly AgentFlowNode[],
+  nodes: readonly GraphFlowNode[],
   edges: readonly Edge[],
 ): Workflow {
   const layout: WorkflowLayout = {};
@@ -63,7 +69,7 @@ export function fromFlow(
   return {
     name: meta.name,
     ...(meta.description ? { description: meta.description } : {}),
-    nodes: nodes.map((n) => n.data.node),
+    nodes: nodes.map((n): WorkflowNode => n.data.node),
     edges: edges.map((e) => ({
       from: e.source,
       to: e.target,
@@ -73,17 +79,21 @@ export function fromFlow(
   };
 }
 
-/** A fresh node id not colliding with the existing set (`agent-1`, `agent-2`…). */
-export function nextNodeId(existing: ReadonlySet<string>): string {
+/** A fresh node id not colliding with the existing set — prefixed by kind
+ *  (`agent-1`, `trigger-1`, …). */
+export function nextNodeId(
+  existing: ReadonlySet<string>,
+  prefix: NodeKind = 'agent',
+): string {
   let n = 1;
-  while (existing.has(`agent-${n}`)) {
+  while (existing.has(`${prefix}-${n}`)) {
     n += 1;
   }
-  return `agent-${n}`;
+  return `${prefix}-${n}`;
 }
 
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 88;
+const NODE_WIDTH = 240;
+const NODE_HEIGHT = 128;
 
 /**
  * Auto-layout via ELK (layered, left→right — matches the producer→consumer

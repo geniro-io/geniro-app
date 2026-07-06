@@ -143,6 +143,13 @@ export class TerminalsService {
         `workflow ${run.workflowId} has no node: ${nodeId}`,
       );
     }
+    if (node.kind !== 'agent') {
+      // Only agent nodes run a CLI session there is anything to mirror of.
+      throw new BadRequestException(
+        'TERMINAL_NODE_NOT_AGENT',
+        `node ${nodeId} is a ${node.kind} node — only agent nodes have a terminal`,
+      );
+    }
     return { agentKind: node.agent, stateNodeId: nodeId, wireNodeId: nodeId };
   }
 }

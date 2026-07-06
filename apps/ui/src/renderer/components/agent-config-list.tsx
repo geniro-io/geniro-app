@@ -64,6 +64,8 @@ export interface AgentConfigListProps {
   keyPresent: boolean;
   cursorKey: string;
   onCursorKeyChange: (value: string) => void;
+  /** Fired when the key field loses focus — Settings uses it to auto-save. */
+  onCursorKeyBlur?: () => void;
   /** Whether a Cursor key is already saved in the Keychain (null = loading). */
   hasStoredKey: boolean | null;
   /** Settings-only: clear the saved Keychain key. Omitted in onboarding. */
@@ -87,6 +89,7 @@ export function AgentConfigList({
   keyPresent,
   cursorKey,
   onCursorKeyChange,
+  onCursorKeyBlur,
   hasStoredKey,
   onRemoveKey,
 }: AgentConfigListProps): React.JSX.Element {
@@ -156,6 +159,7 @@ export function AgentConfigList({
                   }
                   value={cursorKey}
                   onChange={(event) => onCursorKeyChange(event.target.value)}
+                  onBlur={onCursorKeyBlur}
                 />
                 {hasStoredKey && onRemoveKey ? (
                   <Button

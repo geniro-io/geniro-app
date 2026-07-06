@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,8 +15,8 @@ import { WorkflowStoreService } from './workflow-store.service';
 const WF: Workflow = {
   name: 'Review Team',
   nodes: [
-    { id: 'coder', agent: 'claude', approval: 'auto' },
-    { id: 'reviewer', agent: 'cursor-agent', approval: 'ask' },
+    { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
+    { id: 'reviewer', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
   ],
   edges: [{ from: 'coder', to: 'reviewer' }],
 };
@@ -43,7 +43,77 @@ describe('WorkflowStoreService', () => {
       slug: 'review-team',
       name: 'Review Team',
       nodeCount: 2,
+      edgeCount: 1,
     });
+  });
+
+  it('summarizes the per-agent-kind breakdown in a stable order', async () => {
+    // The card badges read agentCounts directly — assert it is a real tally
+    // (three same-kind nodes count as 3, not deduped to 1) and that the order
+    // follows WORKFLOW_AGENT_KINDS (claude first) regardless of declaration
+    // order, so a card's badges don't reshuffle between listings.
+    await store.create({
+      name: 'Mixed Team',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'd', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [],
+    });
+    const [summary] = await store.list();
+    expect(summary.agentCounts).toEqual([
+      { kind: 'claude', count: 3 },
+      { kind: 'cursor-agent', count: 1 },
+    ]);
+    expect(summary.edgeCount).toBe(0);
+  });
+
+  it('counts trigger nodes in nodeCount but never in agentCounts', async () => {
+    await store.create({
+      name: 'Triggered',
+      nodes: [
+        { id: 't', kind: 'trigger', trigger: 'manual' },
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [{ from: 't', to: 'a' }],
+    });
+    const [summary] = await store.list();
+    expect(summary!.nodeCount).toBe(2);
+    expect(summary!.agentCounts).toEqual([{ kind: 'claude', count: 1 }]);
+  });
+
+  it('lists workflows newest-updated first', async () => {
+    // Deliberately make the ALPHABETICALLY-FIRST slug the OLDER file: an
+    // alphabetical sort would return ['alpha', 'beta'], so this only passes
+    // when the ordering truly follows the modification time.
+    await store.create({ ...WF, name: 'Alpha' });
+    await store.create({ ...WF, name: 'Beta' });
+    await utimes(
+      join(dir, 'alpha.geniro.yaml'),
+      new Date(),
+      new Date('2026-01-01T00:00:00Z'),
+    );
+    await utimes(
+      join(dir, 'beta.geniro.yaml'),
+      new Date(),
+      new Date('2026-06-01T00:00:00Z'),
+    );
+
+    const slugs = (await store.list()).map((s) => s.slug);
+    expect(slugs).toEqual(['beta', 'alpha']);
+  });
+
+  it('accepts an empty workflow as a library draft', async () => {
+    // "New workflow" persists a blank canvas (no nodes) before the builder
+    // opens — the store must round-trip it; only RUNNING it is rejected
+    // (graph-executor's GRAPH_EMPTY).
+    const created = await store.create({ name: 'Blank', nodes: [], edges: [] });
+    const { workflow } = await store.get(created.slug);
+    expect(workflow.nodes).toEqual([]);
+    const [summary] = await store.list();
+    expect(summary).toMatchObject({ nodeCount: 0, edgeCount: 0 });
   });
 
   it('suffixes the slug when the name collides', async () => {

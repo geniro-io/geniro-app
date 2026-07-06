@@ -58,13 +58,33 @@ describe('serializeWorkflowYaml', () => {
   it('emits parseable YAML for a fresh workflow (no existing source)', () => {
     const wf: Workflow = {
       name: 'fresh',
-      nodes: [{ id: 'a', agent: 'claude', approval: 'auto' }],
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
       edges: [],
       layout: { a: { x: 10, y: 20 } },
     };
     const out = serializeWorkflowYaml(wf);
     const back = parseWorkflowYaml(out);
     expect(back).toEqual(wf);
+  });
+
+  it('round-trips a trigger node and defaults kind-less YAML nodes to agent', () => {
+    // The union discriminates on `kind`; a pre-trigger file written without
+    // it must still parse as agent nodes (backward compat via preprocess).
+    const wf: Workflow = {
+      name: 'triggered',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [{ from: 'start', to: 'a' }],
+    };
+    const back = parseWorkflowYaml(serializeWorkflowYaml(wf));
+    expect(back).toEqual(wf);
+
+    const legacy = parseWorkflowYaml(
+      'name: old\nnodes:\n  - id: a\n    agent: claude\n',
+    );
+    expect(legacy.nodes[0]).toMatchObject({ kind: 'agent', agent: 'claude' });
   });
 
   it('preserves user comments when patching an existing file', () => {
@@ -97,7 +117,10 @@ describe('serializeWorkflowYaml', () => {
     const wf = parseWorkflowYaml(VALID_SOURCE);
     const grown: Workflow = {
       ...wf,
-      nodes: [...wf.nodes, { id: 'tester', agent: 'claude', approval: 'auto' }],
+      nodes: [
+        ...wf.nodes,
+        { id: 'tester', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
       edges: [...wf.edges, { from: 'reviewer', to: 'tester' }],
     };
     const out = serializeWorkflowYaml(grown, VALID_SOURCE);
@@ -137,8 +160,13 @@ edges: []
     const wf: Workflow = {
       name: 'review-team',
       nodes: [
-        { id: 'coder', agent: 'claude', approval: 'auto' },
-        { id: 'reviewer', agent: 'cursor-agent', approval: 'auto' },
+        { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'reviewer',
+          kind: 'agent',
+          agent: 'cursor-agent',
+          approval: 'auto',
+        },
       ],
       edges: [],
     };
@@ -150,7 +178,7 @@ edges: []
   it('falls back to a clean dump when the existing source is unparseable', () => {
     const wf: Workflow = {
       name: 'rescued',
-      nodes: [{ id: 'a', agent: 'claude', approval: 'auto' }],
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
       edges: [],
     };
     const out = serializeWorkflowYaml(wf, 'nodes: [\nname: :');

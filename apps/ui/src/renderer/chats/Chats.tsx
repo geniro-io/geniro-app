@@ -265,17 +265,8 @@ export function Chats({
     return chosen;
   }, [folder, chooseFolder]);
 
-  // Read settings at creation time (not mount) so a default model saved on the
-  // Settings tab applies to the very next chat without a tab round-trip.
   const createChatRun = useCallback(
-    async (cwd: string) => {
-      const { defaultModel } = await window.geniro.getSettings();
-      return chatApi.createChat(
-        defaultModel
-          ? { agentKind, cwd, model: defaultModel }
-          : { agentKind, cwd },
-      );
-    },
+    async (cwd: string) => chatApi.createChat({ agentKind, cwd }),
     [agentKind, chatApi],
   );
 

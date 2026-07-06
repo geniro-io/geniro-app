@@ -16,7 +16,6 @@ import { Settings } from './Settings';
 const settings: SettingsShape = {
   onboardingComplete: true,
   projectFolder: '/proj',
-  defaultModel: 'claude-sonnet-5',
   cliPaths: {},
   checkForUpdates: false,
 };
@@ -63,68 +62,34 @@ afterEach(async () => {
   container.remove();
 });
 
-describe('Settings defaults section', () => {
-  it('seeds the default model and update-check from persisted settings', async () => {
+describe('Settings updates section', () => {
+  it('seeds the update toggle from persisted settings', async () => {
     await mount();
 
-    const model = container.querySelector<HTMLInputElement>('#default-model');
-    const updates =
-      container.querySelector<HTMLInputElement>('#check-for-updates');
-    expect(model?.value).toBe('claude-sonnet-5');
-    expect(updates?.checked).toBe(false);
+    const toggle = container.querySelector('[role="switch"]');
+    expect(toggle?.getAttribute('aria-checked')).toBe('false');
   });
 
-  it('saves the trimmed model (null when cleared) and the update toggle', async () => {
+  it('auto-saves the update toggle on flip — no Save button', async () => {
     await mount();
-    const model = container.querySelector<HTMLInputElement>('#default-model')!;
-    const updates =
-      container.querySelector<HTMLInputElement>('#check-for-updates')!;
+    // The Save button is gone; flipping the switch must persist on its own.
+    expect(
+      [...container.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Save changes'),
+      ),
+    ).toBe(false);
 
-    // Clear the model and flip the toggle via native setters + change events.
-    const setValue = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value',
-    )!.set!;
+    const toggle =
+      container.querySelector<HTMLButtonElement>('[role="switch"]')!;
     await act(async () => {
-      setValue.call(model, '   ');
-      model.dispatchEvent(new Event('input', { bubbles: true }));
-      updates.click();
-    });
-
-    const save = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Save changes'),
-    )!;
-    await act(async () => {
-      save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(geniro.updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultModel: null, checkForUpdates: true }),
+      expect.objectContaining({ checkForUpdates: true }),
     );
-  });
-
-  it('saves a padded model trimmed', async () => {
-    await mount();
-    const model = container.querySelector<HTMLInputElement>('#default-model')!;
-    const setValue = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value',
-    )!.set!;
-    await act(async () => {
-      setValue.call(model, '  claude-x  ');
-      model.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-
-    const save = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Save changes'),
-    )!;
-    await act(async () => {
-      save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(geniro.updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultModel: 'claude-x' }),
-    );
+    // The switch reflects the new state immediately.
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
   });
 
   it('runs a manual update check and reports the outcome', async () => {

@@ -85,15 +85,42 @@ export interface ChatItem {
 /** Tool-approval mode of one workflow node. */
 export type WorkflowApproval = 'auto' | 'ask';
 
-/** One agent node of a workflow DAG. */
-export interface WorkflowNode {
+/**
+ * Node kinds a workflow may contain (mirrors the daemon's `NODE_KINDS`).
+ * A new kind lands here plus one entry in the renderer's
+ * `NODE_CONNECTION_RULES` mirror and its schema branch on the daemon.
+ */
+export type NodeKind = 'agent' | 'trigger';
+export const NODE_KINDS: readonly NodeKind[] = ['agent', 'trigger'];
+
+/** Trigger types a trigger node may carry (mirrors `TRIGGER_KINDS`). */
+export type TriggerKind = 'manual';
+export const TRIGGER_KINDS: readonly TriggerKind[] = ['manual'];
+
+/** One agent node — a CLI coding agent running one turn per run. */
+export interface WorkflowAgentNode {
   id: string;
+  kind: 'agent';
   name?: string;
   agent: CliKind;
   model?: string;
   role?: string;
   approval: WorkflowApproval;
 }
+
+/**
+ * One trigger node — the graph's entry point. Runs no CLI; firing it (manual
+ * = submitting a run prompt) seeds its downstream agents.
+ */
+export interface WorkflowTriggerNode {
+  id: string;
+  kind: 'trigger';
+  name?: string;
+  trigger: TriggerKind;
+}
+
+/** One node of a workflow DAG, discriminated by `kind`. */
+export type WorkflowNode = WorkflowAgentNode | WorkflowTriggerNode;
 
 /** Directed edge: `from`'s final text feeds `to`'s prompt context. */
 export interface WorkflowEdge {
@@ -120,6 +147,9 @@ export interface WorkflowSummary {
   name: string;
   description: string | null;
   nodeCount: number;
+  edgeCount: number;
+  /** Per-agent-kind node counts, only kinds present, in a stable order. */
+  agentCounts: { kind: CliKind; count: number }[];
   updatedAt: string;
 }
 
@@ -173,8 +203,6 @@ export interface Settings {
   onboardingComplete: boolean;
   /** Absolute path to the user's working project folder (agent cwd). */
   projectFolder: string | null;
-  /** Default model id applied to new agent nodes. */
-  defaultModel: string | null;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -185,7 +213,6 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
   projectFolder: null,
-  defaultModel: null,
   cliPaths: {},
   checkForUpdates: true,
 };

@@ -59,8 +59,12 @@ function schemeOf(url: string): string {
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
+    width: 1440,
+    height: 920,
+    // Keep the builder's palette + canvas + inspector (and the library grid)
+    // usable — below this the three-pane layout starts to crowd.
+    minWidth: 960,
+    minHeight: 640,
     show: false,
     title: 'Geniro',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,

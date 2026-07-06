@@ -170,7 +170,6 @@ beforeEach(() => {
     getSettings: vi.fn().mockResolvedValue({
       onboardingComplete: true,
       projectFolder: '/proj',
-      defaultModel: null,
       cliPaths: {},
       checkForUpdates: true,
     }),
@@ -859,15 +858,9 @@ describe('Chats terminal mirror', () => {
 });
 
 describe('Chats defaults', () => {
-  it('applies the settings default model to a new chat', async () => {
-    (window as unknown as { geniro: Partial<GeniroApi> }).geniro.getSettings =
-      vi.fn().mockResolvedValue({
-        onboardingComplete: true,
-        projectFolder: '/proj',
-        defaultModel: 'claude-sonnet-5',
-        cliPaths: {},
-        checkForUpdates: true,
-      });
+  it('creates a new chat with no model — new chats use the CLI default', async () => {
+    // The default-model setting was removed; a new chat must NOT carry a model
+    // (regressing it would re-introduce the concept this pins as gone).
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
     const { client } = makeClient();
     const container = await mount(client);
@@ -879,8 +872,9 @@ describe('Chats defaults', () => {
       newChat?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(api.createChat).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'claude-sonnet-5' }),
-    );
+    expect(api.createChat).toHaveBeenCalled();
+    for (const [arg] of api.createChat.mock.calls) {
+      expect(arg).not.toHaveProperty('model');
+    }
   });
 });

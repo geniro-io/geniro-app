@@ -9,6 +9,7 @@ import type {
   WorkflowNode,
   WorkflowTriggerNode,
 } from '../../shared/contracts';
+import { makeHandleId } from './node-schema';
 
 /**
  * Pure Workflow ⇄ React Flow document conversion (no React, unit-testable).
@@ -45,12 +46,26 @@ export function toFlow(workflow: Workflow): {
       ? { id: node.id, type: 'trigger', position, data: { node } }
       : { id: node.id, type: 'agent', position, data: { node } };
   });
-  const edges = workflow.edges.map((edge) => ({
-    id: edgeId(edge.from, edge.to),
-    source: edge.from,
-    target: edge.to,
-    label: edge.label,
-  }));
+  // Edges attach to the per-rule handles. The YAML never stores ports: with
+  // at most one rule per (side, peer kind) the canonical handle pair is fully
+  // derived from the endpoint kinds (see makeHandleId).
+  const kindOf = new Map(workflow.nodes.map((node) => [node.id, node.kind]));
+  const edges = workflow.edges.map((edge) => {
+    const sourceKind = kindOf.get(edge.from);
+    const targetKind = kindOf.get(edge.to);
+    return {
+      id: edgeId(edge.from, edge.to),
+      source: edge.from,
+      target: edge.to,
+      label: edge.label,
+      ...(targetKind
+        ? { sourceHandle: makeHandleId('source', targetKind) }
+        : {}),
+      ...(sourceKind
+        ? { targetHandle: makeHandleId('target', sourceKind) }
+        : {}),
+    };
+  });
   return { nodes, edges };
 }
 

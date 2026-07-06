@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type {
   DaemonHandle,
+  NodeKind,
   WorkflowAgentNode,
   WorkflowApproval,
   WorkflowNode,
@@ -61,7 +62,7 @@ import {
   type PaletteItem,
   parsePaletteItem,
 } from './node-palette';
-import { canConnect } from './node-schema';
+import { canConnect, makeHandleId } from './node-schema';
 import { TriggerNode } from './trigger-node';
 import { WorkflowCard } from './workflow-card';
 
@@ -372,14 +373,31 @@ export function Graphs({
       if (connection.source === connection.target) {
         return; // self-loops are invalid (the daemon rejects them too)
       }
+      // Normalize to the canonical handle pair derived from the endpoint
+      // kinds (the same ids toFlow derives) — a drag may have grabbed any of
+      // the stacked collapsed handles, but with one rule per (side, kind)
+      // there is exactly one correct pair.
+      const kindOf = (id: string): NodeKind | undefined =>
+        nodes.find((n) => n.id === id)?.data.node.kind;
+      const sourceKind = kindOf(connection.source);
+      const targetKind = kindOf(connection.target);
       setEdges((prev) =>
         addEdge(
-          { ...connection, id: edgeId(connection.source, connection.target) },
+          {
+            ...connection,
+            id: edgeId(connection.source, connection.target),
+            sourceHandle: targetKind
+              ? makeHandleId('source', targetKind)
+              : connection.sourceHandle,
+            targetHandle: sourceKind
+              ? makeHandleId('target', sourceKind)
+              : connection.targetHandle,
+          },
           prev,
         ),
       );
     },
-    [setEdges],
+    [nodes, setEdges],
   );
 
   /**

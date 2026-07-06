@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { canConnect, NODE_TYPE_SCHEMAS } from './node-schema';
+import { canConnect, makeHandleId, NODE_TYPE_SCHEMAS } from './node-schema';
 
 describe('canConnect (real registry)', () => {
   it('allows agent → agent and trigger → agent', () => {
@@ -44,5 +44,16 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'approval',
     ]);
     expect(triggerKeys).toEqual(['id', 'kind', 'name', 'trigger']);
+  });
+});
+
+describe('makeHandleId', () => {
+  it('derives the per-rule handle id from direction + peer kind', () => {
+    // Pinned literally: toFlow derives these for STORED edges and the ports
+    // block renders Handles under them — a drifted scheme silently detaches
+    // every persisted edge from its handle.
+    expect(makeHandleId('target', 'trigger')).toBe('target-kind-trigger');
+    expect(makeHandleId('target', 'agent')).toBe('target-kind-agent');
+    expect(makeHandleId('source', 'agent')).toBe('source-kind-agent');
   });
 });

@@ -139,6 +139,18 @@ export const NODE_CONNECTION_RULES: Record<
 };
 
 /**
+ * The React Flow handle id for one connection rule — geniro's
+ * `${dir}-${rule.type}-${slug(rule.value)}` scheme collapsed to our kind-only
+ * rules. Every rule renders its own handle under this id (collapsed and
+ * expanded alike), and because the registry holds at most ONE rule per
+ * (side, peer kind), an edge's handles are fully derivable from its endpoint
+ * kinds — so ports never need to be persisted in the YAML.
+ */
+export function makeHandleId(dir: 'source' | 'target', kind: NodeKind): string {
+  return `${dir}-kind-${kind}`;
+}
+
+/**
  * Whether an edge `source → target` is legal under the connection rules:
  * the source kind must list the target kind in its `outputs` AND the target
  * kind must list the source kind in its `inputs` (both sides agree) — the

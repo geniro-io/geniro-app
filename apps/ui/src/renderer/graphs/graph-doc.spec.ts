@@ -32,6 +32,10 @@ describe('toFlow / fromFlow', () => {
         source: 'coder',
         target: 'reviewer',
         label: undefined,
+        // Handles derive from the endpoint kinds (both agents here) and are
+        // never persisted — fromFlow drops them below.
+        sourceHandle: 'source-kind-agent',
+        targetHandle: 'target-kind-agent',
       },
     ]);
 
@@ -56,6 +60,13 @@ describe('toFlow / fromFlow', () => {
       'agent',
       'agent',
     ]);
+    // A trigger→agent edge lands on the agent's trigger-typed input handle.
+    expect(flow.edges[0]).toMatchObject({
+      source: 'start',
+      target: 'coder',
+      sourceHandle: 'source-kind-agent',
+      targetHandle: 'target-kind-trigger',
+    });
     const back = fromFlow({ name: 'triggered' }, flow.nodes, flow.edges);
     expect(back.nodes[0]).toEqual({
       id: 'start',

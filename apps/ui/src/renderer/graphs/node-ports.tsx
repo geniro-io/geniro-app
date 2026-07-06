@@ -164,42 +164,49 @@ export function NodePorts({
   }, [expanded, nodeId, updateNodeInternals]);
 
   return (
-    <div
-      className={cn(
-        'flex justify-between gap-2 px-3 py-2.5',
-        expanded ? 'items-start' : 'items-center',
-      )}>
-      <div className="flex min-w-0 flex-1 justify-start">
-        <PortsSide
-          side="input"
-          kind={kind}
-          expanded={expanded}
-          missing={missingInput}
-        />
+    <>
+      {/* Geniro's toggle: an 18px circle straddling the header divider,
+          centered on the card (a zero-height row keeps it out of flow). */}
+      <div className="relative z-10 flex h-0 justify-center">
+        <button
+          type="button"
+          aria-label={expanded ? 'Collapse ports' : 'Expand ports'}
+          aria-expanded={expanded}
+          className="nodrag absolute -top-[9px] flex size-[18px] items-center justify-center rounded-full border border-border/60 bg-card text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+          onPointerDown={(event) => {
+            // Neither drag nor select the node from the toggle.
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            setExpanded((value) => !value);
+          }}>
+          {expanded ? (
+            <ChevronUp aria-hidden="true" className="size-2.5" />
+          ) : (
+            <ChevronDown aria-hidden="true" className="size-2.5" />
+          )}
+        </button>
       </div>
-      <button
-        type="button"
-        aria-label={expanded ? 'Collapse ports' : 'Expand ports'}
-        aria-expanded={expanded}
-        className="nodrag shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        onClick={(event) => {
-          event.stopPropagation();
-          setExpanded((value) => !value);
-        }}>
-        {expanded ? (
-          <ChevronUp aria-hidden="true" className="size-3.5" />
-        ) : (
-          <ChevronDown aria-hidden="true" className="size-3.5" />
-        )}
-      </button>
-      <div className="flex min-w-0 flex-1 justify-end">
-        <PortsSide
-          side="output"
-          kind={kind}
-          expanded={expanded}
-          missing={missingOutput}
-        />
+      <div className="flex gap-4 px-3 pt-3 pb-2.5">
+        <div className="flex min-w-0 flex-1 justify-start">
+          <PortsSide
+            side="input"
+            kind={kind}
+            expanded={expanded}
+            missing={missingInput}
+          />
+        </div>
+        <div className="flex min-w-0 flex-1 justify-end">
+          <PortsSide
+            side="output"
+            kind={kind}
+            expanded={expanded}
+            missing={missingOutput}
+          />
+        </div>
       </div>
-    </div>
+    </>
   );
 }

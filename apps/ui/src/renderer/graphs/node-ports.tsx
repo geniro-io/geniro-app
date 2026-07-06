@@ -87,7 +87,7 @@ function PortsSide({
     // — plural label + the rule-type count — so input and output always
     // mirror each other visually.
     return (
-      <div className="relative flex items-center">
+      <div className="relative flex w-full items-center">
         {rules.map((rule, index) => (
           <Handle
             key={rule.kind}
@@ -97,7 +97,7 @@ function PortsSide({
             style={handleStyle(edge, tone, index > 0, rules.length - index)}
           />
         ))}
-        <div className={pill({ tone })}>
+        <div className={cn(pill({ tone }), 'w-full')}>
           <div className="text-[10px] font-semibold leading-tight">{side}s</div>
           <div className="text-[10px] leading-tight opacity-60">
             {rules.length} connection{rules.length === 1 ? '' : 's'}
@@ -106,26 +106,19 @@ function PortsSide({
       </div>
     );
   }
+  // Every row fills its column — both sides are equal flex-1 columns, so all
+  // labels come out the same width.
   return (
-    <div
-      className={cn(
-        'flex w-full flex-col gap-1.5',
-        side === 'output' && 'items-end',
-      )}>
+    <div className="flex w-full flex-col gap-1.5">
       {rules.map((rule) => (
-        <div
-          key={rule.kind}
-          className={cn(
-            'relative flex items-center',
-            side === 'input' && 'w-full',
-          )}>
+        <div key={rule.kind} className="relative flex w-full items-center">
           <Handle
             type={dir}
             id={makeHandleId(dir, rule.kind)}
             position={position}
             style={handleStyle(edge, tone, false)}
           />
-          <div className={cn(pill({ tone }), side === 'input' && 'w-full')}>
+          <div className={cn(pill({ tone }), 'w-full')}>
             <div className="text-[10px] font-semibold leading-tight">
               {rule.kind}
             </div>

@@ -31,7 +31,6 @@ const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
 export const settingsPatchSchema = z.strictObject({
   onboardingComplete: z.boolean().optional(),
   projectFolder: absolutePath.nullable().optional(),
-  defaultModel: z.string().nullable().optional(),
   // partialRecord, not record: in zod v4 z.record over an enum key is
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),

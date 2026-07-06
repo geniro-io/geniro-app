@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
-import { ConflictException } from '@packages/common';
+import { BadRequestException, ConflictException } from '@packages/common';
 
 import type {
   AgentEvent,
@@ -25,9 +25,17 @@ import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import type { ItemKind } from '../../runs/runs.types';
-import type { NodeStateWire, Workflow, WorkflowNode } from '../graphs.types';
+import type {
+  NodeStateWire,
+  Workflow,
+  WorkflowAgentNode,
+  WorkflowNode,
+} from '../graphs.types';
 import { buildEdgeMaps, computeRunOrder } from '../utils/graph-order';
-import { validateWorkflowGraph } from '../utils/graph-validate';
+import {
+  validateRunnableGraph,
+  validateWorkflowGraph,
+} from '../utils/graph-validate';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
 type NodeOutcome = 'completed' | 'failed' | 'cancelled' | 'skipped';
@@ -85,7 +93,18 @@ export class GraphExecutorService {
    */
   async startRun(input: StartWorkflowRunInput): Promise<RunWire> {
     validateWorkflowGraph(input.workflow.nodes, input.workflow.edges);
+    validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
     computeRunOrder(input.workflow.nodes, input.workflow.edges);
+    // Milestone-1 guard: call edges are drawable/persistable statics, but the
+    // call runtime (CallBroker + MCP endpoint) lands in milestone 2 — without
+    // it a call-only node would launch at run start with only the seed prompt.
+    // Milestone 2 removes this check.
+    if (input.workflow.edges.some((edge) => edge.kind === 'call')) {
+      throw new BadRequestException(
+        'GRAPH_CALL_RUNTIME_UNAVAILABLE',
+        'This workflow has call edges — agent-to-agent calls are not runnable yet; remove the call edges to run it today',
+      );
+    }
     const cwd = resolveValidCwd(input.cwd);
 
     const em = this.em.fork();
@@ -296,7 +315,31 @@ export class GraphExecutorService {
       }
     };
 
-    const launchNode = (node: WorkflowNode): void => {
+    /**
+     * A trigger node runs no CLI — firing it IS the run start, so it settles
+     * completed instantly (its downstream agents launch in the same schedule
+     * pass). It records no finalText: the seed prompt already reaches every
+     * agent, so composePrompt must not add an empty "output from trigger"
+     * section.
+     */
+    const fireTrigger = (node: WorkflowNode): void => {
+      settled.set(node.id, 'completed');
+      enqueue(async () => {
+        const now = Date.now();
+        await this.nodeStateDao.setStatus(
+          runId,
+          node.id,
+          { status: 'completed', startedAt: now, endedAt: now },
+          em,
+        );
+        await persistItem(node.id, 'status', null, {
+          nodeId: node.id,
+          status: 'completed',
+        });
+      });
+    };
+
+    const launchNode = (node: WorkflowAgentNode): void => {
       const adapter: AgentAdapter =
         node.agent === 'claude' ? this.claude : this.cursor;
       const textChunks: string[] = [];
@@ -483,6 +526,12 @@ export class GraphExecutorService {
             (id) => settled.get(id) === 'completed',
           );
           if (allCompleted) {
+            if (node.kind === 'trigger') {
+              // No process, no concurrency slot — settles in this pass.
+              fireTrigger(node);
+              changed = true;
+              continue;
+            }
             if (runningHandles.size >= MAX_PARALLEL_NODES) {
               // Concurrency cap reached — leave the node ready; the
               // schedule() pass each settling node fires launches it later.
@@ -519,7 +568,11 @@ export class GraphExecutorService {
     schedule();
   }
 
-  /** seed task + each producer's final text under a labeled heading. */
+  /**
+   * seed task + each producer's final text under a labeled heading. Producers
+   * with no recorded output (triggers — they seed, they don't produce) get no
+   * section at all.
+   */
   private composePrompt(
     seedPrompt: string,
     producerIds: ReadonlySet<string>,
@@ -528,11 +581,13 @@ export class GraphExecutorService {
   ): string {
     const parts = [seedPrompt];
     for (const producerId of producerIds) {
+      const finalText = finalTexts.get(producerId);
+      if (finalText === undefined) {
+        continue;
+      }
       const producer = nodesById.get(producerId);
       const name = producer?.name ?? producerId;
-      parts.push(
-        `## Output from ${name}\n\n${finalTexts.get(producerId) ?? ''}`,
-      );
+      parts.push(`## Output from ${name}\n\n${finalText}`);
     }
     return parts.join('\n\n');
   }

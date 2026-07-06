@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
+import type { BadRequestException } from '@packages/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -271,28 +272,129 @@ function setup(): {
   };
 }
 
+/**
+ * Prepend a manual trigger wired to every root: runs may only enter through a
+ * trigger, so every fixture below goes through this before startRun. The
+ * trigger spawns no CLI, so `claude.starts[0]` is still the first AGENT turn.
+ */
+function triggered(workflow: Workflow): Workflow {
+  const hasIncoming = new Set(workflow.edges.map((e) => e.to));
+  const roots = workflow.nodes.filter((n) => !hasIncoming.has(n.id));
+  return {
+    ...workflow,
+    nodes: [
+      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      ...workflow.nodes,
+    ],
+    edges: [
+      ...roots.map((r) => ({ from: 'start', to: r.id, kind: 'data' as const })),
+      ...workflow.edges,
+    ],
+  };
+}
+
 const LINEAR: Workflow = {
   name: 'linear',
   nodes: [
-    { id: 'a', agent: 'claude', approval: 'auto' },
-    { id: 'b', name: 'Reviewer', agent: 'claude', approval: 'auto' },
+    { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+    {
+      id: 'b',
+      kind: 'agent',
+      name: 'Reviewer',
+      agent: 'claude',
+      approval: 'auto',
+    },
   ],
-  edges: [{ from: 'a', to: 'b' }],
+  edges: [{ from: 'a', to: 'b', kind: 'data' as const }],
 };
 
 describe('GraphExecutorService', () => {
+  it('rejects running a workflow with call edges — the call runtime is not shipped yet', async () => {
+    // Milestone-1 guard: without it, a call-only callee has no producers and
+    // schedule() would launch it at run start with only the seed prompt.
+    // Milestone 2 (CallBroker + MCP endpoint) removes this guard.
+    const { service, claude, runDao } = setup();
+    let code: string | undefined;
+    try {
+      await service.startRun({
+        slug: 'calls',
+        workflow: triggered({
+          name: 'calls',
+          nodes: [
+            { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+            { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+          ],
+          edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+    } catch (err) {
+      code = (err as BadRequestException).errorCode;
+    }
+    expect(code).toBe('GRAPH_CALL_RUNTIME_UNAVAILABLE');
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
+  it('rejects running an empty workflow (a blank-canvas draft)', async () => {
+    // Empty workflows are legal in the library (the builder starts blank) but
+    // must never start a run: no run row, no adapter spawn.
+    const { service, claude, runDao } = setup();
+    let code: string | undefined;
+    try {
+      await service.startRun({
+        slug: 'blank',
+        workflow: { name: 'blank', nodes: [], edges: [] },
+        cwd: dir,
+        prompt: 'go',
+      });
+    } catch (err) {
+      code = (err as BadRequestException).errorCode;
+    }
+    expect(code).toBe('GRAPH_EMPTY');
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
+  it('rejects running a workflow with no trigger', async () => {
+    const { service, claude, runDao } = setup();
+    let code: string | undefined;
+    try {
+      await service.startRun({
+        slug: 'untriggered',
+        workflow: {
+          name: 'untriggered',
+          nodes: [
+            { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          ],
+          edges: [],
+        },
+        cwd: dir,
+        prompt: 'go',
+      });
+    } catch (err) {
+      code = (err as BadRequestException).errorCode;
+    }
+    expect(code).toBe('GRAPH_NO_TRIGGER');
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
   it('runs a linear chain, feeding A output into B prompt', async () => {
     const { service, claude, runDao, itemDao, nodeDao } = setup();
     const run = await service.startRun({
       slug: 'linear',
-      workflow: LINEAR,
+      workflow: triggered(LINEAR),
       cwd: dir,
       prompt: 'build the feature',
     });
     expect(run.workflowId).toBe('linear');
     await drain();
 
-    // Only the root launched; it received the seed prompt + node config.
+    // The trigger settled instantly (no CLI) and its agent launched with the
+    // BARE seed prompt — no empty "## Output from start" section.
+    expect(nodeDao.row(run.id, 'start')?.status).toBe('completed');
     expect(claude.starts).toHaveLength(1);
     expect(claude.starts[0]!.input.prompt).toBe('build the feature');
     expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
@@ -330,21 +432,21 @@ describe('GraphExecutorService', () => {
     const diamond: Workflow = {
       name: 'diamond',
       nodes: [
-        { id: 'a', agent: 'claude', approval: 'auto' },
-        { id: 'b', agent: 'claude', approval: 'auto' },
-        { id: 'c', agent: 'cursor-agent', approval: 'auto' },
-        { id: 'd', agent: 'claude', approval: 'auto' },
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'c', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+        { id: 'd', kind: 'agent', agent: 'claude', approval: 'auto' },
       ],
       edges: [
-        { from: 'a', to: 'b' },
-        { from: 'a', to: 'c' },
-        { from: 'b', to: 'd' },
-        { from: 'c', to: 'd' },
+        { from: 'a', to: 'b', kind: 'data' as const },
+        { from: 'a', to: 'c', kind: 'data' as const },
+        { from: 'b', to: 'd', kind: 'data' as const },
+        { from: 'c', to: 'd', kind: 'data' as const },
       ],
     };
     const run = await service.startRun({
       slug: 'diamond',
-      workflow: diamond,
+      workflow: triggered(diamond),
       cwd: dir,
       prompt: 'task',
     });
@@ -386,7 +488,7 @@ describe('GraphExecutorService', () => {
     const { service, claude, runDao, nodeDao, itemDao } = setup();
     const run = await service.startRun({
       slug: 'linear',
-      workflow: LINEAR,
+      workflow: triggered(LINEAR),
       cwd: dir,
       prompt: 'task',
     });
@@ -410,7 +512,7 @@ describe('GraphExecutorService', () => {
     const { service, claude, runDao, nodeDao, registry } = setup();
     const run = await service.startRun({
       slug: 'linear',
-      workflow: LINEAR,
+      workflow: triggered(LINEAR),
       cwd: dir,
       prompt: 'task',
     });
@@ -432,6 +534,7 @@ describe('GraphExecutorService', () => {
       name: 'wide',
       nodes: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({
         id,
+        kind: 'agent' as const,
         agent: 'claude' as const,
         approval: 'auto' as const,
       })),
@@ -439,7 +542,7 @@ describe('GraphExecutorService', () => {
     };
     await service.startRun({
       slug: 'wide',
-      workflow: wide,
+      workflow: triggered(wide),
       cwd: dir,
       prompt: 'go',
     });
@@ -492,7 +595,7 @@ describe('GraphExecutorService', () => {
     const { service, claude, runDao, nodeDao, itemDao } = setup();
     const run = await service.startRun({
       slug: 'linear',
-      workflow: LINEAR,
+      workflow: triggered(LINEAR),
       cwd: dir,
       prompt: 'task',
     });
@@ -521,12 +624,12 @@ describe('GraphExecutorService', () => {
     const { service, claude, itemDao, approvals } = setup();
     const askFlow: Workflow = {
       name: 'ask',
-      nodes: [{ id: 'a', agent: 'claude', approval: 'ask' }],
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
       edges: [],
     };
     const run = await service.startRun({
       slug: 'ask',
-      workflow: askFlow,
+      workflow: triggered(askFlow),
       cwd: dir,
       prompt: 'task',
     });
@@ -585,7 +688,7 @@ describe('GraphExecutorService', () => {
     };
     const run = await service.startRun({
       slug: 'linear',
-      workflow: LINEAR,
+      workflow: triggered(LINEAR),
       cwd: dir,
       prompt: 'task',
     });
@@ -608,12 +711,12 @@ describe('GraphExecutorService', () => {
     const { service, claude, itemDao, approvals } = setup();
     const askFlow: Workflow = {
       name: 'ask',
-      nodes: [{ id: 'a', agent: 'claude', approval: 'ask' }],
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
       edges: [],
     };
     const run = await service.startRun({
       slug: 'ask',
-      workflow: askFlow,
+      workflow: triggered(askFlow),
       cwd: dir,
       prompt: 'task',
     });
@@ -646,14 +749,20 @@ describe('GraphExecutorService', () => {
     const named: Workflow = {
       name: 'named',
       nodes: [
-        { id: 'a', name: 'Coder', agent: 'claude', approval: 'auto' },
-        { id: 'b', agent: 'claude', approval: 'auto' },
+        {
+          id: 'a',
+          kind: 'agent',
+          name: 'Coder',
+          agent: 'claude',
+          approval: 'auto',
+        },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
       ],
-      edges: [{ from: 'a', to: 'b' }],
+      edges: [{ from: 'a', to: 'b', kind: 'data' as const }],
     };
     await service.startRun({
       slug: 'named',
-      workflow: named,
+      workflow: triggered(named),
       cwd: dir,
       prompt: 'task',
     });
@@ -667,11 +776,13 @@ describe('GraphExecutorService', () => {
     const { service, cursor, itemDao } = setup();
     await service.startRun({
       slug: 'c',
-      workflow: {
+      workflow: triggered({
         name: 'c',
-        nodes: [{ id: 'only', agent: 'cursor-agent', approval: 'ask' }],
+        nodes: [
+          { id: 'only', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
+        ],
         edges: [],
-      },
+      }),
       cwd: dir,
       prompt: 'task',
     });

@@ -85,9 +85,31 @@ export interface ChatItem {
 /** Tool-approval mode of one workflow node. */
 export type WorkflowApproval = 'auto' | 'ask';
 
-/** One agent node of a workflow DAG. */
-export interface WorkflowNode {
+/**
+ * Node kinds a workflow may contain (mirrors the daemon's `NODE_KINDS`).
+ * A new kind lands here plus one entry in the renderer's
+ * `NODE_CONNECTION_RULES` mirror and its schema branch on the daemon.
+ */
+export type NodeKind = 'agent' | 'trigger';
+export const NODE_KINDS: readonly NodeKind[] = ['agent', 'trigger'];
+
+/** Trigger types a trigger node may carry (mirrors `TRIGGER_KINDS`). */
+export type TriggerKind = 'manual';
+export const TRIGGER_KINDS: readonly TriggerKind[] = ['manual'];
+
+/**
+ * Edge kinds (mirrors the daemon's `EDGE_KINDS`): `data` — the producer's
+ * final text feeds the consumer's prompt (the DAG flow); `call` — the source
+ * may invoke the target at runtime via the call_agent tool (grants permission
+ * only; no data flows along it).
+ */
+export type EdgeKind = 'data' | 'call';
+export const EDGE_KINDS: readonly EdgeKind[] = ['data', 'call'];
+
+/** One agent node — a CLI coding agent running one turn per run. */
+export interface WorkflowAgentNode {
   id: string;
+  kind: 'agent';
   name?: string;
   agent: CliKind;
   model?: string;
@@ -95,10 +117,25 @@ export interface WorkflowNode {
   approval: WorkflowApproval;
 }
 
-/** Directed edge: `from`'s final text feeds `to`'s prompt context. */
+/**
+ * One trigger node — the graph's entry point. Runs no CLI; firing it (manual
+ * = submitting a run prompt) seeds its downstream agents.
+ */
+export interface WorkflowTriggerNode {
+  id: string;
+  kind: 'trigger';
+  name?: string;
+  trigger: TriggerKind;
+}
+
+/** One node of a workflow DAG, discriminated by `kind`. */
+export type WorkflowNode = WorkflowAgentNode | WorkflowTriggerNode;
+
+/** Directed edge `from → to`, discriminated by `kind` (see `EdgeKind`). */
 export interface WorkflowEdge {
   from: string;
   to: string;
+  kind: EdgeKind;
   label?: string;
 }
 
@@ -120,6 +157,9 @@ export interface WorkflowSummary {
   name: string;
   description: string | null;
   nodeCount: number;
+  edgeCount: number;
+  /** Per-agent-kind node counts, only kinds present, in a stable order. */
+  agentCounts: { kind: CliKind; count: number }[];
   updatedAt: string;
 }
 
@@ -173,8 +213,6 @@ export interface Settings {
   onboardingComplete: boolean;
   /** Absolute path to the user's working project folder (agent cwd). */
   projectFolder: string | null;
-  /** Default model id applied to new agent nodes. */
-  defaultModel: string | null;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -185,7 +223,6 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
   projectFolder: null,
-  defaultModel: null,
   cliPaths: {},
   checkForUpdates: true,
 };

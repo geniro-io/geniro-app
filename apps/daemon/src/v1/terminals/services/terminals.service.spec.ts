@@ -88,7 +88,7 @@ describe('TerminalsService', () => {
     const { service, pty } = build({
       run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
       nodeState: { agentSessionId: 'sess-n' },
-      workflow: { nodes: [{ id: 'agent-1', agent: 'claude' }] },
+      workflow: { nodes: [{ id: 'agent-1', kind: 'agent', agent: 'claude' }] },
     });
 
     await service.createForRun({ runId: 'run-2', nodeId: 'agent-1' });
@@ -114,7 +114,7 @@ describe('TerminalsService', () => {
   it('rejects an unknown workflow node', async () => {
     const { service } = build({
       run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
-      workflow: { nodes: [{ id: 'agent-1', agent: 'claude' }] },
+      workflow: { nodes: [{ id: 'agent-1', kind: 'agent', agent: 'claude' }] },
     });
 
     await expect(

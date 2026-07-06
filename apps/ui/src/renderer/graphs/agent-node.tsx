@@ -1,44 +1,57 @@
-import { Handle, type NodeProps, Position } from '@xyflow/react';
-import { Bot, ShieldQuestion } from 'lucide-react';
+import type { NodeProps } from '@xyflow/react';
+import { Bot, ShieldQuestion, SquareTerminal } from 'lucide-react';
 
+import type { CliKind } from '../../shared/contracts';
 import { Badge } from '../components/ui/badge';
-import { cn } from '../components/ui/utils';
+import { AgentAvatar } from './agent-avatar';
 import type { AgentFlowNode } from './graph-doc';
+import { NodeCard } from './node-card';
 
 /**
- * Canvas card for one agent node: name, agent kind, model, and an "asks
- * before tools" marker. Edges flow left (inputs) → right (output), matching
- * the producer→consumer direction. All colours come from design tokens.
+ * Canvas card for one agent node — the kind-specific header (avatar chip,
+ * label, agent/model badges, optional role preview) inside the shared
+ * `NodeCard` shell, which owns selection/validation styling and the
+ * collapsible ports block.
  */
+
+/** Per-kind glyph shown next to the agent badge. */
+const AGENT_ICON: Record<CliKind, React.ReactNode> = {
+  claude: <Bot aria-hidden="true" className="size-3" />,
+  'cursor-agent': <SquareTerminal aria-hidden="true" className="size-3" />,
+};
+
 export function AgentNode({
   data,
   selected,
 }: NodeProps<AgentFlowNode>): React.JSX.Element {
   const { node } = data;
+  const label = node.name ?? node.id;
   return (
-    <div
-      className={cn(
-        'w-[220px] rounded-lg border border-border bg-card px-3 py-2.5 shadow-panel-sm',
-        selected && 'ring-2 ring-ring/60',
-      )}>
-      <Handle type="target" position={Position.Left} />
-      <div className="flex items-center gap-1.5">
-        <Bot aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
-        <span className="truncate text-sm font-medium">
-          {node.name ?? node.id}
+    <NodeCard node={node} selected={selected} className="w-[240px]">
+      <div className="mb-2 flex items-center gap-2">
+        <AgentAvatar label={label} />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+          {label}
         </span>
         {node.approval === 'ask' ? (
           <ShieldQuestion
             aria-label="Asks before tool calls"
-            className="ml-auto size-3.5 shrink-0 text-muted-foreground"
+            className="size-3.5 shrink-0 text-muted-foreground"
           />
         ) : null}
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1">
-        <Badge variant="secondary">{node.agent}</Badge>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge className="gap-1">
+          {AGENT_ICON[node.agent]}
+          {node.agent}
+        </Badge>
         {node.model ? <Badge variant="outline">{node.model}</Badge> : null}
       </div>
-      <Handle type="source" position={Position.Right} />
-    </div>
+      {node.role ? (
+        <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+          {node.role}
+        </p>
+      ) : null}
+    </NodeCard>
   );
 }

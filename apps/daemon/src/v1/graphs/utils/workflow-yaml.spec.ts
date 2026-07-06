@@ -2,21 +2,28 @@ import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
 import type { Workflow } from '../graphs.types';
-import { parseWorkflowYaml, serializeWorkflowYaml } from './workflow-yaml';
+import {
+  parseLegacyWorkflowYaml,
+  parseWorkflowYaml,
+  serializeWorkflowYaml,
+} from './workflow-yaml';
 
 const VALID_SOURCE = `# My review team
 name: review-team
 nodes:
   # the coder writes the change
   - id: coder
+    kind: agent
     agent: claude
     role: You write the code.
   - id: reviewer
+    kind: agent
     agent: cursor-agent
     approval: ask
 edges:
   - from: coder
     to: reviewer
+    kind: data
 `;
 
 describe('parseWorkflowYaml', () => {
@@ -26,7 +33,7 @@ describe('parseWorkflowYaml', () => {
     expect(wf.nodes).toHaveLength(2);
     expect(wf.nodes[0]!.approval).toBe('auto');
     expect(wf.nodes[1]!.approval).toBe('ask');
-    expect(wf.edges).toEqual([{ from: 'coder', to: 'reviewer' }]);
+    expect(wf.edges).toEqual([{ from: 'coder', to: 'reviewer', kind: 'data' }]);
   });
 
   it('rejects malformed YAML with WORKFLOW_YAML_INVALID', () => {
@@ -43,7 +50,9 @@ describe('parseWorkflowYaml', () => {
 
   it('rejects schema violations naming the offending path', () => {
     try {
-      parseWorkflowYaml('name: x\nnodes:\n  - id: a\n    agent: gpt\n');
+      parseWorkflowYaml(
+        'name: x\nnodes:\n  - id: a\n    kind: agent\n    agent: gpt\n',
+      );
       expect.unreachable('expected a schema rejection');
     } catch (err) {
       expect(err).toBeInstanceOf(BadRequestException);
@@ -52,19 +61,125 @@ describe('parseWorkflowYaml', () => {
       expect(exception.getMessage()).toContain('nodes.0.agent');
     }
   });
+
+  it('rejects a kind-less node — the legacy preprocess shim is gone', () => {
+    // Strict schema (no-backcompat): `kind` is required on every node; the
+    // store's one-time normalization owns legacy files, never the schema.
+    try {
+      parseWorkflowYaml('name: old\nnodes:\n  - id: a\n    agent: claude\n');
+      expect.unreachable('expected a strict-schema rejection');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as BadRequestException).errorCode).toBe(
+        'WORKFLOW_YAML_INVALID',
+      );
+    }
+  });
+
+  it('rejects a kind-less edge naming the offending path', () => {
+    const source = `name: x
+nodes:
+  - id: a
+    kind: agent
+    agent: claude
+  - id: b
+    kind: agent
+    agent: claude
+edges:
+  - from: a
+    to: b
+`;
+    try {
+      parseWorkflowYaml(source);
+      expect.unreachable('expected a strict-schema rejection');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BadRequestException);
+      const exception = err as BadRequestException;
+      expect(exception.errorCode).toBe('WORKFLOW_YAML_INVALID');
+      expect(exception.getMessage()).toContain('edges.0.kind');
+    }
+  });
+});
+
+describe('parseLegacyWorkflowYaml', () => {
+  it('stamps kind-less nodes as agents and kind-less edges as data', () => {
+    const legacy = parseLegacyWorkflowYaml(
+      'name: old\nnodes:\n  - id: a\n    agent: claude\nedges:\n  - from: a\n    to: a2\n',
+    );
+    expect(legacy?.nodes[0]).toMatchObject({ id: 'a', kind: 'agent' });
+    expect(legacy?.edges[0]).toEqual({ from: 'a', to: 'a2', kind: 'data' });
+  });
+
+  it('returns null on real garbage instead of guessing', () => {
+    // Malformed YAML enters the doc.errors branch — the store must surface
+    // the STRICT parse error, never a half-guessed workflow.
+    expect(parseLegacyWorkflowYaml('nodes: [\nname: :')).toBeNull();
+    // Well-formed YAML, hopeless shape (even with kinds injected).
+    expect(parseLegacyWorkflowYaml('name: g\nnodes: notalist\n')).toBeNull();
+    expect(parseLegacyWorkflowYaml('42')).toBeNull();
+  });
 });
 
 describe('serializeWorkflowYaml', () => {
   it('emits parseable YAML for a fresh workflow (no existing source)', () => {
     const wf: Workflow = {
       name: 'fresh',
-      nodes: [{ id: 'a', agent: 'claude', approval: 'auto' }],
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
       edges: [],
       layout: { a: { x: 10, y: 20 } },
     };
     const out = serializeWorkflowYaml(wf);
     const back = parseWorkflowYaml(out);
     expect(back).toEqual(wf);
+  });
+
+  it('round-trips trigger nodes and call edges', () => {
+    const wf: Workflow = {
+      name: 'triggered',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'start', to: 'a', kind: 'data' },
+        { from: 'a', to: 'b', kind: 'call' },
+      ],
+    };
+    const back = parseWorkflowYaml(serializeWorkflowYaml(wf));
+    expect(back).toEqual(wf);
+  });
+
+  it('keeps a data edge and a call edge between the same pair distinct on save', () => {
+    // The edge identity is (from, to, kind): both wires between one ordered
+    // pair must survive the comment-preserving merge — a from→to key would
+    // silently drop one of them.
+    const source = `name: pair
+nodes:
+  - id: a
+    kind: agent
+    agent: claude
+  - id: b
+    kind: agent
+    agent: claude
+edges:
+  # data flows a to b
+  - from: a
+    to: b
+    kind: data
+  - from: a
+    to: b
+    kind: call
+`;
+    const wf = parseWorkflowYaml(source);
+    expect(wf.edges).toHaveLength(2);
+    const out = serializeWorkflowYaml(wf, source);
+    expect(out).toContain('# data flows a to b');
+    const back = parseWorkflowYaml(out);
+    expect(back.edges).toEqual([
+      { from: 'a', to: 'b', kind: 'data' },
+      { from: 'a', to: 'b', kind: 'call' },
+    ]);
   });
 
   it('preserves user comments when patching an existing file', () => {
@@ -97,8 +212,11 @@ describe('serializeWorkflowYaml', () => {
     const wf = parseWorkflowYaml(VALID_SOURCE);
     const grown: Workflow = {
       ...wf,
-      nodes: [...wf.nodes, { id: 'tester', agent: 'claude', approval: 'auto' }],
-      edges: [...wf.edges, { from: 'reviewer', to: 'tester' }],
+      nodes: [
+        ...wf.nodes,
+        { id: 'tester', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [...wf.edges, { from: 'reviewer', to: 'tester', kind: 'data' }],
     };
     const out = serializeWorkflowYaml(grown, VALID_SOURCE);
     expect(out).toContain('# the coder writes the change');
@@ -127,18 +245,26 @@ describe('serializeWorkflowYaml', () => {
     const dupSource = `name: review-team
 nodes:
   - id: coder
+    kind: agent
     agent: claude
   - id: coder
+    kind: agent
     agent: claude
   - id: reviewer
+    kind: agent
     agent: cursor-agent
 edges: []
 `;
     const wf: Workflow = {
       name: 'review-team',
       nodes: [
-        { id: 'coder', agent: 'claude', approval: 'auto' },
-        { id: 'reviewer', agent: 'cursor-agent', approval: 'auto' },
+        { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'reviewer',
+          kind: 'agent',
+          agent: 'cursor-agent',
+          approval: 'auto',
+        },
       ],
       edges: [],
     };
@@ -147,10 +273,46 @@ edges: []
     expect(back.nodes.map((n) => n.id)).toEqual(['coder', 'reviewer']);
   });
 
+  it('rewrites a retained legacy kind-less edge item with its kind explicit', () => {
+    // The merge keys edges by (from, to, kind); a legacy item without `kind`
+    // never matches, so it is dropped and re-appended fully-specified — the
+    // saved file is always strict-parseable.
+    const legacyEdgeSource = `name: review-team
+nodes:
+  - id: coder
+    kind: agent
+    agent: claude
+  - id: reviewer
+    kind: agent
+    agent: cursor-agent
+edges:
+  - from: coder
+    to: reviewer
+`;
+    const wf: Workflow = {
+      name: 'review-team',
+      nodes: [
+        { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'reviewer',
+          kind: 'agent',
+          agent: 'cursor-agent',
+          approval: 'auto',
+        },
+      ],
+      edges: [{ from: 'coder', to: 'reviewer', kind: 'data' }],
+    };
+    const out = serializeWorkflowYaml(wf, legacyEdgeSource);
+    const back = parseWorkflowYaml(out);
+    expect(back.edges).toEqual([
+      { from: 'coder', to: 'reviewer', kind: 'data' },
+    ]);
+  });
+
   it('falls back to a clean dump when the existing source is unparseable', () => {
     const wf: Workflow = {
       name: 'rescued',
-      nodes: [{ id: 'a', agent: 'claude', approval: 'auto' }],
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
       edges: [],
     };
     const out = serializeWorkflowYaml(wf, 'nodes: [\nname: :');

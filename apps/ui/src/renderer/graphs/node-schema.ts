@@ -1,4 +1,4 @@
-import type { CliKind, NodeKind } from '../../shared/contracts';
+import type { CliKind, EdgeKind, NodeKind } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 
 /**
@@ -100,6 +100,8 @@ export const AGENT_MODEL_OPTIONS: Record<CliKind, readonly string[]> = {
  * may attach (default: single).
  */
 export interface ConnectionRule {
+  /** Edge kind this rule governs — data-flow and call wires are separate ports. */
+  edge: EdgeKind;
   kind: NodeKind;
   required?: boolean;
   multiple?: boolean;
@@ -112,6 +114,10 @@ export interface ConnectionRule {
  * the info popup's Inputs/Outputs sections and the canvas
  * `isValidConnection`. A future kind is one new entry here + one in the
  * daemon registry.
+ *
+ * Order matters: the FIRST rule per side is the painted top of the collapsed
+ * handle stack (node-ports), so a collapsed drag lands on it — keep a data
+ * rule first on every side, or collapsed drags stop being data-flow.
  */
 export const NODE_CONNECTION_RULES: Record<
   NodeKind,
@@ -120,30 +126,50 @@ export const NODE_CONNECTION_RULES: Record<
   agent: {
     inputs: [
       {
+        edge: 'data',
         kind: 'agent',
         multiple: true,
         description:
           "the final text of every upstream agent is appended to this node's prompt.",
       },
       {
+        edge: 'data',
         kind: 'trigger',
         description:
           'fires this node with the run prompt — every run enters through a trigger.',
       },
+      {
+        edge: 'call',
+        kind: 'agent',
+        multiple: true,
+        description:
+          'agents wired here may invoke this node on demand during a run.',
+      },
     ],
     outputs: [
       {
+        edge: 'data',
         kind: 'agent',
         multiple: true,
         description:
           "this node's final text feeds every downstream agent it connects to.",
       },
+      {
+        edge: 'call',
+        kind: 'agent',
+        multiple: true,
+        description:
+          'this node may invoke the connected agents via the call_agent tool.',
+      },
     ],
   },
   trigger: {
+    // Triggers are pure entry points: nothing may feed one, and firing fans
+    // out to any number of agents. Call wires never touch triggers.
     inputs: [],
     outputs: [
       {
+        edge: 'data',
         kind: 'agent',
         multiple: true,
         description: 'fires the connected agents with the run prompt.',
@@ -154,36 +180,81 @@ export const NODE_CONNECTION_RULES: Record<
 
 /**
  * The React Flow handle id for one connection rule — geniro's
- * `${dir}-${rule.type}-${slug(rule.value)}` scheme collapsed to our kind-only
- * rules. Every rule renders its own handle under this id (collapsed and
+ * `${dir}-${rule.type}-${slug(rule.value)}` scheme extended with the edge
+ * kind. Every rule renders its own handle under this id (collapsed and
  * expanded alike), and because the registry holds at most ONE rule per
- * (side, peer kind), an edge's handles are fully derivable from its endpoint
- * kinds — so ports never need to be persisted in the YAML.
+ * (side, edge kind, peer kind), an edge's handles are fully derivable from
+ * its kind + endpoint kinds — so ports never need to be persisted in the
+ * YAML (which is also why this rename was free: handles never hit disk).
  */
-export function makeHandleId(dir: 'source' | 'target', kind: NodeKind): string {
-  return `${dir}-kind-${kind}`;
+export function makeHandleId(
+  dir: 'source' | 'target',
+  edge: EdgeKind,
+  kind: NodeKind,
+): string {
+  return `${dir}-${edge}-${kind}`;
 }
 
 /**
- * Whether an edge `source → target` is legal under the connection rules:
- * the source kind must list the target kind in its `outputs` AND the target
- * kind must list the source kind in its `inputs` (both sides agree) — the
- * same pairing the daemon's `validateEdgeRules` enforces on save. Unknown
- * kinds refuse the connection rather than throwing: on the canvas this is a
- * live drag predicate, not a validation gate.
+ * The canvas edge ⇄ EdgeKind discriminator, in ONE place: a call edge
+ * carries React Flow `type: 'call'` (which also renders it through the
+ * registered call component); a data edge carries no type (React Flow's
+ * default). Every canvas producer/consumer routes through this pair —
+ * re-deriving the mapping inline is how a rename silently misses a site.
+ */
+export function flowEdgeKind(edge: { type?: string }): EdgeKind {
+  return edge.type === 'call' ? 'call' : 'data';
+}
+
+/** Spreadable inverse of {@link flowEdgeKind} for building canvas edges. */
+export function flowEdgeType(edgeKind: EdgeKind): { type?: 'call' } {
+  return edgeKind === 'call' ? { type: 'call' } : {};
+}
+
+/**
+ * The edge kind a drag is wiring, read off the handles it grabbed: a call
+ * handle on EITHER end makes it a call wire (the other end may be a collapsed
+ * stack's data handle — onConnect normalizes the pair afterwards). Everything
+ * else — collapsed pills, missing handle ids — stays data flow, which is what
+ * makes the collapsed-drag-is-data-flow rule hold.
+ */
+export function connectionEdgeKind(
+  sourceHandle: string | null | undefined,
+  targetHandle: string | null | undefined,
+): EdgeKind {
+  const edgeOf = (handle: string | null | undefined): string | undefined =>
+    handle?.split('-')[1];
+  return edgeOf(sourceHandle) === 'call' || edgeOf(targetHandle) === 'call'
+    ? 'call'
+    : 'data';
+}
+
+/**
+ * Whether an edge of `edge` kind `source → target` is legal under the
+ * connection rules: the source kind must list (edge, target kind) in its
+ * `outputs` AND the target kind must list (edge, source kind) in its
+ * `inputs` (both sides agree) — the same pairing the daemon's
+ * `validateEdgeRules` enforces on save. Unknown kinds refuse the connection
+ * rather than throwing: on the canvas this is a live drag predicate, not a
+ * validation gate.
  */
 export function canConnect(
+  edgeKind: EdgeKind,
   sourceKind: string,
   targetKind: string,
   rules: Record<
     string,
     {
-      inputs: readonly { kind: string }[];
-      outputs: readonly { kind: string }[];
+      inputs: readonly { edge: string; kind: string }[];
+      outputs: readonly { edge: string; kind: string }[];
     }
   > = NODE_CONNECTION_RULES,
 ): boolean {
-  const out = rules[sourceKind]?.outputs.some((r) => r.kind === targetKind);
-  const inp = rules[targetKind]?.inputs.some((r) => r.kind === sourceKind);
+  const out = rules[sourceKind]?.outputs.some(
+    (r) => r.edge === edgeKind && r.kind === targetKind,
+  );
+  const inp = rules[targetKind]?.inputs.some(
+    (r) => r.edge === edgeKind && r.kind === sourceKind,
+  );
   return Boolean(out && inp);
 }

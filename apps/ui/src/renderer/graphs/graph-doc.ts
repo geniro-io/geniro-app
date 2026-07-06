@@ -2,6 +2,7 @@ import type { Edge, Node } from '@xyflow/react';
 import ELK from 'elkjs/lib/elk.bundled.js';
 
 import type {
+  EdgeKind,
   NodeKind,
   Workflow,
   WorkflowAgentNode,
@@ -9,7 +10,7 @@ import type {
   WorkflowNode,
   WorkflowTriggerNode,
 } from '../../shared/contracts';
-import { makeHandleId } from './node-schema';
+import { flowEdgeKind, flowEdgeType, makeHandleId } from './node-schema';
 
 /**
  * Pure Workflow ⇄ React Flow document conversion (no React, unit-testable).
@@ -31,9 +32,15 @@ function fallbackPosition(index: number): { x: number; y: number } {
   return { x: (index % 3) * GRID_X, y: Math.floor(index / 3) * GRID_Y };
 }
 
-/** Stable edge id for a producer→consumer pair. */
-export function edgeId(from: string, to: string): string {
-  return `${from}->${to}`;
+/**
+ * Stable edge id per (from, to, edge kind) — the kind is part of the identity
+ * because a data edge and a call edge may legally share the same endpoints.
+ * JSON keeps the components unambiguous: node ids are free-form (hand-written
+ * YAML may contain '->' or '#'), and React Flow needs distinct edges to never
+ * share an id.
+ */
+export function edgeId(from: string, to: string, kind: EdgeKind): string {
+  return JSON.stringify([from, to, kind]);
 }
 
 export function toFlow(workflow: Workflow): {
@@ -47,22 +54,23 @@ export function toFlow(workflow: Workflow): {
       : { id: node.id, type: 'agent', position, data: { node } };
   });
   // Edges attach to the per-rule handles. The YAML never stores ports: with
-  // at most one rule per (side, peer kind) the canonical handle pair is fully
-  // derived from the endpoint kinds (see makeHandleId).
+  // at most one rule per (side, edge kind, peer kind) the canonical handle
+  // pair is fully derived from the edge kind + endpoint kinds (makeHandleId).
   const kindOf = new Map(workflow.nodes.map((node) => [node.id, node.kind]));
   const edges = workflow.edges.map((edge) => {
     const sourceKind = kindOf.get(edge.from);
     const targetKind = kindOf.get(edge.to);
     return {
-      id: edgeId(edge.from, edge.to),
+      id: edgeId(edge.from, edge.to, edge.kind),
       source: edge.from,
       target: edge.to,
       label: edge.label,
+      ...flowEdgeType(edge.kind),
       ...(targetKind
-        ? { sourceHandle: makeHandleId('source', targetKind) }
+        ? { sourceHandle: makeHandleId('source', edge.kind, targetKind) }
         : {}),
       ...(sourceKind
-        ? { targetHandle: makeHandleId('target', sourceKind) }
+        ? { targetHandle: makeHandleId('target', edge.kind, sourceKind) }
         : {}),
     };
   });
@@ -88,6 +96,7 @@ export function fromFlow(
     edges: edges.map((e) => ({
       from: e.source,
       to: e.target,
+      kind: flowEdgeKind(e),
       ...(typeof e.label === 'string' && e.label ? { label: e.label } : {}),
     })),
     layout,
@@ -131,7 +140,7 @@ export async function autoLayout(workflow: Workflow): Promise<WorkflowLayout> {
       height: NODE_HEIGHT,
     })),
     edges: workflow.edges.map((edge) => ({
-      id: edgeId(edge.from, edge.to),
+      id: edgeId(edge.from, edge.to, edge.kind),
       sources: [edge.from],
       targets: [edge.to],
     })),

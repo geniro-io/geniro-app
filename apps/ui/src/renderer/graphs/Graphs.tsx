@@ -46,6 +46,7 @@ import { Textarea } from '../components/ui/textarea';
 import { WorkflowApi } from '../workflow-api';
 import { AgentAvatar } from './agent-avatar';
 import { AgentNode } from './agent-node';
+import { CallEdge } from './call-edge';
 import { CreateWorkflowDialog } from './create-workflow-dialog';
 import {
   autoLayout,
@@ -62,12 +63,20 @@ import {
   type PaletteItem,
   parsePaletteItem,
 } from './node-palette';
-import { canConnect, makeHandleId } from './node-schema';
+import {
+  canConnect,
+  connectionEdgeKind,
+  flowEdgeType,
+  makeHandleId,
+} from './node-schema';
+import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 
 const NODE_TYPES = { agent: AgentNode, trigger: TriggerNode };
+// Data edges keep React Flow's default; call edges render dashed amber.
+const EDGE_TYPES = { call: CallEdge };
 
 /**
  * The Workflows page: compose a DAG of agents on a React Flow canvas, backed
@@ -375,37 +384,52 @@ export function Graphs({
       if (connection.source === connection.target) {
         return; // self-loops are invalid (the daemon rejects them too)
       }
-      // Normalize to the canonical handle pair derived from the endpoint
-      // kinds (the same ids toFlow derives) — a drag may have grabbed any of
-      // the stacked collapsed handles, but with one rule per (side, kind)
-      // there is exactly one correct pair.
+      // A drag that grabbed a call handle on either end wires a call edge;
+      // everything else — the collapsed summary pills included — stays data
+      // flow (call edges are drawn from the expanded ports block).
+      const edgeKind = connectionEdgeKind(
+        connection.sourceHandle,
+        connection.targetHandle,
+      );
+      // Normalize to the canonical handle pair derived from the edge kind +
+      // endpoint kinds (the same ids toFlow derives) — a drag may have
+      // grabbed any of the stacked collapsed handles, but with one rule per
+      // (side, edge kind, peer kind) there is exactly one correct pair.
       const kindOf = (id: string): NodeKind | undefined =>
         nodes.find((n) => n.id === id)?.data.node.kind;
       const sourceKind = kindOf(connection.source);
       const targetKind = kindOf(connection.target);
-      setEdges((prev) =>
-        addEdge(
+      setEdges((prev) => {
+        const id = edgeId(connection.source, connection.target, edgeKind);
+        // One edge per (pair, edge kind) — the daemon rejects duplicates on
+        // save, so the canvas never creates one.
+        if (prev.some((e) => e.id === id)) {
+          return prev;
+        }
+        return addEdge(
           {
             ...connection,
-            id: edgeId(connection.source, connection.target),
+            id,
+            ...flowEdgeType(edgeKind),
             sourceHandle: targetKind
-              ? makeHandleId('source', targetKind)
+              ? makeHandleId('source', edgeKind, targetKind)
               : connection.sourceHandle,
             targetHandle: sourceKind
-              ? makeHandleId('target', sourceKind)
+              ? makeHandleId('target', edgeKind, sourceKind)
               : connection.targetHandle,
           },
           prev,
-        ),
-      );
+        );
+      });
     },
     [nodes, setEdges],
   );
 
   /**
    * Live drag predicate: an edge may only be wired when the connection rules
-   * allow the (source kind → target kind) pair — the same registry the daemon
-   * enforces on save. Also refuses self-loops so the invalid wire never draws.
+   * allow the (edge kind, source kind → target kind) triple — the same
+   * registry the daemon enforces on save — and no edge of that kind already
+   * joins the pair. Also refuses self-loops so the invalid wire never draws.
    */
   const isValidConnection = useCallback(
     (connection: Connection | Edge): boolean => {
@@ -420,13 +444,21 @@ export function Graphs({
         nodes.find((n) => n.id === id)?.data.node.kind;
       const sourceKind = kindOf(connection.source);
       const targetKind = kindOf(connection.target);
+      const edgeKind = connectionEdgeKind(
+        connection.sourceHandle,
+        connection.targetHandle,
+      );
       return (
         sourceKind !== undefined &&
         targetKind !== undefined &&
-        canConnect(sourceKind, targetKind)
+        canConnect(edgeKind, sourceKind, targetKind) &&
+        !edges.some(
+          (e) =>
+            e.id === edgeId(connection.source, connection.target, edgeKind),
+        )
       );
     },
-    [nodes],
+    [nodes, edges],
   );
 
   /**
@@ -460,6 +492,22 @@ export function Graphs({
 
   const selected =
     nodes.find((n) => n.id === selectedNodeId)?.data.node ?? null;
+
+  // Read-only "Agent calls" summary for the inspector: who this agent may
+  // invoke and who may invoke it (the amber call edges touching the node),
+  // plus a heads-up when it takes part in a call loop. Null when the node
+  // has no call wiring — the section only appears once calls exist.
+  const callInfo = useMemo(
+    () =>
+      selected?.kind === 'agent'
+        ? agentCallInfo(
+            selected.id,
+            nodes.map((n) => ({ id: n.id, name: n.data.node.name })),
+            edges,
+          )
+        : null,
+    [selected, nodes, edges],
+  );
 
   // The last pan/zoom of this workflow, restored on open. Only read when the
   // builder (re)mounts its ReactFlow — one instance per opened workflow.
@@ -622,6 +670,7 @@ export function Graphs({
             nodes={nodes}
             edges={edges}
             nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
             onInit={(instance) => setRfInstance(instance)}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
@@ -747,6 +796,33 @@ export function Graphs({
                         <option value="ask">ask in chat</option>
                       </Select>
                     </Field>
+                    {callInfo ? (
+                      <NoteBox aria-label="Agent calls" className="text-xs">
+                        <span className="block font-medium text-foreground">
+                          Agent calls
+                        </span>
+                        {callInfo.callees.length > 0 ? (
+                          <span className="block">
+                            May call: {callInfo.callees.join(', ')}
+                          </span>
+                        ) : null}
+                        {callInfo.callers.length > 0 ? (
+                          <span className="block">
+                            Callable by: {callInfo.callers.join(', ')}
+                          </span>
+                        ) : null}
+                        {callInfo.inCycle ? (
+                          <span className="block text-warning">
+                            Takes part in a call loop — runtime calls are
+                            depth-capped.
+                          </span>
+                        ) : null}
+                        <span className="block">
+                          Call edges are static permissions for now — running
+                          them lands with the call runtime.
+                        </span>
+                      </NoteBox>
+                    ) : null}
                   </>
                 )}
                 <Button

@@ -5,7 +5,15 @@ import type { WorkflowEdge, WorkflowNode } from '../graphs.types';
 import { buildEdgeMaps, computeRunOrder } from './graph-order';
 
 function node(id: string): WorkflowNode {
-  return { id, agent: 'claude', approval: 'auto' };
+  return { id, kind: 'agent', agent: 'claude', approval: 'auto' };
+}
+
+function data(from: string, to: string): WorkflowEdge {
+  return { from, to, kind: 'data' };
+}
+
+function call(from: string, to: string): WorkflowEdge {
+  return { from, to, kind: 'call' };
 }
 
 describe('computeRunOrder', () => {
@@ -14,10 +22,7 @@ describe('computeRunOrder', () => {
   // edge direction (rt feeds tool feeds agent).
   it('orders a linear chain producers-first', () => {
     const nodes = [node('agent'), node('tool'), node('rt')];
-    const edges: WorkflowEdge[] = [
-      { from: 'rt', to: 'tool' },
-      { from: 'tool', to: 'agent' },
-    ];
+    const edges = [data('rt', 'tool'), data('tool', 'agent')];
     const order = computeRunOrder(nodes, edges).map((n) => n.id);
     expect(order).toEqual(['rt', 'tool', 'agent']);
   });
@@ -30,11 +35,11 @@ describe('computeRunOrder', () => {
 
   it('orders a diamond with the join last', () => {
     const nodes = [node('d'), node('b'), node('c'), node('a')];
-    const edges: WorkflowEdge[] = [
-      { from: 'a', to: 'b' },
-      { from: 'a', to: 'c' },
-      { from: 'b', to: 'd' },
-      { from: 'c', to: 'd' },
+    const edges = [
+      data('a', 'b'),
+      data('a', 'c'),
+      data('b', 'd'),
+      data('c', 'd'),
     ];
     const order = computeRunOrder(nodes, edges).map((n) => n.id);
     expect(order[0]).toBe('a');
@@ -44,11 +49,7 @@ describe('computeRunOrder', () => {
 
   it('throws GRAPH_CIRCULAR_DEPENDENCY naming the cycle nodes', () => {
     const nodes = [node('a'), node('b'), node('c')];
-    const edges: WorkflowEdge[] = [
-      { from: 'a', to: 'b' },
-      { from: 'b', to: 'c' },
-      { from: 'c', to: 'b' },
-    ];
+    const edges = [data('a', 'b'), data('b', 'c'), data('c', 'b')];
     try {
       computeRunOrder(nodes, edges);
       expect.unreachable('expected a cycle rejection');
@@ -60,20 +61,36 @@ describe('computeRunOrder', () => {
       expect(exception.getMessage()).toContain('c');
     }
   });
+
+  it('ignores call edges: a call cycle is NOT a topological cycle', () => {
+    // a and b call each other — legal wiring; only data edges order the run.
+    const nodes = [node('a'), node('b')];
+    const edges = [data('a', 'b'), call('b', 'a'), call('a', 'b')];
+    const order = computeRunOrder(nodes, edges).map((n) => n.id);
+    expect(order).toEqual(['a', 'b']);
+  });
 });
 
 describe('buildEdgeMaps', () => {
   it('maps producers and consumers per node', () => {
     const nodes = [node('a'), node('b'), node('c')];
-    const edges: WorkflowEdge[] = [
-      { from: 'a', to: 'c' },
-      { from: 'b', to: 'c' },
-    ];
+    const edges = [data('a', 'c'), data('b', 'c')];
     const { producersOf, consumersOf } = buildEdgeMaps(nodes, edges);
     expect([...producersOf.get('c')!].sort()).toEqual(['a', 'b']);
     expect(producersOf.get('a')!.size).toBe(0);
     expect([...consumersOf.get('a')!]).toEqual(['c']);
     expect([...consumersOf.get('b')!]).toEqual(['c']);
     expect(consumersOf.get('c')!.size).toBe(0);
+  });
+
+  it('excludes call edges from the adjacency — they grant a tool, not data', () => {
+    // A call-only callee has NO producers: it must never be scheduled as a
+    // root or waited on by the DAG walk (it runs on demand in milestone 2).
+    const nodes = [node('a'), node('callee')];
+    const { producersOf, consumersOf } = buildEdgeMaps(nodes, [
+      call('a', 'callee'),
+    ]);
+    expect(producersOf.get('callee')!.size).toBe(0);
+    expect(consumersOf.get('a')!.size).toBe(0);
   });
 });

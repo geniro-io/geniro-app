@@ -5,7 +5,11 @@ import { type CSSProperties, useEffect, useState } from 'react';
 
 import type { NodeKind } from '../../shared/contracts';
 import { cn } from '../components/ui/utils';
-import { makeHandleId, NODE_CONNECTION_RULES } from './node-schema';
+import {
+  type ConnectionRule,
+  makeHandleId,
+  NODE_CONNECTION_RULES,
+} from './node-schema';
 
 /**
  * The collapsible ports block shared by every node card — geniro's
@@ -18,13 +22,14 @@ import { makeHandleId, NODE_CONNECTION_RULES } from './node-schema';
  * Handle ids come from `makeHandleId`, matching the ids `toFlow` derives for
  * stored edges; colours are tokens only (`var(--color-*)`).
  */
-type Tone = 'input' | 'output' | 'missing';
+type Tone = 'input' | 'output' | 'call' | 'missing';
 
 const pill = cva('rounded px-2 py-1', {
   variants: {
     tone: {
       input: 'bg-primary/10 text-primary',
       output: 'bg-success/10 text-success',
+      call: 'bg-warning/10 text-warning',
       missing: 'bg-destructive/10 text-destructive',
     },
   },
@@ -33,13 +38,14 @@ const pill = cva('rounded px-2 py-1', {
 const TONE_VAR: Record<Tone, string> = {
   input: 'var(--color-primary)',
   output: 'var(--color-success)',
+  call: 'var(--color-warning)',
   missing: 'var(--color-destructive)',
 };
 
 /** Stacked-when-collapsed handle dot; `hidden` keeps the handle connectable
  *  while only the top of the stack is painted (geniro's collapsed trick). */
 function handleStyle(
-  edge: 'left' | 'right',
+  anchor: 'left' | 'right',
   tone: Tone,
   hidden: boolean,
   zIndex?: number,
@@ -50,7 +56,7 @@ function handleStyle(
     position: 'absolute',
     top: '50%',
     transform: 'translateY(-50%)',
-    ...(edge === 'left' ? { left: -18 } : { right: -18 }),
+    ...(anchor === 'left' ? { left: -18 } : { right: -18 }),
     background: hidden ? 'transparent' : TONE_VAR[tone],
     border: hidden ? 'none' : '2px solid var(--color-card)',
     boxShadow: hidden ? 'none' : `0 0 0 1px ${TONE_VAR[tone]}`,
@@ -79,22 +85,37 @@ function PortsSide({
   }
   const dir = side === 'input' ? 'target' : 'source';
   const position = side === 'input' ? Position.Left : Position.Right;
-  const edge = side === 'input' ? 'left' : 'right';
+  // The card edge the handles anchor to — named apart from rule.edge (the
+  // EdgeKind), which shares this scope.
+  const anchor = side === 'input' ? 'left' : 'right';
   const tone: Tone = missing ? 'missing' : side;
+  // Call rules keep their amber identity even while a required DATA input is
+  // missing — only data rules can be required, so the destructive tint never
+  // belongs on a call row.
+  const toneOf = (rule: ConnectionRule): Tone =>
+    rule.edge === 'call' ? 'call' : tone;
 
   if (!expanded) {
     // Geniro's collapsed slot: a uniform two-line summary pill on each side
     // — plural label + the rule-type count — so input and output always
-    // mirror each other visually.
+    // mirror each other visually. ALL rule handles (call ones included) stay
+    // mounted in the stack so existing edges never detach; only the top is
+    // painted, and a collapsed drag always lands on that data handle — call
+    // wires are drawn from the expanded rows.
     return (
       <div className="relative flex w-full items-center">
         {rules.map((rule, index) => (
           <Handle
-            key={rule.kind}
+            key={`${rule.edge}-${rule.kind}`}
             type={dir}
-            id={makeHandleId(dir, rule.kind)}
+            id={makeHandleId(dir, rule.edge, rule.kind)}
             position={position}
-            style={handleStyle(edge, tone, index > 0, rules.length - index)}
+            style={handleStyle(
+              anchor,
+              toneOf(rule),
+              index > 0,
+              rules.length - index,
+            )}
           />
         ))}
         <div className={cn(pill({ tone }), 'w-full')}>
@@ -111,20 +132,26 @@ function PortsSide({
   return (
     <div className="flex w-full flex-col gap-1.5">
       {rules.map((rule) => (
-        <div key={rule.kind} className="relative flex w-full items-center">
+        <div
+          key={`${rule.edge}-${rule.kind}`}
+          className="relative flex w-full items-center">
           <Handle
             type={dir}
-            id={makeHandleId(dir, rule.kind)}
+            id={makeHandleId(dir, rule.edge, rule.kind)}
             position={position}
-            style={handleStyle(edge, tone, false)}
+            style={handleStyle(anchor, toneOf(rule), false)}
           />
-          <div className={cn(pill({ tone }), 'w-full')}>
+          <div className={cn(pill({ tone: toneOf(rule) }), 'w-full')}>
             <div className="text-[10px] font-semibold leading-tight">
               {rule.kind}
             </div>
-            {rule.required || rule.multiple ? (
+            {rule.edge === 'call' || rule.required || rule.multiple ? (
               <div className="text-[10px] leading-tight opacity-60">
-                {[rule.required && 'required', rule.multiple && 'multiple']
+                {[
+                  rule.edge === 'call' && 'call',
+                  rule.required && 'required',
+                  rule.multiple && 'multiple',
+                ]
                   .filter(Boolean)
                   .join(' · ')}
               </div>

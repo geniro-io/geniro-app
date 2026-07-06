@@ -24,6 +24,12 @@ export function buildEdgeMaps(
     consumersOf.set(node.id, new Set());
   }
   for (const edge of edges) {
+    // Producer/consumer adjacency IS data flow — call edges grant a runtime
+    // tool, order nothing, and may legally form call cycles, so they never
+    // enter the maps (and thus never reach the Kahn sort below).
+    if (edge.kind !== 'data') {
+      continue;
+    }
     producersOf.get(edge.to)?.add(edge.from);
     consumersOf.get(edge.from)?.add(edge.to);
   }

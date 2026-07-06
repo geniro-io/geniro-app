@@ -139,12 +139,19 @@ function RuleRow({
         aria-hidden="true"
         className={cn(
           'mt-1 size-2 shrink-0 rounded-full',
-          direction === 'input' ? 'bg-primary' : 'bg-success',
+          // Call rules mirror their amber canvas handles; data rules keep the
+          // input/output tones.
+          rule.edge === 'call'
+            ? 'bg-warning'
+            : direction === 'input'
+              ? 'bg-primary'
+              : 'bg-success',
         )}
       />
       <div className="flex min-w-0 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-1.5">
           <code className="text-xs font-semibold">{rule.kind}</code>
+          {rule.edge === 'call' ? <Badge variant="muted">call</Badge> : null}
           <Badge variant="muted">{rule.multiple ? 'multiple' : 'single'}</Badge>
           {rule.required ? <Badge variant="secondary">required</Badge> : null}
           {partnersOf(rule.kind).map((label) => (
@@ -378,7 +385,7 @@ export function NodePalette(): React.JSX.Element {
                 ) : (
                   infoRules.inputs.map((rule) => (
                     <RuleRow
-                      key={`in-${rule.kind}`}
+                      key={`in-${rule.edge}-${rule.kind}`}
                       rule={rule}
                       direction="input"
                     />
@@ -389,7 +396,7 @@ export function NodePalette(): React.JSX.Element {
                 <p className="px-3 pt-2 text-xs font-medium">Outputs</p>
                 {infoRules.outputs.map((rule) => (
                   <RuleRow
-                    key={`out-${rule.kind}`}
+                    key={`out-${rule.edge}-${rule.kind}`}
                     rule={rule}
                     direction="output"
                   />

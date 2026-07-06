@@ -37,6 +37,39 @@ export function parseWorkflowYaml(source: string): Workflow {
   return parsed.data;
 }
 
+/**
+ * Lenient parse for LEGACY files only (pre-kind schema): a kind-less node is
+ * an agent (the only kind that existed), a kind-less edge is data flow.
+ * Returns null when even the lenient shape fails — the caller falls back to
+ * the strict error. The store uses this once per file to normalize-and-rewrite
+ * (with a .bak); the strict schema itself carries no compatibility shim.
+ */
+export function parseLegacyWorkflowYaml(source: string): Workflow | null {
+  const doc = parseDocument(source);
+  if (doc.errors.length > 0) {
+    return null;
+  }
+  const raw = doc.toJS() as unknown;
+  if (raw === null || typeof raw !== 'object') {
+    return null;
+  }
+  const tree = raw as Record<string, unknown>;
+  const withKind = (list: unknown, kind: string): unknown =>
+    Array.isArray(list)
+      ? list.map((item) =>
+          item !== null && typeof item === 'object' && !('kind' in item)
+            ? { ...item, kind }
+            : item,
+        )
+      : list;
+  const parsed = WorkflowSchema.safeParse({
+    ...tree,
+    nodes: withKind(tree.nodes, 'agent'),
+    edges: withKind(tree.edges, 'data'),
+  });
+  return parsed.success ? parsed.data : null;
+}
+
 /** A workflow as a plain-JS tree with undefined-valued keys pruned. */
 function workflowToPlain(workflow: Workflow): Record<string, unknown> {
   return JSON.parse(JSON.stringify(workflow)) as Record<string, unknown>;
@@ -76,8 +109,12 @@ function patchNodeItem(item: YAMLMap, node: WorkflowNode): void {
   }
 }
 
-function edgeKey(from: unknown, to: unknown): string {
-  return `${String(from)} -> ${String(to)}`;
+function edgeKey(from: unknown, to: unknown, kind: unknown): string {
+  // Kind is part of the identity: a data edge and a call edge may share the
+  // same from→to pair, and keying them together would drop one on save.
+  // JSON keeps the components unambiguous — node ids are free-form and may
+  // themselves contain a would-be delimiter like '->' or '#'.
+  return JSON.stringify([from, to, kind]);
 }
 
 /**
@@ -141,9 +178,11 @@ export function serializeWorkflowYaml(
     root.set('nodes', doc.createNode(workflowToPlain(workflow).nodes));
   }
 
-  // Edges: same strategy, keyed by from→to.
+  // Edges: same strategy, keyed by from→to→kind. A legacy kind-less item
+  // never matches a kept key, so it is dropped here and re-appended below
+  // with its kind explicit.
   const keepEdges = new Map<string, WorkflowEdge>(
-    workflow.edges.map((e) => [edgeKey(e.from, e.to), e]),
+    workflow.edges.map((e) => [edgeKey(e.from, e.to, e.kind), e]),
   );
   const edgesValue = root.get('edges');
   if (isSeq(edgesValue)) {
@@ -153,7 +192,7 @@ export function serializeWorkflowYaml(
       if (!isMap(item)) {
         return false;
       }
-      const key = edgeKey(item.get('from'), item.get('to'));
+      const key = edgeKey(item.get('from'), item.get('to'), item.get('kind'));
       if (!keepEdges.has(key) || retained.has(key)) {
         return false;
       }
@@ -162,9 +201,10 @@ export function serializeWorkflowYaml(
     });
     for (const item of edgesValue.items) {
       const map = item as YAMLMap;
-      const key = edgeKey(map.get('from'), map.get('to'));
+      const key = edgeKey(map.get('from'), map.get('to'), map.get('kind'));
       const edge = keepEdges.get(key);
       if (edge) {
+        map.set('kind', edge.kind);
         setOrDelete(map, 'label', edge.label);
         patched.add(key);
       }

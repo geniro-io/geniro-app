@@ -84,7 +84,7 @@ describe('NodeCard', () => {
     // The invalid state wins over the selection ring.
     expect(card().className).not.toContain('border-primary');
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      'No input connected — wire a trigger or an upstream agent into this node.',
+      'No input connected — wire a trigger, an upstream agent, or a call edge into this node.',
     );
   });
 
@@ -107,9 +107,11 @@ describe('NodeCard', () => {
     );
   });
 
-  it('degrades to the red state for a node with no kind (old-daemon data)', () => {
-    // A pre-kind daemon serves nodes without `kind`; the card must render
-    // its error strip — not throw and blank the whole app (the M-blank bug).
+  it('degrades to the red state for a node of an unknown kind (version skew)', () => {
+    // Kinds are strict everywhere now, but a newer daemon (or hand-written
+    // garbage) can still hand the renderer a kind these registries don't
+    // know; the card must render its error strip — not throw and blank the
+    // whole app (the M-blank bug).
     const legacy = { id: 'x1', agent: 'claude' } as unknown as WorkflowNode;
     mocks.nodes = [{ id: 'x1', data: { node: {} as { kind: string } } }];
     render(legacy);

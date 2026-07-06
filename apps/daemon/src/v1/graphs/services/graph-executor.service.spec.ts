@@ -287,7 +287,7 @@ function triggered(workflow: Workflow): Workflow {
       ...workflow.nodes,
     ],
     edges: [
-      ...roots.map((r) => ({ from: 'start', to: r.id })),
+      ...roots.map((r) => ({ from: 'start', to: r.id, kind: 'data' as const })),
       ...workflow.edges,
     ],
   };
@@ -305,10 +305,38 @@ const LINEAR: Workflow = {
       approval: 'auto',
     },
   ],
-  edges: [{ from: 'a', to: 'b' }],
+  edges: [{ from: 'a', to: 'b', kind: 'data' as const }],
 };
 
 describe('GraphExecutorService', () => {
+  it('rejects running a workflow with call edges — the call runtime is not shipped yet', async () => {
+    // Milestone-1 guard: without it, a call-only callee has no producers and
+    // schedule() would launch it at run start with only the seed prompt.
+    // Milestone 2 (CallBroker + MCP endpoint) removes this guard.
+    const { service, claude, runDao } = setup();
+    let code: string | undefined;
+    try {
+      await service.startRun({
+        slug: 'calls',
+        workflow: triggered({
+          name: 'calls',
+          nodes: [
+            { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+            { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+          ],
+          edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+    } catch (err) {
+      code = (err as BadRequestException).errorCode;
+    }
+    expect(code).toBe('GRAPH_CALL_RUNTIME_UNAVAILABLE');
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
   it('rejects running an empty workflow (a blank-canvas draft)', async () => {
     // Empty workflows are legal in the library (the builder starts blank) but
     // must never start a run: no run row, no adapter spawn.
@@ -410,10 +438,10 @@ describe('GraphExecutorService', () => {
         { id: 'd', kind: 'agent', agent: 'claude', approval: 'auto' },
       ],
       edges: [
-        { from: 'a', to: 'b' },
-        { from: 'a', to: 'c' },
-        { from: 'b', to: 'd' },
-        { from: 'c', to: 'd' },
+        { from: 'a', to: 'b', kind: 'data' as const },
+        { from: 'a', to: 'c', kind: 'data' as const },
+        { from: 'b', to: 'd', kind: 'data' as const },
+        { from: 'c', to: 'd', kind: 'data' as const },
       ],
     };
     const run = await service.startRun({
@@ -730,7 +758,7 @@ describe('GraphExecutorService', () => {
         },
         { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
       ],
-      edges: [{ from: 'a', to: 'b' }],
+      edges: [{ from: 'a', to: 'b', kind: 'data' as const }],
     };
     await service.startRun({
       slug: 'named',

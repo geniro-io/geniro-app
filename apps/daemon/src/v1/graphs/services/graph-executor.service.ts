@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
-import { ConflictException } from '@packages/common';
+import { BadRequestException, ConflictException } from '@packages/common';
 
 import type {
   AgentEvent,
@@ -95,6 +95,16 @@ export class GraphExecutorService {
     validateWorkflowGraph(input.workflow.nodes, input.workflow.edges);
     validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
     computeRunOrder(input.workflow.nodes, input.workflow.edges);
+    // Milestone-1 guard: call edges are drawable/persistable statics, but the
+    // call runtime (CallBroker + MCP endpoint) lands in milestone 2 — without
+    // it a call-only node would launch at run start with only the seed prompt.
+    // Milestone 2 removes this check.
+    if (input.workflow.edges.some((edge) => edge.kind === 'call')) {
+      throw new BadRequestException(
+        'GRAPH_CALL_RUNTIME_UNAVAILABLE',
+        'This workflow has call edges — agent-to-agent calls are not runnable yet; remove the call edges to run it today',
+      );
+    }
     const cwd = resolveValidCwd(input.cwd);
 
     const em = this.em.fork();

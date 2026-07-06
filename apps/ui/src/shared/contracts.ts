@@ -97,6 +97,15 @@ export const NODE_KINDS: readonly NodeKind[] = ['agent', 'trigger'];
 export type TriggerKind = 'manual';
 export const TRIGGER_KINDS: readonly TriggerKind[] = ['manual'];
 
+/**
+ * Edge kinds (mirrors the daemon's `EDGE_KINDS`): `data` — the producer's
+ * final text feeds the consumer's prompt (the DAG flow); `call` — the source
+ * may invoke the target at runtime via the call_agent tool (grants permission
+ * only; no data flows along it).
+ */
+export type EdgeKind = 'data' | 'call';
+export const EDGE_KINDS: readonly EdgeKind[] = ['data', 'call'];
+
 /** One agent node — a CLI coding agent running one turn per run. */
 export interface WorkflowAgentNode {
   id: string;
@@ -122,10 +131,11 @@ export interface WorkflowTriggerNode {
 /** One node of a workflow DAG, discriminated by `kind`. */
 export type WorkflowNode = WorkflowAgentNode | WorkflowTriggerNode;
 
-/** Directed edge: `from`'s final text feeds `to`'s prompt context. */
+/** Directed edge `from → to`, discriminated by `kind` (see `EdgeKind`). */
 export interface WorkflowEdge {
   from: string;
   to: string;
+  kind: EdgeKind;
   label?: string;
 }
 

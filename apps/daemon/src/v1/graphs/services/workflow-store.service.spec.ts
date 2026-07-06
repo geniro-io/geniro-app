@@ -18,7 +18,7 @@ const WF: Workflow = {
     { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
     { id: 'reviewer', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
   ],
-  edges: [{ from: 'coder', to: 'reviewer' }],
+  edges: [{ from: 'coder', to: 'reviewer', kind: 'data' as const }],
 };
 
 describe('WorkflowStoreService', () => {
@@ -77,7 +77,7 @@ describe('WorkflowStoreService', () => {
         { id: 't', kind: 'trigger', trigger: 'manual' },
         { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
       ],
-      edges: [{ from: 't', to: 'a' }],
+      edges: [{ from: 't', to: 'a', kind: 'data' as const }],
     });
     const [summary] = await store.list();
     expect(summary!.nodeCount).toBe(2);
@@ -178,7 +178,7 @@ describe('WorkflowStoreService', () => {
     await store.save('good', WF);
     await writeFile(
       join(dir, 'My-Team.geniro.yaml'),
-      'name: my team\nnodes:\n  - id: solo\n    agent: claude\n',
+      'name: my team\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
       'utf8',
     );
     const listed = await store.list();
@@ -222,8 +222,8 @@ describe('WorkflowStoreService', () => {
     const cyclic: Workflow = {
       ...WF,
       edges: [
-        { from: 'coder', to: 'reviewer' },
-        { from: 'reviewer', to: 'coder' },
+        { from: 'coder', to: 'reviewer', kind: 'data' as const },
+        { from: 'reviewer', to: 'coder', kind: 'data' as const },
       ],
     };
     await expect(store.save('team', cyclic)).rejects.toBeInstanceOf(
@@ -262,7 +262,7 @@ describe('WorkflowStoreService', () => {
     const external = join(dir, '..', `external-${Date.now()}.geniro.yaml`);
     await writeFile(
       external,
-      `# imported with comments\nname: ext\nnodes:\n  - id: solo\n    agent: claude\n`,
+      `# imported with comments\nname: ext\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
       'utf8',
     );
     try {
@@ -284,5 +284,149 @@ describe('WorkflowStoreService', () => {
     expect(await readFile(target, 'utf8')).toBe(
       await readFile(join(dir, 'team.geniro.yaml'), 'utf8'),
     );
+  });
+
+  describe('legacy (pre-kind) file normalization', () => {
+    // A library file written before node/edge kinds existed — no `kind` on
+    // either. These live outside git (userData), so the store normalizes them
+    // in place on first read instead of rejecting them.
+    const LEGACY_SOURCE = [
+      '# hand-written header comment',
+      'name: Legacy Team',
+      'nodes:',
+      '  - id: coder',
+      '    agent: claude',
+      '  - id: reviewer',
+      '    agent: cursor-agent',
+      'edges:',
+      '  - from: coder',
+      '    to: reviewer',
+      '',
+    ].join('\n');
+
+    it('get() normalizes a legacy file once: strict rewrite + .bak of the original bytes', async () => {
+      const path = join(dir, 'legacy.geniro.yaml');
+      await writeFile(path, LEGACY_SOURCE, 'utf8');
+
+      const { workflow } = await store.get('legacy');
+      expect(workflow.nodes.map((n) => n.kind)).toEqual(['agent', 'agent']);
+      expect(workflow.edges).toEqual([
+        { from: 'coder', to: 'reviewer', kind: 'data' },
+      ]);
+
+      // The file on disk is now strict (kinds explicit) and went through the
+      // comment-preserving serializer, and the original bytes moved to .bak —
+      // without the backup, a code revert would strand an unreadable file.
+      const rewritten = await readFile(path, 'utf8');
+      expect(rewritten).toContain('kind: agent');
+      expect(rewritten).toContain('kind: data');
+      expect(rewritten).toContain('# hand-written header comment');
+      expect(await readFile(`${path}.bak`, 'utf8')).toBe(LEGACY_SOURCE);
+
+      // One-time by construction: the rewrite strict-parses, so a second read
+      // must leave both the file and the backup byte-identical.
+      await store.get('legacy');
+      expect(await readFile(path, 'utf8')).toBe(rewritten);
+      expect(await readFile(`${path}.bak`, 'utf8')).toBe(LEGACY_SOURCE);
+    });
+
+    it('list() normalizes legacy files instead of skipping them, and never lists the .bak', async () => {
+      await writeFile(join(dir, 'legacy.geniro.yaml'), LEGACY_SOURCE, 'utf8');
+
+      const listed = await store.list();
+      expect(listed.map((s) => s.slug)).toEqual(['legacy']);
+      expect(listed[0]).toMatchObject({
+        name: 'Legacy Team',
+        nodeCount: 2,
+        edgeCount: 1,
+      });
+      expect(await readFile(join(dir, 'legacy.geniro.yaml.bak'), 'utf8')).toBe(
+        LEGACY_SOURCE,
+      );
+    });
+
+    it('never clobbers an existing .bak on a repeat normalization', async () => {
+      // The .bak holds the OLDEST pre-normalization bytes: if the user
+      // hand-edits the file back into the legacy shape after an earlier
+      // normalization, the re-normalization must not overwrite the backup.
+      const path = join(dir, 'legacy.geniro.yaml');
+      await writeFile(path, LEGACY_SOURCE, 'utf8');
+      await writeFile(`${path}.bak`, 'ORIGINAL BACKUP', 'utf8');
+
+      await store.get('legacy');
+      expect(await readFile(path, 'utf8')).toContain('kind: agent');
+      expect(await readFile(`${path}.bak`, 'utf8')).toBe('ORIGINAL BACKUP');
+    });
+
+    it('get() returns the same edge list on every read of a legacy file repeating one pair kind-less and kinded', async () => {
+      // A hand-edited legacy file can carry the same from→to pair twice: once
+      // kind-less (pre-kind era) and once already carrying kind: data. The
+      // normalizing read collapses them to a single edge in the rewritten
+      // file, so the workflow handed back from that same read must agree —
+      // otherwise the first open shows an edge list the daemon's own
+      // save/run validation rejects as a duplicate wire, and the second
+      // read silently disagrees with the first.
+      await writeFile(
+        join(dir, 'dup.geniro.yaml'),
+        [
+          'name: Dup Pair',
+          'nodes:',
+          '  - id: coder',
+          '    agent: claude',
+          '  - id: reviewer',
+          '    agent: claude',
+          'edges:',
+          '  - from: coder',
+          '    to: reviewer',
+          '  - from: coder',
+          '    to: reviewer',
+          '    kind: data',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const first = (await store.get('dup')).workflow;
+      const second = (await store.get('dup')).workflow;
+      expect(first.edges).toEqual(second.edges);
+    });
+
+    it('a file that fails even the lenient parse throws in get() and leaves no .bak', async () => {
+      // Real garbage (nodes is not a list) is NOT a legacy file: the strict
+      // error surfaces, the file stays untouched for the user to repair, and
+      // no backup is minted for a normalization that never happened.
+      const path = join(dir, 'garbage.geniro.yaml');
+      const source = 'name: g\nnodes: notalist\n';
+      await writeFile(path, source, 'utf8');
+
+      await expect(store.get('garbage')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect((await store.list()).map((s) => s.slug)).toEqual([]);
+      expect(await readFile(path, 'utf8')).toBe(source);
+      await expect(readFile(`${path}.bak`, 'utf8')).rejects.toThrow();
+    });
+
+    it('importFrom normalizes a legacy external file, leaving the original untouched', async () => {
+      const external = join(dir, '..', `legacy-ext-${Date.now()}.geniro.yaml`);
+      await writeFile(external, LEGACY_SOURCE, 'utf8');
+      try {
+        const imported = await store.importFrom(external);
+        expect(imported.workflow.edges[0]!.kind).toBe('data');
+
+        // The library only ever holds strict files: the imported copy carries
+        // explicit kinds (and the user's comment), round-trips through get(),
+        // and needs no .bak — the untouched original at sourcePath is the backup.
+        const path = join(dir, `${imported.slug}.geniro.yaml`);
+        const content = await readFile(path, 'utf8');
+        expect(content).toContain('kind: agent');
+        expect(content).toContain('# hand-written header comment');
+        expect((await store.get(imported.slug)).workflow.nodes).toHaveLength(2);
+        await expect(readFile(`${path}.bak`, 'utf8')).rejects.toThrow();
+        expect(await readFile(external, 'utf8')).toBe(LEGACY_SOURCE);
+      } finally {
+        await rm(external, { force: true });
+      }
+    });
   });
 });

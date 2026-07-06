@@ -35,6 +35,15 @@ export const TriggerKindSchema = z.enum(TRIGGER_KINDS);
 export type TriggerKind = z.infer<typeof TriggerKindSchema>;
 
 /**
+ * Edge kinds: `data` — the producer's final text feeds the consumer's prompt
+ * (the DAG flow); `call` — the source may invoke the target at runtime via
+ * the call_agent tool (grants permission only; no data flows along it).
+ */
+export const EDGE_KINDS = ['data', 'call'] as const;
+export const EdgeKindSchema = z.enum(EDGE_KINDS);
+export type EdgeKind = z.infer<typeof EdgeKindSchema>;
+
+/**
  * One typed connection rule of a node kind (the geniro `ConnectionRule`
  * model, trimmed to kind-matching — geniro-app has no template indirection):
  * "this side of the node accepts/produces edges to nodes of `kind`".
@@ -42,6 +51,8 @@ export type TriggerKind = z.infer<typeof TriggerKindSchema>;
  * `multiple` = more than one such edge may attach (default: single).
  */
 export interface ConnectionRule {
+  /** Edge kind this rule governs — data-flow and call wires are separate ports. */
+  edge: EdgeKind;
   kind: NodeKind;
   required?: boolean;
   multiple?: boolean;
@@ -60,16 +71,20 @@ export const NODE_CONNECTION_RULES: Record<
 > = {
   agent: {
     inputs: [
-      { kind: 'agent', multiple: true },
-      { kind: 'trigger' }, // at most one trigger feeds an agent
+      { edge: 'data', kind: 'agent', multiple: true },
+      { edge: 'data', kind: 'trigger' }, // at most one trigger feeds an agent
+      { edge: 'call', kind: 'agent', multiple: true },
     ],
-    outputs: [{ kind: 'agent', multiple: true }],
+    outputs: [
+      { edge: 'data', kind: 'agent', multiple: true },
+      { edge: 'call', kind: 'agent', multiple: true },
+    ],
   },
   trigger: {
     // Triggers are pure entry points: nothing may feed one, and firing fans
-    // out to any number of agents.
+    // out to any number of agents. Call wires never touch triggers.
     inputs: [],
-    outputs: [{ kind: 'agent', multiple: true }],
+    outputs: [{ edge: 'data', kind: 'agent', multiple: true }],
   },
 };
 
@@ -120,31 +135,30 @@ export const WorkflowTriggerNodeSchema = z.object({
 });
 
 /**
- * One node of a workflow DAG, discriminated by `kind`. The preprocess step
- * keeps pre-trigger YAML parseable: a node written without `kind` is an
- * agent node (the only kind that existed).
+ * One node of a workflow DAG, discriminated by `kind`. Strict: `kind` is
+ * required on every node — legacy kind-less files are normalized once by the
+ * store (no compatibility shim lives in the schema).
  */
-export const WorkflowNodeSchema = z.preprocess(
-  (value) =>
-    value !== null && typeof value === 'object' && !('kind' in value)
-      ? { ...value, kind: 'agent' }
-      : value,
-  z.discriminatedUnion('kind', [
-    WorkflowAgentNodeSchema,
-    WorkflowTriggerNodeSchema,
-  ]),
-);
+export const WorkflowNodeSchema = z.discriminatedUnion('kind', [
+  WorkflowAgentNodeSchema,
+  WorkflowTriggerNodeSchema,
+]);
 
 /**
- * A directed edge `from → to`: node `from`'s final text is appended to node
- * `to`'s prompt context (`to` depends on `from`; producers run first). This is
- * the geniro-app execution semantics — the Geniro source models edges the
- * other way around (`edge.from` depends on `edge.to`), so the ported
- * topo-sort operates on this repo's producer→consumer direction.
+ * A directed edge `from → to`, discriminated by `kind`. For `data` edges,
+ * node `from`'s final text is appended to node `to`'s prompt context (`to`
+ * depends on `from`; producers run first) — that is the geniro-app execution
+ * semantics; the Geniro source models edges the other way around
+ * (`edge.from` depends on `edge.to`), so the ported topo-sort operates on
+ * this repo's producer→consumer direction. `call` edges order nothing and
+ * feed nothing — they only grant the call_agent tool (see `EDGE_KINDS`).
  */
 export const WorkflowEdgeSchema = z.object({
-  from: z.string().min(1).describe('Producer node id'),
-  to: z.string().min(1).describe('Consumer node id'),
+  from: z.string().min(1).describe('Source node id'),
+  to: z.string().min(1).describe('Target node id'),
+  kind: EdgeKindSchema.describe(
+    "Edge kind — 'data' feeds output text; 'call' grants the call_agent tool",
+  ),
   label: z.string().optional().describe('Optional edge label'),
 });
 

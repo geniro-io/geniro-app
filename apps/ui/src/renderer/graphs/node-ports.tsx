@@ -97,7 +97,7 @@ function PortsSide({
             style={handleStyle(edge, tone, index > 0, rules.length - index)}
           />
         ))}
-        <div className={cn(pill({ tone }), side === 'output' && 'text-right')}>
+        <div className={pill({ tone })}>
           <div className="text-[10px] font-semibold leading-tight">{side}s</div>
           <div className="text-[10px] leading-tight opacity-60">
             {rules.length} connection{rules.length === 1 ? '' : 's'}
@@ -110,7 +110,7 @@ function PortsSide({
     <div
       className={cn(
         'flex w-full flex-col gap-1.5',
-        side === 'output' && 'items-end text-right',
+        side === 'output' && 'items-end',
       )}>
       {rules.map((rule) => (
         <div
@@ -165,8 +165,27 @@ export function NodePorts({
 
   return (
     <>
-      {/* Geniro's toggle: an 18px circle straddling the header divider,
-          centered on the card (a zero-height row keeps it out of flow). */}
+      <div className="flex gap-4 px-3 pt-3 pb-2.5">
+        <div className="flex min-w-0 flex-1 justify-start">
+          <PortsSide
+            side="input"
+            kind={kind}
+            expanded={expanded}
+            missing={missingInput}
+          />
+        </div>
+        <div className="flex min-w-0 flex-1 justify-end">
+          <PortsSide
+            side="output"
+            kind={kind}
+            expanded={expanded}
+            missing={missingOutput}
+          />
+        </div>
+      </div>
+      {/* The toggle: an 18px circle straddling the ports block's BOTTOM edge
+          (the card's bottom border, or the error strip's divider), centered —
+          a zero-height row keeps it out of flow. */}
       <div className="relative z-10 flex h-0 justify-center">
         <button
           type="button"
@@ -188,24 +207,6 @@ export function NodePorts({
             <ChevronDown aria-hidden="true" className="size-2.5" />
           )}
         </button>
-      </div>
-      <div className="flex gap-4 px-3 pt-3 pb-2.5">
-        <div className="flex min-w-0 flex-1 justify-start">
-          <PortsSide
-            side="input"
-            kind={kind}
-            expanded={expanded}
-            missing={missingInput}
-          />
-        </div>
-        <div className="flex min-w-0 flex-1 justify-end">
-          <PortsSide
-            side="output"
-            kind={kind}
-            expanded={expanded}
-            missing={missingOutput}
-          />
-        </div>
       </div>
     </>
   );

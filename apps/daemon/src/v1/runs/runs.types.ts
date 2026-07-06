@@ -18,6 +18,12 @@ export type NodeStatus = RunStatus | 'skipped';
  * forward-compat though only a subset is emitted. `approval_request` is an
  * `ask`-node's paused tool call awaiting a verdict; `approval_verdict` records
  * the user's answer, closing the pair for reconnect replay.
+ *
+ * The agent-calls milestone adds the three call kinds: `call_started` (a
+ * caller invoked call_agent — attributed to the CALLER node), `call_result`
+ * (the call's envelope settled — also the caller's), and `await_collected`
+ * (an async result was picked up via await_agent). The callee's own turn
+ * streams as regular items under the callee's nodeId.
  */
 export type ItemKind =
   | 'message'
@@ -32,7 +38,10 @@ export type ItemKind =
   | 'attachment'
   | 'status'
   | 'approval_request'
-  | 'approval_verdict';
+  | 'approval_verdict'
+  | 'call_started'
+  | 'call_result'
+  | 'await_collected';
 
 /** A CLI coding agent the daemon can drive headlessly (M2: one at a time). */
 export type AgentKind = 'claude' | 'cursor-agent';

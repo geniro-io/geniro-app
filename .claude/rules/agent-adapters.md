@@ -21,6 +21,13 @@ globs:
   - override `buildApprovalResponse(id, allow, updatedInput)` only when the CLI
     has an approval wire protocol (Claude's stream-json `control_response`);
     the default `undefined` makes `respondApproval` a no-op
+  - override `prepareTurn(input)` only when a turn needs a resource materialized
+    BEFORE the spawn and torn down when it settles — return a disposer; the base
+    runs it on exactly one exit path (once on `handle.done`, OR once on a
+    synchronous `start()` throw), so every settle path frees the resource
+    exactly once (Claude's per-turn `--mcp-config` file for caller nodes
+    writes/removes the 0600 config here — the call token rides the file, never
+    argv)
 - Never wire `runHeadlessCli` (or `spawn`) directly from an adapter or service —
   the base class's `start()` is the single spawn path.
 - **Each adapter gets its own subdirectory** `adapters/<name>/` holding ALL of its

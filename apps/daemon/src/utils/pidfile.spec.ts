@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { DaemonInfo } from './handshake';
-import { mintToken, removePidfile, writePidfile } from './pidfile';
+import { removePidfile, writePidfile } from './pidfile';
 
 describe('pidfile', () => {
   let dir: string;
@@ -27,13 +27,6 @@ describe('pidfile', () => {
     token: 'deadbeef',
     version: '0.1.0',
     startedAt: new Date(0).toISOString(),
-  });
-
-  it('mints unique 64-char hex tokens', () => {
-    const a = mintToken();
-    const b = mintToken();
-    expect(a).toMatch(/^[0-9a-f]{64}$/);
-    expect(a).not.toBe(b);
   });
 
   it('writes the descriptor as JSON that reads back intact', () => {

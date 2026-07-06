@@ -1,16 +1,20 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 
+import { CallTokenRegistry } from './call-token.registry';
 import { LoopbackTokenGuard } from './token.guard';
 
 const TOKEN = 'per-launch-token';
 
-function guard(): LoopbackTokenGuard {
-  return new LoopbackTokenGuard({
-    token: TOKEN,
-    version: '0.0.0-test',
-    startedAt: Date.now(),
-  });
+function guard(callTokens = new CallTokenRegistry()): LoopbackTokenGuard {
+  return new LoopbackTokenGuard(
+    {
+      token: TOKEN,
+      version: '0.0.0-test',
+      startedAt: Date.now(),
+    },
+    callTokens,
+  );
 }
 
 function httpContext(url: string, authorization?: string): ExecutionContext {
@@ -76,6 +80,91 @@ describe('LoopbackTokenGuard', () => {
         guard().canActivate(httpContext('/healthz', `Bearer ${TOKEN}`)),
       ).toBe(true);
       expect(guard().canActivate(httpContext('/healthz'))).toBe(false);
+    });
+  });
+
+  describe('per-node call token (MCP namespace)', () => {
+    const CALL = 'orch-call-token';
+
+    function registryWith(
+      runId: string,
+      nodeId: string,
+      token: string,
+    ): CallTokenRegistry {
+      const registry = new CallTokenRegistry();
+      registry.issue(runId, nodeId, token);
+      return registry;
+    }
+
+    it("opens exactly the issuing node's MCP route", () => {
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      expect(
+        g.canActivate(httpContext('/v1/mcp/run-1/orch', `Bearer ${CALL}`)),
+      ).toBe(true);
+    });
+
+    it("rejects the token on ANOTHER node's route in the same run (no nodeId spoof)", () => {
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      expect(
+        g.canActivate(httpContext('/v1/mcp/run-1/helper', `Bearer ${CALL}`)),
+      ).toBe(false);
+    });
+
+    it("rejects the call token on another run's MCP route", () => {
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      expect(
+        g.canActivate(httpContext('/v1/mcp/run-2/orch', `Bearer ${CALL}`)),
+      ).toBe(false);
+    });
+
+    it('rejects the call token everywhere off the MCP namespace', () => {
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      expect(g.canActivate(httpContext('/v1/chats', `Bearer ${CALL}`))).toBe(
+        false,
+      );
+      // Prefix look-alike must not inherit the call-token acceptance.
+      expect(
+        g.canActivate(httpContext('/v1/mcpx/run-1/orch', `Bearer ${CALL}`)),
+      ).toBe(false);
+    });
+
+    it('still accepts the launch token on an MCP route', () => {
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      expect(
+        g.canActivate(httpContext('/v1/mcp/run-1/orch', `Bearer ${TOKEN}`)),
+      ).toBe(true);
+    });
+
+    it('rejects a revoked call token', () => {
+      const registry = registryWith('run-1', 'orch', CALL);
+      const g = guard(registry);
+      registry.revokeRun('run-1');
+      expect(
+        g.canActivate(httpContext('/v1/mcp/run-1/orch', `Bearer ${CALL}`)),
+      ).toBe(false);
+    });
+
+    it('decodes percent-encoded run/node segments before the lookup', () => {
+      const g = guard(registryWith('run 1', 'node/x', CALL));
+      expect(
+        g.canActivate(
+          httpContext('/v1/mcp/run%201/node%2Fx', `Bearer ${CALL}`),
+        ),
+      ).toBe(true);
+    });
+
+    it('rejects a missing node segment and malformed encoding without throwing', () => {
+      const g = guard(registryWith('run-1', 'orch', CALL));
+      // runId present, nodeId missing.
+      expect(
+        g.canActivate(httpContext('/v1/mcp/run-1', `Bearer ${CALL}`)),
+      ).toBe(false);
+      expect(g.canActivate(httpContext('/v1/mcp/', `Bearer ${CALL}`))).toBe(
+        false,
+      );
+      expect(
+        g.canActivate(httpContext('/v1/mcp/%E0%A4%A/orch', `Bearer ${CALL}`)),
+      ).toBe(false);
     });
   });
 });

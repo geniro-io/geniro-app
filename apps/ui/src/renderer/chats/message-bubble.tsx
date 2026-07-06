@@ -17,6 +17,9 @@ const bubbleVariants = cva('flex flex-col gap-1 rounded-xl text-sm', {
       reasoning:
         'self-start max-w-[85%] bg-muted/50 text-muted-foreground px-3.5 py-2.5',
       tool: 'self-start w-full bg-muted text-muted-foreground px-3.5 py-2.5',
+      // Agent-to-agent call rows share the call features' amber language
+      // (the dashed call edge, the amber ports) via the warning token.
+      call: 'self-start w-full bg-warning/10 border border-warning/30 px-3.5 py-2.5',
       error:
         'self-start max-w-[85%] bg-destructive/10 border border-destructive/30 text-destructive px-3.5 py-2.5',
       note: 'self-center text-xs text-muted-foreground py-1',

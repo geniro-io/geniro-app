@@ -1,4 +1,13 @@
 import { EventEmitter } from 'node:events';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,14 +48,25 @@ class FakeChild extends EventEmitter {
 function fakeSpawn(): {
   spawn: SpawnFn;
   child: FakeChild;
-  captured: { command?: string; args?: string[]; cwd?: string };
+  captured: {
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  };
 } {
   const child = new FakeChild();
-  const captured: { command?: string; args?: string[]; cwd?: string } = {};
+  const captured: {
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {};
   const spawn: SpawnFn = (command, args, options) => {
     captured.command = command;
     captured.args = args;
     captured.cwd = options.cwd;
+    captured.env = options.env;
     return child as unknown as SpawnedProcess;
   };
   return { spawn, child, captured };
@@ -399,5 +419,99 @@ describe('ClaudeAdapter binary override', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn }).start({ prompt: 'p', cwd: '/proj' }, () => {});
     expect(captured.command).toBe('/opt/tools/claude');
+  });
+});
+
+describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
+  const ENDPOINT = {
+    url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
+    token: 'call-token-1',
+  };
+  const dirs: string[] = [];
+
+  function mcpDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-mcp-spec-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a per-turn 0600 config file, points argv at it, and injects MCP_TOOL_TIMEOUT', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const dir = mcpDir();
+    const handle = new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
+      { prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT },
+      () => {},
+    );
+    const idx = captured.args!.indexOf('--mcp-config');
+    expect(idx).toBeGreaterThan(-1);
+    const configPath = captured.args![idx + 1]!;
+    expect(captured.args).toContain('--strict-mcp-config');
+    expect(configPath.startsWith(dir)).toBe(true);
+    // The token travels IN the file (0600), never in argv.
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
+      mcpServers: {
+        geniro: {
+          type: 'http',
+          url: ENDPOINT.url,
+          headers: { Authorization: 'Bearer call-token-1' },
+        },
+      },
+    });
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(captured.args!.join(' ')).not.toContain('call-token-1');
+    expect(captured.env?.MCP_TOOL_TIMEOUT).toBe(String(30 * 60_000));
+    // The file dies with the turn.
+    child.emit('close', 0, null);
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  it('disposes the config file when the turn settles via cancel, not just clean exit', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+      { prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT },
+      () => {},
+    );
+    const idx = captured.args!.indexOf('--mcp-config');
+    const configPath = captured.args![idx + 1]!;
+    expect(existsSync(configPath)).toBe(true);
+    // Cancel is a distinct settle path from a clean exit — the disposer must
+    // run here too, or a live-token 0600 file leaks to tmp.
+    handle.cancel();
+    child.emit('close', null, 'SIGTERM');
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  it('honors a toolTimeoutMs override', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        mcpEndpoint: { ...ENDPOINT, toolTimeoutMs: 5000 },
+      },
+      () => {},
+    );
+    expect(captured.env?.MCP_TOOL_TIMEOUT).toBe('5000');
+  });
+
+  it('a turn without mcpEndpoint keeps argv and env untouched', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+      { prompt: 'p', cwd: '/proj', env: { FOO: 'bar' } },
+      () => {},
+    );
+    expect(captured.args!.join(' ')).not.toContain('--mcp-config');
+    expect(captured.env?.MCP_TOOL_TIMEOUT).toBeUndefined();
+    expect(captured.env?.FOO).toBe('bar');
   });
 });

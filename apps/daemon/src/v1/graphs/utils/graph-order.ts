@@ -37,6 +37,41 @@ export function buildEdgeMaps(
 }
 
 /**
+ * Nodes that run ONLY when called: agent nodes targeted by ≥1 call edge with
+ * no incoming data edge. The executor excludes them from the DAG walk — they
+ * are not roots, never enter `schedule()`'s loop or the settled denominator —
+ * and launches a fresh turn per CallBroker call instead.
+ * `validateRunnableGraph` forbids them from feeding data consumers (a
+ * per-call output has no defined place in the DAG order).
+ *
+ * Structurally typed (`{ id, kind }` / `{ from, to, kind }`) so the ONE
+ * predicate serves both the executor (WorkflowNode/WorkflowEdge) and the
+ * validator (loosely-typed) — the "call-only node" definition must never
+ * diverge between the two, or an invariant fix would silently miss a copy.
+ */
+export function onDemandNodeIds(
+  nodes: readonly { id: string; kind: string }[],
+  edges: readonly { from: string; to: string; kind: string }[],
+): Set<string> {
+  const callTargets = new Set<string>();
+  const dataTargets = new Set<string>();
+  for (const edge of edges) {
+    (edge.kind === 'call' ? callTargets : dataTargets).add(edge.to);
+  }
+  const onDemand = new Set<string>();
+  for (const node of nodes) {
+    if (
+      node.kind === 'agent' &&
+      callTargets.has(node.id) &&
+      !dataTargets.has(node.id)
+    ) {
+      onDemand.add(node.id);
+    }
+  }
+  return onDemand;
+}
+
+/**
  * Kahn topological sort, ported from Geniro's `graph-compiler.ts`
  * `getBuildOrder` (:582-645). The source counts OUTGOING edges because its
  * edge semantics are inverted (`edge.from` depends on `edge.to`); geniro-app

@@ -10,11 +10,13 @@ import { buildMetricExtension } from '@packages/metrics';
 import { buildMikroOrmExtension } from '@packages/mikroorm';
 
 import { AppModule } from './app.module';
+import { mintToken } from './auth/mint-token';
 import type { RuntimeInfo } from './auth/runtime';
 import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
 import type { DaemonInfo } from './utils/handshake';
-import { mintToken, writePidfile } from './utils/pidfile';
+import { writePidfile } from './utils/pidfile';
+import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { ChatService } from './v1/agents/services/chat.service';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
@@ -24,6 +26,7 @@ const runtime: RuntimeInfo = {
   token,
   version: environment.version,
   startedAt,
+  port: null,
 };
 
 // Assembled exactly like Geniro's apps/api: a bootstrapper + extensions, started
@@ -56,7 +59,9 @@ bootstrapper.addExtension(
         // Written only after the schema is migrated (appChangeCb) and the server
         // is listening — a reader that sees the pidfile is guaranteed a healthy,
         // migrated daemon. `port` is the actually-bound one (may differ from the
-        // preferred port when portFallback kicked in).
+        // preferred port when portFallback kicked in). The shared RuntimeInfo
+        // learns it here — the executor mints per-run MCP URLs from it.
+        runtime.port = port;
         const info: DaemonInfo = {
           pid: process.pid,
           host,
@@ -85,6 +90,11 @@ bootstrapper.addExtension(
       // a fresh install, so a logged reconcile error always means a real failure.
       await app.get(ChatService).reconcileOrphanedRuns();
       await app.get(GraphExecutorService).reconcileOrphanedRuns();
+
+      // Sweep MCP config files a prior crash left behind (the per-turn
+      // disposer only runs on a clean settle). The tokens in them are already
+      // dead — this is hygiene for <userData>/tmp.
+      app.get(ClaudeAdapter).sweepStaleConfigs();
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

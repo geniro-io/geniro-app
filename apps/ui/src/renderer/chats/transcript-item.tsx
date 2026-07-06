@@ -125,6 +125,60 @@ export const TranscriptItem = memo(function TranscriptItem({
         </MessageBubble>
       );
     }
+    case 'call_started': {
+      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
+      const mode = payloadString(item.payload, 'mode') ?? 'sync';
+      const callId = payloadString(item.payload, 'callId');
+      return (
+        <MessageBubble
+          variant="call"
+          role={tag(
+            `📞 call → ${callee}${mode === 'sync' ? '' : ` · ${mode}`}${callId ? ` · ${callId}` : ''}`,
+          )}>
+          <div className="whitespace-pre-wrap">
+            {payloadString(item.payload, 'message') ?? ''}
+          </div>
+        </MessageBubble>
+      );
+    }
+    case 'call_result': {
+      // Payload spreads the call ENVELOPE: status 'ok' carries
+      // result.{call_id,agent,text}; 'error' carries the prefixed error line.
+      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
+      const callId = payloadString(item.payload, 'callId');
+      const suffix = callId ? ` · ${callId}` : '';
+      if (payloadString(item.payload, 'status') === 'ok') {
+        const result = (item.payload as { result?: unknown } | null)?.result;
+        const text =
+          result && typeof result === 'object' && 'text' in result
+            ? String((result as { text: unknown }).text)
+            : pretty(result ?? null);
+        return (
+          <MessageBubble
+            variant="call"
+            role={tag(`✓ result ← ${callee}${suffix}`)}>
+            <div className="whitespace-pre-wrap">{text}</div>
+          </MessageBubble>
+        );
+      }
+      return (
+        <MessageBubble
+          variant="error"
+          role={tag(`✗ call failed ← ${callee}${suffix}`)}>
+          <div className="whitespace-pre-wrap">
+            {payloadString(item.payload, 'error') ?? 'call failed'}
+          </div>
+        </MessageBubble>
+      );
+    }
+    case 'await_collected':
+      return (
+        <MessageBubble variant="note">
+          {tag(
+            `⏳ collected ${payloadString(item.payload, 'callId') ?? 'call'}`,
+          )}
+        </MessageBubble>
+      );
     default:
       return null; // usage / attachment / approval_request (rendered as a card)
   }

@@ -83,6 +83,16 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Materialize turn-scoped resources BEFORE the spawn; the returned disposer
+   * runs when the turn settles (any path). Default: nothing. The Claude
+   * adapter writes its per-turn MCP config file here so `buildArgs` can
+   * reference the path while the call token stays out of argv.
+   */
+  protected prepareTurn(_input: AgentTurnInput): (() => void) | undefined {
+    return undefined;
+  }
+
+  /**
    * Start a turn. Events are delivered to `onEvent` in stream order. The
    * returned handle settles via `done` and can `cancel` the turn.
    */
@@ -90,19 +100,35 @@ export abstract class AgentAdapter {
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
   ): AgentTurnHandle {
-    return runHeadlessCli({
-      command: this.command,
-      args: this.buildArgs(input),
-      cwd: input.cwd,
-      env: this.buildEnv(input),
-      stdinPayload: this.buildStdinPayload(input),
-      keepStdinOpen: this.keepStdinOpen(input),
-      buildApprovalResponse: (id, allow, updatedInput) =>
-        this.buildApprovalResponse(id, allow, updatedInput),
-      mapper: (obj) => this.mapMessage(obj),
-      onEvent,
-      spawn: this.options.spawn,
-      logger: this.options.logger,
-    });
+    const dispose = this.prepareTurn(input);
+    let handle: AgentTurnHandle;
+    try {
+      handle = runHeadlessCli({
+        command: this.command,
+        args: this.buildArgs(input),
+        cwd: input.cwd,
+        env: this.buildEnv(input),
+        stdinPayload: this.buildStdinPayload(input),
+        keepStdinOpen: this.keepStdinOpen(input),
+        buildApprovalResponse: (id, allow, updatedInput) =>
+          this.buildApprovalResponse(id, allow, updatedInput),
+        mapper: (obj) => this.mapMessage(obj),
+        onEvent,
+        spawn: this.options.spawn,
+        logger: this.options.logger,
+      });
+    } catch (err) {
+      // A synchronous throw between prepareTurn and a settling handle (a spawn
+      // failure, a bad argv) would otherwise leak the turn-scoped resource —
+      // the disposer only rides `handle.done`, which never arrives here.
+      dispose?.();
+      throw err;
+    }
+    if (dispose) {
+      // `done` never rejects (handle contract), so one settle callback covers
+      // every exit path.
+      void handle.done.then(dispose);
+    }
+    return handle;
   }
 }

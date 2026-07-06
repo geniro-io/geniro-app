@@ -20,7 +20,7 @@ import { makeHandleId, NODE_CONNECTION_RULES } from './node-schema';
  */
 type Tone = 'input' | 'output' | 'missing';
 
-const pill = cva('rounded px-2 py-0.5', {
+const pill = cva('rounded px-2 py-1', {
   variants: {
     tone: {
       input: 'bg-primary/10 text-primary',
@@ -83,6 +83,9 @@ function PortsSide({
   const tone: Tone = missing ? 'missing' : side;
 
   if (!expanded) {
+    // Geniro's collapsed slot: a uniform two-line summary pill on each side
+    // — plural label + the rule-type count — so input and output always
+    // mirror each other visually.
     return (
       <div className="relative flex items-center">
         {rules.map((rule, index) => (
@@ -94,13 +97,11 @@ function PortsSide({
             style={handleStyle(edge, tone, index > 0, rules.length - index)}
           />
         ))}
-        <div className={pill({ tone })}>
-          <div className="text-[10px] font-semibold leading-tight">{side}</div>
-          {rules.length > 1 ? (
-            <div className="text-[10px] leading-tight opacity-60">
-              {rules.length} types
-            </div>
-          ) : null}
+        <div className={cn(pill({ tone }), side === 'output' && 'text-right')}>
+          <div className="text-[10px] font-semibold leading-tight">{side}s</div>
+          <div className="text-[10px] leading-tight opacity-60">
+            {rules.length} connection{rules.length === 1 ? '' : 's'}
+          </div>
         </div>
       </div>
     );
@@ -108,18 +109,23 @@ function PortsSide({
   return (
     <div
       className={cn(
-        'flex flex-col gap-1.5',
+        'flex w-full flex-col gap-1.5',
         side === 'output' && 'items-end text-right',
       )}>
       {rules.map((rule) => (
-        <div key={rule.kind} className="relative flex items-center">
+        <div
+          key={rule.kind}
+          className={cn(
+            'relative flex items-center',
+            side === 'input' && 'w-full',
+          )}>
           <Handle
             type={dir}
             id={makeHandleId(dir, rule.kind)}
             position={position}
             style={handleStyle(edge, tone, false)}
           />
-          <div className={pill({ tone })}>
+          <div className={cn(pill({ tone }), side === 'input' && 'w-full')}>
             <div className="text-[10px] font-semibold leading-tight">
               {rule.kind}
             </div>
@@ -158,7 +164,11 @@ export function NodePorts({
   }, [expanded, nodeId, updateNodeInternals]);
 
   return (
-    <div className="flex items-start justify-between gap-2 px-3 py-2.5">
+    <div
+      className={cn(
+        'flex justify-between gap-2 px-3 py-2.5',
+        expanded ? 'items-start' : 'items-center',
+      )}>
       <div className="flex min-w-0 flex-1 justify-start">
         <PortsSide
           side="input"

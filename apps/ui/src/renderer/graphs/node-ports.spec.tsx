@@ -83,10 +83,12 @@ describe('NodePorts', () => {
         missingOutput={false}
       />,
     );
-    expect(container.textContent).toContain('input');
-    expect(container.textContent).toContain('output');
-    // The agent kind has two input rule types — the collapsed summary says so.
-    expect(container.textContent).toContain('2 types');
+    // Geniro's collapsed slots: both sides show the same two-line pill —
+    // plural label + rule-type count — so input and output stay symmetric.
+    expect(container.textContent).toContain('inputs');
+    expect(container.textContent).toContain('outputs');
+    expect(container.textContent).toContain('2 connections');
+    expect(container.textContent).toContain('1 connection');
     // Per-type labels are NOT visible while collapsed.
     expect(container.textContent).not.toContain('trigger');
     // All three rule handles exist (edges stay attached), only the top of
@@ -116,7 +118,7 @@ describe('NodePorts', () => {
     expect(container.textContent).toContain('trigger');
     // …with its arity flag, and no summary pills anymore.
     expect(container.textContent).toContain('multiple');
-    expect(container.textContent).not.toContain('2 types');
+    expect(container.textContent).not.toContain('connection');
     expect(handles().every((h) => !h.hidden)).toBe(true);
     const button = container.querySelector('[aria-label="Collapse ports"]');
     expect(button?.getAttribute('aria-expanded')).toBe('true');
@@ -134,7 +136,8 @@ describe('NodePorts', () => {
       />,
     );
     expect(container.textContent).not.toContain('input');
-    expect(container.textContent).toContain('output');
+    expect(container.textContent).toContain('outputs');
+    expect(container.textContent).toContain('1 connection');
     expect(handles()).toEqual([{ id: 'source-kind-agent', hidden: false }]);
   });
 

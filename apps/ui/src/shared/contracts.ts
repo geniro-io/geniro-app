@@ -185,6 +185,24 @@ export interface NodeStateWire {
   error: string | null;
 }
 
+/**
+ * Whether cursor-agent CALLER nodes can hold the call tools on this machine —
+ * the daemon's cached MCP-trust probe verdict (mirrors the daemon
+ * `CursorCallsCapability`). `unknown` = not probed yet; reading the
+ * capabilities route pre-warms the probe daemon-side.
+ */
+export interface CursorCallsCapability {
+  status: 'pass' | 'fail' | 'unknown';
+  version: string | null;
+  probedAt: number | null;
+  reason: string | null;
+}
+
+/** GET /v1/capabilities (mirrors the daemon `CapabilitiesWire`). */
+export interface CapabilitiesWire {
+  cursorCalls: CursorCallsCapability;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Terminals (mirrors the daemon's v1/terminals wire shapes — keep in sync with
 // apps/daemon/src/v1/terminals/terminals.types.ts)

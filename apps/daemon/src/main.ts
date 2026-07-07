@@ -18,6 +18,7 @@ import type { DaemonInfo } from './utils/handshake';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { ChatService } from './v1/agents/services/chat.service';
+import { CursorMcpMergeService } from './v1/agents/services/cursor-mcp-merge.service';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
 const startedAt = Date.now();
@@ -95,6 +96,11 @@ bootstrapper.addExtension(
       // disposer only runs on a clean settle). The tokens in them are already
       // dead — this is hygiene for <userData>/tmp.
       app.get(ClaudeAdapter).sweepStaleConfigs();
+
+      // Restore .cursor/mcp.json merges a crash stranded in USER worktrees —
+      // journal-driven, so no disk scanning; unlike the claude sweep this one
+      // is an obligation, not hygiene (the file is the user's).
+      app.get(CursorMcpMergeService).reconcileStranded();
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

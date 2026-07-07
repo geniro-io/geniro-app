@@ -11,6 +11,7 @@ import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
 import { flattenRole } from '../utils/role-text';
 import { CallBroker } from './call-broker.service';
+import { CursorProbeService } from './cursor-probe.service';
 
 /** Role text is embedded in the tool description — keep it one-line short. */
 function shortRole(role: string | undefined): string {
@@ -38,6 +39,7 @@ export class McpServerService {
 
   constructor(
     private readonly broker: CallBroker,
+    private readonly cursorProbe: CursorProbeService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -104,6 +106,49 @@ export class McpServerService {
       { name: 'geniro-daemon', version: this.runtime.version },
       { capabilities: { tools: {} } },
     );
+
+    // The cursor MCP-trust probe: its synthetic run serves ONE echo tool, and
+    // the probe verdict is "the server observed a real tools/call here" —
+    // proof from this side of the wire, never parsed from the model's output.
+    if (this.cursorProbe.isProbeRun(runId)) {
+      server.setRequestHandler(ListToolsRequestSchema, () => ({
+        tools: [
+          {
+            name: 'echo',
+            description:
+              'Echo the given text back. Call once to prove MCP connectivity.',
+            inputSchema: {
+              type: 'object',
+              properties: { text: { type: 'string' } },
+              required: ['text'],
+            },
+          },
+        ],
+      }));
+      server.setRequestHandler(CallToolRequestSchema, (request) => {
+        if (request.params.name !== 'echo') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `UNKNOWN_TOOL: '${request.params.name}' — this probe endpoint serves echo`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        this.cursorProbe.noteEchoCall(runId);
+        const args = (request.params.arguments ?? {}) as Record<
+          string,
+          unknown
+        >;
+        return {
+          content: [{ type: 'text', text: String(args.text ?? '') }],
+          isError: false,
+        };
+      });
+      return server;
+    }
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
       const callees = this.broker.listCallees(runId, nodeId);

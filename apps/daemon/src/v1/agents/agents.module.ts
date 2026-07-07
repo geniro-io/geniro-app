@@ -12,6 +12,7 @@ import { RunDao } from './dao/run.dao';
 import { AgentEventBus } from './services/agent-events.bus';
 import { ApprovalRegistry } from './services/approval-registry';
 import { ChatService } from './services/chat.service';
+import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
 import { ProcessRegistry } from './services/process-registry';
 
 /**
@@ -43,6 +44,13 @@ import { ProcessRegistry } from './services/process-registry';
         }),
     },
     { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
+    {
+      // Factory because the trailing options bag is a test seam, not a DI token.
+      provide: CursorMcpMergeService,
+      useFactory: (processes: ProcessRegistry) =>
+        new CursorMcpMergeService(processes),
+      inject: [ProcessRegistry],
+    },
   ],
   exports: [
     AgentEventBus,
@@ -53,6 +61,7 @@ import { ProcessRegistry } from './services/process-registry';
     RunDao,
     ClaudeAdapter,
     CursorAdapter,
+    CursorMcpMergeService,
   ],
 })
 export class AgentsModule {}

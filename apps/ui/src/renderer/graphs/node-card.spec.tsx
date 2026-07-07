@@ -3,7 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkflowNode } from '../../shared/contracts';
+import type {
+  CursorCallsCapability,
+  WorkflowNode,
+} from '../../shared/contracts';
 
 const mocks = vi.hoisted(() => ({
   edges: [] as { source: string; target: string }[],
@@ -24,7 +27,7 @@ vi.mock('@xyflow/react', () => ({
     selector({ nodes: mocks.nodes }),
 }));
 
-import { NodeCard } from './node-card';
+import { CursorCallsContext, NodeCard } from './node-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -68,6 +71,21 @@ function render(node: WorkflowNode, selected = false): void {
       <NodeCard node={node} selected={selected} className="w-[240px]">
         <span>header-content</span>
       </NodeCard>,
+    );
+  });
+}
+
+function renderWithCapability(
+  node: WorkflowNode,
+  capability: CursorCallsCapability | null,
+): void {
+  act(() => {
+    root.render(
+      <CursorCallsContext.Provider value={capability}>
+        <NodeCard node={node} selected={false} className="w-[240px]">
+          <span>header-content</span>
+        </NodeCard>
+      </CursorCallsContext.Provider>,
     );
   });
 }
@@ -128,5 +146,73 @@ describe('NodeCard', () => {
     mocks.edges = [{ source: 't1', target: 'a1' }];
     render(AGENT);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe('NodeCard — cursor calls degrade warning', () => {
+  const CURSOR_CALLER: WorkflowNode = {
+    id: 'c1',
+    kind: 'agent',
+    agent: 'cursor-agent',
+    approval: 'auto',
+  };
+  const FAIL: CursorCallsCapability = {
+    status: 'fail',
+    version: 'v1',
+    probedAt: 1,
+    reason: 'no headless MCP trust',
+  };
+  const PASS: CursorCallsCapability = {
+    status: 'pass',
+    version: 'v1',
+    probedAt: 1,
+    reason: null,
+  };
+
+  function cursorCallerCanvas(): void {
+    canvas(CURSOR_CALLER, AGENT);
+    mocks.edges = [
+      { source: 'c1', target: 'a1', type: 'call' } as (typeof mocks.edges)[0],
+    ];
+  }
+
+  it('shows the amber note on a cursor caller when the probe failed', () => {
+    cursorCallerCanvas();
+    renderWithCapability(CURSOR_CALLER, FAIL);
+    const note = container.querySelector('[role="note"]');
+    expect(note?.textContent).toContain('Agent calls will be disabled');
+    expect(note?.textContent).toContain('no headless MCP trust');
+  });
+
+  it('shows a probing note while the verdict is still unknown', () => {
+    cursorCallerCanvas();
+    renderWithCapability(CURSOR_CALLER, {
+      ...FAIL,
+      status: 'unknown',
+      reason: null,
+    });
+    expect(container.querySelector('[role="note"]')?.textContent).toContain(
+      'not verified yet',
+    );
+  });
+
+  it('stays silent on a pass, on a claude caller, and on a cursor node without call edges', () => {
+    cursorCallerCanvas();
+    renderWithCapability(CURSOR_CALLER, PASS);
+    expect(container.querySelector('[role="note"]')).toBeNull();
+
+    // claude caller with the same failed capability — not a cursor concern
+    canvas(AGENT, CURSOR_CALLER);
+    mocks.edges = [
+      { source: 'a1', target: 'c1', type: 'call' } as (typeof mocks.edges)[0],
+    ];
+    renderWithCapability(AGENT, FAIL);
+    expect(container.querySelector('[role="note"]')).toBeNull();
+
+    // cursor node with only a data edge — not a caller
+    canvas(CURSOR_CALLER, AGENT);
+    mocks.edges = [{ source: 'c1', target: 'a1' }];
+    renderWithCapability(CURSOR_CALLER, FAIL);
+    expect(container.querySelector('[role="note"]')).toBeNull();
   });
 });

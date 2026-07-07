@@ -1,9 +1,13 @@
 import { type ReactFlowState, useEdges, useStore } from '@xyflow/react';
-import { useMemo } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 
-import type { WorkflowNode } from '../../shared/contracts';
+import type {
+  CursorCallsCapability,
+  WorkflowNode,
+} from '../../shared/contracts';
 import { cn } from '../components/ui/utils';
 import { NodePorts } from './node-ports';
+import { flowEdgeKind } from './node-schema';
 import { type NodeValidationError, validateNode } from './node-validate';
 
 /**
@@ -45,6 +49,45 @@ export function useNodeValidation(node: WorkflowNode): NodeValidationError[] {
   return useMemo(() => validateNode(node, kinds, edges), [node, kinds, edges]);
 }
 
+/**
+ * The daemon's cursor-calls probe verdict, provided by the Graphs page.
+ * Lives in context (not inside `validateNode`) because the pure validator has
+ * no daemon access — this is machine state, not graph state.
+ */
+export const CursorCallsContext = createContext<CursorCallsCapability | null>(
+  null,
+);
+
+/**
+ * The amber degrade warning for a cursor node that has outgoing call edges
+ * while the machine's cursor-agent can't (or isn't yet known to) use MCP call
+ * tools. Null = no warning (not a cursor caller, verdict passed, or the
+ * capability hasn't loaded yet).
+ */
+export function useCursorCallsWarning(node: WorkflowNode): string | null {
+  const capability = useContext(CursorCallsContext);
+  const edges = useEdges();
+  return useMemo(() => {
+    if (
+      node.kind !== 'agent' ||
+      node.agent !== 'cursor-agent' ||
+      !capability ||
+      capability.status === 'pass'
+    ) {
+      return null;
+    }
+    const isCaller = edges.some(
+      (edge) => edge.source === node.id && flowEdgeKind(edge) === 'call',
+    );
+    if (!isCaller) {
+      return null;
+    }
+    return capability.status === 'fail'
+      ? `Agent calls will be disabled: ${capability.reason ?? 'cursor-agent did not pass the MCP-trust probe on this machine'}`
+      : 'Agent calls not verified yet — probing cursor-agent MCP support…';
+  }, [node, capability, edges]);
+}
+
 export function NodeCard({
   node,
   selected,
@@ -59,6 +102,7 @@ export function NodeCard({
   children: React.ReactNode;
 }): React.JSX.Element {
   const errors = useNodeValidation(node);
+  const callsWarning = useCursorCallsWarning(node);
   const invalid = errors.length > 0;
   return (
     <div
@@ -81,7 +125,10 @@ export function NodeCard({
       {invalid ? (
         <div
           role="alert"
-          className="flex flex-col gap-1 rounded-b-xl border-t border-destructive/20 bg-destructive/10 px-3 py-2">
+          className={cn(
+            'flex flex-col gap-1 border-t border-destructive/20 bg-destructive/10 px-3 py-2',
+            callsWarning ? '' : 'rounded-b-xl',
+          )}>
           {errors.map((error) => (
             <p
               key={error.message}
@@ -89,6 +136,15 @@ export function NodeCard({
               {error.message}
             </p>
           ))}
+        </div>
+      ) : null}
+      {callsWarning ? (
+        <div
+          role="note"
+          className="rounded-b-xl border-t border-warning/20 bg-warning/10 px-3 py-2">
+          <p className="text-[10px] leading-snug text-warning">
+            {callsWarning}
+          </p>
         </div>
       ) : null}
     </div>

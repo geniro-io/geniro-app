@@ -389,10 +389,10 @@ export function Chats({
   }, [chatApi, workflowApi]);
 
   const respondApproval = useCallback(
-    (item: ChatItem, allow: boolean): void => {
+    (item: ChatItem, allow: boolean, answer?: string): void => {
       const requestId = payloadString(item.payload, 'id');
       if (requestId) {
-        client.sendVerdict(item.runId, requestId, allow);
+        client.sendVerdict(item.runId, requestId, allow, answer);
       }
     },
     [client],
@@ -618,7 +618,9 @@ export function Chats({
                     requestId !== null &&
                     (expiredIds.has(requestId) || deadRequestIds.has(requestId))
                   }
-                  onRespond={(allow) => respondApproval(item, allow)}
+                  onRespond={(allow, answer) =>
+                    respondApproval(item, allow, answer)
+                  }
                 />
               );
             })

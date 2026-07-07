@@ -10,6 +10,14 @@ import type { AgentKind, ItemKind, RunStatus } from '../runs/runs.types';
 export const SINGLE_AGENT_NODE = 'agent';
 
 /**
+ * Sanity cap on a question answer (M4) — it travels as ONE stdin control
+ * line into the paused CLI turn. Enforced at BOTH ingress points of the
+ * answer channel: the WS verdict (oversize → answer dropped, plain approve)
+ * and the MCP answer_agent tool (oversize → INVALID_ARGS envelope).
+ */
+export const MAX_ANSWER_LENGTH = 32_768;
+
+/**
  * A persisted transcript item projected to the wire — `payload` is parsed back
  * from its stored JSON string so the renderer receives structured data, not a
  * doubly-encoded string. This is the shape the daemon emits over `/ws` and the

@@ -119,9 +119,16 @@ export const TranscriptItem = memo(function TranscriptItem({
     }
     case 'approval_verdict': {
       const allow = (item.payload as { allow?: unknown } | null)?.allow;
+      const answer = payloadString(item.payload, 'answer');
       return (
         <MessageBubble variant="note">
-          {tag(allow === true ? '✓ tool approved' : '✗ tool denied')}
+          {tag(
+            allow === true
+              ? answer
+                ? `✓ answered — ${answer}`
+                : '✓ tool approved'
+              : '✗ tool denied',
+          )}
         </MessageBubble>
       );
     }
@@ -179,6 +186,56 @@ export const TranscriptItem = memo(function TranscriptItem({
           )}
         </MessageBubble>
       );
+    case 'call_question': {
+      // A call-initiated callee parked on a question — the CALLER (not the
+      // user) is expected to answer it via answer_agent.
+      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
+      const callId = payloadString(item.payload, 'callId');
+      const options = (item.payload as { options?: unknown } | null)?.options;
+      const optionLine = Array.isArray(options)
+        ? options.filter((o) => typeof o === 'string').join(' / ')
+        : '';
+      return (
+        <MessageBubble
+          variant="call"
+          role={tag(`❓ question ← ${callee}${callId ? ` · ${callId}` : ''}`)}>
+          <div className="whitespace-pre-wrap">
+            {payloadString(item.payload, 'question') ?? ''}
+            {optionLine ? (
+              <span className="text-muted-foreground">{`\n(${optionLine})`}</span>
+            ) : null}
+          </div>
+        </MessageBubble>
+      );
+    }
+    case 'call_answer': {
+      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
+      const callId = payloadString(item.payload, 'callId');
+      const suffix = callId ? ` · ${callId}` : '';
+      const outcome = payloadString(item.payload, 'outcome');
+      if (outcome === 'answered') {
+        return (
+          <MessageBubble
+            variant="call"
+            role={tag(`💬 answered → ${callee}${suffix}`)}>
+            <div className="whitespace-pre-wrap">
+              {payloadString(item.payload, 'answer') ?? ''}
+            </div>
+          </MessageBubble>
+        );
+      }
+      return (
+        <MessageBubble variant="error" role={tag(`✗ question${suffix}`)}>
+          <div className="whitespace-pre-wrap">
+            {outcome === 'timeout'
+              ? 'timed out — the caller never answered'
+              : outcome === 'undelivered'
+                ? 'undelivered — the callee ended before the answer arrived'
+                : 'orphaned — the caller ended before answering'}
+          </div>
+        </MessageBubble>
+      );
+    }
     default:
       return null; // usage / attachment / approval_request (rendered as a card)
   }

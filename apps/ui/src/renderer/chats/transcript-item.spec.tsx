@@ -115,3 +115,87 @@ describe('TranscriptItem — agent-call rows', () => {
     expect(container.textContent).toContain('collected call-2');
   });
 });
+
+describe('TranscriptItem — Q&A bridge rows (M4)', () => {
+  it('renders call_question with the callee, question text, and options', () => {
+    render(
+      <TranscriptItem
+        item={item('call_question', {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          question: 'Which color?',
+          options: ['Red', 'Blue'],
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('question ← helper');
+    expect(text).toContain('call-1');
+    expect(text).toContain('Which color?');
+    expect(text).toContain('Red / Blue');
+  });
+
+  it('renders an answered call_answer with the answer text', () => {
+    render(
+      <TranscriptItem
+        item={item('call_answer', {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          answer: 'Blue',
+          outcome: 'answered',
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('answered → helper');
+    expect(text).toContain('Blue');
+  });
+
+  it('renders timeout, orphaned, and undelivered call_answer outcomes as errors', () => {
+    render(
+      <TranscriptItem
+        item={item('call_answer', {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          outcome: 'timeout',
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('timed out');
+
+    render(
+      <TranscriptItem
+        item={item('call_answer', {
+          callId: 'call-2',
+          calleeNodeId: 'helper',
+          outcome: 'orphaned',
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('orphaned');
+
+    render(
+      <TranscriptItem
+        item={item('call_answer', {
+          callId: 'call-3',
+          calleeNodeId: 'helper',
+          outcome: 'undelivered',
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('undelivered');
+  });
+
+  it('an approval_verdict with an answer shows the answered line', () => {
+    render(
+      <TranscriptItem
+        item={item('approval_verdict', {
+          id: 'q-1',
+          allow: true,
+          answer: 'Blue',
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('✓ answered — Blue');
+  });
+});

@@ -23,7 +23,11 @@ export type NodeStatus = RunStatus | 'skipped';
  * caller invoked call_agent — attributed to the CALLER node), `call_result`
  * (the call's envelope settled — also the caller's), and `await_collected`
  * (an async result was picked up via await_agent). The callee's own turn
- * streams as regular items under the callee's nodeId.
+ * streams as regular items under the callee's nodeId. The Q&A bridge (M4)
+ * adds `call_question` (a call-initiated callee raised AskUserQuestion —
+ * parked, awaiting the caller) and `call_answer` (how it resolved: answered
+ * via answer_agent, TTL timeout, or orphaned by the caller ending) — both
+ * attributed to the CALLER node like the other call kinds.
  */
 export type ItemKind =
   | 'message'
@@ -41,7 +45,9 @@ export type ItemKind =
   | 'approval_verdict'
   | 'call_started'
   | 'call_result'
-  | 'await_collected';
+  | 'await_collected'
+  | 'call_question'
+  | 'call_answer';
 
 /** A CLI coding agent the daemon can drive headlessly (M2: one at a time). */
 export type AgentKind = 'claude' | 'cursor-agent';

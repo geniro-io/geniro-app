@@ -8,6 +8,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
 import { flattenRole } from '../utils/role-text';
 import { CallBroker } from './call-broker.service';
@@ -164,7 +165,10 @@ export class McpServerService {
             name: 'call_agent',
             description:
               `Invoke one of your call-wired agents and get its result envelope. Callable now: ${callable}. ` +
-              'A sync call can take minutes — for long tasks or parallel fan-out prefer mode "async" and collect with await_agent.',
+              'A sync call can take minutes — for long tasks or parallel fan-out prefer mode "async" and collect with await_agent. ' +
+              'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
+              'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
+              'After answering, collect the final result with await_agent(call_id).',
             inputSchema: {
               type: 'object',
               properties: {
@@ -191,7 +195,9 @@ export class McpServerService {
           {
             name: 'await_agent',
             description:
-              'Collect the result envelope of one of YOUR earlier async call_agent calls. Blocks until that callee finishes.',
+              'Collect the result envelope of one of YOUR earlier async call_agent calls (or of a sync call that paused on a question). ' +
+              'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when the callee pauses to ask; ' +
+              'the call stays collectable after you answer via answer_agent.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -201,6 +207,29 @@ export class McpServerService {
                 },
               },
               required: ['call_id'],
+            },
+          },
+          {
+            name: 'answer_agent',
+            description:
+              'Answer a parked question one of YOUR callees raised (a {"status":"question"} envelope carrying its call_id). ' +
+              'Answer from your own role/context only when confident; when unsure, ask the user through your own question mechanism first and relay their answer verbatim. ' +
+              "After answering, collect the callee's final result with await_agent(call_id). Unanswered questions time out and fail the call.",
+            inputSchema: {
+              type: 'object',
+              properties: {
+                call_id: {
+                  type: 'string',
+                  description:
+                    'The call_id from the {"status":"question"} envelope.',
+                },
+                answer: {
+                  type: 'string',
+                  description:
+                    "Your answer — an offered option's label when one fits, or free text.",
+                },
+              },
+              required: ['call_id', 'answer'],
             },
           },
         ],
@@ -225,15 +254,23 @@ export class McpServerService {
           (await this.broker.awaitAgent(runId, nodeId, {
             call_id: args.call_id as string,
           }));
+      } else if (name === 'answer_agent') {
+        envelope =
+          validateAnswerAgentArgs(args) ??
+          this.broker.answerAgent(runId, nodeId, {
+            call_id: args.call_id as string,
+            answer: args.answer as string,
+          });
       } else {
         envelope = {
           status: 'error',
-          error: `UNKNOWN_TOOL: '${name}' — this endpoint serves call_agent and await_agent`,
+          error: `UNKNOWN_TOOL: '${name}' — this endpoint serves call_agent, await_agent, and answer_agent`,
         };
       }
       return {
         content: [{ type: 'text', text: JSON.stringify(envelope) }],
-        isError: envelope.status !== 'ok',
+        // A question envelope is a normal outcome, not a tool failure.
+        isError: envelope.status === 'error',
       };
     });
 
@@ -262,6 +299,23 @@ function validateAwaitAgentArgs(
 ): CallEnvelope | null {
   if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
     return invalidArgs("'call_id' must be a non-empty string");
+  }
+  return null;
+}
+
+function validateAnswerAgentArgs(
+  args: Record<string, unknown>,
+): CallEnvelope | null {
+  if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
+    return invalidArgs("'call_id' must be a non-empty string");
+  }
+  if (typeof args.answer !== 'string' || args.answer.trim().length === 0) {
+    return invalidArgs("'answer' must be a non-empty string");
+  }
+  if (args.answer.length > MAX_ANSWER_LENGTH) {
+    return invalidArgs(
+      `'answer' exceeds ${MAX_ANSWER_LENGTH} characters — summarize it`,
+    );
   }
   return null;
 }

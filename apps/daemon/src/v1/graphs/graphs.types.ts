@@ -239,18 +239,51 @@ export interface CalleeTurnOutcome {
 }
 
 /**
- * The envelope every call tool returns — NEVER bare text, so milestone 4's
- * `status: 'question'` (the Q&A bridge) extends the contract without breaking
- * existing callers. A discriminated union so an `ok` envelope always carries
- * `result` and an `error` always carries `error` — the illegal mixed shapes
- * are unrepresentable, and the JSON serializes identically to the old
- * optional-field form. `result` carries `{ call_id, agent, text }` for a
- * settled call and `{ call_id, agent, state }` for an accepted async/
- * fire-and-forget start; `error` is a machine-prefixed one-liner
- * (`DEPTH_LIMIT: …`). Milestone 4 adds a `{ status: 'question'; … }` arm.
+ * The envelope every call tool returns — NEVER bare text. A discriminated
+ * union so an `ok` envelope always carries `result` and an `error` always
+ * carries `error` — the illegal mixed shapes are unrepresentable. `result`
+ * carries `{ call_id, agent, text }` for a settled call and
+ * `{ call_id, agent, state }` for an accepted async/fire-and-forget start;
+ * `error` is a machine-prefixed one-liner (`DEPTH_LIMIT: …`).
+ *
+ * The `question` arm (M4, the Q&A bridge): the callee raised a mid-turn
+ * AskUserQuestion and is PARKED awaiting the caller — answer with
+ * `answer_agent(call_id, answer)`, then collect the final result with
+ * `await_agent(call_id)` (a sync call that parks becomes await-collectable).
+ * Left unanswered, the call fails with `QUESTION_TIMEOUT`.
  */
 export type CallEnvelope =
-  { status: 'ok'; result: unknown } | { status: 'error'; error: string };
+  | { status: 'ok'; result: unknown }
+  | { status: 'error'; error: string }
+  | {
+      status: 'question';
+      call_id: string;
+      /** The callee node id the question came from. */
+      agent: string;
+      /** The question text (multi-question inputs join per line). */
+      question: string;
+      /** Option labels the callee offered (may be empty for free-form). */
+      options: string[];
+    };
+
+/**
+ * A callee's mid-turn question, handed from the executor's capture seam to
+ * the broker's parking lot (broker owns SEMANTICS — TTL, ownership, the
+ * question envelope; the executor owns MECHANICS — the two closures below).
+ * `deliver` writes the caller's answer into the callee's stdin control
+ * channel (allow + `updatedInput.response` — the probe-verified free-text
+ * channel); `fail` cancels the parked callee turn (TTL / orphan drain).
+ * `payload` is the raw AskUserQuestion input for the transcript row.
+ */
+export interface ParkQuestionInput {
+  question: string;
+  options: string[];
+  payload: unknown;
+  /** Test seam; the executor omits it (broker default applies). */
+  ttlMs?: number;
+  deliver(answer: string): boolean;
+  fail(): void;
+}
 
 /**
  * Whether cursor-agent caller nodes can receive the call tools on THIS
@@ -305,4 +338,11 @@ export interface RunCallCapability {
   ): void;
   /** True once the run's cancel was requested — refuse new calls. */
   isCancelled(): boolean;
+  /**
+   * True while the node has at least one live turn — i.e. it could still
+   * call answer_agent. A question parking after its owner settled (or owned
+   * by a fire-and-forget caller) is orphaned immediately instead of waiting
+   * out the TTL.
+   */
+  isNodeLive(nodeId: string): boolean;
 }

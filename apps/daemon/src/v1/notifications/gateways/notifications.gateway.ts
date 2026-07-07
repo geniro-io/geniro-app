@@ -13,21 +13,31 @@ import type { Server, Socket } from 'socket.io';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
+import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { extractStringField } from '../../agents/utils/ws-payload';
 
-/** Defensively read a `verdict` payload: `{runId, requestId, allow}`. */
-function extractVerdict(
-  data: unknown,
-): { runId: string; requestId: string; allow: boolean } | null {
+/**
+ * Defensively read a `verdict` payload: `{runId, requestId, allow, answer?}`.
+ * `answer` is the user's picked option / typed text for a question card
+ * (AskUserQuestion, M4) — optional and only honored as a non-empty string, so
+ * the plain approve/deny wire stays byte-compatible.
+ */
+function extractVerdict(data: unknown): {
+  runId: string;
+  requestId: string;
+  allow: boolean;
+  answer?: string;
+} | null {
   if (!data || typeof data !== 'object') {
     return null;
   }
-  const { runId, requestId, allow } = data as {
+  const { runId, requestId, allow, answer } = data as {
     runId?: unknown;
     requestId?: unknown;
     allow?: unknown;
+    answer?: unknown;
   };
   if (
     typeof runId !== 'string' ||
@@ -38,7 +48,20 @@ function extractVerdict(
   ) {
     return null;
   }
-  return { runId, requestId, allow };
+  return {
+    runId,
+    requestId,
+    allow,
+    // Oversize answers are dropped (not truncated): the verdict then lands
+    // as a plain approve — the transcript verdict row records it as
+    // "✓ tool approved" with no answer, and nothing is folded into the tool.
+    answer:
+      typeof answer === 'string' &&
+      answer.length > 0 &&
+      answer.length <= MAX_ANSWER_LENGTH
+        ? answer
+        : undefined,
+  };
 }
 
 /** Socket.IO room a client joins to receive one run's streamed items. */
@@ -153,6 +176,7 @@ export class NotificationsGateway
       parsed.runId,
       parsed.requestId,
       parsed.allow,
+      parsed.answer,
     );
     return {
       event: 'verdict_ack',

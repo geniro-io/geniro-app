@@ -134,6 +134,11 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           id,
           toolName: asString(request.tool_name) ?? '',
           input: request.input ?? null,
+          // AskUserQuestion carries requires_user_interaction: true (verified
+          // live on 2.1.202) — the M4 question-vs-permission discriminator.
+          requiresUserInteraction: asBoolean(request.requires_user_interaction)
+            ? true
+            : undefined,
         },
       ];
     }

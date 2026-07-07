@@ -860,6 +860,13 @@ export function Graphs({
                             Call edges let this agent invoke its callees at
                             runtime via the call_agent tool.
                           </span>
+                          {callInfo.callees.length > 0 ? (
+                            <span className="block">
+                              {selected.agent === 'cursor-agent'
+                                ? 'Callee questions: this agent can answer them (answer_agent) but cannot escalate to you — an unanswered question times the call out.'
+                                : 'Callee questions reach this agent first; it answers from its role or escalates to you as a question card.'}
+                            </span>
+                          ) : null}
                         </NoteBox>
                       ) : null}
                     </>

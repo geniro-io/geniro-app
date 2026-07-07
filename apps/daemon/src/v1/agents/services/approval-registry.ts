@@ -10,8 +10,10 @@ export interface PendingApproval {
   /**
    * Delivers the verdict to the owning turn (persisting the verdict item on
    * success). Returns whether the turn was still live to receive it.
+   * `answer` carries the user's picked option / typed text for a question
+   * card (AskUserQuestion) — absent for plain tool approvals.
    */
-  respond: (allow: boolean) => boolean;
+  respond: (allow: boolean, answer?: string) => boolean;
 }
 
 /**
@@ -35,14 +37,24 @@ export class ApprovalRegistry {
   }
 
   /** Deliver a verdict; false when the request is unknown, settled, or dead. */
-  resolve(runId: string, requestId: string, allow: boolean): boolean {
+  resolve(
+    runId: string,
+    requestId: string,
+    allow: boolean,
+    answer?: string,
+  ): boolean {
     const key = this.key(runId, requestId);
     const entry = this.pending.get(key);
     if (!entry) {
       return false;
     }
     this.pending.delete(key);
-    return entry.respond(allow);
+    // Arity-preserving: a plain approve/deny keeps the historical one-arg
+    // call shape — responders can't observe the difference, but call-shape
+    // assertions (spies) on the pre-M4 wire stay byte-identical.
+    return answer === undefined
+      ? entry.respond(allow)
+      : entry.respond(allow, answer);
   }
 
   /** Drop every pending approval of one node's turn (turn settled or died). */

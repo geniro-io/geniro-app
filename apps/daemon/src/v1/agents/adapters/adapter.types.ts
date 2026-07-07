@@ -52,6 +52,13 @@ export type AgentEvent =
       id: string;
       toolName: string;
       input: unknown;
+      /**
+       * The CLI flagged this request as a genuine USER QUESTION (claude sets
+       * `requires_user_interaction` on AskUserQuestion), not a permission
+       * check. The graph executor routes flagged requests from call-initiated
+       * turns to the caller (the M4 Q&A bridge) instead of auto-approving.
+       */
+      requiresUserInteraction?: boolean;
     };
 
 /** Everything an adapter needs to drive one turn. */

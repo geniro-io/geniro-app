@@ -47,7 +47,17 @@ export function mapEventToItem(
       return {
         kind: 'approval_request',
         role: null,
-        payload: { id: event.id, toolName: event.toolName, input: event.input },
+        payload: {
+          id: event.id,
+          toolName: event.toolName,
+          input: event.input,
+          // Persisted for transcript observability (correlates with the
+          // daemon's flag-only drift warning); routing AND rendering both
+          // key on the tool name, never on this flag.
+          ...(event.requiresUserInteraction
+            ? { requiresUserInteraction: true }
+            : {}),
+        },
       };
     case 'turn_complete':
       return {

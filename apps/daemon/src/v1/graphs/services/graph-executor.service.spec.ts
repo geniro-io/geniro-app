@@ -1559,3 +1559,488 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 });
+
+describe('GraphExecutorService — Q&A bridge (M4)', () => {
+  const CALL_WORKFLOW: Workflow = {
+    name: 'qa',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+  };
+
+  const QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Which color?',
+        header: 'Color',
+        options: [{ label: 'Red' }, { label: 'Blue' }],
+        multiSelect: false,
+      },
+    ],
+  };
+
+  it('parks a call-initiated question in the broker and delivers the answer as updatedInput.response — never a renderer card', async () => {
+    const { service, claude, approvals, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'qa',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    // The caller is question-capable: ask-mode CLI + the question guidance in
+    // its awareness block (headless claude has no AskUserQuestion under
+    // --dangerously-skip-permissions).
+    expect(caller.input.approvalMode).toBe('ask');
+    expect(caller.input.systemPrompt).toContain('answer_agent');
+
+    const sync = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+    const callee = claude.starts[1]!;
+    // The 'auto' callee is spawned in ask mode too — the question channel.
+    expect(callee.input.approvalMode).toBe('ask');
+
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    const envelope = await sync;
+    expect(envelope).toMatchObject({
+      status: 'question',
+      call_id: 'call-1',
+      agent: 'callee',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+    });
+    // Bridged questions never become renderer approvals.
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(itemDao.items.some((i) => i.kind === 'call_question')).toBe(true);
+
+    const answered = callBroker.answerAgent(run.id, 'a', {
+      call_id: 'call-1',
+      answer: 'Blue',
+    });
+    expect(answered.status).toBe('ok');
+    expect(callee.respondApproval).toHaveBeenCalledWith('q-1', true, {
+      ...QUESTION_INPUT,
+      response: 'Blue',
+    });
+
+    completeTurn(callee, 'blue it is');
+    const final = await callBroker.awaitAgent(run.id, 'a', {
+      call_id: 'call-1',
+    });
+    expect(final).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'callee', text: 'blue it is' },
+    });
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it("auto-approves a call-initiated turn's plain permissions silently; an explicit 'ask' callee keeps the human card", async () => {
+    const askCallee: Workflow = {
+      ...CALL_WORKFLOW,
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'callee', kind: 'agent', agent: 'claude', approval: 'ask' },
+      ],
+    };
+    const { service, claude, approvals, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'qa-ask',
+      workflow: triggered(askCallee),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    // The CALLER is 'auto': its own plain permission is answered by the
+    // daemon (unattended semantics), with no card and no transcript item.
+    caller.emit({
+      type: 'approval_request',
+      id: 'p-caller',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    await drain();
+    expect(caller.respondApproval).toHaveBeenCalledWith('p-caller', true, {
+      command: 'ls',
+    });
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+
+    // The callee node is explicitly 'ask' — its plain permissions still go
+    // to the human card exactly as before the bridge.
+    void callBroker.callAgent(run.id, 'a', { agent: 'callee', message: 'm' });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'approval_request',
+      id: 'p-callee',
+      toolName: 'Write',
+      input: { file_path: 'x' },
+    });
+    await drain();
+    expect(callee.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    completeTurn(callee, 'ok');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it("a DAG caller's own question becomes an answerable card: the verdict answer rides updatedInput.response", async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'qa-escalate',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    caller.emit({
+      type: 'approval_request',
+      id: 'q-esc',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    // DAG-scheduled questions keep the card path (the escalation surface).
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    const applied = approvals.resolve(run.id, 'q-esc', true, 'Blue');
+    expect(applied).toBe(true);
+    expect(caller.respondApproval).toHaveBeenCalledWith('q-esc', true, {
+      ...QUESTION_INPUT,
+      response: 'Blue',
+    });
+    await drain();
+    const verdictItem = itemDao.items.find(
+      (i) => i.kind === 'approval_verdict',
+    );
+    expect(JSON.parse(verdictItem!.payload)).toMatchObject({
+      allow: true,
+      answer: 'Blue',
+    });
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('leaves non-caller auto nodes on plain auto — no ask-mode override outside the call surface', async () => {
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'plain',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(claude.starts[0]!.input.approvalMode).toBe('auto');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    completeTurn(claude.starts[1]!, 'done');
+    await drain();
+  });
+
+  it('drains a parked question when its caller settles: the callee is cancelled and the call fails as QUESTION_ORPHANED', async () => {
+    const { service, claude, callBroker, itemDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'qa-orphan',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    const sync = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect((await sync).status).toBe('question');
+
+    // The caller ends without answering — nobody is left to answer_agent.
+    completeTurn(caller, 'done without answering');
+    await drain();
+    expect(callee.cancelled).toBe(true);
+    expect(
+      JSON.parse(itemDao.items.find((i) => i.kind === 'call_answer')!.payload),
+    ).toMatchObject({ outcome: 'orphaned' });
+    const callResult = itemDao.items.find((i) => i.kind === 'call_result');
+    const callResultPayload = JSON.parse(callResult!.payload) as {
+      status: string;
+      error?: string;
+    };
+    expect(callResultPayload.status).toBe('error');
+    expect(callResultPayload.error).toContain('QUESTION_ORPHANED');
+    // The run still settles — an orphaned question never wedges it.
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('keeps cursor callees on their own approval mode — no ask override, no question channel', async () => {
+    const mixed: Workflow = {
+      name: 'mixed',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'callee',
+          kind: 'agent',
+          agent: 'cursor-agent',
+          approval: 'auto',
+        },
+      ],
+      edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+    };
+    const { service, claude, cursor, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'mixed',
+      workflow: triggered(mixed),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'a', { agent: 'callee', message: 'm' });
+    await drain();
+    expect(cursor.starts).toHaveLength(1);
+    expect(cursor.starts[0]!.input.approvalMode).toBe('auto');
+    completeTurn(cursor.starts[0]!, 'ok');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+});
+
+describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
+  const CALL_WORKFLOW: Workflow = {
+    name: 'qa2',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+  };
+  const QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Which color?',
+        options: [{ label: 'Red' }, { label: 'Blue' }],
+      },
+    ],
+  };
+
+  async function parkOne(slug: string): Promise<{
+    ctx: ReturnType<typeof setup>;
+    run: { id: string };
+    sync: Promise<unknown>;
+    caller: FakeTurn;
+    callee: FakeTurn;
+  }> {
+    const ctx = setup();
+    const run = await ctx.service.startRun({
+      slug,
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = ctx.claude.starts[0]!;
+    const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = ctx.claude.starts[1]!;
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    return { ctx, run, sync, caller, callee };
+  }
+
+  it('denies a SECOND question raised while the first is parked — the callee must not hang unanswerable', async () => {
+    const { ctx, run, sync, caller, callee } = await parkOne('qa2-second');
+    expect(((await sync) as { status: string }).status).toBe('question');
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-2',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect(callee.respondApproval).toHaveBeenCalledWith('q-2', false);
+    ctx.callBroker.answerAgent(run.id, 'a', {
+      call_id: 'call-1',
+      answer: 'Blue',
+    });
+    completeTurn(callee, 'done');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('run cancel reaches a parked callee: the turn dies with the run and no timeout ever fires', async () => {
+    const { ctx, run, sync, callee } = await parkOne('qa2-cancel');
+    expect(((await sync) as { status: string }).status).toBe('question');
+    await ctx.service.cancel(run.id);
+    await drain();
+    expect(callee.cancelled).toBe(true);
+    expect(ctx.runDao.runs.get(run.id)?.status).toBe('cancelled');
+    // The cancelled caller's settle drain orphans the parked question — the
+    // resolution row is 'orphaned', NEVER a later 'timeout' from a leaked
+    // TTL timer, and the call settles as an error.
+    const callResult = ctx.itemDao.items.find((i) => i.kind === 'call_result');
+    expect(JSON.parse(callResult!.payload)).toMatchObject({ status: 'error' });
+    const outcomes = ctx.itemDao.items
+      .filter((i) => i.kind === 'call_answer')
+      .map((i) => (JSON.parse(i.payload) as { outcome: string }).outcome);
+    expect(outcomes).toEqual(['orphaned']);
+  });
+
+  it("a plain tool's approval NEVER folds a verdict answer — original input delivered, nothing recorded", async () => {
+    // The negative half of the fold gate: a crafted verdict carrying an
+    // answer for a NON-question tool must neither mutate the tool input nor
+    // be recorded in the transcript.
+    const askCaller: Workflow = {
+      ...CALL_WORKFLOW,
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' },
+        { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+    };
+    const ctx = setup();
+    const run = await ctx.service.startRun({
+      slug: 'qa2-no-fold',
+      workflow: triggered(askCaller),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = ctx.claude.starts[0]!;
+    caller.emit({
+      type: 'approval_request',
+      id: 'p-1',
+      toolName: 'Write',
+      input: { file_path: 'x' },
+    });
+    await drain();
+    expect(ctx.approvals.resolve(run.id, 'p-1', true, 'sneaky')).toBe(true);
+    expect(caller.respondApproval).toHaveBeenCalledWith('p-1', true, {
+      file_path: 'x',
+    });
+    await drain();
+    const verdictItem = ctx.itemDao.items.find(
+      (i) => i.kind === 'approval_verdict',
+    );
+    expect(JSON.parse(verdictItem!.payload)).not.toHaveProperty('answer');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('parks an AskUserQuestion WITHOUT the interaction flag — the bridge keys on the tool NAME alone', async () => {
+    // The name-only keying is the drift hardening: if a future CLI drops the
+    // flag on a real question, the bridge must still park it for the caller
+    // (a name-AND-flag regression would divert it to the card path where no
+    // caller can ever answer).
+    const ctx = setup();
+    const run = await ctx.service.startRun({
+      slug: 'qa2-no-flag',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = ctx.claude.starts[0]!;
+    const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = ctx.claude.starts[1]!;
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-nf',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+    });
+    await drain();
+    expect(((await sync) as { status: string }).status).toBe('question');
+    expect(ctx.itemDao.items.some((i) => i.kind === 'call_question')).toBe(
+      true,
+    );
+    ctx.callBroker.answerAgent(run.id, 'a', {
+      call_id: 'call-1',
+      answer: 'Blue',
+    });
+    completeTurn(callee, 'done');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('keeps a flagged request under an UNKNOWN tool name on the approval path — never bridged to the caller', async () => {
+    const ctx = setup();
+    const run = await ctx.service.startRun({
+      slug: 'qa2-unknown-tool',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = ctx.claude.starts[0]!;
+    void ctx.callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = ctx.claude.starts[1]!;
+    // A future CLI could flag some OTHER interactive tool — bridging it to
+    // the caller would let an agent answer what may be a permission-like
+    // gate, so it must stay on the (auto/card) approval path.
+    callee.emit({
+      type: 'approval_request',
+      id: 'x-1',
+      toolName: 'FutureInteractiveTool',
+      input: { anything: true },
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect(callee.respondApproval).toHaveBeenCalledWith('x-1', true, {
+      anything: true,
+    });
+    expect(ctx.itemDao.items.some((i) => i.kind === 'call_question')).toBe(
+      false,
+    );
+    completeTurn(callee, 'done');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+});

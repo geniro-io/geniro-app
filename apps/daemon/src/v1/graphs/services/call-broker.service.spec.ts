@@ -39,6 +39,8 @@ function harness(options?: {
   cancelled?: boolean;
   /** 'defer' keeps every launch pending until resolved by the test. */
   launch?: 'instant' | 'defer' | 'throw';
+  /** Node-liveness override; default: every node has a live turn. */
+  isNodeLive?: (nodeId: string) => boolean;
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -80,6 +82,7 @@ function harness(options?: {
       });
     },
     isCancelled: () => options?.cancelled ?? false,
+    isNodeLive: options?.isNodeLive ?? (() => true),
   };
   const broker = new CallBroker();
   broker.registerRun('run-1', capability);
@@ -201,6 +204,38 @@ describe('CallBroker', () => {
       call_id: 'call-1',
     });
     expect(again.error).toContain('UNKNOWN_CALL');
+  });
+
+  it('two concurrent await_agent waiters on one async call still collect exactly once', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    // The caller awaits the same call twice in parallel (a batched pair of
+    // await_agent tool calls, or a client-side MCP timeout retry while the
+    // first await is still blocked server-side). Collection must stay
+    // exactly-once — the same contract the sequential re-await already gets
+    // (UNKNOWN_CALL: "no un-collected async call").
+    const first = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'async done',
+      error: null,
+    });
+    const envelopes = await Promise.all([first, second]);
+    const okCount = envelopes.filter((e) => e.status === 'ok').length;
+    const unknownCount = envelopes.filter(
+      (e) => e.status === 'error' && e.error.includes('UNKNOWN_CALL'),
+    ).length;
+    // One waiter collects the result; the other is told the call is no
+    // longer un-collected — never two fresh collections of one result.
+    expect(okCount).toBe(1);
+    expect(unknownCount).toBe(1);
+    // The transcript records the collection once, not once per waiter.
+    expect(items.filter((i) => i.kind === 'await_collected')).toHaveLength(1);
   });
 
   it("await_agent refuses another caller's call id", async () => {
@@ -352,5 +387,298 @@ describe('CallBroker', () => {
     ]);
     expect(broker.listCallees('run-1', 'nobody')).toEqual([]);
     expect(broker.listCallees('run-9', 'orch')).toEqual([]);
+  });
+});
+
+describe('CallBroker — parked questions (M4)', () => {
+  function park(
+    broker: CallBroker,
+    overrides: {
+      callId?: string;
+      ttlMs?: number;
+      deliver?: (answer: string) => boolean;
+      fail?: () => void;
+    } = {},
+  ): { delivered: string[]; failed: { count: number } } {
+    const delivered: string[] = [];
+    const failed = { count: 0 };
+    const parked = broker.parkQuestion('run-1', overrides.callId ?? 'call-1', {
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+      payload: { questions: [{ question: 'Which color?' }] },
+      ttlMs: overrides.ttlMs,
+      deliver:
+        overrides.deliver ??
+        ((answer) => {
+          delivered.push(answer);
+          return true;
+        }),
+      fail:
+        overrides.fail ??
+        (() => {
+          failed.count += 1;
+        }),
+    });
+    expect(parked).toBe(true);
+    return { delivered, failed };
+  }
+
+  it('a sync call parks: the caller gets the question envelope early, answers, and collects the final result via await_agent', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    const sync = broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+    });
+    const { delivered } = park(broker);
+    expect(await sync).toEqual({
+      status: 'question',
+      call_id: 'call-1',
+      agent: 'helper',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+    });
+    const answered = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      answer: 'Blue',
+    });
+    expect(answered).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', state: 'answered' },
+    });
+    expect(delivered).toEqual(['Blue']);
+    const awaiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'chose blue',
+      error: null,
+    });
+    expect(await awaiting).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'chose blue' },
+    });
+    expect(items.map((i) => i.kind)).toEqual([
+      'call_started',
+      'call_question',
+      'call_answer',
+      'call_result',
+      'await_collected',
+    ]);
+    expect(items[1]!.payload).toMatchObject({
+      callId: 'call-1',
+      callerNodeId: 'orch',
+      calleeNodeId: 'helper',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+      payload: { questions: [{ question: 'Which color?' }] },
+    });
+    expect(items[2]!.payload).toMatchObject({
+      answer: 'Blue',
+      outcome: 'answered',
+    });
+  });
+
+  it('await_agent diverts to the question envelope WITHOUT consuming the call — a later await collects the final', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    // The await is already blocking when the question parks — it must divert.
+    const awaiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    park(broker);
+    const question = await awaiting;
+    expect(question.status).toBe('question');
+    broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'Red' });
+    const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    deferred[0]!.resolve({ status: 'completed', finalText: 'ok', error: null });
+    expect((await second).status).toBe('ok');
+  });
+
+  it('an unanswered question times out: the callee turn is failed and the call settles as QUESTION_TIMEOUT', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    const sync = broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+    });
+    // The fail hook mirrors the executor: cancelling the parked turn.
+    park(broker, {
+      ttlMs: 10,
+      fail: () =>
+        deferred[0]!.resolve({
+          status: 'cancelled',
+          finalText: null,
+          error: 'run cancelled',
+        }),
+    });
+    expect((await sync).status).toBe('question');
+    // Let the 10ms TTL fire and the failed turn settle through the chain.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const final = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(final.status).toBe('error');
+    expect(final.error).toContain('QUESTION_TIMEOUT');
+    expect(items.map((i) => i.kind)).toContain('call_answer');
+    expect(items.find((i) => i.kind === 'call_answer')!.payload).toMatchObject({
+      outcome: 'timeout',
+    });
+    // Nothing left to answer once the TTL failed the call — the settled call
+    // is gone from the live set entirely.
+    const late = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      answer: 'too late',
+    });
+    expect(late.error).toContain('UNKNOWN_CALL');
+  });
+
+  it('answer_agent enforces ownership and exactly-once settlement', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    // No question parked yet → NO_QUESTION, not a hang.
+    const early = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      answer: 'a',
+    });
+    expect(early.error).toContain('NO_QUESTION');
+    park(broker);
+    // Another node must not answer a call it does not own.
+    const stolen = broker.answerAgent('run-1', 'writer', {
+      call_id: 'call-1',
+      answer: 'a',
+    });
+    expect(stolen.error).toContain('UNKNOWN_CALL');
+    expect(
+      broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'a' })
+        .status,
+    ).toBe('ok');
+    // Second answer finds no parked question.
+    const twice = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      answer: 'b',
+    });
+    expect(twice.error).toContain('NO_QUESTION');
+    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+  });
+
+  it('reports DELIVERY_FAILED when the callee turn died before the answer — and resolves the question row', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    park(broker, { deliver: () => false });
+    const gone = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      answer: 'a',
+    });
+    expect(gone.error).toContain('DELIVERY_FAILED');
+    // The transcript's question row must not dangle unresolved.
+    expect(items.find((i) => i.kind === 'call_answer')!.payload).toMatchObject({
+      outcome: 'undelivered',
+    });
+    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+  });
+
+  it('orphans immediately when the question parks AFTER its owner settled — no 5-minute TTL grind', async () => {
+    // A fire-and-forget (or raced) caller can settle before its callee asks;
+    // drainCaller already swept and found nothing, so the park itself must
+    // detect the dead owner and fail fast instead of holding the run open.
+    const { broker, items, deferred } = harness({
+      launch: 'defer',
+      isNodeLive: () => false,
+    });
+    const sync = broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+    });
+    const { failed } = park(broker, { ttlMs: 60_000 });
+    expect(failed.count).toBe(1);
+    expect(
+      items.filter((i) => i.kind === 'call_answer').at(-1)!.payload,
+    ).toMatchObject({ outcome: 'orphaned' });
+    deferred[0]!.resolve({
+      status: 'cancelled',
+      finalText: null,
+      error: 'cancelled',
+    });
+    expect((await sync).error).toContain('QUESTION_ORPHANED');
+  });
+
+  it('a fire-and-forget call that asks is orphaned at once and never becomes awaitable', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    const started = await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+    expect(started.status).toBe('ok');
+    const { failed } = park(broker, { ttlMs: 60_000 });
+    expect(failed.count).toBe(1);
+    expect(
+      items.filter((i) => i.kind === 'call_answer').at(-1)!.payload,
+    ).toMatchObject({ outcome: 'orphaned' });
+    // The "never awaitable" fire-and-forget pin survives the question path.
+    const collected = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(collected.error).toContain('UNKNOWN_CALL');
+    deferred[0]!.resolve({ status: 'cancelled', finalText: null, error: null });
+  });
+
+  it('drainCaller fails a settling caller’s parked questions as QUESTION_ORPHANED', async () => {
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    const sync = broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+    });
+    const { failed } = park(broker, { ttlMs: 60_000 });
+    expect((await sync).status).toBe('question');
+    broker.drainCaller('run-1', 'orch');
+    expect(failed.count).toBe(1);
+    expect(items.find((i) => i.kind === 'call_answer')!.payload).toMatchObject({
+      outcome: 'orphaned',
+    });
+    deferred[0]!.resolve({
+      status: 'cancelled',
+      finalText: null,
+      error: 'run cancelled',
+    });
+    const final = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(final.error).toContain('QUESTION_ORPHANED');
+  });
+
+  it('parkQuestion refuses unknown calls and double parking', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    expect(
+      broker.parkQuestion('run-1', 'call-9', {
+        question: 'q',
+        options: [],
+        payload: null,
+        deliver: () => true,
+        fail: () => {},
+      }),
+    ).toBe(false);
+    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    park(broker);
+    expect(
+      broker.parkQuestion('run-1', 'call-1', {
+        question: 'second',
+        options: [],
+        payload: null,
+        deliver: () => true,
+        fail: () => {},
+      }),
+    ).toBe(false);
+    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+  });
+
+  it('unregisterRun defuses parked TTL timers — a dead run’s callee is never failed by a late timer', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    const { failed } = park(broker, { ttlMs: 10 });
+    broker.unregisterRun('run-1');
+    deferred[0]!.resolve({ status: 'cancelled', finalText: null, error: null });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(failed.count).toBe(0);
   });
 });

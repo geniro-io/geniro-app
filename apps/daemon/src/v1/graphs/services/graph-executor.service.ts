@@ -12,6 +12,11 @@ import type {
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import {
+  optionLabelsOf,
+  questionTextOf,
+  withResponse,
+} from '../../agents/adapters/claude/question-payload';
 import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
 import type { ItemWire, RunWire } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
@@ -498,6 +503,10 @@ export class GraphExecutorService {
       node.agent === 'claude' ||
       (node.agent === 'cursor-agent' && cursorCalls.status === 'pass');
 
+    /** Nodes that hold the call tools in THIS run (callers, not callees). */
+    const isCaller = (node: WorkflowAgentNode): boolean =>
+      callCapable(node) && calleesOf.has(node.id);
+
     /**
      * The caller's MCP grant: call-capable nodes with outgoing call edges get
      * the endpoint (a probe-failed cursor caller degrades — its callees still
@@ -507,7 +516,7 @@ export class GraphExecutorService {
     const mcpEndpointFor = (
       node: WorkflowAgentNode,
     ): { url: string; token: string } | null => {
-      if (!callCapable(node) || !calleesOf.has(node.id)) {
+      if (!isCaller(node)) {
         return null;
       }
       const token = this.callTokens.get(runId, node.id);
@@ -528,7 +537,7 @@ export class GraphExecutorService {
      */
     const systemPromptFor = (node: WorkflowAgentNode): string | null => {
       const callees = calleesOf.get(node.id);
-      if (!callees || !callCapable(node)) {
+      if (!callees || !isCaller(node)) {
         return node.role ?? null;
       }
       const lines = callees.map((callee) => {
@@ -536,7 +545,14 @@ export class GraphExecutorService {
         const role = flattenRole(callee.role, 200);
         return `- ${name} (agent id: ${callee.id})${role ? ` — ${role}` : ''}`;
       });
-      const block = `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}`;
+      // The escalation half differs per CLI: claude callers can ask the user
+      // (AskUserQuestion reaches the run's card); cursor-agent has no
+      // question mechanism, so its only honest move is answer-or-timeout.
+      const questionLine =
+        node.agent === 'claude'
+          ? 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your AskUserQuestion tool and relay their answer. Then collect the final result with await_agent.'
+          : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
+      const block = `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
       return node.role ? `${node.role}\n\n${block}` : block;
     };
 
@@ -655,6 +671,7 @@ export class GraphExecutorService {
     const beginAgentTurn = (
       node: WorkflowAgentNode,
       prompt: string,
+      callContext?: { callId: string },
     ): {
       handle: AgentTurnHandle;
       finish: () => { outcome: NodeOutcome; finalText: string | null };
@@ -672,13 +689,26 @@ export class GraphExecutorService {
         null,
         em,
       );
+      /**
+       * Claude turns that can raise or relay a question — call-initiated
+       * callees AND caller nodes — spawn in the CLI's ask mode (stdin control
+       * protocol, stdin held open): headless claude strips the AskUserQuestion
+       * tool entirely under --dangerously-skip-permissions (probe-verified on
+       * 2.1.202), so without this an 'auto' callee could never ask and an
+       * 'auto' caller could never escalate. The daemon auto-approves the
+       * plain permission requests in onEvent below, so an 'auto' node keeps
+       * today's unattended semantics.
+       */
+      const questionCapable =
+        node.agent === 'claude' &&
+        (callContext !== undefined || isCaller(node));
       const input: AgentTurnInput = {
         prompt,
         cwd,
         model: node.model ?? null,
         resumeSessionId: null,
         systemPrompt: systemPromptFor(node),
-        approvalMode: node.approval,
+        approvalMode: questionCapable ? 'ask' : node.approval,
         mcpEndpoint: mcpEndpointFor(node),
       };
       const onEvent = (event: AgentEvent): void => {
@@ -701,6 +731,56 @@ export class GraphExecutorService {
           ) {
             outcome = terminal;
           }
+          if (event.type === 'approval_request') {
+            // The caller-bridge admits ONLY AskUserQuestion by NAME: bridging
+            // on the CLI-owned requires_user_interaction flag alone could let
+            // a future interactive tool bypass an 'ask' node's human gate via
+            // version drift. A flag-only request stays on the approval path
+            // (card or daemon auto-approve per node.approval) with a warning
+            // so the drift is loud, never silent.
+            const isQuestion = event.toolName === 'AskUserQuestion';
+            if (!isQuestion && event.requiresUserInteraction === true) {
+              this.logger.warn(
+                `interactive control_request for unrecognized tool '${event.toolName}' on ${node.id} — kept on the approval path, not bridged to the caller`,
+              );
+            }
+            if (callContext && isQuestion) {
+              // A call-initiated callee's question goes to its CALLER (the
+              // M4 Q&A bridge) — never to a renderer card. The broker parks
+              // it; answer_agent delivers the answer through these closures.
+              const parked = this.callBroker.parkQuestion(
+                runId,
+                callContext.callId,
+                {
+                  question: questionTextOf(event.input),
+                  options: optionLabelsOf(event.input),
+                  payload: event.input,
+                  deliver: (answer) =>
+                    handle.respondApproval(
+                      event.id,
+                      true,
+                      withResponse(event.input, answer),
+                    ),
+                  fail: () => handle.cancel(),
+                },
+              );
+              if (!parked) {
+                // Unknown/settled call (or a second question raced the
+                // first) — deny so the callee continues instead of hanging
+                // on a question nobody can answer.
+                handle.respondApproval(event.id, false);
+              }
+              return;
+            }
+            if (questionCapable && node.approval !== 'ask' && !isQuestion) {
+              // The daemon-side stand-in for --dangerously-skip-permissions:
+              // an 'auto' node spawned in ask mode (for the question channel)
+              // must not block on plain permissions — approve with the input
+              // unchanged, no transcript item (matching auto-mode silence).
+              handle.respondApproval(event.id, true, event.input);
+              return;
+            }
+          }
           const mapped = mapEventToItem(event);
           if (mapped) {
             await persistItem(node.id, mapped.kind, mapped.role, {
@@ -715,11 +795,19 @@ export class GraphExecutorService {
               requestId: event.id,
               toolName: event.toolName,
               input: event.input,
-              respond: (allow) => {
+              respond: (allow, answer) => {
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
-                  event.input,
+                  // A question card's answer rides the probe-verified
+                  // free-text channel; a plain approval echoes the input —
+                  // the answer folds ONLY into AskUserQuestion so the verdict
+                  // channel can never mutate an arbitrary tool's input.
+                  allow &&
+                    answer !== undefined &&
+                    event.toolName === 'AskUserQuestion'
+                    ? withResponse(event.input, answer)
+                    : event.input,
                 );
                 if (delivered) {
                   enqueue(async () => {
@@ -727,6 +815,14 @@ export class GraphExecutorService {
                       id: event.id,
                       nodeId: node.id,
                       allow,
+                      // Recorded only when it was actually folded — the
+                      // transcript must never claim an answer the agent
+                      // did not receive.
+                      ...(answer !== undefined &&
+                      allow &&
+                      event.toolName === 'AskUserQuestion'
+                        ? { answer }
+                        : {}),
                     });
                   });
                 }
@@ -782,6 +878,7 @@ export class GraphExecutorService {
       } catch (err) {
         releaseNodeTurn(node.id);
         this.approvals.sweepNode(runId, node.id);
+        this.callBroker.drainCaller(runId, node.id);
         settled.set(node.id, 'failed');
         enqueue(async () => {
           await this.nodeStateDao
@@ -810,6 +907,9 @@ export class GraphExecutorService {
         enqueue(async () => {
           if (releaseNodeTurn(node.id)) {
             this.approvals.sweepNode(runId, node.id);
+            // A settled caller can never answer_agent — fail its parked
+            // callee questions now instead of letting the TTL grind out.
+            this.callBroker.drainCaller(runId, node.id);
           }
           runningHandles.delete(node.id);
           const { outcome, finalText } = finish();
@@ -896,10 +996,11 @@ export class GraphExecutorService {
           let finish: () => { outcome: NodeOutcome; finalText: string | null };
           try {
             persistTurnStart(callee);
-            ({ handle, finish } = beginAgentTurn(callee, message));
+            ({ handle, finish } = beginAgentTurn(callee, message, { callId }));
           } catch (err) {
             if (releaseNodeTurn(callee.id)) {
               this.approvals.sweepNode(runId, callee.id);
+              this.callBroker.drainCaller(runId, callee.id);
             }
             enqueue(async () => {
               await this.nodeStateDao
@@ -936,6 +1037,9 @@ export class GraphExecutorService {
               try {
                 if (releaseNodeTurn(callee.id)) {
                   this.approvals.sweepNode(runId, callee.id);
+                  // A callee can itself be a caller — its own parked
+                  // sub-questions die with its last live turn.
+                  this.callBroker.drainCaller(runId, callee.id);
                 }
                 subTurnHandles.delete(callId);
                 const { outcome, finalText } = finish();
@@ -1075,6 +1179,7 @@ export class GraphExecutorService {
           });
         },
         isCancelled: () => cancelRequested,
+        isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
       });
       // Daemon-side self-check: a dead endpoint degrades SILENTLY child-side
       // (claude exits 0 with an unreachable server), so probe our own route

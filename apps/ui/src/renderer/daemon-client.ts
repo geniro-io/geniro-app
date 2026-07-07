@@ -129,9 +129,21 @@ export class DaemonClient {
    * `approval_verdict` item the daemon persists-then-emits back to the room;
    * the immediate `verdict_ack` reply only reports routing (`applied: false`
    * = the request already settled, e.g. the node's turn ended first).
+   * `answer` carries the user's picked option / typed text for a question
+   * card (AskUserQuestion) — omitted for plain tool approvals.
    */
-  sendVerdict(runId: string, requestId: string, allow: boolean): void {
-    this.socket?.emit('verdict', { runId, requestId, allow });
+  sendVerdict(
+    runId: string,
+    requestId: string,
+    allow: boolean,
+    answer?: string,
+  ): void {
+    this.socket?.emit('verdict', {
+      runId,
+      requestId,
+      allow,
+      ...(answer !== undefined ? { answer } : {}),
+    });
   }
 
   close(): void {

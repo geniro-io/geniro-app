@@ -4,6 +4,7 @@ import type {
   CalleeTurnOutcome,
   CallEnvelope,
   CallMode,
+  ParkQuestionInput,
   RunCallCapability,
   WorkflowAgentNode,
 } from '../graphs.types';
@@ -24,28 +25,65 @@ const MAX_CALL_DEPTH = 3;
 /** Hard per-run stop on callee turns — the runaway-loop backstop. */
 const MAX_CALL_TURNS_PER_RUN = 50;
 
+/**
+ * How long a parked question may wait for answer_agent before the call fails
+ * with QUESTION_TIMEOUT. Generous by design — the caller may be escalating to
+ * a human through its own question card.
+ */
+const QUESTION_TTL_MS = 5 * 60_000;
+
 interface AsyncCallEntry {
   /** The caller that started the call — only it may collect the result. */
   owner: string;
   settled: Promise<CallEnvelope>;
 }
 
+/** A parked mid-turn question — the callee is blocked on answer_agent. */
+interface ParkedQuestion {
+  question: string;
+  options: string[];
+  timer: NodeJS.Timeout;
+  deliver(answer: string): boolean;
+  fail(): void;
+}
+
+interface ActiveCall {
+  calleeId: string;
+  /** The caller that started the call — only it may answer or collect. */
+  owner: string;
+  depth: number;
+  /** Fire-and-forget calls orphan their questions — nobody ever collects. */
+  mode: CallMode;
+  /** The FINAL envelope (call_result persisted) — never a question. */
+  settled: Promise<CallEnvelope>;
+  parked: ParkedQuestion | null;
+  /** Sync/await waiters diverted early when a question parks mid-wait. */
+  questionWaiters: ((envelope: CallEnvelope) => void)[];
+  /**
+   * Set BEFORE fail() cancels a parked turn (TTL / orphan drain) so the final
+   * envelope carries the typed error instead of a generic CALLEE_CANCELLED.
+   */
+  failReason: string | null;
+}
+
 interface RunCallState {
   capability: RunCallCapability;
   callSeq: number;
   turnsStarted: number;
-  /** Live callee turns: call id → callee node + its chain depth. */
-  activeCalls: Map<string, { calleeId: string; depth: number }>;
-  /** Async results retained until their caller collects them. */
+  /** Live callee turns keyed by call id. */
+  activeCalls: Map<string, ActiveCall>;
+  /** Results retained until their caller collects them via await_agent. */
   pendingAsync: Map<string, AsyncCallEntry>;
 }
 
 /**
  * Agent-to-agent call semantics over the executor's capability seam: call
  * ids, the depth and total-turns caps, sync waiting, async + await_agent
- * collection, and fire-and-forget. One instance serves every run; state is
- * per-run and dies with `unregisterRun` (in-memory only — a call never
- * outlives its run). Modeled on ApprovalRegistry's pending round-trip.
+ * collection, fire-and-forget, and the Q&A bridge's parked-question
+ * lifecycle (park → answer_agent / TTL / orphan drain). One instance serves
+ * every run; state is per-run and dies with `unregisterRun` (in-memory only —
+ * a call never outlives its run). Modeled on ApprovalRegistry's pending
+ * round-trip.
  */
 @Injectable()
 export class CallBroker {
@@ -64,6 +102,17 @@ export class CallBroker {
 
   /** Drop a settled run's state (uncollected async results included). */
   unregisterRun(runId: string): void {
+    const state = this.runs.get(runId);
+    if (state) {
+      // A parked timer must not fire into a dead run (the executor already
+      // cancelled every callee handle on the way here).
+      for (const call of state.activeCalls.values()) {
+        if (call.parked) {
+          clearTimeout(call.parked.timer);
+          call.parked = null;
+        }
+      }
+    }
     this.runs.delete(runId);
   }
 
@@ -81,10 +130,11 @@ export class CallBroker {
   }
 
   /**
-   * The call_agent tool. Sync resolves with the callee's settled envelope;
-   * async/fire-and-forget resolve immediately with `{ call_id, state }` —
-   * async results are retained for await_agent, fire-and-forget results go
-   * to the transcript only.
+   * The call_agent tool. Sync resolves with the callee's settled envelope OR
+   * an early `question` envelope when the callee parks mid-turn (the call
+   * then becomes await_agent-collectable); async/fire-and-forget resolve
+   * immediately with `{ call_id, state }` — async results are retained for
+   * await_agent, fire-and-forget results go to the transcript only.
    */
   async callAgent(
     runId: string,
@@ -127,7 +177,17 @@ export class CallBroker {
     state.callSeq += 1;
     const callId = `call-${state.callSeq}`;
     const mode: CallMode = args.mode ?? 'sync';
-    state.activeCalls.set(callId, { calleeId: callee.id, depth });
+    const call: ActiveCall = {
+      calleeId: callee.id,
+      owner: callerNodeId,
+      depth,
+      mode,
+      settled: Promise.resolve(RUN_NOT_ACTIVE), // reassigned synchronously below
+      parked: null,
+      questionWaiters: [],
+      failReason: null,
+    };
+    state.activeCalls.set(callId, call);
     state.capability.persistItem(callerNodeId, 'call_started', null, {
       callId,
       callerNodeId,
@@ -136,7 +196,7 @@ export class CallBroker {
       message: args.message,
     });
 
-    const settled = state.capability
+    call.settled = state.capability
       .launchCalleeTurn(callee, args.message, callId, depth)
       .then((outcome) => toEnvelope(callId, callee.id, outcome))
       .catch((err: unknown): CallEnvelope => ({
@@ -144,22 +204,36 @@ export class CallBroker {
         error: `CALL_FAILED: ${err instanceof Error ? err.message : String(err)}`,
       }))
       .then((envelope) => {
+        // A TTL/orphan drain cancelled the parked turn — surface its typed
+        // reason, not the generic CALLEE_CANCELLED the cancel maps to.
+        const final: CallEnvelope = call.failReason
+          ? { status: 'error', error: call.failReason }
+          : envelope;
+        if (call.parked) {
+          // The turn died with a question still parked (external cancel,
+          // crash) — the timer must not fire into a settled call.
+          clearTimeout(call.parked.timer);
+          call.parked = null;
+        }
         state.activeCalls.delete(callId);
         state.capability.persistItem(callerNodeId, 'call_result', null, {
           callId,
           callerNodeId,
           calleeNodeId: callee.id,
           mode,
-          ...envelope,
+          ...final,
         });
-        return envelope;
+        return final;
       });
 
     if (mode === 'sync') {
-      return settled;
+      return this.waitForOutcome(state, callId, call.settled);
     }
     if (mode === 'async') {
-      state.pendingAsync.set(callId, { owner: callerNodeId, settled });
+      state.pendingAsync.set(callId, {
+        owner: callerNodeId,
+        settled: call.settled,
+      });
     }
     return {
       status: 'ok',
@@ -171,7 +245,12 @@ export class CallBroker {
     };
   }
 
-  /** The await_agent tool: collect one of the caller's own async results. */
+  /**
+   * The await_agent tool: collect one of the caller's own async (or
+   * question-parked sync) results. Returns an early `question` envelope when
+   * the callee parks mid-wait — the entry stays collectable for the retry
+   * after answer_agent.
+   */
   async awaitAgent(
     runId: string,
     callerNodeId: string,
@@ -191,13 +270,255 @@ export class CallBroker {
         error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
       };
     }
+    const envelope = await this.waitForOutcome(
+      state,
+      args.call_id,
+      entry.settled,
+    );
+    if (envelope.status === 'question') {
+      return envelope;
+    }
+    // A concurrent waiter may have collected while this one was blocked —
+    // collection stays exactly-once (question envelopes are the only
+    // non-consuming reads), so the loser is told the call is gone rather
+    // than duplicating the await_collected row.
+    if (!state.pendingAsync.has(args.call_id)) {
+      return {
+        status: 'error',
+        error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
+      };
+    }
     state.pendingAsync.delete(args.call_id);
-    const envelope = await entry.settled;
     state.capability.persistItem(callerNodeId, 'await_collected', null, {
       callId: args.call_id,
       callerNodeId,
     });
     return envelope;
+  }
+
+  /**
+   * The answer_agent tool (M4): deliver the caller's answer into its parked
+   * callee turn. Ownership is per caller node — a callee child can never
+   * answer a question it did not cause its own callee to raise.
+   */
+  answerAgent(
+    runId: string,
+    callerNodeId: string,
+    args: { call_id: string; answer: string },
+  ): CallEnvelope {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return RUN_NOT_ACTIVE;
+    }
+    const call = state.activeCalls.get(args.call_id);
+    if (!call || call.owner !== callerNodeId) {
+      return {
+        status: 'error',
+        error: `UNKNOWN_CALL: no live call '${args.call_id}' started by you`,
+      };
+    }
+    const parked = call.parked;
+    if (!parked) {
+      return {
+        status: 'error',
+        error: `NO_QUESTION: call '${args.call_id}' has no outstanding question (already answered, or still running)`,
+      };
+    }
+    call.parked = null;
+    clearTimeout(parked.timer);
+    if (!parked.deliver(args.answer)) {
+      // The question row must not dangle unresolved in the transcript even
+      // when the callee died under it.
+      state.capability.persistItem(call.owner, 'call_answer', null, {
+        callId: args.call_id,
+        callerNodeId,
+        calleeNodeId: call.calleeId,
+        outcome: 'undelivered',
+      });
+      return {
+        status: 'error',
+        error:
+          'DELIVERY_FAILED: the callee turn ended before the answer arrived',
+      };
+    }
+    state.capability.persistItem(call.owner, 'call_answer', null, {
+      callId: args.call_id,
+      callerNodeId,
+      calleeNodeId: call.calleeId,
+      answer: args.answer,
+      outcome: 'answered',
+    });
+    return {
+      status: 'ok',
+      result: { call_id: args.call_id, state: 'answered' },
+    };
+  }
+
+  /**
+   * Park a callee's mid-turn question (M4): the executor's capture seam calls
+   * this instead of tracking a renderer approval. False when the call is
+   * unknown/settled or already parked — the executor then denies the request
+   * so the callee continues instead of hanging.
+   */
+  parkQuestion(
+    runId: string,
+    callId: string,
+    input: ParkQuestionInput,
+  ): boolean {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call || call.parked) {
+      return false;
+    }
+    const timer = setTimeout(
+      () => this.expireQuestion(runId, callId),
+      input.ttlMs ?? QUESTION_TTL_MS,
+    );
+    timer.unref?.();
+    call.parked = {
+      question: input.question,
+      options: input.options,
+      timer,
+      deliver: input.deliver,
+      fail: input.fail,
+    };
+    state.capability.persistItem(call.owner, 'call_question', null, {
+      callId,
+      callerNodeId: call.owner,
+      calleeNodeId: call.calleeId,
+      question: input.question,
+      options: input.options,
+      payload: input.payload,
+    });
+    // Nobody can ever answer_agent this question: a fire-and-forget caller
+    // never sees envelopes, and a settled owner raced the park past its
+    // drainCaller sweep. Orphan NOW instead of grinding through the TTL with
+    // the run held open (the question row above still shows what was asked).
+    if (
+      call.mode === 'fire_and_forget' ||
+      !state.capability.isNodeLive(call.owner)
+    ) {
+      this.failParked(
+        state,
+        callId,
+        call,
+        'QUESTION_ORPHANED: no live caller can answer this question',
+        'orphaned',
+      );
+      return true;
+    }
+    // A sync call that parks becomes await_agent-collectable — its caller got
+    // the question envelope in place of the final result.
+    if (!state.pendingAsync.has(callId)) {
+      state.pendingAsync.set(callId, {
+        owner: call.owner,
+        settled: call.settled,
+      });
+    }
+    const envelope = questionEnvelope(callId, call);
+    for (const notify of call.questionWaiters.splice(0)) {
+      notify(envelope);
+    }
+    return true;
+  }
+
+  /**
+   * Fail every parked question owned by a settling caller — nobody is left
+   * to answer it (the executor calls this when a caller node's LAST live
+   * turn settles, next to its approval sweep).
+   */
+  drainCaller(runId: string, callerNodeId: string): void {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return;
+    }
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner !== callerNodeId || !call.parked) {
+        continue;
+      }
+      this.failParked(
+        state,
+        callId,
+        call,
+        'QUESTION_ORPHANED: the calling agent ended before answering',
+        'orphaned',
+      );
+    }
+  }
+
+  /**
+   * Unpark-and-fail, exactly once: clear the parked state FIRST so a
+   * re-entrant deliver/expire cannot double-settle, stamp the typed reason
+   * the settled chain surfaces instead of CALLEE_CANCELLED, persist the
+   * resolution row, then cancel the parked turn.
+   */
+  private failParked(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+    reason: string,
+    outcome: 'timeout' | 'orphaned',
+  ): void {
+    const parked = call.parked;
+    if (!parked) {
+      return;
+    }
+    call.parked = null;
+    clearTimeout(parked.timer);
+    call.failReason = reason;
+    state.capability.persistItem(call.owner, 'call_answer', null, {
+      callId,
+      callerNodeId: call.owner,
+      calleeNodeId: call.calleeId,
+      outcome,
+    });
+    parked.fail();
+  }
+
+  /**
+   * Resolve with the call's FINAL envelope — or divert early with a
+   * `question` envelope the moment the callee parks. `settled` is the
+   * fallback for calls that already left `activeCalls`.
+   */
+  private waitForOutcome(
+    state: RunCallState,
+    callId: string,
+    settled: Promise<CallEnvelope>,
+  ): Promise<CallEnvelope> {
+    const call = state.activeCalls.get(callId);
+    if (!call) {
+      return settled;
+    }
+    if (call.parked) {
+      return Promise.resolve(questionEnvelope(callId, call));
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const once = (envelope: CallEnvelope): void => {
+        if (!done) {
+          done = true;
+          resolve(envelope);
+        }
+      };
+      call.questionWaiters.push(once);
+      void call.settled.then(once);
+    });
+  }
+
+  /** TTL fired: fail the parked call with the typed question_timeout error. */
+  private expireQuestion(runId: string, callId: string): void {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    if (!state || !call) {
+      return;
+    }
+    this.failParked(
+      state,
+      callId,
+      call,
+      'QUESTION_TIMEOUT: the caller never answered the question',
+      'timeout',
+    );
   }
 
   /**
@@ -230,6 +551,16 @@ function resolveCallee(
   const byName = callees.filter((c) => c.name === wanted);
   // An ambiguous display name must not silently pick a callee.
   return byName.length === 1 ? byName[0]! : null;
+}
+
+function questionEnvelope(callId: string, call: ActiveCall): CallEnvelope {
+  return {
+    status: 'question',
+    call_id: callId,
+    agent: call.calleeId,
+    question: call.parked?.question ?? '',
+    options: call.parked?.options ?? [],
+  };
 }
 
 function toEnvelope(

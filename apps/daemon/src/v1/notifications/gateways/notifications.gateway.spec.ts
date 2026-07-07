@@ -189,4 +189,49 @@ describe('verdict round-trip', () => {
       applied: false,
     });
   });
+
+  it('forwards a question card answer to the responder; junk answers are dropped (M4)', () => {
+    const approvals = new ApprovalRegistry();
+    const respond = vi.fn(() => true);
+    const track = (requestId: string): void =>
+      approvals.track({
+        runId: 'r1',
+        nodeId: 'n1',
+        requestId,
+        toolName: 'AskUserQuestion',
+        input: {},
+        respond,
+      });
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      approvals,
+    );
+
+    track('req-a');
+    gw.verdict({
+      runId: 'r1',
+      requestId: 'req-a',
+      allow: true,
+      answer: 'Blue',
+    });
+    expect(respond).toHaveBeenLastCalledWith(true, 'Blue');
+
+    // Non-string / empty / oversize answers must not reach the turn as
+    // answers — the verdict degrades to a plain approve.
+    track('req-b');
+    gw.verdict({ runId: 'r1', requestId: 'req-b', allow: true, answer: 42 });
+    expect(respond).toHaveBeenLastCalledWith(true);
+    track('req-c');
+    gw.verdict({ runId: 'r1', requestId: 'req-c', allow: true, answer: '' });
+    expect(respond).toHaveBeenLastCalledWith(true);
+    track('req-d');
+    gw.verdict({
+      runId: 'r1',
+      requestId: 'req-d',
+      allow: true,
+      answer: 'x'.repeat(40_000),
+    });
+    expect(respond).toHaveBeenLastCalledWith(true);
+  });
 });

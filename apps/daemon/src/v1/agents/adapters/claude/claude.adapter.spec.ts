@@ -289,6 +289,32 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     ]);
   });
 
+  it('carries requires_user_interaction — the question-vs-permission discriminator (M4)', () => {
+    const events = mapClaudeMessage({
+      type: 'control_request',
+      request_id: 'req-q',
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: 'AskUserQuestion',
+        input: { questions: [] },
+        requires_user_interaction: true,
+      },
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'approval_request',
+        toolName: 'AskUserQuestion',
+        requiresUserInteraction: true,
+      }),
+    ]);
+    // A plain permission carries no flag — the event must not fake one.
+    const plain = mapClaudeMessage(JSON.parse(CONTROL_REQUEST));
+    expect(
+      (plain[0] as { requiresUserInteraction?: boolean })
+        .requiresUserInteraction,
+    ).toBeUndefined();
+  });
+
   it('ignores control_requests that are not can_use_tool', () => {
     expect(
       mapClaudeMessage({

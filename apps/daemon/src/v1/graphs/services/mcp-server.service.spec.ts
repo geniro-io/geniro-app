@@ -29,6 +29,7 @@ function broker(): CallBroker {
     }),
     persistItem: () => {},
     isCancelled: () => false,
+    isNodeLive: () => true,
   };
   const instance = new CallBroker();
   instance.registerRun('run-1', capability);
@@ -138,7 +139,7 @@ describe('McpServerService', () => {
     });
   });
 
-  it('lists call_agent and await_agent, naming the callable agents', async () => {
+  it('lists call_agent, await_agent, and answer_agent, naming the callable agents', async () => {
     const { json } = await post(
       service(),
       'run-1',
@@ -148,9 +149,18 @@ describe('McpServerService', () => {
     const tools = (
       json().result as { tools: { name: string; description: string }[] }
     ).tools;
-    expect(tools.map((t) => t.name)).toEqual(['call_agent', 'await_agent']);
+    expect(tools.map((t) => t.name)).toEqual([
+      'call_agent',
+      'await_agent',
+      'answer_agent',
+    ]);
     expect(tools[0]!.description).toContain('Helper');
     expect(tools[0]!.description).toContain('You help with research.');
+    // The question-envelope guidance rides the descriptions: confident-answer
+    // vs escalate, and the await_agent follow-up.
+    expect(tools[0]!.description).toContain('"question"');
+    expect(tools[2]!.description).toContain('ask the user');
+    expect(tools[2]!.description).toContain('await_agent');
   });
 
   it('tools/call call_agent returns the broker envelope as text content', async () => {
@@ -302,7 +312,128 @@ describe('McpServerService', () => {
     expect(normalTools.map((t) => t.name)).toEqual([
       'call_agent',
       'await_agent',
+      'answer_agent',
     ]);
+  });
+
+  it('a parked question is a NON-error question envelope; answer_agent settles it over the endpoint (M4)', async () => {
+    const instance = new CallBroker();
+    const capability: RunCallCapability = {
+      calleesOf: new Map([['orch', [HELPER]]]),
+      launchCalleeTurn: (_callee, _message, callId) => {
+        setTimeout(() => {
+          instance.parkQuestion('run-1', callId, {
+            question: 'Which color?',
+            options: ['Red', 'Blue'],
+            payload: null,
+            deliver: () => true,
+            fail: () => {},
+          });
+        }, 0);
+        // Parked "forever" — the test consumes only the question leg.
+        return new Promise(() => {});
+      },
+      persistItem: () => {},
+      isCancelled: () => false,
+      isNodeLive: () => true,
+    };
+    instance.registerRun('run-1', capability);
+    const target = service(instance);
+
+    const asked = await post(
+      target,
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: { agent: 'helper', message: 'm' },
+      }),
+    );
+    const askedResult = asked.json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(askedResult.isError).toBe(false);
+    expect(JSON.parse(askedResult.content[0]!.text)).toEqual({
+      status: 'question',
+      call_id: 'call-1',
+      agent: 'helper',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+    });
+
+    // Ownership is enforced across the endpoint: another node may not answer.
+    const stolen = await post(
+      target,
+      'run-1',
+      'intruder',
+      rpc('tools/call', {
+        name: 'answer_agent',
+        arguments: { call_id: 'call-1', answer: 'Blue' },
+      }),
+    );
+    const stolenResult = stolen.json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(stolenResult.isError).toBe(true);
+    expect(JSON.parse(stolenResult.content[0]!.text).error).toContain(
+      'UNKNOWN_CALL',
+    );
+
+    const answered = await post(
+      target,
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'answer_agent',
+        arguments: { call_id: 'call-1', answer: 'Blue' },
+      }),
+    );
+    const answeredResult = answered.json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(answeredResult.isError).toBe(false);
+    expect(JSON.parse(answeredResult.content[0]!.text)).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', state: 'answered' },
+    });
+
+    // Empty answers are refused at the endpoint, in-envelope.
+    const empty = await post(
+      target,
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'answer_agent',
+        arguments: { call_id: 'call-1', answer: '   ' },
+      }),
+    );
+    expect(
+      JSON.parse(
+        (empty.json().result as { content: { text: string }[] }).content[0]!
+          .text,
+      ).error,
+    ).toContain('INVALID_ARGS');
+  });
+
+  it('refuses an oversize answer in-envelope (single stdin control line cap)', async () => {
+    const { json } = await post(
+      service(new CallBroker()),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'answer_agent',
+        arguments: { call_id: 'call-1', answer: 'x'.repeat(40_000) },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text).error).toContain('INVALID_ARGS');
   });
 
   it('methodNotAllowed answers 405 with a JSON-RPC error body', () => {

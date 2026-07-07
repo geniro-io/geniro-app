@@ -54,7 +54,9 @@ export type ChatItemKind =
   | 'approval_verdict'
   | 'call_started'
   | 'call_result'
-  | 'await_collected';
+  | 'await_collected'
+  | 'call_question'
+  | 'call_answer';
 
 /** A run — a single-agent chat or a workflow (graph) execution. */
 export interface ChatRun {

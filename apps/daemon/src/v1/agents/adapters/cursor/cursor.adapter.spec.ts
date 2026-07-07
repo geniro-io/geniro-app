@@ -239,6 +239,27 @@ describe('CursorAdapter graph-node extras', () => {
     // ask degrades to --force (auto-approve) — cursor-agent has no callback.
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });
+
+  it('passes --trust only when the turn sets trustWorkspace', () => {
+    const plain = fakeSpawn();
+    new CursorAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(plain.captured.args).not.toEqual(
+      expect.arrayContaining(['--trust']),
+    );
+
+    const trusted = fakeSpawn();
+    new CursorAdapter({ spawn: trusted.spawn }).start(
+      { prompt: 'go', cwd: '/probe-tmp', trustWorkspace: true },
+      () => {},
+    );
+    expect(trusted.captured.args).toEqual(expect.arrayContaining(['--trust']));
+    // Blanket approval must never ride the argv — approval stays scoped to
+    // the geniro entry's autoApprove + `mcp enable geniro`.
+    expect(trusted.captured.args).not.toContain('--approve-mcps');
+  });
 });
 
 describe('CursorAdapter binary override', () => {

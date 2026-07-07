@@ -211,6 +211,9 @@ export class CursorAdapter extends AgentAdapter {
 
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = ['-p', '--output-format', 'stream-json', '--force'];
+    if (input.trustWorkspace) {
+      args.push('--trust');
+    }
     if (input.model) {
       args.push('--model', input.model);
     }

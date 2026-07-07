@@ -1,4 +1,5 @@
 import type {
+  CapabilitiesWire,
   ChatRun,
   NodeStateWire,
   Workflow,
@@ -72,5 +73,10 @@ export class WorkflowApi extends DaemonRestApi {
       'POST',
       `/v1/workflows/runs/${encodeURIComponent(runId)}/cancel`,
     );
+  }
+
+  /** Machine capabilities (cursor call support) — reading pre-warms the probe. */
+  capabilities(): Promise<CapabilitiesWire> {
+    return this.request('GET', '/v1/capabilities');
   }
 }

@@ -87,6 +87,13 @@ export interface AgentTurnInput {
    */
   env?: Record<string, string>;
   /**
+   * Trust the turn's cwd without prompting (cursor `--trust`, headless-only).
+   * Needed when the cwd is a daemon-created directory the user never opened —
+   * the MCP-trust probe's temp workspace. User-project turns never set it:
+   * trusting the user's own worktree is the user's decision, not the daemon's.
+   */
+  trustWorkspace?: boolean;
+  /**
    * Loopback MCP endpoint granting this turn the agent-call tools
    * (call_agent / await_agent). Delivery is adapter-specific — claude gets a
    * per-turn config file referenced by `--mcp-config` (the token travels IN

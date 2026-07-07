@@ -253,6 +253,29 @@ export type CallEnvelope =
   { status: 'ok'; result: unknown } | { status: 'error'; error: string };
 
 /**
+ * Whether cursor-agent caller nodes can receive the call tools on THIS
+ * machine — the cached verdict of the one-shot MCP-trust probe (headless
+ * cursor-agent silently drops MCP servers it hasn't approved, so the only
+ * honest answer comes from actually running one turn against an echo tool).
+ * `unknown` = not probed yet this launch (no cursor caller ran, or the
+ * binary version could not be read so the verdict is not disk-cacheable).
+ */
+export interface CursorCallsCapability {
+  status: 'pass' | 'fail' | 'unknown';
+  /** `cursor-agent --version` line the verdict is keyed by; null = unreadable. */
+  version: string | null;
+  /** Epoch ms of the probe that produced this verdict; null when `unknown`. */
+  probedAt: number | null;
+  /** One-liner for the builder warning / system item when status is not pass. */
+  reason: string | null;
+}
+
+/** GET /v1/capabilities — machine-level feature availability the builder reads. */
+export interface CapabilitiesWire {
+  cursorCalls: CursorCallsCapability;
+}
+
+/**
  * What the graph executor exposes to the broker for one live run — the
  * capability seam. The broker owns call SEMANTICS (ids, caps, sync/async
  * bookkeeping); the executor owns MECHANICS (spawning the callee turn,

@@ -5,6 +5,7 @@ import { McpController } from './controllers/mcp.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { CallBroker } from './services/call-broker.service';
 import { GraphExecutorService } from './services/graph-executor.service';
+import { McpServerService } from './services/mcp-server.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 
 /**
@@ -25,6 +26,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     },
     GraphExecutorService,
     CallBroker,
+    McpServerService,
   ],
   exports: [WorkflowStoreService],
 })

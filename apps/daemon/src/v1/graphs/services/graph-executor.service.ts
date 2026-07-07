@@ -29,6 +29,7 @@ import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import type { ItemKind } from '../../runs/runs.types';
 import type {
+  CalleeTurnOutcome,
   NodeStateWire,
   Workflow,
   WorkflowAgentNode,
@@ -45,7 +46,7 @@ import {
 } from '../utils/graph-validate';
 import { flattenRole } from '../utils/role-text';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
-import { CallBroker, type CalleeTurnOutcome } from './call-broker.service';
+import { CallBroker } from './call-broker.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
 type NodeOutcome = 'completed' | 'failed' | 'cancelled' | 'skipped';

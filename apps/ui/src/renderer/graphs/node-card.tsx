@@ -5,6 +5,7 @@ import type {
   CursorCallsCapability,
   WorkflowNode,
 } from '../../shared/contracts';
+import { ErrorText } from '../components/error-text';
 import { cn } from '../components/ui/utils';
 import { NodePorts } from './node-ports';
 import { flowEdgeKind } from './node-schema';
@@ -123,18 +124,18 @@ export function NodeCard({
         missingOutput={errors.some((e) => e.side === 'output')}
       />
       {invalid ? (
+        // The strip is a styling container; each line is its own alert via the
+        // shared ErrorText primitive (which owns role="alert") — so the roles
+        // don't nest. Compact 10px canvas sizing overrides ErrorText's text-sm.
         <div
-          role="alert"
           className={cn(
             'flex flex-col gap-1 border-t border-destructive/20 bg-destructive/10 px-3 py-2',
             callsWarning ? '' : 'rounded-b-xl',
           )}>
           {errors.map((error) => (
-            <p
-              key={error.message}
-              className="text-[10px] leading-snug text-destructive">
+            <ErrorText key={error.message} className="text-[10px] leading-snug">
               {error.message}
-            </p>
+            </ErrorText>
           ))}
         </div>
       ) : null}

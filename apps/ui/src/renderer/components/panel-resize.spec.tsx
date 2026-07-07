@@ -73,6 +73,30 @@ describe('usePanelWidth (left-edge handle)', () => {
     expect(localStorage.getItem('test.rightPanelWidth')).toBe('360');
   });
 
+  it('persists only on drag-end, not on every mousemove', () => {
+    localStorage.setItem('test.rightPanelWidth', '300');
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    const handle = container.querySelector('[role="separator"]')!;
+    act(() => {
+      handle.dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, clientX: 1000 }),
+      );
+      window.dispatchEvent(new MouseEvent('mousemove', { clientX: 960 })); // +40
+    });
+    // The width tracks the drag live...
+    expect(width()).toBe(340);
+    // ...but localStorage is NOT written until the gesture ends. The reverted
+    // bug — a [width] effect — would have flushed '340' here, mid-drag.
+    expect(localStorage.getItem('test.rightPanelWidth')).toBe('300');
+
+    act(() => {
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    });
+    expect(localStorage.getItem('test.rightPanelWidth')).toBe('340');
+  });
+
   it('clamps to the min/max bounds', () => {
     act(() => {
       root.render(<RightPanel />);

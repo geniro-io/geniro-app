@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { cn } from './ui/utils';
 
@@ -34,10 +34,6 @@ export function usePanelWidth({
 } {
   const [width, setWidth] = useState(() => readWidth(storageKey, defaultWidth));
 
-  useEffect(() => {
-    localStorage.setItem(storageKey, String(Math.round(width)));
-  }, [storageKey, width]);
-
   const startResize = useCallback(
     (event: React.MouseEvent): void => {
       event.preventDefault();
@@ -46,11 +42,13 @@ export function usePanelWidth({
       // Handle on the right edge: dragging right (+x) widens. On the left
       // edge the panel sits to the right, so dragging LEFT widens.
       const sign = handleEdge === 'right' ? 1 : -1;
+      let latestWidth = startWidth;
       const onMove = (move: MouseEvent): void => {
         const next = Math.min(
           maxWidth,
           Math.max(minWidth, startWidth + sign * (move.clientX - startX)),
         );
+        latestWidth = next;
         setWidth(next);
       };
       const onUp = (): void => {
@@ -58,13 +56,17 @@ export function usePanelWidth({
         window.removeEventListener('mouseup', onUp);
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        // Persist once, at drag-end — NOT on every mousemove-driven render.
+        // A live resize fires hundreds of these; a synchronous localStorage
+        // write per frame stutters the canvas the drag is resizing.
+        localStorage.setItem(storageKey, String(Math.round(latestWidth)));
       };
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
     },
-    [width, handleEdge, minWidth, maxWidth],
+    [width, handleEdge, minWidth, maxWidth, storageKey],
   );
 
   return { width, startResize };

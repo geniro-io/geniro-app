@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -51,6 +52,12 @@ function configPathOf(cwd: string): string {
 /** The backup sits next to the file so a user can spot and undo it by hand. */
 export function backupPathOf(cwd: string): string {
   return `${configPathOf(cwd)}.geniro-bak`;
+}
+
+/** The atomic-write staging sibling — consumed by rename on a successful merge;
+ *  only ever lingers if a crash struck between the write and the rename. */
+function tmpPathOf(cwd: string): string {
+  return `${configPathOf(cwd)}.geniro-tmp`;
 }
 
 type McpJson = { mcpServers?: Record<string, unknown> } & Record<
@@ -123,8 +130,18 @@ export function mergeGeniroEntry(
   }
   const mode = statSync(path).mode & 0o777;
   copyFileSync(path, backupPathOf(cwd));
+  // The merged file carries a bearer call token, so it must never be even
+  // briefly world-readable. Write to a fresh sibling temp created 0600, then
+  // renameSync it over the original (atomic replace) — a plain in-place
+  // writeFileSync truncates the user's file while KEEPING its (often 0644)
+  // mode, leaving the token exposed until a follow-up chmod. The rmSync clears
+  // any temp a crashed turn stranded so the fresh 0600 create applies; the
+  // 'wx' (O_EXCL) flag then refuses to follow a symlink planted at the temp
+  // path rather than writing the token through it. Mirrors the create branch.
+  const tmp = tmpPathOf(cwd);
+  rmSync(tmp, { force: true });
   writeFileSync(
-    path,
+    tmp,
     JSON.stringify(
       {
         ...parsed,
@@ -133,11 +150,9 @@ export function mergeGeniroEntry(
       null,
       2,
     ),
-    'utf8',
+    { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
-  // The merged file now carries a bearer call token: clamp to owner-only for
-  // the turn regardless of the user's original (often 0644) mode.
-  chmodSync(path, 0o600);
+  renameSync(tmp, path);
   return { ok: true, created: false, mode };
 }
 
@@ -153,6 +168,11 @@ export function restoreGeniroEntry(
   const path = configPathOf(cwd);
   const backup = backupPathOf(cwd);
   try {
+    // Sweep a temp orphaned by a crash between the merge's write and rename (a
+    // successful merge renames it away). restoreGeniroEntry is the one cleanup
+    // path both settle and the boot reconcile take, so this clears a stranded
+    // 0600 temp holding an already-revoked token — no stray file left behind.
+    rmSync(tmpPathOf(cwd), { force: true });
     if (!existsSync(path)) {
       // The user removed the file mid-turn — their call; just drop the backup.
       rmSync(backup, { force: true });

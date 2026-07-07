@@ -195,4 +195,76 @@ describe('ApprovalCard', () => {
     expect(el.textContent).toContain('Agent asks to run a tool');
     expect(el.textContent).not.toContain('Agent asks a question');
   });
+
+  const MULTI_QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Which color should the header be?',
+        header: 'Color',
+        options: [{ label: 'Red' }, { label: 'Blue' }],
+        multiSelect: false,
+      },
+      {
+        question: 'Which font size?',
+        header: 'Size',
+        options: [{ label: 'Small' }, { label: 'Large' }],
+        multiSelect: false,
+      },
+    ],
+  };
+
+  it('multi-question card hides the free-text box — one answer cannot address several questions', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    // Both questions render with their option buttons...
+    expect(el.textContent).toContain('Which color should the header be?');
+    expect(el.textContent).toContain('Which font size?');
+    // ...but the free-text Input + Answer are gone: a single free-text answer
+    // maps to the ONE `response` wire channel, ambiguous across questions.
+    expect(el.querySelector('input')).toBeNull();
+    const labels = [...el.querySelectorAll('button')].map((b) => b.textContent);
+    expect(labels).not.toContain('Answer');
+    // Decline stays, and each question's options still answer with their label.
+    expect(labels).toContain('Decline');
+    expect(labels).toContain('Blue');
+    expect(labels).toContain('Large');
+  });
+
+  it('tones a settled verdict by outcome — success for allowed, destructive for denied', () => {
+    // Tool card: an approved verdict is toned success, not muted.
+    const approved = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'ls' }}
+        verdict={true}
+        onRespond={vi.fn()}
+      />,
+    );
+    const approvedLine = [...approved.querySelectorAll('p')].find((p) =>
+      p.textContent?.includes('✓ approved'),
+    )!;
+    expect(approvedLine.className).toContain('text-success');
+    expect(approvedLine.className).not.toContain('text-muted-foreground');
+
+    // Question card: a declined answer is toned destructive.
+    const declined = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={QUESTION_INPUT}
+        verdict={false}
+        onRespond={vi.fn()}
+      />,
+    );
+    const declinedLine = [...declined.querySelectorAll('p')].find((p) =>
+      p.textContent?.includes('✗ declined'),
+    )!;
+    expect(declinedLine.className).toContain('text-destructive');
+    expect(declinedLine.className).not.toContain('text-muted-foreground');
+  });
 });

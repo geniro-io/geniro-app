@@ -2,11 +2,7 @@ import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
 import type { Workflow } from '../graphs.types';
-import {
-  parseLegacyWorkflowYaml,
-  parseWorkflowYaml,
-  serializeWorkflowYaml,
-} from './workflow-yaml';
+import { parseWorkflowYaml, serializeWorkflowYaml } from './workflow-yaml';
 
 const VALID_SOURCE = `# My review team
 name: review-team
@@ -63,8 +59,9 @@ describe('parseWorkflowYaml', () => {
   });
 
   it('rejects a kind-less node — the legacy preprocess shim is gone', () => {
-    // Strict schema (no-backcompat): `kind` is required on every node; the
-    // store's one-time normalization owns legacy files, never the schema.
+    // Strict schema (no-backcompat): `kind` is required on every node. Kind-less
+    // legacy files are rejected outright — there is no normalization shim, in
+    // the schema OR the store (parseLegacyWorkflowYaml + the .bak retry are gone).
     try {
       parseWorkflowYaml('name: old\nnodes:\n  - id: a\n    agent: claude\n');
       expect.unreachable('expected a strict-schema rejection');
@@ -98,25 +95,6 @@ edges:
       expect(exception.errorCode).toBe('WORKFLOW_YAML_INVALID');
       expect(exception.getMessage()).toContain('edges.0.kind');
     }
-  });
-});
-
-describe('parseLegacyWorkflowYaml', () => {
-  it('stamps kind-less nodes as agents and kind-less edges as data', () => {
-    const legacy = parseLegacyWorkflowYaml(
-      'name: old\nnodes:\n  - id: a\n    agent: claude\nedges:\n  - from: a\n    to: a2\n',
-    );
-    expect(legacy?.nodes[0]).toMatchObject({ id: 'a', kind: 'agent' });
-    expect(legacy?.edges[0]).toEqual({ from: 'a', to: 'a2', kind: 'data' });
-  });
-
-  it('returns null on real garbage instead of guessing', () => {
-    // Malformed YAML enters the doc.errors branch — the store must surface
-    // the STRICT parse error, never a half-guessed workflow.
-    expect(parseLegacyWorkflowYaml('nodes: [\nname: :')).toBeNull();
-    // Well-formed YAML, hopeless shape (even with kinds injected).
-    expect(parseLegacyWorkflowYaml('name: g\nnodes: notalist\n')).toBeNull();
-    expect(parseLegacyWorkflowYaml('42')).toBeNull();
   });
 });
 

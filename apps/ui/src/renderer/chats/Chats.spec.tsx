@@ -230,6 +230,32 @@ describe('Chats reconnect seam', () => {
     );
   });
 
+  it('inserts an out-of-order live item in seq order, not at the tail', async () => {
+    // History arrives seq-sorted; a reconnect/replay delta can deliver a seq
+    // BELOW the tail. That skips the fast-path append and must re-sort — the
+    // late item has to land between its neighbours, not after a higher seq.
+    api.getHistory.mockResolvedValue([
+      msg(0, 'assistant', 'ITEM-A'),
+      msg(2, 'assistant', 'ITEM-C'),
+    ]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // seq 1 < the tail's seq 2 → fast-path append is skipped; the slow path
+    // must place B between A and C.
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'ITEM-B'));
+    });
+
+    const rendered = [...container.querySelectorAll('[data-role="assistant"]')]
+      .map((el) => el.textContent ?? '')
+      .join('|');
+    // Reverting the .sort() to a plain [...prev, item] append lands B AFTER C.
+    expect(rendered.indexOf('ITEM-A')).toBeLessThan(rendered.indexOf('ITEM-B'));
+    expect(rendered.indexOf('ITEM-B')).toBeLessThan(rendered.indexOf('ITEM-C'));
+  });
+
   it('ignores a live item addressed to a non-active run', async () => {
     api.getHistory.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client, emitItem } = makeClient();

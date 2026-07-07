@@ -29,7 +29,6 @@ import {
 import { computeRunOrder } from '../utils/graph-order';
 import { validateWorkflowGraph } from '../utils/graph-validate';
 import {
-  parseLegacyWorkflowYaml,
   parseWorkflowYaml,
   serializeWorkflowYaml,
 } from '../utils/workflow-yaml';
@@ -105,10 +104,7 @@ export class WorkflowStoreService {
     for (const entry of entries.filter((e) => e.endsWith(WORKFLOW_SUFFIX))) {
       const path = join(this.dir, entry);
       try {
-        const workflow = await this.loadWorkflow(
-          path,
-          await readFile(path, 'utf8'),
-        );
+        const workflow = parseWorkflowYaml(await readFile(path, 'utf8'));
         const stats = await stat(path);
         summaries.push({
           slug: entry.slice(0, -WORKFLOW_SUFFIX.length),
@@ -140,41 +136,7 @@ export class WorkflowStoreService {
     // One read serves both the 404 mapping and the parse — a second read
     // could race a concurrent delete into a raw ENOENT instead of the 404.
     const source = await this.readSource(path, slug);
-    return { slug, workflow: await this.loadWorkflow(path, source) };
-  }
-
-  /**
-   * Strict-parse one library file's already-read source. A file the strict
-   * schema rejects gets ONE lenient retry as a legacy (pre-kind) file: on
-   * success the original bytes are backed up to `<file>.bak` (never
-   * clobbering an earlier backup) and the file is rewritten with kinds
-   * explicit — after that it strict-parses forever, so the normalization is
-   * one-time by construction. The backup exists because these files live
-   * outside git: without it, a code revert would silently downgrade call
-   * edges to data edges.
-   */
-  private async loadWorkflow(path: string, source: string): Promise<Workflow> {
-    try {
-      return parseWorkflowYaml(source);
-    } catch (err) {
-      const legacy = parseLegacyWorkflowYaml(source);
-      if (!legacy) {
-        throw err;
-      }
-      const backup = `${path}.bak`;
-      if (!(await this.exists(backup))) {
-        await writeFile(backup, source, 'utf8');
-      }
-      const normalized = serializeWorkflowYaml(legacy, source);
-      await this.atomicWrite(path, normalized);
-      this.logger.warn(
-        `normalized legacy workflow ${basename(path)} (original backed up to ${basename(backup)})`,
-      );
-      // Return what was PERSISTED, not the lenient parse: the serializer's
-      // per-(from,to,kind) edge map can legally collapse a legacy duplicate,
-      // and the first read must agree with every later one.
-      return parseWorkflowYaml(normalized);
-    }
+    return { slug, workflow: parseWorkflowYaml(source) };
   }
 
   /**
@@ -231,9 +193,6 @@ export class WorkflowStoreService {
       );
     }
     await rm(path);
-    // The backup belongs to the deleted file: left behind, it would block
-    // the one-time .bak of a FUTURE legacy file landing on the same slug.
-    await rm(`${path}.bak`, { force: true });
   }
 
   /** Copy an external `*.geniro.yaml` into the library (validated first). */
@@ -247,21 +206,10 @@ export class WorkflowStoreService {
         `Cannot read ${sourcePath}`,
       );
     }
-    let workflow: Workflow;
-    let content = source;
-    try {
-      workflow = parseWorkflowYaml(source);
-    } catch (err) {
-      // Legacy (pre-kind) external file: import it normalized — the library
-      // only ever holds strict-parseable files. The user's original stays
-      // untouched at sourcePath, so no backup is needed here.
-      const legacy = parseLegacyWorkflowYaml(source);
-      if (!legacy) {
-        throw err;
-      }
-      workflow = legacy;
-      content = serializeWorkflowYaml(legacy, source);
-    }
+    // A kind-less legacy (pre-kind) file is refused, not normalized
+    // (no-backcompat): parseWorkflowYaml throws WORKFLOW_YAML_INVALID, which
+    // the controller maps to 400. The library only ever holds strict files.
+    const workflow = parseWorkflowYaml(source);
     this.validateGraph(workflow);
     await mkdir(this.dir, { recursive: true });
     const importedName = basename(sourcePath).endsWith(WORKFLOW_SUFFIX)
@@ -269,7 +217,7 @@ export class WorkflowStoreService {
       : workflow.name;
     const slug = await this.uniqueSlug(importedName);
     // Strict files land verbatim — the user's comments come along.
-    await this.atomicWrite(this.fileFor(slug), content);
+    await this.atomicWrite(this.fileFor(slug), source);
     return { slug, workflow };
   }
 

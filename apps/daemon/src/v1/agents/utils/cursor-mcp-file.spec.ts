@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -98,6 +99,45 @@ describe('mergeGeniroEntry / restoreGeniroEntry', () => {
       other: 'setting',
     });
     expect(existsSync(backupPathOf(cwd))).toBe(false);
+  });
+
+  it('merges via an atomic temp+rename so the token file is never briefly world-readable', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const path = configPath(cwd);
+    writeFileSync(path, JSON.stringify({ mcpServers: {} }), 'utf8');
+    // A user's file is commonly group/world-readable (0644). The merged file
+    // carries a bearer call token and must land 0600 with NO in-between window.
+    chmodSync(path, 0o644);
+    const before = statSync(path).ino;
+
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    expect(result).toMatchObject({ ok: true, created: false });
+
+    // End state is owner-only, and the token content actually landed.
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readConfig(cwd)).toMatchObject({ mcpServers: { geniro: ENTRY } });
+    // Atomic replace: the token was written to a fresh 0600 sibling and renamed
+    // over the file, so the inode changed. The reverted bug — an in-place
+    // writeFileSync — truncates the SAME inode and keeps its 0644 mode until a
+    // follow-up chmod; that is the world-readable window this pins shut.
+    expect(statSync(path).ino).not.toBe(before);
+    // The temp sibling is consumed by the rename — no loose-mode leftover.
+    expect(existsSync(`${path}.geniro-tmp`)).toBe(false);
+  });
+
+  it('restore sweeps a .geniro-tmp orphaned by a crash between write and rename', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const tmp = `${configPath(cwd)}.geniro-tmp`;
+    // Simulate the staging temp a merge stranded when it died before renameSync
+    // (0600, holds an already-revoked token).
+    writeFileSync(tmp, '{"mcpServers":{"geniro":{}}}', { mode: 0o600 });
+    expect(existsSync(tmp)).toBe(true);
+
+    // restore is the one cleanup path both settle and the boot reconcile take.
+    restoreGeniroEntry(cwd, { created: false });
+    expect(existsSync(tmp)).toBe(false);
   });
 
   it('refuses an unparseable file without writing anything', () => {

@@ -114,6 +114,16 @@ export function Chats({
       return;
     }
     setItems((prev) => {
+      const last = prev[prev.length - 1];
+      // Fast path: items carry a monotonic seq and are emitted persist-first,
+      // so a strictly-newer item just appends. `items` stays seq-sorted, so a
+      // full copy+resort per stream item (O(N² log N) to build a run) is only
+      // needed on the rare out-of-order case below.
+      if (last === undefined || item.seq > last.seq) {
+        return [...prev, item];
+      }
+      // The replay/live seam (or a reconnect delta) can re-deliver or reorder a
+      // seq: de-dupe by seq, then insert in seq order.
       if (prev.some((existing) => existing.seq === item.seq)) {
         return prev; // de-dupe the replay/live seam by seq
       }

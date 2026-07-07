@@ -5,6 +5,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
+import { cn } from '../components/ui/utils';
 
 /** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -122,28 +123,36 @@ export function ApprovalCard({
           </p>
         ) : verdict === null ? (
           <div className="flex items-center gap-2">
-            <Input
-              value={freeText}
-              aria-label="Answer the agent's question"
-              placeholder="Or type your own answer…"
-              onChange={(e) => setFreeText(e.target.value)}
-              onKeyDown={(e) => {
-                // The verdict is one-shot — an Enter that merely confirms an
-                // IME composition must not submit a half-composed answer.
-                if (e.nativeEvent.isComposing) {
-                  return;
-                }
-                if (e.key === 'Enter' && freeText.trim().length > 0) {
-                  onRespond(true, freeText.trim());
-                }
-              }}
-            />
-            <Button
-              type="button"
-              disabled={freeText.trim().length === 0}
-              onClick={() => onRespond(true, freeText.trim())}>
-              Answer
-            </Button>
+            {/* A single free-text answer maps to the ONE `response` wire
+                channel, so it is offered only for a single-question payload; a
+                multi-question card is answered through its per-question
+                options (or declined). */}
+            {questions.length === 1 ? (
+              <>
+                <Input
+                  value={freeText}
+                  aria-label="Answer the agent's question"
+                  placeholder="Or type your own answer…"
+                  onChange={(e) => setFreeText(e.target.value)}
+                  onKeyDown={(e) => {
+                    // The verdict is one-shot — an Enter that merely confirms an
+                    // IME composition must not submit a half-composed answer.
+                    if (e.nativeEvent.isComposing) {
+                      return;
+                    }
+                    if (e.key === 'Enter' && freeText.trim().length > 0) {
+                      onRespond(true, freeText.trim());
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  disabled={freeText.trim().length === 0}
+                  onClick={() => onRespond(true, freeText.trim())}>
+                  Answer
+                </Button>
+              </>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -152,7 +161,11 @@ export function ApprovalCard({
             </Button>
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">
+          <p
+            className={cn(
+              'text-xs',
+              verdict ? 'text-success' : 'text-destructive',
+            )}>
             {verdict ? '✓ answered' : '✗ declined'}
           </p>
         )}
@@ -196,7 +209,11 @@ export function ApprovalCard({
           </Button>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">
+        <p
+          className={cn(
+            'text-xs',
+            verdict ? 'text-success' : 'text-destructive',
+          )}>
           {verdict ? '✓ approved' : '✗ denied'}
         </p>
       )}

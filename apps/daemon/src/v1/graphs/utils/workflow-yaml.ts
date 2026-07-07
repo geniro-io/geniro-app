@@ -37,39 +37,6 @@ export function parseWorkflowYaml(source: string): Workflow {
   return parsed.data;
 }
 
-/**
- * Lenient parse for LEGACY files only (pre-kind schema): a kind-less node is
- * an agent (the only kind that existed), a kind-less edge is data flow.
- * Returns null when even the lenient shape fails — the caller falls back to
- * the strict error. The store uses this once per file to normalize-and-rewrite
- * (with a .bak); the strict schema itself carries no compatibility shim.
- */
-export function parseLegacyWorkflowYaml(source: string): Workflow | null {
-  const doc = parseDocument(source);
-  if (doc.errors.length > 0) {
-    return null;
-  }
-  const raw = doc.toJS() as unknown;
-  if (raw === null || typeof raw !== 'object') {
-    return null;
-  }
-  const tree = raw as Record<string, unknown>;
-  const withKind = (list: unknown, kind: string): unknown =>
-    Array.isArray(list)
-      ? list.map((item) =>
-          item !== null && typeof item === 'object' && !('kind' in item)
-            ? { ...item, kind }
-            : item,
-        )
-      : list;
-  const parsed = WorkflowSchema.safeParse({
-    ...tree,
-    nodes: withKind(tree.nodes, 'agent'),
-    edges: withKind(tree.edges, 'data'),
-  });
-  return parsed.success ? parsed.data : null;
-}
-
 /** A workflow as a plain-JS tree with undefined-valued keys pruned. */
 function workflowToPlain(workflow: Workflow): Record<string, unknown> {
   return JSON.parse(JSON.stringify(workflow)) as Record<string, unknown>;
@@ -178,7 +145,7 @@ export function serializeWorkflowYaml(
     root.set('nodes', doc.createNode(workflowToPlain(workflow).nodes));
   }
 
-  // Edges: same strategy, keyed by from→to→kind. A legacy kind-less item
+  // Edges: same strategy, keyed by from→to→kind. A hand-edited kind-less item
   // never matches a kept key, so it is dropped here and re-appended below
   // with its kind explicit.
   const keepEdges = new Map<string, WorkflowEdge>(

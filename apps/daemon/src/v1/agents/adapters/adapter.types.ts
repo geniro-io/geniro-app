@@ -86,6 +86,19 @@ export interface AgentTurnInput {
    * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).
    */
   env?: Record<string, string>;
+  /**
+   * Loopback MCP endpoint granting this turn the agent-call tools
+   * (call_agent / await_agent). Delivery is adapter-specific — claude gets a
+   * per-turn config file referenced by `--mcp-config` (the token travels IN
+   * the 0600 file, never argv); cursor callers land in milestone 3. Absent
+   * or null: the turn gets no call tools.
+   */
+  mcpEndpoint?: {
+    url: string;
+    token: string;
+    /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
+    toolTimeoutMs?: number;
+  } | null;
 }
 
 /** Handle to an in-flight turn. */

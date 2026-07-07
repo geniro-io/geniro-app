@@ -6,6 +6,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import type { BadRequestException } from '@packages/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import type {
   AgentEvent,
   AgentTurnInput,
@@ -22,6 +23,7 @@ import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { Workflow } from '../graphs.types';
+import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
@@ -173,11 +175,18 @@ interface FakeTurn {
 
 class FakeAdapter {
   readonly starts: FakeTurn[] = [];
+  /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
+  throwNextStart: Error | null = null;
   constructor(readonly kind: 'claude' | 'cursor-agent') {}
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
   ): { done: Promise<void>; cancel: () => void; respondApproval: unknown } {
+    if (this.throwNextStart) {
+      const err = this.throwNextStart;
+      this.throwNextStart = null;
+      throw err;
+    }
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -225,13 +234,22 @@ let dir: string;
 
 beforeAll(() => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-exec-')));
+  // The run-start MCP self-check probes the daemon's own route over real
+  // loopback HTTP — no server listens in unit tests, and a rejecting fetch
+  // would append a system item at a nondeterministic time. Stub it green;
+  // the failure path gets its own test with a failing stub.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: true })),
+  );
 });
 
 afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
+  vi.unstubAllGlobals();
 });
 
-function setup(): {
+function setup(runtimePort: number | null = 4870): {
   service: GraphExecutorService;
   claude: FakeAdapter;
   cursor: FakeAdapter;
@@ -240,6 +258,8 @@ function setup(): {
   nodeDao: FakeNodeStateDao;
   registry: ProcessRegistry;
   approvals: ApprovalRegistry;
+  callTokens: CallTokenRegistry;
+  callBroker: CallBroker;
 } {
   const claude = new FakeAdapter('claude');
   const cursor = new FakeAdapter('cursor-agent');
@@ -248,6 +268,8 @@ function setup(): {
   const nodeDao = new FakeNodeStateDao();
   const registry = new ProcessRegistry();
   const approvals = new ApprovalRegistry();
+  const callTokens = new CallTokenRegistry();
+  const callBroker = new CallBroker();
   const em = { fork: () => ({ clear: () => {} }) } as unknown as EntityManager;
   const service = new GraphExecutorService(
     em,
@@ -259,6 +281,14 @@ function setup(): {
     approvals,
     claude as unknown as ClaudeAdapter,
     cursor as unknown as CursorAdapter,
+    callTokens,
+    callBroker,
+    {
+      token: 'launch-token',
+      version: '0.0.0-test',
+      startedAt: 0,
+      port: runtimePort,
+    },
   );
   return {
     service,
@@ -269,6 +299,8 @@ function setup(): {
     nodeDao,
     registry,
     approvals,
+    callTokens,
+    callBroker,
   };
 }
 
@@ -309,32 +341,38 @@ const LINEAR: Workflow = {
 };
 
 describe('GraphExecutorService', () => {
-  it('rejects running a workflow with call edges — the call runtime is not shipped yet', async () => {
-    // Milestone-1 guard: without it, a call-only callee has no producers and
-    // schedule() would launch it at run start with only the seed prompt.
-    // Milestone 2 (CallBroker + MCP endpoint) removes this guard.
-    const { service, claude, runDao } = setup();
-    let code: string | undefined;
-    try {
-      await service.startRun({
-        slug: 'calls',
-        workflow: triggered({
-          name: 'calls',
-          nodes: [
-            { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
-            { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
-          ],
-          edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
-        }),
-        cwd: dir,
-        prompt: 'go',
-      });
-    } catch (err) {
-      code = (err as BadRequestException).errorCode;
-    }
-    expect(code).toBe('GRAPH_CALL_RUNTIME_UNAVAILABLE');
-    expect(claude.starts).toHaveLength(0);
-    expect(runDao.runs.size).toBe(0);
+  it('runs a call-edge workflow: the callee is on-demand, the broker gets the run', async () => {
+    // Milestone-2 replaces the M1 GRAPH_CALL_RUNTIME_UNAVAILABLE guard: a
+    // call-only callee never launches with the DAG (it runs per CallBroker
+    // call), stays out of the settled denominator, and ends 'skipped' when
+    // the run finishes uncalled; the broker surface dies with the run.
+    const { service, claude, runDao, nodeDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // Only the caller launches; the callee waits for calls.
+    expect(claude.starts).toHaveLength(1);
+    expect(callBroker.hasRun(run.id)).toBe(true);
+    expect(callBroker.listCallees(run.id, 'a').map((c) => c.id)).toEqual([
+      'callee',
+    ]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(claude.starts).toHaveLength(1);
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(nodeDao.row(run.id, 'callee')?.status).toBe('skipped');
+    expect(callBroker.hasRun(run.id)).toBe(false);
   });
 
   it('rejects running an empty workflow (a blank-canvas draft)', async () => {
@@ -814,5 +852,443 @@ describe('GraphExecutorService', () => {
       (i) => i.runId === orphan.id && i.kind === 'error',
     );
     expect(errorItem).toBeDefined();
+  });
+});
+
+describe('GraphExecutorService — agent calls', () => {
+  const CALL_WF: Workflow = {
+    name: 'calls',
+    nodes: [
+      {
+        id: 'orch',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You orchestrate.',
+      },
+      {
+        id: 'helper',
+        kind: 'agent',
+        name: 'Helper',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You help.',
+      },
+    ],
+    edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
+  };
+
+  it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
+    const { service, claude, callTokens, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    // Endpoint: this run's route, this caller's node id, the run's token —
+    // and the token travels in the input (→ config file), never argv.
+    expect(caller.input.mcpEndpoint?.url).toBe(
+      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/orch`,
+    );
+    expect(caller.input.mcpEndpoint?.token).toBe(
+      callTokens.get(run.id, 'orch'),
+    );
+    // The token is per caller node: helper (a callee, not a caller) has none.
+    expect(callTokens.get(run.id, 'helper')).toBeNull();
+    // Awareness: role first, then the May-call block naming id + role.
+    expect(caller.input.systemPrompt).toContain('You orchestrate.');
+    expect(caller.input.systemPrompt).toContain('May call');
+    expect(caller.input.systemPrompt).toContain('Helper (agent id: helper)');
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    // The callee is NOT a caller: bare role, no endpoint, fresh prompt.
+    expect(callee.input.prompt).toBe('help me');
+    expect(callee.input.systemPrompt).toBe('You help.');
+    expect(callee.input.mcpEndpoint ?? null).toBeNull();
+    completeTurn(callee, 'helped');
+    expect(await envelope).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'helped' },
+    });
+    // The caller's token is live mid-run; it is revoked once the run settles.
+    expect(callTokens.get(run.id, 'orch')).not.toBeNull();
+    completeTurn(caller, 'done');
+    await drain();
+    expect(callTokens.get(run.id, 'orch')).toBeNull();
+  });
+
+  it('cursor callers get no endpoint and no awareness block (milestone 3)', async () => {
+    const { service, cursor } = setup();
+    await service.startRun({
+      slug: 'c',
+      workflow: triggered({
+        ...CALL_WF,
+        nodes: [
+          { ...CALL_WF.nodes[0]!, agent: 'cursor-agent' as const },
+          CALL_WF.nodes[1]!,
+        ],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = cursor.starts[0]!;
+    expect(caller.input.mcpEndpoint ?? null).toBeNull();
+    expect(caller.input.systemPrompt).toBe('You orchestrate.');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('sync call: transcript rows on the caller, per-call node_state on the callee', async () => {
+    const { service, claude, callBroker, itemDao, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'Helper',
+      message: 'summarize',
+    });
+    await drain();
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('running');
+    completeTurn(claude.starts[1]!, 'summary text');
+    expect((await envelope).status).toBe('ok');
+    await drain();
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('completed');
+    const callItems = itemDao.items.filter((i) =>
+      ['call_started', 'call_result'].includes(i.kind),
+    );
+    expect(callItems.map((i) => [i.kind, i.nodeId])).toEqual([
+      ['call_started', 'orch'],
+      ['call_result', 'orch'],
+    ]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('a live fire-and-forget callee holds the run open until it settles', async () => {
+    const { service, claude, callBroker, runDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const detached = await callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'background task',
+      mode: 'fire_and_forget',
+    });
+    expect(detached.status).toBe('ok');
+    await drain();
+    completeTurn(claude.starts[0]!, 'caller done');
+    await drain();
+    // Every DAG node settled, but the detached callee still runs — the run
+    // must NOT roll up yet (sub-turns are out of the denominator but alive).
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    completeTurn(claude.starts[1]!, 'background done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('completed');
+  });
+
+  it('run cancel fans to in-flight callee sub-turns', async () => {
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'never finishes',
+    });
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+    await service.cancel(run.id);
+    await drain();
+    expect(claude.starts[1]!.cancelled).toBe(true);
+    const settled = await envelope;
+    expect(settled.status).toBe('error');
+    expect(settled.error).toContain('CALLEE_CANCELLED');
+    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
+  });
+
+  it('reports a failed endpoint self-check as a system item', async () => {
+    const { service, claude, itemDao } = setup();
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+      new Error('ECONNREFUSED'),
+    );
+    await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const note = itemDao.items.find(
+      (i) =>
+        i.kind === 'system' &&
+        JSON.parse(i.payload).message.includes('self-check failed'),
+    );
+    expect(note).toBeDefined();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('launches every level-2 callee when four 2-deep sync chains run at once', async () => {
+    // The sub-turn pool holds MAX_PARALLEL_SUB_TURNS (4) slots. Four DAG
+    // callers each sync-call a distinct level-1 callee (b1..b4); those four
+    // callee turns occupy every sub-turn slot and, being sync callers
+    // themselves, stay live while blocked on their own call. Each b then
+    // sync-calls a distinct level-2 callee (d1..d4) — a legal depth-2 chain
+    // the run must be able to launch. Since the four b-turns never release a
+    // slot (they are waiting on d), the four d-turns can never acquire one:
+    // the whole run wedges. Every d-turn should still start.
+    const { service, claude, callBroker } = setup();
+    const ids = [1, 2, 3, 4];
+    const agent = (id: string) => ({
+      id,
+      kind: 'agent' as const,
+      agent: 'claude' as const,
+      approval: 'auto' as const,
+    });
+    const wf: Workflow = {
+      name: 'nested-calls',
+      nodes: [
+        ...ids.map((i) => agent(`c${i}`)),
+        ...ids.map((i) => agent(`b${i}`)),
+        ...ids.map((i) => agent(`d${i}`)),
+      ],
+      edges: [
+        ...ids.map((i) => ({
+          from: `c${i}`,
+          to: `b${i}`,
+          kind: 'call' as const,
+        })),
+        ...ids.map((i) => ({
+          from: `b${i}`,
+          to: `d${i}`,
+          kind: 'call' as const,
+        })),
+      ],
+    };
+    const run = await service.startRun({
+      slug: 'nested',
+      workflow: triggered(wf),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // The four DAG callers are live; no callee has been invoked yet.
+    expect(claude.starts).toHaveLength(4);
+
+    // Each caller sync-calls its level-1 callee — this fills all four slots.
+    for (const i of ids) {
+      void callBroker.callAgent(run.id, `c${i}`, {
+        agent: `b${i}`,
+        message: `to-b${i}`,
+      });
+    }
+    await drain();
+    const afterB = claude.starts.map((t) => t.input.prompt);
+    for (const i of ids) {
+      expect(afterB).toContain(`to-b${i}`);
+    }
+
+    // Each level-1 callee sync-calls its own level-2 callee (depth 2, legal).
+    for (const i of ids) {
+      void callBroker.callAgent(run.id, `b${i}`, {
+        agent: `d${i}`,
+        message: `to-d${i}`,
+      });
+    }
+    await drain();
+
+    // Every level-2 callee turn must have launched.
+    const prompts = claude.starts.map((t) => t.input.prompt);
+    for (const i of ids) {
+      expect(prompts).toContain(`to-d${i}`);
+    }
+  });
+
+  it('caps concurrent depth-1 callee turns at MAX_PARALLEL_SUB_TURNS, then drains the queue', async () => {
+    // Deleting the sub-turn slot acquire/release would let all 5 fan-out
+    // callee turns spawn at once (up to 50 CLI agents in the worst case); this
+    // pins that only 4 run concurrently and the 5th launches when one frees.
+    const { service, claude, callBroker } = setup();
+    const agent = (id: string) => ({
+      id,
+      kind: 'agent' as const,
+      agent: 'claude' as const,
+      approval: 'auto' as const,
+    });
+    const ids = [1, 2, 3, 4, 5];
+    const wf: Workflow = {
+      name: 'fanout',
+      nodes: [agent('orch'), ...ids.map((i) => agent(`h${i}`))],
+      edges: ids.map((i) => ({
+        from: 'orch',
+        to: `h${i}`,
+        kind: 'call' as const,
+      })),
+    };
+    const run = await service.startRun({
+      slug: 'fanout',
+      workflow: triggered(wf),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const orchTurn = claude.starts.length; // the caller turn already launched
+    // Five async calls — all admitted by the broker, but the pool bounds how
+    // many callee TURNS run at once.
+    for (const i of ids) {
+      void callBroker.callAgent(run.id, 'orch', {
+        agent: `h${i}`,
+        message: `call ${i}`,
+        mode: 'async',
+      });
+    }
+    await drain();
+    const calleeTurns = () =>
+      claude.starts.slice(orchTurn).map((t) => t.input.prompt);
+    // Exactly four callee turns are live; the fifth waits for a slot.
+    expect(calleeTurns()).toHaveLength(4);
+    // Complete one callee → its slot frees → the queued fifth launches.
+    const firstCallee = claude.starts.slice(orchTurn)[0]!;
+    completeTurn(firstCallee, 'done');
+    await drain();
+    expect(calleeTurns()).toHaveLength(5);
+    for (const i of ids) {
+      expect(calleeTurns()).toContain(`call ${i}`);
+    }
+    // Drain the rest so the run can settle cleanly.
+    for (const turn of claude.starts.slice(orchTurn)) {
+      if (!turn.cancelled) {
+        completeTurn(turn, 'done');
+      }
+    }
+    completeTurn(claude.starts[orchTurn - 1]!, 'orch done');
+    await drain();
+  });
+
+  it('surfaces "endpoint unavailable" when the server has no bound port', async () => {
+    // port: null → mcpEndpointFor returns null → the self-check reports the
+    // sync unavailable branch (distinct from the fetch-failure branch).
+    const { service, claude, itemDao } = setup(null);
+    await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const note = itemDao.items.find(
+      (i) =>
+        i.kind === 'system' &&
+        JSON.parse(i.payload).message.includes('endpoint unavailable'),
+    );
+    expect(note).toBeDefined();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('settles a node failed (not a run-crashing throw) when adapter.start throws', async () => {
+    // prepareTurn's config-file write can throw synchronously out of
+    // adapter.start; drive()/startRun promise "never throws", so the node
+    // must settle failed and the run must still roll up.
+    const { service, claude, runDao, nodeDao } = setup();
+    claude.throwNextStart = new Error('ENOSPC');
+    await service.startRun({
+      slug: 'lin',
+      workflow: triggered({
+        name: 'lin',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // The throw did not spawn a live turn, and the node/run settled failed.
+    expect(claude.starts).toHaveLength(0);
+    expect(nodeDao.row('run-0', 'a')?.status).toBe('failed');
+    expect(runDao.runs.get('run-0')?.status).toBe('failed');
+  });
+
+  it('a callee whose start throws yields a CALL_FAILED envelope without wedging the run', async () => {
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.throwNextStart = new Error('EACCES');
+    const envelope = await callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'go',
+    });
+    expect(envelope.status).toBe('error');
+    if (envelope.status === 'error') {
+      expect(envelope.error).toContain('turn start failed');
+    }
+    await drain();
+    // The caller turn still finishes and the run rolls up (not wedged).
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('upserts callee node_state per call — the latest call wins', async () => {
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // First call → helper completes.
+    const first = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'first',
+    });
+    await drain();
+    completeTurn(claude.starts[1]!, 'ok-1');
+    await first;
+    await drain();
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('completed');
+    // Second call to the SAME callee → a fresh turn that fails; node_state
+    // must reflect the LATEST call, not stick on the first completion.
+    const second = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'second',
+    });
+    await drain();
+    claude.starts[2]!.emit({ type: 'error', message: 'boom' });
+    claude.starts[2]!.finish();
+    await second;
+    await drain();
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('failed');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
   });
 });

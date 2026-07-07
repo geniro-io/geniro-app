@@ -25,6 +25,27 @@ Everything else goes into a kind-directory:
 | `adapters/`    | CLI agent adapters — see `agent-adapters.md`                             |
 | `gateways/`    | Socket.IO gateways                                                       |
 
+## Thin controllers, fat services — and types in the types file
+
+- **All business logic lives in `services/`.** A controller method does three
+  things only: read the route/body input, make ONE call into a service, and
+  (when Nest doesn't do it) shape the HTTP response. Anything more — building
+  protocol servers, argument validation beyond the DTO layer, wire-envelope
+  construction, error mapping, orchestration — belongs in an `@Injectable()`
+  service the controller delegates to. Reference: `McpController` (route +
+  delegation only) → `McpServerService` (the whole MCP protocol).
+- **A controller file contains exactly one `@Controller` class** — no
+  module-scope functions, no helper classes, no exported constants, no private
+  helper methods carrying logic. A helper a controller "needs" is business
+  logic in disguise: move it into the service (or a pure `utils/` helper the
+  service imports).
+- **Shared types/interfaces/enums live in the module's root types file**
+  (`<name>.types.ts`), never declared in a service/controller file. The moment
+  a second file imports a type, it moves to the types file; a type used by
+  exactly one file may stay private (unexported) there. Reference: the call
+  runtime's `CallMode` / `CallEnvelope` / `CalleeTurnOutcome` /
+  `RunCallCapability` live in `graphs.types.ts`, not in the broker.
+
 Rules:
 
 - **Cross-module logic is extracted, never mirrored.** When a module needs logic another module already implements, extract it into the owning module (`utils/` for pure helpers, `services/` for DI) and import it across the boundary — never copy-adapt it. `v1/agents` is the shared agent-execution substrate (adapters, event bus, registries, run DAOs, `utils/event-to-item`, `utils/persist-item`); `v1/graphs` and future consumers import from it. Mirroring is how an invariant fix silently misses one copy — the M3 review found the same code duplicated four times before extraction.

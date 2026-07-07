@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import type { AgentKind, NodeStatus } from '../runs/runs.types';
+import type { AgentKind, ItemKind, NodeStatus } from '../runs/runs.types';
 
 /**
  * The workflow domain model — the zod half of the Geniro graph-core port
@@ -221,4 +221,65 @@ export interface NodeStateWire {
   startedAt: number | null;
   endedAt: number | null;
   error: string | null;
+}
+
+// ── Agent-to-agent call runtime ─────────────────────────────────────────────
+// The shared contract between the CallBroker (call semantics), the graph
+// executor (callee-turn mechanics), and the MCP server (the wire surface).
+
+/** How a caller wants its call to behave (the call_agent `mode` argument). */
+export const CALL_MODES = ['sync', 'async', 'fire_and_forget'] as const;
+export type CallMode = (typeof CALL_MODES)[number];
+
+/** How one callee sub-turn ended, as the executor reports it to the broker. */
+export interface CalleeTurnOutcome {
+  status: 'completed' | 'failed' | 'cancelled';
+  finalText: string | null;
+  error: string | null;
+}
+
+/**
+ * The envelope every call tool returns — NEVER bare text, so milestone 4's
+ * `status: 'question'` (the Q&A bridge) extends the contract without breaking
+ * existing callers. A discriminated union so an `ok` envelope always carries
+ * `result` and an `error` always carries `error` — the illegal mixed shapes
+ * are unrepresentable, and the JSON serializes identically to the old
+ * optional-field form. `result` carries `{ call_id, agent, text }` for a
+ * settled call and `{ call_id, agent, state }` for an accepted async/
+ * fire-and-forget start; `error` is a machine-prefixed one-liner
+ * (`DEPTH_LIMIT: …`). Milestone 4 adds a `{ status: 'question'; … }` arm.
+ */
+export type CallEnvelope =
+  { status: 'ok'; result: unknown } | { status: 'error'; error: string };
+
+/**
+ * What the graph executor exposes to the broker for one live run — the
+ * capability seam. The broker owns call SEMANTICS (ids, caps, sync/async
+ * bookkeeping); the executor owns MECHANICS (spawning the callee turn,
+ * transcript persistence, slot accounting, cancellation fan-out).
+ */
+export interface RunCallCapability {
+  /** Callees each caller may invoke: caller node id → callee agent nodes. */
+  readonly calleesOf: ReadonlyMap<string, readonly WorkflowAgentNode[]>;
+  /**
+   * Spawn one fresh callee turn; resolves once the turn fully settles.
+   * `depth` is the call's chain depth (1 = a top-level caller's callee): the
+   * executor bounds only depth-1 turns with its sub-turn slot pool, so a
+   * nested sync chain can't hold every slot while blocked on a deeper call.
+   */
+  launchCalleeTurn(
+    callee: WorkflowAgentNode,
+    message: string,
+    callId: string,
+    depth: number,
+  ): Promise<CalleeTurnOutcome>;
+  /** Persist one transcript item on the run's serialized write chain. */
+  persistItem(
+    nodeId: string | null,
+    kind: ItemKind,
+    role: string | null,
+    payload: unknown,
+  ): void;
+  /** True once the run's cancel was requested — refuse new calls. */
+  isCancelled(): boolean;
 }

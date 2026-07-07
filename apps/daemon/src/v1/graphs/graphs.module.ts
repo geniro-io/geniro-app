@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { McpController } from './controllers/mcp.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
+import { CallBroker } from './services/call-broker.service';
 import { GraphExecutorService } from './services/graph-executor.service';
+import { McpServerService } from './services/mcp-server.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 
 /**
@@ -15,13 +18,15 @@ import { WorkflowStoreService } from './services/workflow-store.service';
  */
 @Module({
   imports: [AgentsModule],
-  controllers: [WorkflowsController],
+  controllers: [WorkflowsController, McpController],
   providers: [
     {
       provide: WorkflowStoreService,
       useFactory: () => new WorkflowStoreService(),
     },
     GraphExecutorService,
+    CallBroker,
+    McpServerService,
   ],
   exports: [WorkflowStoreService],
 })

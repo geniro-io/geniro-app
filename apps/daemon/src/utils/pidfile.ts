@@ -1,12 +1,6 @@
-import { randomBytes } from 'node:crypto';
 import { renameSync, rmSync, writeFileSync } from 'node:fs';
 
 import { type DaemonInfo } from './handshake';
-
-/** Mint a per-launch loopback session token (256 bits, hex). */
-export function mintToken(): string {
-  return randomBytes(32).toString('hex');
-}
 
 /** Atomically write the pidfile (temp + rename) with owner-only permissions. */
 export function writePidfile(path: string, info: DaemonInfo): void {

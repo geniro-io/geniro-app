@@ -8,4 +8,11 @@ export interface RuntimeInfo {
   version: string;
   /** `Date.now()` captured at process start, for uptime reporting. */
   startedAt: number;
+  /**
+   * The actually-bound loopback port — null until the server listens
+   * (main.ts sets it from `onListening`; portFallback may shift it off the
+   * preferred port). Consumers that mint URLs (the MCP endpoint for caller
+   * agents) must treat null as "not routable yet".
+   */
+  port: number | null;
 }

@@ -818,8 +818,8 @@ export function Graphs({
                           </span>
                         ) : null}
                         <span className="block">
-                          Call edges are static permissions for now — running
-                          them lands with the call runtime.
+                          Call edges let this agent invoke its callees at
+                          runtime via the call_agent tool.
                         </span>
                       </NoteBox>
                     ) : null}

@@ -402,3 +402,41 @@ describe('validateEdgeRules', () => {
     expect(() => validateWorkflowGraph(nodes, edges)).not.toThrow();
   });
 });
+
+describe('validateRunnableGraph — call-only producers', () => {
+  it('rejects a call-only node feeding a data consumer (undefined ordering)', () => {
+    // trigger → orch; orch --call--> helper; helper --data--> reporter: the
+    // helper runs per call, so its output has no defined place in the walk.
+    const nodes = [trigger('t'), node('orch'), node('helper'), node('rep')];
+    const edges = [
+      data('t', 'orch'),
+      data('t', 'rep'),
+      call('orch', 'helper'),
+      data('helper', 'rep'),
+    ];
+    expect(errorCode(() => validateRunnableGraph(nodes, edges))).toBe(
+      'GRAPH_CALL_ONLY_PRODUCER',
+    );
+  });
+
+  it('a call-only node with no outgoing data edges is a legal team member', () => {
+    const nodes = [trigger('t'), node('orch'), node('helper')];
+    const edges = [data('t', 'orch'), call('orch', 'helper')];
+    expect(errorCode(() => validateRunnableGraph(nodes, edges))).toBe(
+      undefined,
+    );
+  });
+
+  it('a callable node WITH a data input may feed consumers (it runs in the DAG)', () => {
+    const nodes = [trigger('t'), node('orch'), node('dual'), node('rep')];
+    const edges = [
+      data('t', 'orch'),
+      data('t', 'dual'),
+      call('orch', 'dual'),
+      data('dual', 'rep'),
+    ];
+    expect(errorCode(() => validateRunnableGraph(nodes, edges))).toBe(
+      undefined,
+    );
+  });
+});

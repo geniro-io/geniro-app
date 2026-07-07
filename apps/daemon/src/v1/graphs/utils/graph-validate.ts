@@ -2,6 +2,7 @@ import { BadRequestException } from '@packages/common';
 
 import type { WorkflowEdge, WorkflowNode } from '../graphs.types';
 import { NODE_CONNECTION_RULES } from '../graphs.types';
+import { onDemandNodeIds } from './graph-order';
 
 /**
  * Structural graph validation, ported from Geniro's
@@ -191,7 +192,7 @@ export function validateWorkflowGraph(
  */
 export function validateRunnableGraph(
   nodes: readonly { id: string; kind: string; name?: string }[],
-  edges: readonly { from: string; to: string }[],
+  edges: readonly { from: string; to: string; kind: string }[],
 ): void {
   if (nodes.length === 0) {
     throw new BadRequestException(
@@ -217,5 +218,24 @@ export function validateRunnableGraph(
       'GRAPH_UNTRIGGERED_NODE',
       `Node '${untriggered.name ?? untriggered.id}' has no incoming edge — connect it downstream of a trigger or wire a call edge into it`,
     );
+  }
+  // A call-only node (call target, no data input) runs once per call, on
+  // demand — its "final text" has no defined place in the DAG order, so it
+  // may not feed data consumers. Give it a data input (it then also runs as
+  // a normal DAG node) or drop the outgoing data edge. `onDemandNodeIds` is
+  // the SAME predicate the executor uses to exclude these nodes from the DAG
+  // walk — sharing it keeps validation and execution from ever disagreeing.
+  const onDemand = onDemandNodeIds(nodes, edges);
+  for (const node of nodes) {
+    if (!onDemand.has(node.id)) {
+      continue;
+    }
+    const feeds = edges.find((e) => e.kind === 'data' && e.from === node.id);
+    if (feeds) {
+      throw new BadRequestException(
+        'GRAPH_CALL_ONLY_PRODUCER',
+        `Node '${node.name ?? node.id}' is call-only (runs on demand) — its output cannot feed '${feeds.to}' through a data edge; wire a data input into it or remove that edge`,
+      );
+    }
   }
 }

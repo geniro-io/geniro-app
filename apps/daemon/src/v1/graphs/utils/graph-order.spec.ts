@@ -2,7 +2,7 @@ import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
 import type { WorkflowEdge, WorkflowNode } from '../graphs.types';
-import { buildEdgeMaps, computeRunOrder } from './graph-order';
+import { buildEdgeMaps, computeRunOrder, onDemandNodeIds } from './graph-order';
 
 function node(id: string): WorkflowNode {
   return { id, kind: 'agent', agent: 'claude', approval: 'auto' };
@@ -92,5 +92,25 @@ describe('buildEdgeMaps', () => {
     ]);
     expect(producersOf.get('callee')!.size).toBe(0);
     expect(consumersOf.get('a')!.size).toBe(0);
+  });
+});
+
+describe('onDemandNodeIds', () => {
+  it('marks call targets with no data input as on-demand', () => {
+    const nodes = [node('orch'), node('helper')];
+    expect(onDemandNodeIds(nodes, [call('orch', 'helper')])).toEqual(
+      new Set(['helper']),
+    );
+  });
+
+  it('a call target that ALSO has a data producer runs as a normal DAG node', () => {
+    const nodes = [node('t'), node('orch'), node('helper')];
+    const edges = [data('t', 'helper'), call('orch', 'helper')];
+    expect(onDemandNodeIds(nodes, edges).size).toBe(0);
+  });
+
+  it('nodes without call edges are never on-demand', () => {
+    const nodes = [node('a'), node('b')];
+    expect(onDemandNodeIds(nodes, [data('a', 'b')]).size).toBe(0);
   });
 });

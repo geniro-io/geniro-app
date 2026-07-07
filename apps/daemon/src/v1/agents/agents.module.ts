@@ -1,5 +1,8 @@
+import { join } from 'node:path';
+
 import { Module } from '@nestjs/common';
 
+import { environment } from '../../environments';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CursorAdapter } from './adapters/cursor/cursor.adapter';
 import { ChatController } from './controllers/chat.controller';
@@ -30,7 +33,15 @@ import { ProcessRegistry } from './services/process-registry';
     ItemDao,
     NodeStateDao,
     RunDao,
-    { provide: ClaudeAdapter, useFactory: () => new ClaudeAdapter() },
+    {
+      provide: ClaudeAdapter,
+      // Per-turn --mcp-config files live under the daemon's own userData tmp
+      // (never the OS-shared tmpdir) — they carry the per-run call token.
+      useFactory: () =>
+        new ClaudeAdapter({
+          mcpConfigDir: join(environment.userDataDir, 'tmp'),
+        }),
+    },
     { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
   ],
   exports: [

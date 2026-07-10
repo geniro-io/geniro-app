@@ -1,6 +1,7 @@
 import { type ChildProcess, execFile } from 'node:child_process';
 
 import { resolveAgentBinary } from './agent-binary';
+import { buildChildEnv } from './child-env';
 import { GENIRO_MCP_SERVER_KEY } from './cursor-mcp-entry';
 
 /** `cursor-agent mcp enable` must never wedge a turn start — bound it. */
@@ -28,16 +29,21 @@ export function enableGeniroMcpServer(
 ): Promise<void> {
   const run = options.execFileFn ?? execFile;
   return new Promise((resolve) => {
-    const child = run(
-      resolveAgentBinary('cursor-agent'),
-      ['mcp', 'enable', GENIRO_MCP_SERVER_KEY],
-      {
-        cwd,
-        timeout: options.timeoutMs ?? ENABLE_TIMEOUT_MS,
-        encoding: 'utf8',
-      },
-      () => resolve(),
-    );
-    options.onSpawn?.(child);
+    try {
+      const child = run(
+        resolveAgentBinary('cursor-agent'),
+        ['mcp', 'enable', GENIRO_MCP_SERVER_KEY],
+        {
+          cwd,
+          timeout: options.timeoutMs ?? ENABLE_TIMEOUT_MS,
+          encoding: 'utf8',
+          env: buildChildEnv(),
+        },
+        () => resolve(),
+      );
+      options.onSpawn?.(child);
+    } catch {
+      resolve();
+    }
   });
 }

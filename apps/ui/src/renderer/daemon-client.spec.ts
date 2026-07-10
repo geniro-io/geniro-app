@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
   const emit = vi.fn();
   const close = vi.fn();
   const socket = {
+    connected: false,
     on: (event: string, h: (...args: unknown[]) => void) => {
       handlers[event] = h;
     },
@@ -22,7 +23,7 @@ const mocks = vi.hoisted(() => {
     emit,
     close,
   };
-  return { handlers, ref, emit, close, io: vi.fn(() => socket) };
+  return { handlers, ref, emit, close, socket, io: vi.fn(() => socket) };
 });
 
 vi.mock('socket.io-client', () => ({ io: mocks.io }));
@@ -35,13 +36,19 @@ const handle: DaemonHandle = {
 };
 
 function fireConnect(): void {
+  mocks.socket.connected = true;
   mocks.handlers.connect?.();
+}
+
+function fireJoined(runId: string): void {
+  mocks.ref.any?.('joined', { runId });
 }
 
 beforeEach(() => {
   mocks.emit.mockClear();
   mocks.close.mockClear();
   mocks.io.mockClear();
+  mocks.socket.connected = false;
   mocks.ref.any = null;
   for (const key of Object.keys(mocks.handlers)) {
     delete mocks.handlers[key];
@@ -49,12 +56,12 @@ beforeEach(() => {
 });
 
 describe('DaemonClient', () => {
-  it('fires onReconnect only on a re-connect, and re-joins the active room each connect', () => {
+  it('fires onReconnect only after the active room is re-joined', async () => {
     const client = new DaemonClient(handle, {});
     const reconnects: number[] = [];
     client.onReconnect(() => reconnects.push(1));
     client.connect();
-    client.joinRun('r1');
+    const initialJoin = client.joinRun('r1');
 
     // First connect is NOT a reconnect: no onReconnect, but the active room is
     // (re-)joined so live items resume.
@@ -62,12 +69,17 @@ describe('DaemonClient', () => {
     fireConnect();
     expect(reconnects).toHaveLength(0);
     expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r1' });
+    fireJoined('r1');
+    await initialJoin;
 
-    // Second connect IS a reconnect: onReconnect fires and the room is re-joined.
+    // Second connect IS a reconnect, but replay is held until the joined event.
     mocks.emit.mockClear();
     fireConnect();
-    expect(reconnects).toHaveLength(1);
+    expect(reconnects).toHaveLength(0);
     expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r1' });
+    fireJoined('r1');
+    await Promise.resolve();
+    expect(reconnects).toHaveLength(1);
   });
 
   it('routes only `item` events from onAny to onItem subscribers', () => {
@@ -92,10 +104,28 @@ describe('DaemonClient', () => {
     expect(items).toEqual([item]);
   });
 
-  it('leaveRun clears the active room so a later reconnect does not rejoin it', () => {
+  it('forwards a question answer in the exact verdict payload', () => {
     const client = new DaemonClient(handle, {});
     client.connect();
-    client.joinRun('r1');
+    fireConnect();
+
+    client.sendVerdict('r1', 'req-1', true, 'Blue');
+
+    expect(mocks.emit).toHaveBeenCalledWith('verdict', {
+      runId: 'r1',
+      requestId: 'req-1',
+      allow: true,
+      answer: 'Blue',
+    });
+  });
+
+  it('leaveRun clears the active room so a later reconnect does not rejoin it', async () => {
+    const client = new DaemonClient(handle, {});
+    client.connect();
+    fireConnect();
+    const joined = client.joinRun('r1');
+    fireJoined('r1');
+    await joined;
     client.leaveRun('r1');
 
     mocks.emit.mockClear();

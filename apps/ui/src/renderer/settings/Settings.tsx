@@ -12,6 +12,19 @@ import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
 
+function normalizedCliPaths(
+  paths: Partial<Record<CliKind, string>>,
+): Partial<Record<CliKind, string>> {
+  const cliPaths: Partial<Record<CliKind, string>> = {};
+  for (const kind of CLI_KINDS) {
+    const path = paths[kind]?.trim();
+    if (path) {
+      cliPaths[kind] = path;
+    }
+  }
+  return cliPaths;
+}
+
 /**
  * Post-onboarding configuration. Reuses the onboarding agent-config UI
  * (`AgentConfigList`) so binary paths and the Cursor key are edited the same way
@@ -33,6 +46,12 @@ export function Settings(): React.JSX.Element {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const checkForUpdatesDirtyRef = useRef(false);
+  const persistGenerationRef = useRef({
+    cliPaths: 0,
+    checkForUpdates: 0,
+    other: 0,
+  });
 
   const keyPresent = (hasStoredKey ?? false) || cursorKey.trim() !== '';
 
@@ -48,6 +67,14 @@ export function Settings(): React.JSX.Element {
     () => () => {
       if (pathTimer.current) {
         clearTimeout(pathTimer.current);
+        pathTimer.current = null;
+        void window.geniro
+          .updateSettings({
+            cliPaths: normalizedCliPaths(binaryPathsRef.current),
+          })
+          .catch((err: unknown) => {
+            console.error('failed to flush CLI path settings on unmount', err);
+          });
       }
       if (flashTimer.current) {
         clearTimeout(flashTimer.current);
@@ -60,7 +87,9 @@ export function Settings(): React.JSX.Element {
     void window.geniro.getSettings().then((s) => {
       // Seed saved overrides; the detection effect backfills the rest.
       setBinaryPaths((prev) => ({ ...s.cliPaths, ...prev }));
-      setCheckForUpdates(s.checkForUpdates);
+      if (!checkForUpdatesDirtyRef.current) {
+        setCheckForUpdates(s.checkForUpdates);
+      }
     });
     void window.geniro.detectClis().then(setClis);
     void window.geniro.hasSecret('cursor.apiKey').then(setHasStoredKey);
@@ -97,12 +126,24 @@ export function Settings(): React.JSX.Element {
 
   const persist = useCallback(
     async (patch: Partial<SettingsShape>): Promise<void> => {
+      const domain =
+        patch.cliPaths !== undefined
+          ? 'cliPaths'
+          : patch.checkForUpdates !== undefined
+            ? 'checkForUpdates'
+            : 'other';
+      const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
         await window.geniro.updateSettings(patch);
+        if (generation !== persistGenerationRef.current[domain]) {
+          return;
+        }
         flashSaved();
       } catch (err) {
-        setError(String(err));
+        if (generation === persistGenerationRef.current[domain]) {
+          setError(String(err));
+        }
       }
     },
     [flashSaved],
@@ -114,14 +155,10 @@ export function Settings(): React.JSX.Element {
       clearTimeout(pathTimer.current);
     }
     pathTimer.current = setTimeout(() => {
-      const cliPaths: Partial<Record<CliKind, string>> = {};
-      for (const kind of CLI_KINDS) {
-        const path = binaryPathsRef.current[kind]?.trim();
-        if (path) {
-          cliPaths[kind] = path;
-        }
-      }
-      void persist({ cliPaths });
+      pathTimer.current = null;
+      void persist({
+        cliPaths: normalizedCliPaths(binaryPathsRef.current),
+      });
     }, 600);
   }, [persist]);
 
@@ -169,6 +206,7 @@ export function Settings(): React.JSX.Element {
 
   const onToggleUpdates = useCallback(
     (next: boolean): void => {
+      checkForUpdatesDirtyRef.current = true;
       setCheckForUpdates(next);
       void persist({ checkForUpdates: next });
     },

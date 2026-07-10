@@ -119,6 +119,7 @@ describe('ApprovalCard', () => {
     expect(answerButton.hasAttribute('disabled')).toBe(true);
 
     const input = el.querySelector('input')!;
+    expect(input.maxLength).toBe(32_768);
     act(() => {
       // React reads the value through its own tracker — set via the native
       // setter so the change event carries it.
@@ -213,13 +214,14 @@ describe('ApprovalCard', () => {
     ],
   };
 
-  it('multi-question card hides the free-text box — one answer cannot address several questions', () => {
+  it('multi-question card collects every option before submitting one combined answer', () => {
+    const onRespond = vi.fn();
     const el = render(
       <ApprovalCard
         toolName="AskUserQuestion"
         input={MULTI_QUESTION_INPUT}
         verdict={null}
-        onRespond={vi.fn()}
+        onRespond={onRespond}
       />,
     );
     // Both questions render with their option buttons...
@@ -230,10 +232,36 @@ describe('ApprovalCard', () => {
     expect(el.querySelector('input')).toBeNull();
     const labels = [...el.querySelectorAll('button')].map((b) => b.textContent);
     expect(labels).not.toContain('Answer');
-    // Decline stays, and each question's options still answer with their label.
+    // Decline stays, and each question's options are staged locally.
     expect(labels).toContain('Decline');
     expect(labels).toContain('Blue');
     expect(labels).toContain('Large');
+    const submit = [...el.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Submit answers',
+    )!;
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    act(() => {
+      [...el.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Blue')!
+        .click();
+    });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    act(() => {
+      [...el.querySelectorAll('button')]
+        .find((button) => button.textContent === 'Large')!
+        .click();
+    });
+    expect(submit.hasAttribute('disabled')).toBe(false);
+    act(() => {
+      submit.click();
+    });
+    expect(onRespond).toHaveBeenCalledWith(
+      true,
+      'Which color should the header be?: Blue\nWhich font size?: Large',
+    );
   });
 
   it('tones a settled verdict by outcome — success for allowed, destructive for denied', () => {

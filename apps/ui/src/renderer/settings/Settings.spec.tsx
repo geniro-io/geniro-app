@@ -32,14 +32,15 @@ const geniro = {
 };
 
 let container: HTMLDivElement;
-let root: Root;
+let root: Root | null;
 
 async function mount(): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
-  root = createRoot(container);
+  const mountedRoot = createRoot(container);
+  root = mountedRoot;
   await act(async () => {
-    root.render(<Settings />);
+    mountedRoot.render(<Settings />);
   });
 }
 
@@ -58,7 +59,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(async () => root.unmount());
+  if (root) {
+    await act(async () => root?.unmount());
+  }
   container.remove();
 });
 
@@ -68,6 +71,30 @@ describe('Settings updates section', () => {
 
     const toggle = container.querySelector('[role="switch"]');
     expect(toggle?.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('does not overwrite a user toggle when the initial settings read resolves late', async () => {
+    let resolveSettings!: (value: SettingsShape) => void;
+    geniro.getSettings.mockReturnValueOnce(
+      new Promise<SettingsShape>((resolve) => {
+        resolveSettings = resolve;
+      }),
+    );
+    await mount();
+    const toggle =
+      container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+
+    await act(async () => {
+      resolveSettings({ ...settings, checkForUpdates: true });
+      await Promise.resolve();
+    });
+
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
   });
 
   it('auto-saves the update toggle on flip — no Save button', async () => {
@@ -90,6 +117,41 @@ describe('Settings updates section', () => {
     );
     // The switch reflects the new state immediately.
     expect(toggle.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('ignores an older toggle write failure after the latest write succeeds', async () => {
+    let rejectFirst!: (reason: unknown) => void;
+    let resolveSecond!: (value: SettingsShape) => void;
+    geniro.updateSettings
+      .mockReturnValueOnce(
+        new Promise<SettingsShape>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<SettingsShape>((resolve) => {
+          resolveSecond = resolve;
+        }),
+      );
+    await mount();
+    const toggle =
+      container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      resolveSecond(settings);
+      await Promise.resolve();
+      rejectFirst(new Error('older write failed'));
+      await Promise.resolve();
+    });
+
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(container.textContent).not.toContain('older write failed');
   });
 
   it('runs a manual update check and reports the outcome', async () => {
@@ -129,5 +191,33 @@ describe('Settings updates section', () => {
       check.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(container.textContent).toContain('ipc broke');
+  });
+
+  it('flushes a pending CLI path edit when Settings unmounts', async () => {
+    await mount();
+    const claudeToggle = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.includes('claude'),
+    )!;
+    await act(async () => {
+      claudeToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const input =
+      container.querySelector<HTMLInputElement>('#agent-path-claude')!;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setValue?.call(input, '  /opt/new-claude  ');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    expect(geniro.updateSettings).not.toHaveBeenCalled();
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      cliPaths: { claude: '/opt/new-claude' },
+    });
   });
 });

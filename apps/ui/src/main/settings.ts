@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { app } from 'electron';
 
 import { DEFAULT_SETTINGS, type Settings } from '../shared/contracts';
+import { settingsPatchSchema } from './ipc-schemas';
 
 /**
  * Non-secret app settings, persisted as a plain JSON file in Electron's
@@ -28,10 +29,15 @@ export function readSettings(): Settings {
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<Settings>;
+    const parsed = settingsPatchSchema.safeParse(
+      JSON.parse(readFileSync(path, 'utf8')),
+    );
+    if (!parsed.success) {
+      return { ...DEFAULT_SETTINGS };
+    }
     // Merge over defaults so a settings file written by an older version still
     // yields a complete object as the schema grows.
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    return { ...DEFAULT_SETTINGS, ...parsed.data };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

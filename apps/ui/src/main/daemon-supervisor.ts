@@ -20,6 +20,7 @@ const HEALTH_POLL_INTERVAL_MS = 200;
 /** Per-attempt cap on the /health fetch — a wedged-but-listening daemon must
  * not stall start() on undici's multi-minute default. */
 const HEALTH_FETCH_TIMEOUT_MS = 2_000;
+const KILL_CONFIRM_MS = 1_000;
 /**
  * Shutdown-timing invariant across the process boundary: UI grace > daemon
  * registry drain (SHUTDOWN_DRAIN_MS = 5s, apps/daemon …/services/process-registry.ts)
@@ -96,7 +97,7 @@ function defaultIsAlive(pid: number): boolean {
   }
 }
 
-async function defaultCheckHealth(
+export async function defaultCheckHealth(
   host: string,
   port: number,
 ): Promise<boolean> {
@@ -104,6 +105,29 @@ async function defaultCheckHealth(
     // /health/check is the @packages/http-server readiness endpoint (cloned
     // from Geniro), unauthenticated and version-neutral.
     const res = await fetch(`http://${host}:${port}/health/check`, {
+      signal: AbortSignal.timeout(HEALTH_FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      return false;
+    }
+    const body: unknown = await res.json();
+    return (
+      typeof body === 'object' &&
+      body !== null &&
+      (body as { status?: unknown }).status === 'ok' &&
+      typeof (body as { version?: unknown }).version === 'string'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function defaultCheckIdentity(
+  handle: DaemonHandle,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chats`, {
+      headers: { authorization: `Bearer ${handle.token}` },
       signal: AbortSignal.timeout(HEALTH_FETCH_TIMEOUT_MS),
     });
     return res.ok;
@@ -131,6 +155,7 @@ export interface DaemonSupervisorOptions {
   readDaemonInfo?: (path: string) => DaemonInfo | null;
   isAlive?: (pid: number) => boolean;
   checkHealth?: (host: string, port: number) => Promise<boolean>;
+  checkIdentity?: (handle: DaemonHandle) => Promise<boolean>;
   killPid?: (pid: number, signal: NodeJS.Signals) => void;
   resolveEntry?: () => string;
   bundledVersion?: (entry: string) => string | null;
@@ -150,6 +175,11 @@ export class DaemonSupervisor {
   private child: ChildProcess | null = null;
   private owned = false;
   private handle: DaemonHandle | null = null;
+  private currentPid: number | null = null;
+  private startPromise: Promise<DaemonHandle> | null = null;
+  private restartPromise: Promise<DaemonHandle> | null = null;
+  private restartGeneration = 0;
+  private stopping = false;
 
   private readonly spawn: typeof nodeSpawn;
   private readonly readInfo: (path: string) => DaemonInfo | null;
@@ -158,6 +188,7 @@ export class DaemonSupervisor {
     host: string,
     port: number,
   ) => Promise<boolean>;
+  private readonly checkIdentity: (handle: DaemonHandle) => Promise<boolean>;
   private readonly killPid: (pid: number, signal: NodeJS.Signals) => void;
   private readonly resolveEntry: () => string;
   private readonly bundledVersion: (entry: string) => string | null;
@@ -170,6 +201,7 @@ export class DaemonSupervisor {
     this.readInfo = options.readDaemonInfo ?? readDaemonInfo;
     this.isAlive = options.isAlive ?? defaultIsAlive;
     this.checkHealth = options.checkHealth ?? defaultCheckHealth;
+    this.checkIdentity = options.checkIdentity ?? defaultCheckIdentity;
     this.killPid =
       options.killPid ?? ((pid, signal) => process.kill(pid, signal));
     this.resolveEntry = options.resolveEntry ?? resolveDaemonEntry;
@@ -180,44 +212,129 @@ export class DaemonSupervisor {
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
   }
 
-  async start(): Promise<DaemonHandle> {
+  start(): Promise<DaemonHandle> {
+    if (this.stopping) {
+      return Promise.reject(new Error('daemon supervisor is stopping'));
+    }
+    if (this.startPromise) {
+      return this.startPromise;
+    }
+    const pending = this.startNow();
+    this.startPromise = pending;
+    const clear = (): void => {
+      if (this.startPromise === pending) {
+        this.startPromise = null;
+      }
+    };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  private async startNow(): Promise<DaemonHandle> {
     const entry = this.resolveEntry();
     const existing = this.readInfo(pidfilePath());
-    if (
-      existing &&
-      this.isAlive(existing.pid) &&
-      (await this.checkHealth(existing.host, existing.port))
-    ) {
-      const bundled = this.bundledVersion(entry);
-      if (bundled === null || existing.version === bundled) {
-        // Reuse a daemon another UI instance already started.
-        this.owned = false;
-        this.handle = toHandle(existing);
-        return this.handle;
+    if (existing && this.isAlive(existing.pid)) {
+      const existingHandle = toHandle(existing);
+      if (
+        (await this.checkHealth(existing.host, existing.port)) &&
+        (await this.checkIdentity(existingHandle))
+      ) {
+        const bundled = this.bundledVersion(entry);
+        if (bundled === null || existing.version === bundled) {
+          // Reuse a daemon another UI instance already started.
+          this.owned = false;
+          this.currentPid = existing.pid;
+          this.handle = existingHandle;
+          return this.handle;
+        }
+        await this.terminate(existing.pid);
+      } else {
+        throw new Error(
+          `daemon pid ${existing.pid} is alive but failed identity/health verification; refusing to signal or start a second daemon`,
+        );
       }
-      // Healthy but a different version (left over across an app update):
-      // adopting it would pair a new renderer with an old daemon API. Tear it
-      // down and respawn the bundled version.
-      await this.terminate(existing.pid);
     }
-    // Not reusable (absent, dead, unhealthy, or stale-version): drop any stale
-    // pidfile BEFORE spawning so the poll below can't adopt the old descriptor.
-    if (existing) {
-      try {
-        this.removePidfile(pidfilePath());
-      } catch {
-        // best-effort
-      }
+    this.removePidfileBestEffort();
+    if (this.stopping) {
+      throw new Error('daemon supervisor stopped during startup');
     }
     return this.spawnDaemon(entry);
+  }
+
+  restart(): Promise<DaemonHandle> {
+    if (this.stopping) {
+      return Promise.reject(new Error('daemon supervisor is stopping'));
+    }
+    this.restartGeneration += 1;
+    if (this.restartPromise) {
+      return this.restartPromise;
+    }
+    const pending = this.restartUntilCurrent();
+    this.restartPromise = pending;
+    const clear = (): void => {
+      if (this.restartPromise === pending) {
+        this.restartPromise = null;
+      }
+    };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  private async restartUntilCurrent(): Promise<DaemonHandle> {
+    let handle: DaemonHandle;
+    do {
+      const generation = this.restartGeneration;
+      handle = await this.restartNow();
+      if (generation === this.restartGeneration) {
+        return handle;
+      }
+    } while (!this.stopping);
+    throw new Error('daemon supervisor stopped during restart');
+  }
+
+  private async restartNow(): Promise<DaemonHandle> {
+    const pid = this.currentPid ?? this.readInfo(pidfilePath())?.pid ?? null;
+    if (pid !== null && this.isAlive(pid)) {
+      const current = this.handle;
+      if (
+        !current ||
+        !(await this.checkHealth(current.host, current.port)) ||
+        !(await this.checkIdentity(current))
+      ) {
+        throw new Error(
+          `daemon pid ${pid} failed identity/health verification; refusing to signal it`,
+        );
+      }
+      await this.terminate(pid);
+    }
+    this.owned = false;
+    this.child = null;
+    this.handle = null;
+    this.currentPid = null;
+    this.removePidfileBestEffort();
+    if (this.stopping) {
+      throw new Error('daemon supervisor stopped during restart');
+    }
+    return this.spawnDaemon(this.resolveEntry());
+  }
+
+  private removePidfileBestEffort(): void {
+    try {
+      this.removePidfile(pidfilePath());
+    } catch {
+      // best-effort
+    }
   }
 
   /** SIGTERM (lets Nest shutdown hooks drain), SIGKILL past the grace. */
   private async terminate(pid: number): Promise<void> {
     try {
       this.killPid(pid, 'SIGTERM');
-    } catch {
-      return; // already gone
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') {
+        return;
+      }
+      throw err;
     }
     const deadline = Date.now() + this.shutdownGraceMs;
     while (Date.now() < deadline) {
@@ -228,9 +345,20 @@ export class DaemonSupervisor {
     }
     try {
       this.killPid(pid, 'SIGKILL');
-    } catch {
-      // already gone
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        throw err;
+      }
+      return;
     }
+    const killDeadline = Date.now() + KILL_CONFIRM_MS;
+    while (Date.now() < killDeadline) {
+      if (!this.isAlive(pid)) {
+        return;
+      }
+      await delay(this.pollIntervalMs);
+    }
+    throw new Error(`daemon pid ${pid} remained alive after SIGKILL`);
   }
 
   private async spawnDaemon(entry: string): Promise<DaemonHandle> {
@@ -247,6 +375,9 @@ export class DaemonSupervisor {
     // so the daemon can find `claude` / `cursor-agent`. Dev launches already
     // run from a terminal with the right PATH.
     const shellPath = app.isPackaged ? await loginShellPath() : null;
+    if (this.stopping) {
+      throw new Error('daemon supervisor stopped before daemon spawn');
+    }
     // Settings cliPaths overrides ride the daemon env (GENIRO_-prefixed, so
     // they are stripped from every agent child); the daemon resolves them into
     // the spawn command for headless turns AND PTY mirrors. A change in
@@ -278,14 +409,20 @@ export class DaemonSupervisor {
       process.stderr.write(`[daemon] ${b}`),
     );
     child.on('exit', () => {
-      if (this.owned) {
+      if (this.child === child) {
         this.handle = null;
         this.child = null;
+        this.currentPid = null;
+        this.owned = false;
       }
     });
 
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      if (this.stopping) {
+        await this.stopChild(child);
+        throw new Error('daemon supervisor stopped during daemon startup');
+      }
       // Only adopt the pidfile OUR child wrote (pid match) — never a stale
       // descriptor that happens to still answer /health on another port.
       const info = this.readInfo(pidfilePath());
@@ -295,6 +432,7 @@ export class DaemonSupervisor {
         (await this.checkHealth(info.host, info.port))
       ) {
         this.handle = toHandle(info);
+        this.currentPid = info.pid;
         return this.handle;
       }
       if (child.exitCode !== null) {
@@ -303,6 +441,13 @@ export class DaemonSupervisor {
         );
       }
       await delay(this.pollIntervalMs);
+    }
+    await this.stopChild(child);
+    if (this.child === child) {
+      this.handle = null;
+      this.child = null;
+      this.currentPid = null;
+      this.owned = false;
     }
     throw new Error('daemon did not become healthy within the timeout');
   }
@@ -316,11 +461,27 @@ export class DaemonSupervisor {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    if (this.startPromise) {
+      await this.startPromise.catch(() => undefined);
+    }
+    if (this.restartPromise) {
+      await this.restartPromise.catch(() => undefined);
+    }
     const child = this.child;
     if (!this.owned || !child || child.exitCode !== null) {
       this.handle = null;
+      this.currentPid = null;
       return;
     }
+    await this.stopChild(child);
+    this.handle = null;
+    this.child = null;
+    this.currentPid = null;
+    this.owned = false;
+  }
+
+  private async stopChild(child: ChildProcess): Promise<void> {
     child.kill('SIGTERM');
     const exited = await Promise.race([
       new Promise<boolean>((resolve) =>
@@ -331,7 +492,5 @@ export class DaemonSupervisor {
     if (!exited) {
       child.kill('SIGKILL');
     }
-    this.handle = null;
-    this.child = null;
   }
 }

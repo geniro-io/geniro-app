@@ -2,6 +2,7 @@ import { type ChildProcess, execFile } from 'node:child_process';
 
 import type { AgentKind } from '../../runs/runs.types';
 import { resolveAgentBinary } from './agent-binary';
+import { buildChildEnv } from './child-env';
 
 export interface ResolveAgentVersionOptions {
   /** Kill a hung `--version` child after this long. */
@@ -30,7 +31,11 @@ export function resolveAgentVersion(
     const child = run(
       resolveAgentBinary(kind),
       ['--version'],
-      { timeout: options.timeoutMs ?? VERSION_TIMEOUT_MS, encoding: 'utf8' },
+      {
+        timeout: options.timeoutMs ?? VERSION_TIMEOUT_MS,
+        encoding: 'utf8',
+        env: buildChildEnv(),
+      },
       (err, stdout) => {
         if (err) {
           resolve(null);

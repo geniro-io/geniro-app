@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { Settings } from '../shared/contracts';
 
 const mocks = vi.hoisted(() => ({
   app: {
@@ -10,10 +12,9 @@ const mocks = vi.hoisted(() => ({
   },
   getSecret: vi.fn((): string | null => null),
   loginShellPath: vi.fn(async () => null),
-  readSettings: vi.fn(() => ({
+  readSettings: vi.fn((): Settings => ({
     onboardingComplete: true,
     projectFolder: null,
-    defaultModel: null,
     cliPaths: { claude: '/opt/tools/claude' },
     checkForUpdates: true,
   })),
@@ -30,6 +31,8 @@ import type { DaemonInfo } from './daemon-pidfile';
 import {
   DaemonSupervisor,
   type DaemonSupervisorOptions,
+  defaultCheckHealth,
+  defaultCheckIdentity,
 } from './daemon-supervisor';
 
 class FakeChild extends EventEmitter {
@@ -68,14 +71,19 @@ interface Harness {
 function harness(opts: {
   pidfile: DaemonInfo | null;
   alive?: (pid: number) => boolean;
-  healthy?: boolean;
+  healthy?: boolean | ((current: DaemonInfo | null) => boolean);
+  identified?: boolean;
   bundled?: string | null;
+  killPid?: (pid: number, signal: NodeJS.Signals) => void;
+  onKill?: (pid: number, signal: NodeJS.Signals) => void;
   graceMs?: number;
+  pollMs?: number;
 }): Harness {
   let pidfile = opts.pidfile;
   const child = new FakeChild();
   const spawned: { env?: NodeJS.ProcessEnv }[] = [];
   const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+  const killedPids = new Set<number>();
   const removed: string[] = [];
   const options: DaemonSupervisorOptions = {
     spawn: ((cmd: string, args: string[], o: { env?: NodeJS.ProcessEnv }) => {
@@ -87,13 +95,25 @@ function harness(opts: {
       return child;
     }) as unknown as DaemonSupervisorOptions['spawn'],
     readDaemonInfo: () => pidfile,
-    isAlive: opts.alive ?? (() => true),
-    checkHealth: async () => opts.healthy ?? true,
-    killPid: (pid, signal) => kills.push({ pid, signal }),
+    isAlive: opts.alive ?? ((pid) => !killedPids.has(pid)),
+    checkHealth: async () =>
+      typeof opts.healthy === 'function'
+        ? opts.healthy(pidfile)
+        : (opts.healthy ?? true),
+    checkIdentity: async () => opts.identified ?? true,
+    killPid:
+      opts.killPid ??
+      ((pid, signal) => {
+        kills.push({ pid, signal });
+        if (signal === 'SIGKILL') {
+          killedPids.add(pid);
+        }
+        opts.onKill?.(pid, signal);
+      }),
     resolveEntry: () => '/bundle/daemon/dist/main.js',
     bundledVersion: () => (opts.bundled === undefined ? '0.2.0' : opts.bundled),
     removePidfile: (path) => removed.push(path),
-    pollIntervalMs: 1,
+    pollIntervalMs: opts.pollMs ?? 1,
     shutdownGraceMs: opts.graceMs ?? 15,
   };
   return {
@@ -110,6 +130,53 @@ function harness(opts: {
 
 beforeEach(() => {
   mocks.getSecret.mockReturnValue(null);
+  mocks.readSettings.mockReturnValue({
+    onboardingComplete: true,
+    projectFolder: null,
+    cliPaths: { claude: '/opt/tools/claude' },
+    checkForUpdates: true,
+  });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('defaultCheckHealth', () => {
+  it('accepts only the expected Geniro health response shape', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'ok', version: '1.0.0' }),
+    });
+    await expect(defaultCheckHealth('127.0.0.1', 4823)).resolves.toBe(true);
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ service: 'not-geniro' }),
+    });
+    await expect(defaultCheckHealth('127.0.0.1', 4823)).resolves.toBe(false);
+  });
+
+  it('proves daemon identity with the launch bearer token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      defaultCheckIdentity({
+        host: '127.0.0.1',
+        port: 4823,
+        token: 'secret-token',
+        version: '1.0.0',
+      }),
+    ).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4823/v1/chats',
+      expect.objectContaining({
+        headers: { authorization: 'Bearer secret-token' },
+      }),
+    );
+  });
 });
 
 describe('DaemonSupervisor.start', () => {
@@ -158,14 +225,20 @@ describe('DaemonSupervisor.start', () => {
   it('escalates a stale-version daemon that ignores SIGTERM to SIGKILL', async () => {
     vi.useFakeTimers();
     try {
+      let staleAlive = true;
       const h = harness({
         pidfile: info({ pid: 1111, version: '0.1.0' }),
-        alive: (pid) => pid === 1111, // never dies politely; new child adopts fine
+        alive: (pid) => (pid === 1111 ? staleAlive : true),
+        onKill: (_pid, signal) => {
+          if (signal === 'SIGKILL') {
+            staleAlive = false;
+          }
+        },
         graceMs: 50,
       });
 
       const started = h.supervisor.start();
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(1_100);
       await started;
 
       expect(h.kills).toEqual([
@@ -173,6 +246,26 @@ describe('DaemonSupervisor.start', () => {
         { pid: 1111, signal: 'SIGKILL' },
       ]);
       expect(h.spawned).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not spawn a replacement while the stale daemon remains alive after SIGKILL', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        pidfile: info({ pid: 1111, version: '0.1.0' }),
+        alive: (pid) => pid === 1111,
+        graceMs: 50,
+        pollMs: 5,
+      });
+
+      const started = h.supervisor.start();
+      await vi.advanceTimersByTimeAsync(1_200);
+
+      await expect(started).rejects.toThrow(/remained alive|SIGKILL/i);
+      expect(h.spawned).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -202,6 +295,42 @@ describe('DaemonSupervisor.start', () => {
     expect(handle.version).toBe('0.2.0');
   });
 
+  it('fails closed for an alive unhealthy pid instead of signalling or duplicating it', async () => {
+    const h = harness({
+      pidfile: info({ pid: 1111 }),
+      alive: () => true,
+      healthy: false,
+    });
+
+    await expect(h.supervisor.start()).rejects.toThrow(
+      /failed identity\/health verification/,
+    );
+
+    expect(h.kills).toHaveLength(0);
+    expect(h.spawned).toHaveLength(0);
+  });
+
+  it('fails closed when an alive stale-version daemon cannot be signalled', async () => {
+    const h = harness({
+      pidfile: info({ pid: 1111, version: '0.1.0' }),
+      alive: () => true,
+      killPid: () => {
+        const error = new Error(
+          'operation not permitted',
+        ) as NodeJS.ErrnoException;
+        error.code = 'EPERM';
+        throw error;
+      },
+    });
+
+    await expect(h.supervisor.start()).rejects.toThrow(
+      /operation not permitted|signal|refus/i,
+    );
+
+    expect(h.removed).toHaveLength(0);
+    expect(h.spawned).toHaveLength(0);
+  });
+
   it('passes the Settings cliPaths override into the daemon spawn env', async () => {
     const h = harness({ pidfile: null });
 
@@ -210,6 +339,65 @@ describe('DaemonSupervisor.start', () => {
     expect(h.spawned).toHaveLength(1);
     expect(h.spawned[0]?.env?.GENIRO_CLAUDE_BIN).toBe('/opt/tools/claude');
     expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBeUndefined();
+  });
+
+  it('terminates a spawned child that never becomes healthy before the startup deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        pidfile: null,
+        healthy: false,
+        graceMs: 50,
+        pollMs: 5_000,
+      });
+
+      const started = h.supervisor.start();
+      const rejected = expect(started).rejects.toThrow(
+        /did not become healthy/,
+      );
+      await vi.advanceTimersByTimeAsync(25_000);
+      await rejected;
+
+      expect(h.child.signals[0]).toBe('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('DaemonSupervisor.restart', () => {
+  it('replaces an adopted daemon and reloads Keychain and CLI settings', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        pidfile: info({ pid: 1111, version: '0.2.0' }),
+        graceMs: 25,
+      });
+      await h.supervisor.start();
+      mocks.getSecret.mockReturnValue('new-cursor-key');
+      mocks.readSettings.mockReturnValue({
+        onboardingComplete: true,
+        projectFolder: null,
+        cliPaths: { 'cursor-agent': '/opt/tools/cursor-agent' },
+        checkForUpdates: true,
+      });
+
+      const restarted = h.supervisor.restart();
+      await vi.advanceTimersByTimeAsync(50);
+      await restarted;
+
+      expect(h.kills).toEqual([
+        { pid: 1111, signal: 'SIGTERM' },
+        { pid: 1111, signal: 'SIGKILL' },
+      ]);
+      expect(h.spawned).toHaveLength(1);
+      expect(h.spawned[0]?.env?.GENIRO_CURSOR_API_KEY).toBe('new-cursor-key');
+      expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBe(
+        '/opt/tools/cursor-agent',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

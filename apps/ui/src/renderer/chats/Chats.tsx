@@ -96,6 +96,7 @@ export function Chats({
   // Highest seq rendered for the active run — the replay cursor used to fetch
   // only the items missed during a disconnect.
   const lastSeqRef = useRef(-1);
+  const reconnectAfterSeqRef = useRef(-1);
   // Mirror `runs` into a ref so the stable activateRun callback can read the
   // active run's current status without being re-created on every list change.
   const runsRef = useRef<ChatRun[]>([]);
@@ -170,8 +171,8 @@ export function Chats({
       setError(null);
       // Join FIRST so any live item published during the history fetch is
       // buffered through addItem; the seq de-dupe reconciles the overlap.
-      client.joinRun(runId);
       try {
+        await client.joinRun(runId);
         const history = await chatApi.getHistory(runId);
         // The user may have switched runs while this fetch was in flight —
         // a stale completion must not replay items or re-arm Stop/streaming
@@ -214,17 +215,24 @@ export function Chats({
       )
       .catch((err: unknown) => setError(String(err)));
     const unsubscribeItem = client.onItem(addItem);
+    const unsubscribeDisconnect = client.onDisconnect(() => {
+      reconnectAfterSeqRef.current = lastSeqRef.current;
+    });
     // On reconnect the WS missed any items streamed while offline (the room
     // buffers nothing for an absent member); fetch just the delta past the last
     // seq we rendered. addItem de-dupes, so an overlap with re-joined live items
     // is harmless.
-    const unsubscribeReconnect = client.onReconnect(() => {
+    const unsubscribeReconnect = client.onReconnect((joinError) => {
       const active = activeRunIdRef.current;
       if (!active) {
         return;
       }
+      if (joinError) {
+        setError(joinError.message);
+        return;
+      }
       void chatApi
-        .getHistory(active, lastSeqRef.current)
+        .getHistory(active, reconnectAfterSeqRef.current)
         .then((items) => items.forEach(addItem))
         // Same stale-run guard as activateRun's catch: if the user switched
         // runs while this delta-fetch was in flight, A's error must not paint
@@ -235,15 +243,20 @@ export function Chats({
           }
         });
     });
+    const selectedRun = activeRunIdRef.current;
+    if (selectedRun) {
+      void activateRun(selectedRun);
+    }
     return () => {
       unsubscribeItem();
+      unsubscribeDisconnect();
       unsubscribeReconnect();
       const active = activeRunIdRef.current;
       if (active) {
         client.leaveRun(active);
       }
     };
-  }, [client, chatApi, workflowApi, addItem]);
+  }, [client, chatApi, workflowApi, addItem, activateRun]);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -408,15 +421,21 @@ export function Chats({
     [client],
   );
 
-  // Requests the daemon reported as already settled (`verdict_ack` with
-  // applied: false) — the card renders expired instead of retrying forever.
-  const [deadRequestIds, setDeadRequestIds] = useState<Set<string>>(new Set());
+  // Requests the daemon reported as already settled — invalid answers remain
+  // retryable, while expired cards stop retrying forever.
+  const [deadRequestKeys, setDeadRequestKeys] = useState<Set<string>>(
+    new Set(),
+  );
   useEffect(
     () =>
       client.onVerdictAck((ack) => {
-        if (!ack.applied && ack.requestId) {
-          const requestId = ack.requestId;
-          setDeadRequestIds((prev) => new Set(prev).add(requestId));
+        if (
+          ack.status === 'expired' &&
+          ack.runId === activeRunIdRef.current &&
+          ack.requestId
+        ) {
+          const requestKey = `${ack.runId}:${ack.requestId}`;
+          setDeadRequestKeys((prev) => new Set(prev).add(requestKey));
         }
       }),
     [client],
@@ -439,12 +458,53 @@ export function Chats({
     title: string;
   } | null>(null);
 
-  /** Node ids seen in this run's transcript — the workflow "open terminal" targets. */
-  const runNodeIds = useMemo(
+  const seenNodeIds = useMemo(
     () => [
       ...new Set(items.flatMap((item) => (item.nodeId ? [item.nodeId] : []))),
     ],
     [items],
+  );
+  const [mirrorableNodeIds, setMirrorableNodeIds] = useState<Set<string>>(
+    new Set(),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    const workflowId = activeRun?.workflowId;
+    if (!workflowId) {
+      setMirrorableNodeIds(new Set());
+      return;
+    }
+    void workflowApi
+      .get(workflowId)
+      .then(({ workflow }) => {
+        if (cancelled) {
+          return;
+        }
+        setMirrorableNodeIds(
+          new Set(
+            workflow.nodes
+              .filter(
+                (node) => node.kind === 'agent' && node.agent === 'claude',
+              )
+              .map((node) => node.id),
+          ),
+        );
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setMirrorableNodeIds(new Set());
+          setError(
+            `Could not load workflow terminal targets: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRun?.workflowId, workflowApi]);
+  const terminalNodeIds = useMemo(
+    () => seenNodeIds.filter((nodeId) => mirrorableNodeIds.has(nodeId)),
+    [seenNodeIds, mirrorableNodeIds],
   );
 
   const openTerminal = useCallback(
@@ -586,9 +646,9 @@ export function Chats({
               Terminal
             </Button>
           ) : null}
-          {activeRun?.workflowId && runNodeIds.length > 0 ? (
+          {activeRun?.workflowId && terminalNodeIds.length > 0 ? (
             <span className="ml-auto flex flex-wrap gap-1">
-              {runNodeIds.map((nodeId) => (
+              {terminalNodeIds.map((nodeId) => (
                 <Button
                   key={nodeId}
                   type="button"
@@ -626,7 +686,8 @@ export function Chats({
                   verdict={requestId ? (verdicts.get(requestId) ?? null) : null}
                   expired={
                     requestId !== null &&
-                    (expiredIds.has(requestId) || deadRequestIds.has(requestId))
+                    (expiredIds.has(requestId) ||
+                      deadRequestKeys.has(`${item.runId}:${requestId}`))
                   }
                   onRespond={(allow, answer) =>
                     respondApproval(item, allow, answer)

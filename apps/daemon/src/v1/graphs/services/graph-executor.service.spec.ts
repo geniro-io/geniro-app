@@ -31,6 +31,7 @@ import { GraphExecutorService } from './graph-executor.service';
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
   readonly runs = new Map<string, Run>();
+  failNextStatus: string | null = null;
   private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
@@ -51,6 +52,10 @@ class FakeRunDao {
     return run;
   }
   async updateById(id: string, data: Partial<Run>): Promise<number> {
+    if (data.status === this.failNextStatus) {
+      this.failNextStatus = null;
+      throw new Error('SQLITE_FULL');
+    }
     const run = this.runs.get(id);
     if (!run) {
       return 0;
@@ -765,13 +770,13 @@ describe('GraphExecutorService', () => {
     await drain();
   });
 
-  it('continues the DAG walk when a node settle write throws (run still finalizes)', async () => {
+  it('fails the node and skips its downstream when settle persistence throws', async () => {
     const { service, claude, runDao, nodeDao, registry } = setup();
     // The bookkeeping write for node a's completion blows up (disk full).
     const original = nodeDao.setStatus.bind(nodeDao);
     let failedOnce = false;
     nodeDao.setStatus = async (runId, nodeId, patch) => {
-      if (!failedOnce && patch.status === 'completed') {
+      if (!failedOnce && nodeId === 'a' && patch.status === 'completed') {
         failedOnce = true;
         throw new Error('SQLITE_FULL');
       }
@@ -788,13 +793,40 @@ describe('GraphExecutorService', () => {
     completeTurn(claude.starts[0]!, 'A out');
     await drain();
 
-    // Node b still launched despite a's failed status write…
-    expect(claude.starts).toHaveLength(2);
-    completeTurn(claude.starts[1]!, 'B out');
+    expect(claude.starts).toHaveLength(1);
+    expect(nodeDao.row(run.id, 'a')).toMatchObject({ status: 'failed' });
+    expect(nodeDao.row(run.id, 'b')).toMatchObject({ status: 'skipped' });
+    expect(runDao.runs.get(run.id)?.status).toBe('failed');
+    expect(registry.has(run.id)).toBe(false);
+  });
+
+  it('falls back to failed when the final completed run write throws', async () => {
+    const { service, claude, runDao, itemDao, registry } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    runDao.failNextStatus = 'completed';
+
+    completeTurn(claude.starts[0]!, 'done');
     await drain();
 
-    // …and the run finalizes instead of leaking its registry claim.
-    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(runDao.runs.get(run.id)?.status).toBe('failed');
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.kind === 'turn_complete' &&
+          JSON.parse(item.payload).stopReason === 'workflow_completed',
+      ),
+    ).toBe(false);
+    expect(itemDao.items.at(-1)?.kind).toBe('error');
     expect(registry.has(run.id)).toBe(false);
   });
 

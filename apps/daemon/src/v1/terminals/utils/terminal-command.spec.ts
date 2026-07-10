@@ -10,11 +10,22 @@ describe('terminalCommand', () => {
     });
   });
 
-  it('opens a fresh interactive claude session without a session id', () => {
-    expect(terminalCommand('claude', null)).toEqual({
-      command: 'claude',
-      args: [],
-    });
+  it('rejects claude until a resumable session id is stored', () => {
+    expect(() => terminalCommand('claude', null)).toThrowError(
+      /TERMINAL_SESSION_UNAVAILABLE|resumable terminal session/,
+    );
+  });
+
+  it('rejects a whitespace-only session id instead of spawning a broken resume command', () => {
+    expect(() => terminalCommand('claude', ' \t\n ')).toThrowError(
+      /TERMINAL_SESSION_UNAVAILABLE|resumable terminal session/,
+    );
+  });
+
+  it('rejects a zero-width-only session id instead of spawning an invisible resume target', () => {
+    expect(() => terminalCommand('claude', '\u200b')).toThrowError(
+      /TERMINAL_SESSION_UNAVAILABLE|resumable terminal session/,
+    );
   });
 
   it('rejects cursor-agent (deferred scope)', () => {

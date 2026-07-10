@@ -13,6 +13,18 @@ interface ParsedQuestion {
   options: string[];
 }
 
+/** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
+const MAX_ANSWER_LENGTH = 32_768;
+
+function combinedAnswer(
+  questions: ParsedQuestion[],
+  answers: Record<number, string>,
+): string {
+  return questions
+    .map((question, index) => `${question.question}: ${answers[index] ?? ''}`)
+    .join('\n');
+}
+
 /**
  * Parse an AskUserQuestion tool input (`{ questions: [{ question, options:
  * [{ label }] }] }`) into renderable entries. Empty for any other tool's
@@ -47,7 +59,12 @@ function readQuestions(input: unknown): ParsedQuestion[] {
               ? (o as { label?: unknown }).label
               : null,
           )
-          .filter((label): label is string => typeof label === 'string')
+          .filter(
+            (label): label is string =>
+              typeof label === 'string' &&
+              label.length > 0 &&
+              label.length <= MAX_ANSWER_LENGTH,
+          )
       : [];
     parsed.push({ question: q.question, options });
   }
@@ -82,10 +99,18 @@ export function ApprovalCard({
   onRespond: (allow: boolean, answer?: string) => void;
 }): React.JSX.Element {
   const [freeText, setFreeText] = useState('');
+  const [selectedAnswers, setSelectedAnswers] = useState<
+    Record<number, string>
+  >({});
   // Name-only, matching the daemon's fold gate exactly: a card must never
   // collect an answer the daemon would refuse to deliver (a flag-only
   // interactive tool renders the plain approve/deny body instead).
   const questions = toolName === 'AskUserQuestion' ? readQuestions(input) : [];
+  const isMultiQuestion = questions.length > 1;
+  const allQuestionsAnswered =
+    isMultiQuestion &&
+    questions.every((_, index) => Boolean(selectedAnswers[index]));
+  const multiAnswer = combinedAnswer(questions, selectedAnswers);
 
   if (questions.length > 0) {
     return (
@@ -107,9 +132,27 @@ export function ApprovalCard({
                   <Button
                     key={`${li}-${label}`}
                     type="button"
-                    variant="outline"
+                    variant={
+                      isMultiQuestion && selectedAnswers[qi] === label
+                        ? 'secondary'
+                        : 'outline'
+                    }
                     size="sm"
-                    onClick={() => onRespond(true, label)}>
+                    aria-pressed={
+                      isMultiQuestion
+                        ? selectedAnswers[qi] === label
+                        : undefined
+                    }
+                    onClick={() => {
+                      if (isMultiQuestion) {
+                        setSelectedAnswers((previous) => ({
+                          ...previous,
+                          [qi]: label,
+                        }));
+                      } else {
+                        onRespond(true, label);
+                      }
+                    }}>
                     {label}
                   </Button>
                 ))}
@@ -123,14 +166,11 @@ export function ApprovalCard({
           </p>
         ) : verdict === null ? (
           <div className="flex items-center gap-2">
-            {/* A single free-text answer maps to the ONE `response` wire
-                channel, so it is offered only for a single-question payload; a
-                multi-question card is answered through its per-question
-                options (or declined). */}
             {questions.length === 1 ? (
               <>
                 <Input
                   value={freeText}
+                  maxLength={MAX_ANSWER_LENGTH}
                   aria-label="Answer the agent's question"
                   placeholder="Or type your own answer…"
                   onChange={(e) => setFreeText(e.target.value)}
@@ -152,7 +192,17 @@ export function ApprovalCard({
                   Answer
                 </Button>
               </>
-            ) : null}
+            ) : (
+              <Button
+                type="button"
+                disabled={
+                  !allQuestionsAnswered ||
+                  multiAnswer.length > MAX_ANSWER_LENGTH
+                }
+                onClick={() => onRespond(true, multiAnswer)}>
+                Submit answers
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"

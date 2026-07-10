@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { environment } from '../../../environments';
+import { buildChildEnv } from '../utils/child-env';
 import { childProcessHandle } from '../utils/child-handle';
 import { enableGeniroMcpServer } from '../utils/cursor-mcp-enable';
 import { buildCursorMcpServerEntry } from '../utils/cursor-mcp-entry';
@@ -34,6 +35,8 @@ export interface CursorMcpMergeOptions {
   lockWaitMs?: number;
   /** Replacement execFile for tests (`mcp enable` + git children). */
   execFileFn?: typeof execFile;
+  /** Replacement restore for failure-path tests. */
+  restoreFn?: typeof restoreGeniroEntry;
 }
 
 export type CursorMcpAcquireResult =
@@ -66,6 +69,7 @@ export class CursorMcpMergeService {
   private readonly journalPath: string;
   private readonly lockWaitMs: number;
   private readonly execFileFn: typeof execFile;
+  private readonly restoreEntry: typeof restoreGeniroEntry;
 
   constructor(
     private readonly processes: ProcessRegistry,
@@ -76,6 +80,7 @@ export class CursorMcpMergeService {
       join(environment.userDataDir, 'cursor-mcp-journal.json');
     this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
     this.execFileFn = options.execFileFn ?? execFile;
+    this.restoreEntry = options.restoreFn ?? restoreGeniroEntry;
   }
 
   /** Merge the geniro entry for one turn; the result's release undoes it. */
@@ -90,6 +95,32 @@ export class CursorMcpMergeService {
         reason: `another cursor caller is holding ${cwd}/.cursor/mcp.json — gave up after ${Math.round(this.lockWaitMs / 1000)}s`,
       };
     }
+    const stranded = readJournal(this.journalPath).find(
+      (entry) => entry.cwd === cwd,
+    );
+    if (stranded) {
+      if (
+        !this.restoreEntry(cwd, {
+          created: stranded.created,
+          mode: stranded.mode,
+        })
+      ) {
+        releaseLock();
+        return {
+          ok: false,
+          reason: `a previous cursor MCP merge in ${cwd} still needs recovery`,
+        };
+      }
+      try {
+        removeJournalEntry(this.journalPath, cwd);
+      } catch (err) {
+        releaseLock();
+        return {
+          ok: false,
+          reason: `recovered a previous cursor MCP merge but could not clear its journal: ${String(err)}`,
+        };
+      }
+    }
     // Every path out of this section MUST free the lock: journal and merge
     // writes throw on real filesystems (EROFS, EACCES, ENOSPC, `.cursor`
     // being a file), and a throw escaping with the lock held would degrade
@@ -99,23 +130,32 @@ export class CursorMcpMergeService {
     // merge with the same state.
     let created = false;
     let mode: number | undefined;
+    let mergeAttempted = false;
     let merged: ReturnType<typeof mergeGeniroEntry>;
     try {
       const configPath = join(cwd, '.cursor', 'mcp.json');
       created = !existsSync(configPath);
       mode = created ? undefined : statSync(configPath).mode & 0o777;
+      const entry = buildCursorMcpServerEntry(endpoint);
       // Journal BEFORE the file is touched — a crash between the two leaves a
       // harmless entry whose restore is a no-op.
-      addJournalEntry(this.journalPath, { cwd, created, mode, ts: Date.now() });
-      merged = mergeGeniroEntry(cwd, buildCursorMcpServerEntry(endpoint));
+      addJournalEntry(this.journalPath, {
+        cwd,
+        created,
+        mode,
+        ts: Date.now(),
+      });
+      mergeAttempted = true;
+      merged = mergeGeniroEntry(cwd, entry);
     } catch (err) {
       try {
         // Undo whatever landed (a mid-merge throw leaves at most a stray
         // backup — restore never throws and no-ops when nothing merged)
         // BEFORE dropping the journal entry, or the boot reconcile loses its
         // only pointer to a half-done merge.
-        restoreGeniroEntry(cwd, { created, mode });
-        removeJournalEntry(this.journalPath, cwd);
+        if (mergeAttempted && this.restoreEntry(cwd, { created, mode })) {
+          removeJournalEntry(this.journalPath, cwd);
+        }
       } catch {
         // The stranded entry is harmless — restore is a no-op without our key.
       }
@@ -133,7 +173,10 @@ export class CursorMcpMergeService {
       }
       return { ok: false, reason: merged.reason };
     }
-    const state = { created: merged.created, mode: merged.mode };
+    const state = {
+      created: merged.created,
+      mode: merged.mode,
+    };
     await enableGeniroMcpServer(cwd, {
       execFileFn: this.execFileFn,
       onSpawn: (child) =>
@@ -154,11 +197,17 @@ export class CursorMcpMergeService {
         }
         released = true;
         try {
-          restoreGeniroEntry(cwd, state);
-          removeJournalEntry(this.journalPath, cwd);
-        } catch {
-          // Journal removal failed — the boot reconcile re-runs the restore,
-          // which is idempotent once our key is gone.
+          if (this.restoreEntry(cwd, state)) {
+            removeJournalEntry(this.journalPath, cwd);
+          } else {
+            this.logger.warn(
+              `could not restore .cursor/mcp.json in ${cwd} — retained crash journal entry for retry`,
+            );
+          }
+        } catch (err) {
+          this.logger.warn(
+            `could not finalize .cursor/mcp.json restore in ${cwd}: ${String(err)}`,
+          );
         } finally {
           releaseLock();
         }
@@ -172,17 +221,32 @@ export class CursorMcpMergeService {
    */
   reconcileStranded(): number {
     const entries = readJournal(this.journalPath);
+    let restored = 0;
     for (const entry of entries) {
-      restoreGeniroEntry(entry.cwd, {
-        created: entry.created,
-        mode: entry.mode,
-      });
-      removeJournalEntry(this.journalPath, entry.cwd);
-      this.logger.warn(
-        `restored a stranded .cursor/mcp.json merge in ${entry.cwd}`,
-      );
+      if (
+        !this.restoreEntry(entry.cwd, {
+          created: entry.created,
+          mode: entry.mode,
+        })
+      ) {
+        this.logger.warn(
+          `could not restore stranded .cursor/mcp.json merge in ${entry.cwd} — retained journal entry`,
+        );
+        continue;
+      }
+      try {
+        removeJournalEntry(this.journalPath, entry.cwd);
+        restored += 1;
+        this.logger.warn(
+          `restored a stranded .cursor/mcp.json merge in ${entry.cwd}`,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `restored .cursor/mcp.json in ${entry.cwd} but could not clear its journal entry: ${String(err)}`,
+        );
+      }
     }
-    return entries.length;
+    return restored;
   }
 
   /** True when `.cursor/mcp.json` is tracked by git in `cwd`'s repo. */
@@ -191,7 +255,11 @@ export class CursorMcpMergeService {
       const child = this.execFileFn(
         'git',
         ['-C', cwd, 'ls-files', '--error-unmatch', '.cursor/mcp.json'],
-        { timeout: GIT_CHECK_TIMEOUT_MS, encoding: 'utf8' },
+        {
+          timeout: GIT_CHECK_TIMEOUT_MS,
+          encoding: 'utf8',
+          env: buildChildEnv(),
+        },
         (err) => {
           if (err === null) {
             resolve(true);

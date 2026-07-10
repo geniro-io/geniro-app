@@ -5,6 +5,7 @@ import { app, BrowserWindow, nativeImage, shell } from 'electron';
 
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
+import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { readSettings } from './settings';
 import { checkOnLaunch } from './updater';
 
@@ -39,14 +40,6 @@ let teardownDone = false;
  * into running arbitrary commands (Electron security checklist #14).
  */
 const EXTERNAL_OPEN_SCHEMES = new Set(['https:', 'http:', 'mailto:']);
-
-function isSameOrigin(a: string, b: string): boolean {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
-}
 
 /** URL scheme (e.g. 'https:'), or '' when `url` doesn't parse. */
 function schemeOf(url: string): string {
@@ -100,12 +93,12 @@ function createWindow(): void {
   // client-side routing uses history/hash, which doesn't fire these events), so
   // any full navigation to another origin is unexpected and refused.
   win.webContents.on('will-navigate', (event, url) => {
-    if (!isSameOrigin(url, win.webContents.getURL())) {
+    if (!isAllowedTopFrameNavigation(url, win.webContents.getURL())) {
       event.preventDefault();
     }
   });
   win.webContents.on('will-redirect', (event, url) => {
-    if (!isSameOrigin(url, win.webContents.getURL())) {
+    if (!isAllowedTopFrameNavigation(url, win.webContents.getURL())) {
       event.preventDefault();
     }
   });

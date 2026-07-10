@@ -5,6 +5,7 @@ import { buildChildEnv } from './child-env';
 const TOUCHED = [
   'GENIRO_TEST_SECRET',
   'GENIRO_CURSOR_API_KEY',
+  'CURSOR_API_KEY',
   'CHILD_ENV_SPEC_PLAIN',
 ] as const;
 
@@ -27,6 +28,7 @@ describe('buildChildEnv', () => {
 
   it('merges extra over the stripped env (single-secret re-injection)', () => {
     process.env.GENIRO_CURSOR_API_KEY = 'cursor-key';
+    process.env.CURSOR_API_KEY = 'inherited-key';
 
     const env = buildChildEnv({ CURSOR_API_KEY: 'cursor-key' });
 

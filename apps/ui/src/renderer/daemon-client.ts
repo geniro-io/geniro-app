@@ -23,15 +23,26 @@ export interface DaemonClientEvents {
  * (the room buffers nothing for an absent member).
  */
 export interface VerdictAck {
+  runId: string | null;
   requestId: string | null;
-  applied: boolean;
+  status: 'applied' | 'expired' | 'invalid';
+}
+
+const JOIN_TIMEOUT_MS = 5_000;
+
+interface JoinWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class DaemonClient {
   private socket: Socket | null = null;
   private readonly itemListeners = new Set<(item: ChatItem) => void>();
-  private readonly reconnectListeners = new Set<() => void>();
+  private readonly reconnectListeners = new Set<(error?: Error) => void>();
+  private readonly disconnectListeners = new Set<() => void>();
   private readonly verdictAckListeners = new Set<(ack: VerdictAck) => void>();
+  private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private activeRunId: string | null = null;
   private hasConnected = false;
 
@@ -52,19 +63,41 @@ export class DaemonClient {
       const isReconnect = this.hasConnected;
       this.hasConnected = true;
       // Re-join the active run's room so live items resume after a reconnect.
+      let joined: Promise<void> | null = null;
       if (this.activeRunId) {
+        if (isReconnect) {
+          joined = this.waitForJoin(this.activeRunId);
+        }
         socket.emit('join', { runId: this.activeRunId });
       }
       this.events.onOpen?.();
       if (isReconnect) {
-        for (const listener of this.reconnectListeners) {
-          listener();
-        }
+        void (joined ?? Promise.resolve())
+          .then(() => {
+            for (const listener of this.reconnectListeners) {
+              listener();
+            }
+          })
+          .catch((err: unknown) => {
+            const error = err instanceof Error ? err : new Error(String(err));
+            for (const listener of this.reconnectListeners) {
+              listener(error);
+            }
+          });
       }
     });
-    socket.on('disconnect', () => this.events.onClose?.());
+    socket.on('disconnect', () => {
+      this.rejectAllJoins('socket disconnected before joining run');
+      for (const listener of this.disconnectListeners) {
+        listener();
+      }
+      this.events.onClose?.();
+    });
     socket.onAny((event: string, data: unknown) => {
       this.events.onMessage?.(event, data);
+      if (event === 'joined') {
+        this.resolveJoined(data);
+      }
       if (event === 'item') {
         const item = data as ChatItem;
         for (const listener of this.itemListeners) {
@@ -81,8 +114,8 @@ export class DaemonClient {
   }
 
   /**
-   * Subscribe to verdict acknowledgments. `applied: false` means the request
-   * already settled (the node's turn ended first) — the card shows expired.
+   * Subscribe to verdict acknowledgments. Only `expired` means the request
+   * already settled; `invalid` remains retryable.
    */
   onVerdictAck(listener: (ack: VerdictAck) => void): () => void {
     this.verdictAckListeners.add(listener);
@@ -103,17 +136,28 @@ export class DaemonClient {
    * Subscribe to reconnects (not the first connect); returns an unsubscribe
    * function. The renderer uses this to fetch items missed while offline.
    */
-  onReconnect(listener: () => void): () => void {
+  onReconnect(listener: (error?: Error) => void): () => void {
     this.reconnectListeners.add(listener);
     return () => {
       this.reconnectListeners.delete(listener);
     };
   }
 
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => {
+      this.disconnectListeners.delete(listener);
+    };
+  }
+
   /** Join a run's room to start receiving its `item` events. */
-  joinRun(runId: string): void {
+  joinRun(runId: string): Promise<void> {
     this.activeRunId = runId;
-    this.socket?.emit('join', { runId });
+    const joined = this.waitForJoin(runId);
+    if (this.socket?.connected) {
+      this.socket.emit('join', { runId });
+    }
+    return joined;
   }
 
   /** Leave a run's room. */
@@ -121,14 +165,15 @@ export class DaemonClient {
     if (this.activeRunId === runId) {
       this.activeRunId = null;
     }
+    this.rejectJoins(runId, 'run room was left before joining');
     this.socket?.emit('leave', { runId });
   }
 
   /**
    * Answer an `ask`-node's approval card. The durable acknowledgment is the
    * `approval_verdict` item the daemon persists-then-emits back to the room;
-   * the immediate `verdict_ack` reply only reports routing (`applied: false`
-   * = the request already settled, e.g. the node's turn ended first).
+   * the immediate `verdict_ack` reply only reports routing (`expired` means
+   * already settled; `invalid` remains retryable).
    * `answer` carries the user's picked option / typed text for a question
    * card (AskUserQuestion) — omitted for plain tool approvals.
    */
@@ -147,7 +192,74 @@ export class DaemonClient {
   }
 
   close(): void {
+    this.rejectAllJoins('socket closed before joining run');
     this.socket?.close();
     this.socket = null;
+  }
+
+  private waitForJoin(runId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const waiter: JoinWaiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.removeJoinWaiter(runId, waiter);
+          reject(new Error(`timed out joining run ${runId}`));
+        }, JOIN_TIMEOUT_MS),
+      };
+      const waiters = this.joinWaiters.get(runId) ?? new Set<JoinWaiter>();
+      waiters.add(waiter);
+      this.joinWaiters.set(runId, waiters);
+    });
+  }
+
+  private resolveJoined(data: unknown): void {
+    const runId =
+      typeof data === 'object' &&
+      data !== null &&
+      typeof (data as { runId?: unknown }).runId === 'string'
+        ? (data as { runId: string }).runId
+        : null;
+    if (!runId) {
+      return;
+    }
+    const waiters = this.joinWaiters.get(runId);
+    if (!waiters) {
+      return;
+    }
+    this.joinWaiters.delete(runId);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+  }
+
+  private rejectJoins(runId: string, message: string): void {
+    const waiters = this.joinWaiters.get(runId);
+    if (!waiters) {
+      return;
+    }
+    this.joinWaiters.delete(runId);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(message));
+    }
+  }
+
+  private rejectAllJoins(message: string): void {
+    for (const runId of [...this.joinWaiters.keys()]) {
+      this.rejectJoins(runId, message);
+    }
+  }
+
+  private removeJoinWaiter(runId: string, waiter: JoinWaiter): void {
+    const waiters = this.joinWaiters.get(runId);
+    if (!waiters) {
+      return;
+    }
+    waiters.delete(waiter);
+    if (waiters.size === 0) {
+      this.joinWaiters.delete(runId);
+    }
   }
 }

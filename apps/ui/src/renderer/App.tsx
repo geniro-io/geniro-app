@@ -46,12 +46,9 @@ export function App(): React.JSX.Element {
   const [handle, setHandle] = useState<DaemonHandle | null>(null);
   const clientRef = useRef<DaemonClient | null>(null);
 
-  const connectDaemon = useCallback(async (): Promise<void> => {
-    const daemonHandle = await window.geniro.getDaemonHandle();
-    if (!daemonHandle) {
-      setConnected(false);
-      return;
-    }
+  const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
+    clientRef.current?.close();
+    setConnected(false);
     const client = new DaemonClient(daemonHandle, {
       onOpen: () => setConnected(true),
       onClose: () => setConnected(false),
@@ -66,11 +63,21 @@ export function App(): React.JSX.Element {
     });
     clientRef.current = client;
     client.connect();
-    setHandle(daemonHandle); // triggers the render that mounts <Chats>
+    setHandle(daemonHandle);
   }, []);
+
+  const connectDaemon = useCallback(async (): Promise<void> => {
+    const daemonHandle = await window.geniro.getDaemonHandle();
+    if (!daemonHandle) {
+      setConnected(false);
+      return;
+    }
+    attachDaemon(daemonHandle);
+  }, [attachDaemon]);
 
   useEffect(() => {
     let cancelled = false;
+    const unsubscribeRestart = window.geniro.onDaemonRestarted(attachDaemon);
     void window.geniro.getStatus().then((status) => {
       if (cancelled) {
         return;
@@ -84,9 +91,10 @@ export function App(): React.JSX.Element {
     });
     return () => {
       cancelled = true;
+      unsubscribeRestart();
       clientRef.current?.close();
     };
-  }, [connectDaemon]);
+  }, [attachDaemon, connectDaemon]);
 
   const handleOnboardingDone = useCallback((): void => {
     setPhase('ready');

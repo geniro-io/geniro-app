@@ -5,11 +5,19 @@ import { TerminalsService } from './terminals.service';
 function build(overrides: {
   run?: Record<string, unknown> | null;
   nodeState?: { agentSessionId: string | null } | null;
-  workflow?: { nodes: { id: string; agent: string }[] };
+  workflow?: {
+    nodes: { id: string; kind?: string; agent?: string }[];
+  };
 }) {
   const runDao = { getById: vi.fn().mockResolvedValue(overrides.run ?? null) };
   const nodeStateDao = {
-    getByRunNode: vi.fn().mockResolvedValue(overrides.nodeState ?? null),
+    getByRunNode: vi
+      .fn()
+      .mockResolvedValue(
+        'nodeState' in overrides
+          ? overrides.nodeState
+          : { agentSessionId: 'sess-default' },
+      ),
   };
   const workflowStore = {
     get: vi.fn().mockResolvedValue({
@@ -74,14 +82,14 @@ describe('TerminalsService', () => {
     expect(wire.status).toBe('running');
   });
 
-  it('opens a fresh session when no CLI session id is stored', async () => {
+  it('rejects until the run has a resumable CLI session id', async () => {
     const { service, pty } = build({ run: CHAT_RUN, nodeState: null });
 
-    await service.createForRun({ runId: 'run-1' });
-
-    expect(pty.create).toHaveBeenCalledWith(
-      expect.objectContaining({ command: 'claude', args: [] }),
+    await expect(service.createForRun({ runId: 'run-1' })).rejects.toThrow(
+      /TERMINAL_SESSION_UNAVAILABLE|resumable terminal session/,
     );
+
+    expect(pty.create).not.toHaveBeenCalled();
   });
 
   it('resolves a workflow node agent from the YAML definition', async () => {
@@ -122,6 +130,26 @@ describe('TerminalsService', () => {
     ).rejects.toThrow(/NODE_NOT_FOUND|no node/);
   });
 
+  it('rejects workflow trigger and cursor-agent nodes', async () => {
+    const trigger = build({
+      run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
+      workflow: { nodes: [{ id: 'start', kind: 'trigger' }] },
+    });
+    await expect(
+      trigger.service.createForRun({ runId: 'run-2', nodeId: 'start' }),
+    ).rejects.toThrow(/TERMINAL_NODE_NOT_AGENT|only agent nodes/);
+
+    const cursor = build({
+      run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
+      workflow: {
+        nodes: [{ id: 'cursor', kind: 'agent', agent: 'cursor-agent' }],
+      },
+    });
+    await expect(
+      cursor.service.createForRun({ runId: 'run-2', nodeId: 'cursor' }),
+    ).rejects.toThrow(/TERMINAL_UNSUPPORTED|no interactive terminal/);
+  });
+
   it('returns the existing running session instead of spawning a duplicate', async () => {
     const { service, pty } = build({ run: CHAT_RUN });
     pty.findRunning.mockReturnValue({
@@ -152,6 +180,22 @@ describe('TerminalsService', () => {
 
     expect(pty.create).toHaveBeenCalledTimes(1);
     expect(a.id).toBe(b.id);
+  });
+
+  it('rejects a nodeId alias for a chat terminal target', async () => {
+    const { service, pty } = build({ run: CHAT_RUN });
+
+    const [canonical, aliased] = await Promise.allSettled([
+      service.createForRun({ runId: 'run-1' }),
+      service.createForRun({ runId: 'run-1', nodeId: 'ignored-chat-node' }),
+    ]);
+
+    expect(canonical.status).toBe('fulfilled');
+    expect(aliased.status).toBe('rejected');
+    expect(String(aliased.status === 'rejected' ? aliased.reason : '')).toMatch(
+      /TERMINAL_NODE_UNEXPECTED|does not accept a nodeId/,
+    );
+    expect(pty.create).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a chat run that lost its agent kind', async () => {

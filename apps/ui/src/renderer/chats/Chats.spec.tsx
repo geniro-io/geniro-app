@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatItem, ChatRun, GeniroApi } from '../../shared/contracts';
-import type { DaemonClient } from '../daemon-client';
+import type { DaemonClient, VerdictAck } from '../daemon-client';
 import { Chats } from './Chats';
 
 // Tell React this is an act()-aware environment (testing-library sets this for
@@ -33,6 +33,7 @@ vi.mock('../chat-api', () => ({
 // WorkflowApi is mocked the same way; the mount path lists workflows + runs.
 const workflowApi = vi.hoisted(() => ({
   list: vi.fn(),
+  get: vi.fn(),
   listRuns: vi.fn(),
   run: vi.fn(),
   cancelRun: vi.fn(),
@@ -97,6 +98,19 @@ function terminal(seq: number): ChatItem {
   };
 }
 
+function approval(runId: string, seq: number, requestId: string): ChatItem {
+  return {
+    id: `${runId}-approval-${seq}`,
+    runId,
+    nodeId: null,
+    seq,
+    kind: 'approval_request',
+    role: null,
+    payload: { id: requestId, toolName: 'Write', input: { path: '/tmp/a' } },
+    createdAt: 'now',
+  };
+}
+
 const run1: ChatRun = {
   id: 'r1',
   status: 'running',
@@ -112,10 +126,16 @@ const run1: ChatRun = {
 function makeClient(): {
   client: DaemonClient;
   emitItem: (item: ChatItem) => void;
+  fireDisconnect: () => void;
   fireReconnect: () => void;
+  fireVerdictAck: (ack: VerdictAck) => void;
+  joinRun: ReturnType<typeof vi.fn>;
 } {
   let itemListener: ((item: ChatItem) => void) | null = null;
-  let reconnectListener: (() => void) | null = null;
+  let reconnectListener: ((error?: Error) => void) | null = null;
+  let disconnectListener: (() => void) | null = null;
+  let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
+  const joinRun = vi.fn(async () => {});
   const client = {
     onItem: (l: (item: ChatItem) => void) => {
       itemListener = l;
@@ -123,21 +143,35 @@ function makeClient(): {
         itemListener = null;
       };
     },
-    onReconnect: (l: () => void) => {
+    onReconnect: (l: (error?: Error) => void) => {
       reconnectListener = l;
       return () => {
         reconnectListener = null;
       };
     },
-    onVerdictAck: () => () => {},
-    joinRun: vi.fn(),
+    onDisconnect: (l: () => void) => {
+      disconnectListener = l;
+      return () => {
+        disconnectListener = null;
+      };
+    },
+    onVerdictAck: (l: (ack: VerdictAck) => void) => {
+      verdictAckListener = l;
+      return () => {
+        verdictAckListener = null;
+      };
+    },
+    joinRun,
     leaveRun: vi.fn(),
     sendVerdict: vi.fn(),
   } as unknown as DaemonClient;
   return {
     client,
     emitItem: (item) => itemListener?.(item),
+    fireDisconnect: () => disconnectListener?.(),
     fireReconnect: () => reconnectListener?.(),
+    fireVerdictAck: (ack) => verdictAckListener?.(ack),
+    joinRun,
   };
 }
 
@@ -180,6 +214,10 @@ beforeEach(() => {
   api.cancel.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
   workflowApi.list.mockReset().mockResolvedValue([]);
+  workflowApi.get.mockReset().mockResolvedValue({
+    slug: 'review-team',
+    workflow: { name: 'Review team', nodes: [], edges: [] },
+  });
   workflowApi.listRuns.mockReset().mockResolvedValue([]);
   workflowApi.run.mockReset();
   workflowApi.cancelRun.mockReset().mockResolvedValue({ cancelled: true });
@@ -199,6 +237,25 @@ afterEach(async () => {
 });
 
 describe('Chats reconnect seam', () => {
+  it('waits for room membership before fetching the history snapshot', async () => {
+    let resolveJoin!: () => void;
+    const joined = new Promise<void>((resolve) => {
+      resolveJoin = resolve;
+    });
+    const { client, joinRun } = makeClient();
+    joinRun.mockReturnValueOnce(joined);
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat');
+    expect(api.getHistory).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveJoin();
+      await joined;
+    });
+    expect(api.getHistory).toHaveBeenCalledWith('r1');
+  });
+
   it('de-dupes a live item that repeats a replayed history seq (renders once)', async () => {
     api.getHistory.mockResolvedValue([
       msg(0, 'user', 'hi'),
@@ -282,7 +339,7 @@ describe('Chats reconnect seam', () => {
       }
       return Promise.resolve([]);
     });
-    const { client, fireReconnect } = makeClient();
+    const { client, fireDisconnect, fireReconnect } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     expect(container.querySelectorAll('[data-role="assistant"]')).toHaveLength(
@@ -290,6 +347,7 @@ describe('Chats reconnect seam', () => {
     );
 
     await act(async () => {
+      fireDisconnect();
       fireReconnect();
     });
 
@@ -300,6 +358,40 @@ describe('Chats reconnect seam', () => {
       2,
     );
     expect(container.textContent).toContain('delta');
+  });
+
+  it('replays offline items when a newer live item arrives before reconnect recovery starts', async () => {
+    api.getHistory.mockImplementation((_runId: string, afterSeq?: number) => {
+      if (afterSeq === undefined) {
+        return Promise.resolve([
+          msg(0, 'user', 'initial'),
+          msg(1, 'assistant', 'before-disconnect'),
+        ]);
+      }
+      if (afterSeq === 1) {
+        return Promise.resolve([
+          msg(2, 'assistant', 'missed-offline-2'),
+          msg(3, 'assistant', 'missed-offline-3'),
+          msg(4, 'assistant', 'first-live-after-rejoin'),
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      fireDisconnect();
+      // Room membership is restored before the reconnect callback runs, so a
+      // persisted live item can advance the rendered cursor before delta replay.
+      emitItem(msg(4, 'assistant', 'first-live-after-rejoin'));
+      fireReconnect();
+    });
+
+    expect(container.textContent).toContain('missed-offline-2');
+    expect(container.textContent).toContain('missed-offline-3');
+    expect(container.textContent).toContain('first-live-after-rejoin');
   });
 
   it('shows the working state (Stop) when activating an in-flight run', async () => {
@@ -392,11 +484,12 @@ describe('Chats reconnect seam', () => {
       // A's initial activate history.
       return Promise.resolve([msg(0, 'user', 'A-transcript')]);
     });
-    const { client, fireReconnect } = makeClient();
+    const { client, fireDisconnect, fireReconnect } = makeClient();
     const container = await mount(client);
 
     await clickRun(container, 'My chat'); // A active
     await act(async () => {
+      fireDisconnect();
       fireReconnect(); // A's delta fetch starts hanging
     });
     await clickRun(container, 'Second chat'); // switch to B while A's fetch hangs
@@ -469,6 +562,87 @@ describe('Chats reconnect seam', () => {
     );
     expect(active?.textContent).toContain('My chat');
     expect(container.textContent).toContain('hi');
+  });
+});
+
+describe('Chats verdict acknowledgments', () => {
+  it('keeps a second run actionable when a late expired ack reuses its request id', async () => {
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'running',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.getHistory.mockImplementation((runId: string) =>
+      Promise.resolve([approval(runId, 0, 'shared-request-id')]),
+    );
+    const { client, fireVerdictAck } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat');
+    const approveFirst = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Approve',
+    );
+    await act(async () => {
+      approveFirst?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    await clickRun(container, 'Second chat');
+    await act(async () => {
+      fireVerdictAck({
+        runId: 'r1',
+        requestId: 'shared-request-id',
+        status: 'expired',
+      });
+    });
+
+    expect(container.textContent).not.toContain(
+      'expired — the turn ended before an answer',
+    );
+    expect(
+      [...container.querySelectorAll('button')].map(
+        (button) => button.textContent,
+      ),
+    ).toContain('Approve');
+  });
+
+  it('keeps a later run actionable after the active run receives an expired ack with the same request id', async () => {
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'running',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.getHistory.mockImplementation((runId: string) =>
+      Promise.resolve([approval(runId, 0, 'shared-request-id')]),
+    );
+    const { client, fireVerdictAck } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      fireVerdictAck({
+        runId: 'r1',
+        requestId: 'shared-request-id',
+        status: 'expired',
+      });
+    });
+    expect(container.textContent).toContain(
+      'expired — the turn ended before an answer',
+    );
+
+    await clickRun(container, 'Second chat');
+
+    expect(container.textContent).not.toContain(
+      'expired — the turn ended before an answer',
+    );
+    expect(
+      [...container.querySelectorAll('button')].map(
+        (button) => button.textContent,
+      ),
+    ).toContain('Approve');
   });
 });
 
@@ -721,6 +895,21 @@ describe('Chats terminal mirror', () => {
       createdAt: 'later',
     };
     workflowApi.listRuns.mockResolvedValue([wfRun]);
+    workflowApi.get.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          {
+            id: 'agent-1',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+          },
+        ],
+        edges: [],
+      },
+    });
     api.getHistory.mockResolvedValue([
       {
         id: 'w-i1',
@@ -757,6 +946,64 @@ describe('Chats terminal mirror', () => {
     expect(
       container.querySelector('[data-testid="terminal-panel"]')?.textContent,
     ).toContain('agent-1 — terminal');
+  });
+
+  it('hides terminal actions for trigger and cursor-agent workflow nodes', async () => {
+    const wfRun: ChatRun = {
+      id: 'w1',
+      status: 'running',
+      title: 'Mixed team',
+      agentKind: null,
+      workflowId: 'mixed-team',
+      cwd: '/proj',
+      model: null,
+      createdAt: 'later',
+    };
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    workflowApi.get.mockResolvedValue({
+      slug: 'mixed-team',
+      workflow: {
+        name: 'Mixed team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'cursor',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+          {
+            id: 'claude',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+          },
+        ],
+        edges: [],
+      },
+    });
+    api.getHistory.mockResolvedValue(
+      ['start', 'cursor', 'claude'].map((nodeId, index) => ({
+        id: `w-i${index}`,
+        runId: 'w1',
+        nodeId,
+        seq: index,
+        kind: 'status',
+        role: null,
+        payload: { nodeId, status: 'running' },
+        createdAt: 'now',
+      })),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Mixed team');
+
+    const labels = [...container.querySelectorAll('button')].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).toContain('claude');
+    expect(labels).not.toContain('start');
+    expect(labels).not.toContain('cursor');
   });
 
   it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {

@@ -38,6 +38,30 @@ describe('resolveAgentVersion', () => {
     expect(version).toBeNull();
   });
 
+  it('strips daemon-only GENIRO_ values from the version child environment', async () => {
+    const seen: { env?: NodeJS.ProcessEnv } = {};
+    const execFileFn = ((
+      _cmd: string,
+      _args: string[],
+      opts: { env?: NodeJS.ProcessEnv },
+      cb: ExecCallback,
+    ) => {
+      seen.env = opts.env;
+      cb(null, '1.0.0', '');
+      return { pid: 7 } as ReturnType<typeof execFile>;
+    }) as unknown as typeof execFile;
+    vi.stubEnv('GENIRO_CURSOR_API_KEY', 'must-not-leak');
+    vi.stubEnv('NORMAL_VAR', 'keep-me');
+    try {
+      await resolveAgentVersion('cursor-agent', { execFileFn });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(seen.env?.NORMAL_VAR).toBe('keep-me');
+    expect(seen.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
+  });
+
   it('resolves the binary through the Settings override env and hands the child to onSpawn', async () => {
     const seen: { cmd?: string; child?: unknown } = {};
     const execFileFn = ((

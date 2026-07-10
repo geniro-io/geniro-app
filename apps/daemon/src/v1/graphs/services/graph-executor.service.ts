@@ -183,6 +183,15 @@ export class GraphExecutorService {
       throw err;
     }
 
+    if (!this.registry.canStart(run.id)) {
+      this.registry.release(run.id);
+      this.callTokens.revokeRun(run.id);
+      await this.runDao.updateById(run.id, { status: 'failed' }, em);
+      throw new ConflictException(
+        'RUN_STOPPING',
+        'daemon shutdown started before the workflow could launch',
+      );
+    }
     this.drive(em, run.id, input.workflow, cwd, input.prompt, cursorCalls);
 
     return runToWire(run);
@@ -334,12 +343,14 @@ export class GraphExecutorService {
     let cancelRequested = false;
     let seq = 0;
     let runFinished = false;
+    let persistenceFailed = false;
 
     // One serialized write chain for the whole run: seq allocation and
     // persist-then-emit ordering stay correct while N nodes stream at once.
     let chain: Promise<void> = Promise.resolve();
     const enqueue = (work: () => Promise<void> | void): void => {
       chain = chain.then(work).catch((err: unknown) => {
+        persistenceFailed = true;
         this.logger.error(
           `workflow run ${runId} event handling failed: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -422,14 +433,33 @@ export class GraphExecutorService {
         );
         const status = cancelRequested
           ? 'cancelled'
-          : anyNotCompleted
+          : anyNotCompleted || persistenceFailed
             ? 'failed'
             : 'completed';
+        await this.runDao.updateById(runId, { status }, em);
         await persistItem(null, 'turn_complete', null, {
           usage: null,
           stopReason: `workflow_${status}`,
         });
-        await this.runDao.updateById(runId, { status }, em);
+      } catch (err) {
+        persistenceFailed = true;
+        this.logger.error(
+          `workflow run ${runId} finalization failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        await this.runDao
+          .updateById(runId, { status: 'failed' }, em)
+          .catch((statusErr: unknown) => {
+            this.logger.error(
+              `workflow run ${runId} failure-status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+            );
+          });
+        await persistItem(null, 'error', null, {
+          message: 'workflow finalization persistence failed',
+        }).catch((itemErr: unknown) => {
+          this.logger.error(
+            `workflow run ${runId} terminal failure item write failed: ${itemErr instanceof Error ? itemErr.message : String(itemErr)}`,
+          );
+        });
       } finally {
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.
@@ -913,10 +943,6 @@ export class GraphExecutorService {
           }
           runningHandles.delete(node.id);
           const { outcome, finalText } = finish();
-          settled.set(node.id, outcome);
-          if (outcome === 'completed') {
-            finalTexts.set(node.id, finalText ?? '');
-          }
           try {
             await this.nodeStateDao.setStatus(
               runId,
@@ -931,6 +957,40 @@ export class GraphExecutorService {
             await persistItem(node.id, 'status', null, {
               nodeId: node.id,
               status: outcome,
+            });
+            settled.set(node.id, outcome);
+            if (outcome === 'completed') {
+              finalTexts.set(node.id, finalText ?? '');
+            }
+          } catch (err) {
+            persistenceFailed = true;
+            settled.set(node.id, 'failed');
+            finalTexts.delete(node.id);
+            const message = `node bookkeeping failed: ${err instanceof Error ? err.message : String(err)}`;
+            await this.nodeStateDao
+              .setStatus(
+                runId,
+                node.id,
+                {
+                  status: 'failed',
+                  endedAt: Date.now(),
+                  error: message,
+                },
+                em,
+              )
+              .catch((statusErr: unknown) => {
+                this.logger.error(
+                  `workflow run ${runId} node ${node.id} failure-status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+                );
+              });
+            await persistItem(node.id, 'status', null, {
+              nodeId: node.id,
+              status: 'failed',
+              error: message,
+            }).catch((itemErr: unknown) => {
+              this.logger.error(
+                `workflow run ${runId} node ${node.id} failure item write failed: ${itemErr instanceof Error ? itemErr.message : String(itemErr)}`,
+              );
             });
           } finally {
             // The DAG walk must continue even if this node's bookkeeping write

@@ -1,12 +1,12 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import { type GeniroApi, IPC } from '../shared/contracts';
 
 /**
  * The only bridge between the sandboxed renderer and the privileged main
- * process. Every method forwards to an ipcMain.handle channel; the renderer
- * never sees Node or Electron directly. Casts pin `invoke`'s `Promise<any>`
- * back to the typed GeniroApi contract.
+ * process. Request methods forward to ipcMain.handle channels; daemon restart
+ * notifications subscribe to a main-process event. The renderer never sees
+ * Node or Electron directly.
  */
 const api: GeniroApi = {
   getStatus: () =>
@@ -15,6 +15,13 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getDaemonHandle) as ReturnType<
       GeniroApi['getDaemonHandle']
     >,
+  onDaemonRestarted: (listener) => {
+    const handler = (_event: IpcRendererEvent, handle: unknown): void => {
+      listener(handle as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IPC.onDaemonRestarted, handler);
+    return () => ipcRenderer.removeListener(IPC.onDaemonRestarted, handler);
+  },
   pickProjectFolder: () =>
     ipcRenderer.invoke(IPC.pickProjectFolder) as ReturnType<
       GeniroApi['pickProjectFolder']

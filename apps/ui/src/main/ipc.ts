@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from 'electron';
+import { dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
@@ -19,6 +19,11 @@ import { checkForUpdates } from './updater';
  * contract exposed via the preload.
  */
 export function registerIpc(supervisor: DaemonSupervisor): void {
+  const restartAndNotify = async (event: IpcMainInvokeEvent): Promise<void> => {
+    const handle = await supervisor.restart();
+    event.sender.send(IPC.onDaemonRestarted, handle);
+  };
+
   ipcMain.handle(IPC.getStatus, () => {
     const settings = readSettings();
     return {
@@ -48,22 +53,32 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
 
   ipcMain.handle(IPC.getSettings, () => readSettings());
 
-  ipcMain.handle(IPC.updateSettings, (_event, patch: unknown) =>
-    updateSettings(settingsPatchSchema.parse(patch)),
-  );
+  ipcMain.handle(IPC.updateSettings, async (event, patch: unknown) => {
+    const parsed = settingsPatchSchema.parse(patch);
+    const settings = updateSettings(parsed);
+    if (parsed.cliPaths !== undefined) {
+      await restartAndNotify(event);
+    }
+    return settings;
+  });
 
   ipcMain.handle(IPC.detectClis, () => detectClis(readSettings()));
 
-  ipcMain.handle(IPC.saveSecret, (_event, name: unknown, value: unknown) => {
-    saveSecret(secretNameSchema.parse(name), secretValueSchema.parse(value));
-  });
+  ipcMain.handle(
+    IPC.saveSecret,
+    async (event, name: unknown, value: unknown) => {
+      saveSecret(secretNameSchema.parse(name), secretValueSchema.parse(value));
+      await restartAndNotify(event);
+    },
+  );
 
   ipcMain.handle(IPC.hasSecret, (_event, name: unknown) =>
     hasSecret(secretNameSchema.parse(name)),
   );
 
-  ipcMain.handle(IPC.deleteSecret, (_event, name: unknown) => {
+  ipcMain.handle(IPC.deleteSecret, async (event, name: unknown) => {
     deleteSecret(secretNameSchema.parse(name));
+    await restartAndNotify(event);
   });
 
   ipcMain.handle(IPC.pickWorkflowImport, async () => {
@@ -90,7 +105,7 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
 
   ipcMain.handle(IPC.checkForUpdates, () => checkForUpdates());
 
-  ipcMain.handle(IPC.completeOnboarding, (_event, input: unknown) => {
+  ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {
     const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);
     if (cursorApiKey) {
       saveSecret('cursor.apiKey', cursorApiKey);
@@ -98,9 +113,11 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
     // Merge over existing overrides so a re-run of onboarding never clears a
     // previously-set agent path the user didn't touch this time.
     const current = readSettings();
-    return updateSettings({
+    const settings = updateSettings({
       onboardingComplete: true,
       cliPaths: { ...current.cliPaths, ...(cliPaths ?? {}) },
     });
+    await restartAndNotify(event);
+    return settings;
   });
 }

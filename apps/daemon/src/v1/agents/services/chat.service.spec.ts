@@ -63,7 +63,12 @@ class FakeRunDao {
 
 class FakeItemDao {
   readonly items: Item[] = [];
+  failNextKind: string | null = null;
   async create(data: Partial<Item>): Promise<Item> {
+    if (data.kind === this.failNextKind) {
+      this.failNextKind = null;
+      throw new Error('SQLITE_FULL');
+    }
     const item = {
       id: `item-${this.items.length}`,
       nodeId: null,
@@ -253,6 +258,39 @@ describe('ChatService', () => {
 
     expect(published.at(-1)?.item.kind).toBe('turn_complete');
     expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('marks the run failed instead of synthesizing success after an event persistence failure', async () => {
+    const { service, runDao, itemDao, published, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    published.length = 0;
+    itemDao.failNextKind = 'turn_complete';
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'turn_complete', usage: null, stopReason: 'end_turn' });
+    claude.finish();
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+    expect(published.some((event) => event.item.kind === 'turn_complete')).toBe(
+      false,
+    );
+    expect(published.at(-1)?.item.kind).toBe('error');
+  });
+
+  it('marks the run failed and releases its claim when adapter start throws', async () => {
+    const { service, runDao, registry, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    claude.start.mockImplementationOnce(() => {
+      throw new Error('spawn failed');
+    });
+
+    await expect(service.sendMessage(run.id, 'go')).rejects.toThrow(
+      'spawn failed',
+    );
+
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+    expect(registry.has(run.id)).toBe(false);
   });
 
   it('rejects sendMessage for an unknown run', async () => {

@@ -1,11 +1,14 @@
 import {
   chmodSync,
+  constants,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  type Stats,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -47,6 +50,17 @@ export type CursorMcpMergeResult =
 
 function configPathOf(cwd: string): string {
   return join(cwd, '.cursor', 'mcp.json');
+}
+
+function lstatIfExists(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /** The backup sits next to the file so a user can spot and undo it by hand. */
@@ -95,9 +109,24 @@ export function mergeGeniroEntry(
   cwd: string,
   entry: CursorMcpServerEntry,
 ): CursorMcpMergeResult {
+  const cursorDir = join(cwd, '.cursor');
   const path = configPathOf(cwd);
-  if (!existsSync(path)) {
-    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+  const dirStat = lstatIfExists(cursorDir);
+  if (dirStat?.isSymbolicLink() || (dirStat && !dirStat.isDirectory())) {
+    return {
+      ok: false,
+      reason: `${cursorDir} is not a real directory — refusing to touch it`,
+    };
+  }
+  const pathStat = lstatIfExists(path);
+  if (pathStat?.isSymbolicLink()) {
+    return {
+      ok: false,
+      reason: `${path} is a symbolic link — refusing to touch it`,
+    };
+  }
+  if (!pathStat) {
+    mkdirSync(cursorDir, { recursive: true });
     writeFileSync(
       path,
       JSON.stringify(
@@ -105,9 +134,15 @@ export function mergeGeniroEntry(
         null,
         2,
       ),
-      { encoding: 'utf8', mode: 0o600 },
+      { encoding: 'utf8', mode: 0o600, flag: 'wx' },
     );
     return { ok: true, created: true };
+  }
+  if (!pathStat.isFile()) {
+    return {
+      ok: false,
+      reason: `${path} is not a regular file — refusing to touch it`,
+    };
   }
   const parsed = parseFile(path);
   if (parsed === null) {
@@ -129,7 +164,23 @@ export function mergeGeniroEntry(
     };
   }
   const mode = statSync(path).mode & 0o777;
-  copyFileSync(path, backupPathOf(cwd));
+  const backup = backupPathOf(cwd);
+  if (lstatIfExists(backup) !== null) {
+    return {
+      ok: false,
+      reason: `${backup} already exists — refusing to overwrite recovery data`,
+    };
+  }
+  const tmp = tmpPathOf(cwd);
+  const tmpStat = lstatIfExists(tmp);
+  if (tmpStat?.isSymbolicLink()) {
+    return {
+      ok: false,
+      reason: `${tmp} is a symbolic link — refusing to touch it`,
+    };
+  }
+  rmSync(tmp, { force: true });
+  copyFileSync(path, backup, constants.COPYFILE_EXCL);
   // The merged file carries a bearer call token, so it must never be even
   // briefly world-readable. Write to a fresh sibling temp created 0600, then
   // renameSync it over the original (atomic replace) — a plain in-place
@@ -138,8 +189,6 @@ export function mergeGeniroEntry(
   // any temp a crashed turn stranded so the fresh 0600 create applies; the
   // 'wx' (O_EXCL) flag then refuses to follow a symlink planted at the temp
   // path rather than writing the token through it. Mirrors the create branch.
-  const tmp = tmpPathOf(cwd);
-  rmSync(tmp, { force: true });
   writeFileSync(
     tmp,
     JSON.stringify(
@@ -158,25 +207,47 @@ export function mergeGeniroEntry(
 
 /**
  * Undo one merge. Never throws — restore runs on settle paths and at boot,
- * where an fs error must degrade to "leave the backup in place for the user",
- * not take the turn or the boot down.
+ * where an fs error must leave the backup and journal entry for a later retry,
+ * not take the turn or the boot down. False means automatic recovery is still
+ * required.
  */
 export function restoreGeniroEntry(
   cwd: string,
   state: CursorMcpMergeState,
-): void {
+): boolean {
   const path = configPathOf(cwd);
   const backup = backupPathOf(cwd);
   try {
+    const cursorDirStat = lstatIfExists(join(cwd, '.cursor'));
+    if (
+      cursorDirStat?.isSymbolicLink() ||
+      (cursorDirStat && !cursorDirStat.isDirectory())
+    ) {
+      return false;
+    }
     // Sweep a temp orphaned by a crash between the merge's write and rename (a
     // successful merge renames it away). restoreGeniroEntry is the one cleanup
     // path both settle and the boot reconcile take, so this clears a stranded
     // 0600 temp holding an already-revoked token — no stray file left behind.
-    rmSync(tmpPathOf(cwd), { force: true });
-    if (!existsSync(path)) {
+    const tmp = tmpPathOf(cwd);
+    if (lstatIfExists(tmp)?.isSymbolicLink()) {
+      return false;
+    }
+    rmSync(tmp, { force: true });
+    const pathStat = lstatIfExists(path);
+    if (!pathStat) {
       // The user removed the file mid-turn — their call; just drop the backup.
+      if (lstatIfExists(backup)?.isSymbolicLink()) {
+        return false;
+      }
       rmSync(backup, { force: true });
-      return;
+      return true;
+    }
+    if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
+      return false;
+    }
+    if (lstatIfExists(backup)?.isSymbolicLink()) {
+      return false;
     }
     const parsed = parseFile(path);
     if (parsed === null) {
@@ -187,8 +258,9 @@ export function restoreGeniroEntry(
         copyFileSync(backup, path);
         restoreMode(path, state.mode);
         rmSync(backup, { force: true });
+        return true;
       }
-      return;
+      return false;
     }
     if (parsed.mcpServers?.[GENIRO_MCP_SERVER_KEY] !== undefined) {
       const servers = { ...parsed.mcpServers };
@@ -201,7 +273,7 @@ export function restoreGeniroEntry(
         // surgical write instead of deleting it.
         rmSync(path, { force: true });
         rmSync(backup, { force: true });
-        return;
+        return true;
       }
       // Byte-fidelity fast path: when the user made no mid-turn edits, the
       // file minus our key equals the backup — put the ORIGINAL bytes back so
@@ -216,12 +288,14 @@ export function restoreGeniroEntry(
       } else {
         writeFileSync(path, JSON.stringify(result, null, 2), 'utf8');
       }
-      restoreMode(path, state.mode);
     }
+    restoreMode(path, state.mode);
     rmSync(backup, { force: true });
+    return true;
   } catch {
     // Best-effort by contract; a leftover .geniro-bak is the user-visible
     // breadcrumb and the boot reconcile's second chance.
+    return false;
   }
 }
 

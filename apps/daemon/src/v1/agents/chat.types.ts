@@ -10,10 +10,13 @@ import type { AgentKind, ItemKind, RunStatus } from '../runs/runs.types';
 export const SINGLE_AGENT_NODE = 'agent';
 
 /**
+ * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
+ * MAX_ANSWER_LENGTH.
+ *
  * Sanity cap on a question answer (M4) — it travels as ONE stdin control
  * line into the paused CLI turn. Enforced at BOTH ingress points of the
- * answer channel: the WS verdict (oversize → answer dropped, plain approve)
- * and the MCP answer_agent tool (oversize → INVALID_ARGS envelope).
+ * answer channel: the WS verdict (invalid/oversize → status:'invalid', request
+ * remains pending) and the MCP answer_agent tool (oversize → INVALID_ARGS).
  */
 export const MAX_ANSWER_LENGTH = 32_768;
 

@@ -141,4 +141,32 @@ describe('ProcessRegistry shutdown isolation', () => {
     good.resolve();
     await expect(shutdown).resolves.toBeUndefined();
   });
+
+  it('cancels a claimed child that registers after shutdown starts', async () => {
+    const reg = new ProcessRegistry();
+    expect(reg.tryClaim('run-late')).toBe(true);
+
+    const shutdown = reg.onApplicationShutdown();
+    expect(reg.canStart('run-late')).toBe(false);
+    const late = fakeHandle();
+    reg.register('run-late', late.handle);
+
+    expect(late.cancel).toHaveBeenCalledOnce();
+    late.resolve();
+    await shutdown;
+    expect(reg.has('run-late')).toBe(false);
+  });
+
+  it('rejects new claims and cancels unclaimed utility children after shutdown', async () => {
+    const reg = new ProcessRegistry();
+    await reg.onApplicationShutdown();
+
+    expect(reg.tryClaim('run-new')).toBe(false);
+    const utility = fakeHandle();
+    reg.register('utility-late', utility.handle);
+
+    expect(utility.cancel).toHaveBeenCalledOnce();
+    utility.resolve();
+    await utility.handle.done;
+  });
 });

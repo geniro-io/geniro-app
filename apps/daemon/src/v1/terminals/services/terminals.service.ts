@@ -43,38 +43,51 @@ export class TerminalsService {
    * returned instead of spawning a duplicate; concurrent calls coalesce onto
    * one create.
    */
-  createForRun(input: {
+  async createForRun(input: {
     runId: string;
     nodeId?: string | null;
     cols?: number;
     rows?: number;
   }): Promise<TerminalSessionWire> {
-    const key = `${input.runId}:${input.nodeId ?? ''}`;
-    const inFlight = this.pending.get(key);
-    if (inFlight) {
-      return inFlight;
-    }
-    const create = this.doCreateForRun(input).finally(() => {
-      this.pending.delete(key);
-    });
-    this.pending.set(key, create);
-    return create;
-  }
-
-  private async doCreateForRun(input: {
-    runId: string;
-    nodeId?: string | null;
-    cols?: number;
-    rows?: number;
-  }): Promise<TerminalSessionWire> {
-    const existing = this.pty.findRunning(input.runId, input.nodeId ?? null);
-    if (existing) {
-      return existing;
-    }
     const em = this.em.fork();
     const run = await this.runDao.getById(input.runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${input.runId}`);
+    }
+    if (!run.workflowId && input.nodeId != null) {
+      throw new BadRequestException(
+        'TERMINAL_NODE_UNEXPECTED',
+        `chat run ${run.id} does not accept a nodeId`,
+      );
+    }
+    const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
+    const key = `${input.runId}:${nodeId ?? ''}`;
+    const inFlight = this.pending.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+    const create = this.doCreateForRun({ ...input, nodeId }, run, em).finally(
+      () => {
+        this.pending.delete(key);
+      },
+    );
+    this.pending.set(key, create);
+    return create;
+  }
+
+  private async doCreateForRun(
+    input: {
+      runId: string;
+      nodeId?: string | null;
+      cols?: number;
+      rows?: number;
+    },
+    run: Run,
+    em: EntityManager,
+  ): Promise<TerminalSessionWire> {
+    const existing = this.pty.findRunning(input.runId, input.nodeId ?? null);
+    if (existing) {
+      return existing;
     }
     if (!run.cwd) {
       throw new BadRequestException(

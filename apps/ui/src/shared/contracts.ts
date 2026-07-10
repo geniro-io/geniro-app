@@ -319,6 +319,8 @@ export interface GeniroApi {
   getStatus(): Promise<{ onboardingComplete: boolean; daemon: DaemonStatus }>;
   /** Daemon connection handle (host + port + token) for opening an authed WS. */
   getDaemonHandle(): Promise<DaemonHandle | null>;
+  /** Subscribe to daemon restarts that rotate the loopback handle/token. */
+  onDaemonRestarted(listener: (handle: DaemonHandle) => void): () => void;
   /** Open the native folder picker; returns the chosen absolute path or null. */
   pickProjectFolder(): Promise<string | null>;
   /** Open the native file picker for an agent binary; returns the path or null. */
@@ -349,6 +351,7 @@ export interface GeniroApi {
 export const IPC = {
   getStatus: 'geniro:getStatus',
   getDaemonHandle: 'geniro:getDaemonHandle',
+  onDaemonRestarted: 'geniro:onDaemonRestarted',
   pickProjectFolder: 'geniro:pickProjectFolder',
   pickAgentBinary: 'geniro:pickAgentBinary',
   getSettings: 'geniro:getSettings',

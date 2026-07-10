@@ -1,4 +1,10 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 
 /**
@@ -22,35 +28,56 @@ export interface CursorMergeJournalEntry {
   ts: number;
 }
 
-export function readJournal(path: string): CursorMergeJournalEntry[] {
+function isJournalEntry(value: unknown): value is CursorMergeJournalEntry {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const entry = value as Partial<CursorMergeJournalEntry>;
+  return (
+    typeof entry.cwd === 'string' &&
+    typeof entry.created === 'boolean' &&
+    typeof entry.ts === 'number' &&
+    (entry.mode === undefined || typeof entry.mode === 'number')
+  );
+}
+
+function parseJournal(path: string): CursorMergeJournalEntry[] | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    if (!Array.isArray(parsed)) {
-      return [];
+    if (!Array.isArray(parsed) || !parsed.every(isJournalEntry)) {
+      return null;
     }
-    return parsed.filter(
-      (e): e is CursorMergeJournalEntry =>
-        typeof e === 'object' &&
-        e !== null &&
-        typeof (e as CursorMergeJournalEntry).cwd === 'string' &&
-        typeof (e as CursorMergeJournalEntry).created === 'boolean',
-    );
-  } catch {
-    return [];
+    return parsed;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
   }
+}
+
+export function readJournal(path: string): CursorMergeJournalEntry[] {
+  return parseJournal(path) ?? [];
+}
+
+function journalEntriesForMutation(path: string): CursorMergeJournalEntry[] {
+  const entries = parseJournal(path);
+  if (entries === null) {
+    throw new Error(`cursor MCP journal ${path} is malformed`);
+  }
+  return entries;
 }
 
 export function addJournalEntry(
   path: string,
   entry: CursorMergeJournalEntry,
 ): void {
-  const entries = readJournal(path).filter((e) => e.cwd !== entry.cwd);
+  const entries = journalEntriesForMutation(path).filter(
+    (e) => e.cwd !== entry.cwd,
+  );
   entries.push(entry);
   writeJournal(path, entries);
 }
 
 export function removeJournalEntry(path: string, cwd: string): void {
-  const entries = readJournal(path).filter((e) => e.cwd !== cwd);
+  const entries = journalEntriesForMutation(path).filter((e) => e.cwd !== cwd);
   if (entries.length === 0) {
     rmSync(path, { force: true });
     return;
@@ -60,8 +87,12 @@ export function removeJournalEntry(path: string, cwd: string): void {
 
 function writeJournal(path: string, entries: CursorMergeJournalEntry[]): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(entries), {
+  const tmp = `${path}.tmp`;
+  rmSync(tmp, { force: true });
+  writeFileSync(tmp, JSON.stringify(entries), {
     encoding: 'utf8',
     mode: 0o600,
+    flag: 'wx',
   });
+  renameSync(tmp, path);
 }

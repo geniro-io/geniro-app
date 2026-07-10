@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
  * It MUST stay identical to the daemon's `DAEMON_PIDFILE_NAME`.
  */
 export const PIDFILE_NAME = 'daemon.json';
+export const DAEMON_LOOPBACK_HOST = '127.0.0.1';
 
 const MAX_TCP_PORT = 65535;
 
@@ -52,8 +53,7 @@ export function parseDaemonInfo(raw: unknown): DaemonInfo | null {
     typeof v.pid === 'number' &&
     Number.isInteger(v.pid) &&
     v.pid > 0 &&
-    typeof v.host === 'string' &&
-    v.host.length > 0 &&
+    v.host === DAEMON_LOOPBACK_HOST &&
     isValidPort(v.port) &&
     typeof v.token === 'string' &&
     v.token.length > 0 &&

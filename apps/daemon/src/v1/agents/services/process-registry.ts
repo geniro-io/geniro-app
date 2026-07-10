@@ -10,6 +10,11 @@ import type { AgentTurnHandle } from '../adapters/adapter.types';
  * or the UI guillotines the daemon mid-drain.
  */
 const SHUTDOWN_DRAIN_MS = 5000;
+const SHUTDOWN_POLL_MS = 25;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Tracks the in-flight turn (one per run for single-agent M2) so spawned CLI
@@ -30,6 +35,8 @@ const SHUTDOWN_DRAIN_MS = 5000;
 @Injectable()
 export class ProcessRegistry implements OnApplicationShutdown {
   private readonly active = new Map<string, AgentTurnHandle | null>();
+  private readonly shutdownCancelled = new WeakSet<AgentTurnHandle>();
+  private shuttingDown = false;
   /**
    * Runs whose cancel arrived during the claim→register window (no live handle
    * yet). {@link register} consults this so a Stop pressed in that window isn't a
@@ -43,7 +50,7 @@ export class ProcessRegistry implements OnApplicationShutdown {
    * cannot both win.
    */
   tryClaim(runId: string): boolean {
-    if (this.active.has(runId)) {
+    if (this.shuttingDown || this.active.has(runId)) {
       return false;
     }
     this.active.set(runId, null);
@@ -63,7 +70,10 @@ export class ProcessRegistry implements OnApplicationShutdown {
     this.active.set(runId, handle);
     // A cancel that landed during the claim→register window applies now, so the
     // just-spawned CLI is killed instead of running on after the user hit Stop.
-    if (this.cancelRequested.delete(runId)) {
+    const cancelWasRequested = this.cancelRequested.delete(runId);
+    if (this.shuttingDown) {
+      this.cancelForShutdown(handle);
+    } else if (cancelWasRequested) {
       handle.cancel();
     }
     void handle.done.finally(() => {
@@ -78,6 +88,11 @@ export class ProcessRegistry implements OnApplicationShutdown {
   /** True when a turn is claimed or in flight for the run. */
   has(runId: string): boolean {
     return this.active.has(runId);
+  }
+
+  /** Whether a claimed operation may cross its final pre-spawn boundary. */
+  canStart(runId: string): boolean {
+    return !this.shuttingDown && this.active.has(runId);
   }
 
   /**
@@ -106,27 +121,47 @@ export class ProcessRegistry implements OnApplicationShutdown {
    * `cancel()` already escalates SIGTERM→SIGKILL inside that window.
    */
   async onApplicationShutdown(): Promise<void> {
-    const live = [...this.active.values()].filter(
-      (handle): handle is AgentTurnHandle => handle !== null,
-    );
-    for (const handle of live) {
-      // cancel() is a never-throws contract, but one misbehaving handle must
-      // not abort this loop — every child behind it would be orphaned.
-      try {
-        handle.cancel();
-      } catch {
-        // Best-effort: the drain below still waits on the handle's done.
+    this.shuttingDown = true;
+    for (const [runId, handle] of this.active) {
+      if (handle === null) {
+        this.cancelRequested.add(runId);
+      } else {
+        this.cancelForShutdown(handle);
       }
     }
-    if (live.length > 0) {
-      const drained = Promise.allSettled(live.map((handle) => handle.done));
-      const deadline = new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, SHUTDOWN_DRAIN_MS);
-        timer.unref?.();
-      });
-      await Promise.race([drained, deadline]);
+
+    const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
+    while (this.active.size > 0 && Date.now() < deadline) {
+      const live = [...this.active.values()].filter(
+        (handle): handle is AgentTurnHandle => handle !== null,
+      );
+      for (const handle of live) {
+        this.cancelForShutdown(handle);
+      }
+      const remaining = deadline - Date.now();
+      const poll = delay(Math.min(SHUTDOWN_POLL_MS, remaining));
+      if (live.length === 0) {
+        await poll;
+      } else {
+        await Promise.race([
+          Promise.allSettled(live.map((handle) => handle.done)),
+          poll,
+        ]);
+      }
     }
     this.active.clear();
     this.cancelRequested.clear();
+  }
+
+  private cancelForShutdown(handle: AgentTurnHandle): void {
+    if (this.shutdownCancelled.has(handle)) {
+      return;
+    }
+    this.shutdownCancelled.add(handle);
+    try {
+      handle.cancel();
+    } catch {
+      // One bad handle must not prevent later registrations from being reaped.
+    }
   }
 }

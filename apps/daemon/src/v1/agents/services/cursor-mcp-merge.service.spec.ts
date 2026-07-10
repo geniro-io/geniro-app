@@ -14,7 +14,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { readJournal } from '../utils/cursor-mcp-journal';
+import { addJournalEntry, readJournal } from '../utils/cursor-mcp-journal';
 import { CursorMcpMergeService } from './cursor-mcp-merge.service';
 import { ProcessRegistry } from './process-registry';
 
@@ -28,6 +28,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
+  vi.unstubAllEnvs();
 });
 
 function tempDir(prefix: string): string {
@@ -38,16 +39,20 @@ function tempDir(prefix: string): string {
 
 function fakeExec(behavior: { gitTracked: boolean }): {
   execFileFn: typeof execFile;
-  calls: { cmd: string; args: string[] }[];
+  calls: { cmd: string; args: string[]; env?: NodeJS.ProcessEnv }[];
 } {
-  const calls: { cmd: string; args: string[] }[] = [];
+  const calls: {
+    cmd: string;
+    args: string[];
+    env?: NodeJS.ProcessEnv;
+  }[] = [];
   const execFileFn = ((
     cmd: string,
     args: string[],
-    _opts: unknown,
+    opts: { env?: NodeJS.ProcessEnv },
     cb: (err: Error | null, stdout: string, stderr: string) => void,
   ) => {
-    calls.push({ cmd, args });
+    calls.push({ cmd, args, env: opts.env });
     const err =
       cmd === 'git' && !behavior.gitTracked ? new Error('not tracked') : null;
     cb(err, '', '');
@@ -58,10 +63,14 @@ function fakeExec(behavior: { gitTracked: boolean }): {
 
 function build(
   behavior: { gitTracked: boolean },
-  overrides: { journalPath?: string; lockWaitMs?: number } = {},
+  overrides: {
+    journalPath?: string;
+    lockWaitMs?: number;
+    restoreFn?: () => boolean;
+  } = {},
 ): {
   service: CursorMcpMergeService;
-  calls: { cmd: string; args: string[] }[];
+  calls: { cmd: string; args: string[]; env?: NodeJS.ProcessEnv }[];
   journalPath: string;
 } {
   const journalPath =
@@ -72,6 +81,7 @@ function build(
     journalPath,
     lockWaitMs: overrides.lockWaitMs ?? 5_000,
     execFileFn,
+    restoreFn: overrides.restoreFn,
   });
   return { service, calls, journalPath };
 }
@@ -142,6 +152,22 @@ describe('CursorMcpMergeService', () => {
     (result2 as { release: () => void }).release();
   });
 
+  it('strips daemon-only GENIRO_ values from enable and git utility children', async () => {
+    vi.stubEnv('GENIRO_CURSOR_API_KEY', 'must-not-leak');
+    vi.stubEnv('NORMAL_VAR', 'keep-me');
+    const cwd = tempDir('merge-env-');
+    const { service, calls } = build({ gitTracked: true });
+
+    const result = await service.acquire(cwd, ENDPOINT);
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.env?.NORMAL_VAR).toBe('keep-me');
+      expect(call.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
+    }
+    (result as { release: () => void }).release();
+  });
+
   it('refuses a foreign geniro entry, clears the journal, and frees the lock', async () => {
     const cwd = tempDir('merge-conflict-');
     mkdirSync(join(cwd, '.cursor'), { recursive: true });
@@ -161,7 +187,7 @@ describe('CursorMcpMergeService', () => {
     expect(retry.ok).toBe(false);
   });
 
-  it('a merge that throws (.cursor is a file, not a directory) frees the cwd lock and leaves no journal entry', async () => {
+  it('a merge refusal frees the lock and clears its harmless journal entry', async () => {
     const cwd = tempDir('merge-notdir-');
     // A FILE named .cursor makes mergeGeniroEntry's mkdirSync throw — an fs
     // failure on the merge path, after the lock and the journal entry.
@@ -171,18 +197,16 @@ describe('CursorMcpMergeService', () => {
       { gitTracked: false },
       { lockWaitMs: 40 },
     );
-    // Refuse or reject — either is acceptable; what must NOT happen is a
-    // permanently held lock or a stranded journal entry.
+    // The no-follow preflight refuses before any file mutation, so this journal
+    // entry is harmless and can be cleared while the lock is freed.
     await service.acquire(cwd, ENDPOINT).catch(() => undefined);
-
-    // No merge happened, so nothing may be journaled for this cwd — a stale
-    // created:true entry would make the boot reconcile DELETE a real
-    // .cursor/mcp.json the user creates there later.
     expect(readJournal(journalPath)).toHaveLength(0);
 
     // The fs obstacle is gone and nobody holds the cwd — the next turn must
     // acquire instead of timing out behind a ghost holder.
     rmSync(join(cwd, '.cursor'), { force: true });
+    expect(service.reconcileStranded()).toBe(0);
+    expect(readJournal(journalPath)).toHaveLength(0);
     const retry = await service.acquire(cwd, ENDPOINT);
     expect(retry.ok).toBe(true);
     (retry as { release: () => void }).release();
@@ -234,5 +258,64 @@ describe('CursorMcpMergeService', () => {
     const next = build({ gitTracked: false }, { journalPath });
     expect(next.service.reconcileStranded()).toBe(1);
     expect(existsSync(configPath(cwd))).toBe(false);
+  });
+
+  it('retains the journal entry when settle-time restore fails', async () => {
+    const cwd = tempDir('merge-restore-fail-');
+    const journalPath = join(tempDir('merge-restore-journal-'), 'journal.json');
+    const restoreFn = vi.fn(() => false);
+    const { service } = build(
+      { gitTracked: false },
+      { journalPath, restoreFn },
+    );
+    const result = await service.acquire(cwd, ENDPOINT);
+    expect(result.ok).toBe(true);
+
+    (result as { release: () => void }).release();
+
+    expect(restoreFn).toHaveBeenCalledOnce();
+    expect(readJournal(journalPath)).toHaveLength(1);
+  });
+
+  it('keeps the original recovery entry when a new acquire follows a failed restore', async () => {
+    const cwd = tempDir('merge-restore-retry-');
+    const journalPath = join(
+      tempDir('merge-restore-retry-journal-'),
+      'journal.json',
+    );
+    const { service } = build(
+      { gitTracked: false },
+      { journalPath, restoreFn: () => false },
+    );
+    const first = await service.acquire(cwd, ENDPOINT);
+    expect(first.ok).toBe(true);
+    (first as { release: () => void }).release();
+
+    const retry = await service.acquire(cwd, ENDPOINT);
+    expect(retry.ok).toBe(false);
+
+    expect(readJournal(journalPath)).toEqual([
+      expect.objectContaining({ cwd, created: true }),
+    ]);
+  });
+
+  it('retains a stranded entry when boot reconciliation cannot restore it', () => {
+    const cwd = tempDir('merge-reconcile-fail-');
+    const journalPath = join(
+      tempDir('merge-reconcile-journal-'),
+      'journal.json',
+    );
+    addJournalEntry(journalPath, {
+      cwd,
+      created: true,
+      ts: Date.now(),
+    });
+    const { service } = build(
+      { gitTracked: false },
+      { journalPath, restoreFn: () => false },
+    );
+
+    expect(service.reconcileStranded()).toBe(0);
+    expect(readJournal(journalPath)).toHaveLength(1);
   });
 });

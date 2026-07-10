@@ -73,7 +73,7 @@ describe('NotificationsGateway', () => {
     expect(socket.disconnect).not.toHaveBeenCalled();
   });
 
-  it('join reads the runId from {runId} and string payloads, ignores empty', () => {
+  it('join reads the runId from {runId} and string payloads, ignores empty', async () => {
     const gw = new NotificationsGateway(
       runtime,
       new AgentEventBus(),
@@ -81,24 +81,57 @@ describe('NotificationsGateway', () => {
     );
     const socket = fakeSocket('good-token');
 
-    expect(gw.join(socket as unknown as Socket, { runId: 'r1' })).toEqual({
+    await expect(
+      gw.join(socket as unknown as Socket, { runId: 'r1' }),
+    ).resolves.toEqual({
       event: 'joined',
       data: { runId: 'r1' },
     });
     expect(socket.join).toHaveBeenCalledWith('run:r1');
 
-    expect(gw.join(socket as unknown as Socket, 'r2')).toEqual({
+    await expect(gw.join(socket as unknown as Socket, 'r2')).resolves.toEqual({
       event: 'joined',
       data: { runId: 'r2' },
     });
     expect(socket.join).toHaveBeenCalledWith('run:r2');
 
     // An empty/garbage payload yields a null runId and joins no room.
-    expect(gw.join(socket as unknown as Socket, { runId: '' })).toEqual({
+    await expect(
+      gw.join(socket as unknown as Socket, { runId: '' }),
+    ).resolves.toEqual({
       event: 'joined',
       data: { runId: null },
     });
     expect(socket.join).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not acknowledge joined until Socket.IO room membership completes', async () => {
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+    );
+    const socket = fakeSocket('good-token');
+    let resolveJoin!: () => void;
+    socket.join.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveJoin = resolve;
+      }),
+    );
+    let settled = false;
+    const response = gw
+      .join(socket as unknown as Socket, { runId: 'r1' })
+      .finally(() => {
+        settled = true;
+      });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolveJoin();
+    await expect(response).resolves.toEqual({
+      event: 'joined',
+      data: { runId: 'r1' },
+    });
   });
 
   it('leave reads the runId and leaves the room', () => {
@@ -170,12 +203,12 @@ describe('verdict round-trip', () => {
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
     expect(ack).toEqual({
       event: 'verdict_ack',
-      data: { requestId: 'req-1', applied: true },
+      data: { runId: 'r1', requestId: 'req-1', status: 'applied' },
     });
     expect(respond).toHaveBeenCalledWith(true);
   });
 
-  it('acks applied=false for unknown or malformed verdicts', () => {
+  it('distinguishes expired requests from malformed verdicts', () => {
     const gw = new NotificationsGateway(
       runtime,
       new AgentEventBus(),
@@ -183,14 +216,15 @@ describe('verdict round-trip', () => {
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
-    ).toEqual({ requestId: 'ghost', applied: false });
+    ).toEqual({ runId: 'r1', requestId: 'ghost', status: 'expired' });
     expect(gw.verdict({ nonsense: true }).data).toEqual({
+      runId: null,
       requestId: null,
-      applied: false,
+      status: 'invalid',
     });
   });
 
-  it('forwards a question card answer to the responder; junk answers are dropped (M4)', () => {
+  it('forwards valid answers and rejects invalid ones without consuming the question', () => {
     const approvals = new ApprovalRegistry();
     const respond = vi.fn(() => true);
     const track = (requestId: string): void =>
@@ -217,21 +251,36 @@ describe('verdict round-trip', () => {
     });
     expect(respond).toHaveBeenLastCalledWith(true, 'Blue');
 
-    // Non-string / empty / oversize answers must not reach the turn as
-    // answers — the verdict degrades to a plain approve.
+    // Non-string / empty / oversize answers must not consume the one-shot
+    // approval as a plain approve; the user can correct and resubmit.
     track('req-b');
-    gw.verdict({ runId: 'r1', requestId: 'req-b', allow: true, answer: 42 });
-    expect(respond).toHaveBeenLastCalledWith(true);
+    expect(
+      gw.verdict({
+        runId: 'r1',
+        requestId: 'req-b',
+        allow: true,
+        answer: 42,
+      }).data,
+    ).toEqual({ runId: 'r1', requestId: 'req-b', status: 'invalid' });
     track('req-c');
-    gw.verdict({ runId: 'r1', requestId: 'req-c', allow: true, answer: '' });
-    expect(respond).toHaveBeenLastCalledWith(true);
+    expect(
+      gw.verdict({
+        runId: 'r1',
+        requestId: 'req-c',
+        allow: true,
+        answer: '',
+      }).data,
+    ).toEqual({ runId: 'r1', requestId: 'req-c', status: 'invalid' });
     track('req-d');
-    gw.verdict({
-      runId: 'r1',
-      requestId: 'req-d',
-      allow: true,
-      answer: 'x'.repeat(40_000),
-    });
-    expect(respond).toHaveBeenLastCalledWith(true);
+    expect(
+      gw.verdict({
+        runId: 'r1',
+        requestId: 'req-d',
+        allow: true,
+        answer: 'x'.repeat(40_000),
+      }).data,
+    ).toEqual({ runId: 'r1', requestId: 'req-d', status: 'invalid' });
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(approvals.listByRun('r1')).toHaveLength(3);
   });
 });

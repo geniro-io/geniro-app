@@ -44,7 +44,11 @@ function extractVerdict(data: unknown): {
     runId.length === 0 ||
     typeof requestId !== 'string' ||
     requestId.length === 0 ||
-    typeof allow !== 'boolean'
+    typeof allow !== 'boolean' ||
+    (answer !== undefined &&
+      (typeof answer !== 'string' ||
+        answer.length === 0 ||
+        answer.length > MAX_ANSWER_LENGTH))
   ) {
     return null;
   }
@@ -52,15 +56,7 @@ function extractVerdict(data: unknown): {
     runId,
     requestId,
     allow,
-    // Oversize answers are dropped (not truncated): the verdict then lands
-    // as a plain approve — the transcript verdict row records it as
-    // "✓ tool approved" with no answer, and nothing is folded into the tool.
-    answer:
-      typeof answer === 'string' &&
-      answer.length > 0 &&
-      answer.length <= MAX_ANSWER_LENGTH
-        ? answer
-        : undefined,
+    answer: typeof answer === 'string' ? answer : undefined,
   };
 }
 
@@ -131,13 +127,13 @@ export class NotificationsGateway
   }
 
   @SubscribeMessage('join')
-  join(
+  async join(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: unknown,
-  ): WsResponse<{ runId: string | null }> {
+  ): Promise<WsResponse<{ runId: string | null }>> {
     const runId = extractRunId(data);
     if (runId) {
-      void client.join(runRoom(runId));
+      await client.join(runRoom(runId));
     }
     return { event: 'joined', data: { runId } };
   }
@@ -156,20 +152,25 @@ export class NotificationsGateway
 
   /**
    * The elicitation card's answer: routes a tool-approval verdict to the
-   * paused `ask`-node turn via the {@link ApprovalRegistry}. `applied: false`
-   * means the request is unknown or already settled (e.g. the node's turn
-   * ended first) — the card renders it as expired. The socket is already
-   * token-authenticated at `handleConnection`.
+   * paused `ask`-node turn via the {@link ApprovalRegistry}. The acknowledgment
+   * distinguishes applied, expired, and retryable-invalid payloads. The socket
+   * is already token-authenticated at `handleConnection`.
    */
   @SubscribeMessage('verdict')
-  verdict(
-    @MessageBody() data: unknown,
-  ): WsResponse<{ requestId: string | null; applied: boolean }> {
+  verdict(@MessageBody() data: unknown): WsResponse<{
+    runId: string | null;
+    requestId: string | null;
+    status: 'applied' | 'expired' | 'invalid';
+  }> {
     const parsed = extractVerdict(data);
     if (!parsed) {
       return {
         event: 'verdict_ack',
-        data: { requestId: null, applied: false },
+        data: {
+          runId: extractStringField(data, 'runId'),
+          requestId: extractStringField(data, 'requestId'),
+          status: 'invalid',
+        },
       };
     }
     const applied = this.approvals.resolve(
@@ -180,7 +181,11 @@ export class NotificationsGateway
     );
     return {
       event: 'verdict_ack',
-      data: { requestId: parsed.requestId, applied },
+      data: {
+        runId: parsed.runId,
+        requestId: parsed.requestId,
+        status: applied ? 'applied' : 'expired',
+      },
     };
   }
 

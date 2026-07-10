@@ -199,14 +199,22 @@ export class ChatService {
         agentKind === 'claude' ? this.claude : this.cursor;
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
+      let eventHandlingFailed = false;
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
+          eventHandlingFailed = true;
           this.logger.error(
             `run ${runId} event handling failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
       };
 
+      if (!this.registry.canStart(runId)) {
+        throw new ConflictException(
+          'RUN_STOPPING',
+          'daemon shutdown started before the agent could launch',
+        );
+      }
       const handle = adapter.start(
         { prompt: text, cwd, model, resumeSessionId },
         (event) => {
@@ -244,6 +252,24 @@ export class ChatService {
       void handle.done
         .then(async () => {
           await chain; // drain pending persists before finalizing
+          if (eventHandlingFailed) {
+            const message = 'run event persistence failed';
+            await this.runDao
+              .updateById(runId, { status: 'failed' }, em)
+              .catch((err: unknown) => {
+                this.logger.error(
+                  `run ${runId} failure-status write failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
+            await this.persist(em, runId, seq++, 'error', null, {
+              message,
+            }).catch((err: unknown) => {
+              this.logger.error(
+                `run ${runId} terminal failure item write failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+            return;
+          }
           if (!sawTerminal) {
             // The turn ended with no terminal event (e.g. a clean exit with no
             // result line). Persist+emit a synthetic turn_complete so the client
@@ -271,6 +297,13 @@ export class ChatService {
     } catch (err) {
       // Failed before the handle took over the slot's lifecycle — drop the claim
       // so the run is not wedged as permanently busy.
+      await this.runDao
+        .updateById(runId, { status: 'failed' }, em)
+        .catch((statusErr: unknown) => {
+          this.logger.error(
+            `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+          );
+        });
       this.registry.release(runId);
       throw err;
     }

@@ -147,13 +147,22 @@ describe('defaultCheckHealth', () => {
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ status: 'ok', version: '1.0.0' }),
+      // The real wire shape: @packages/http-server's HealthStatus.Ok ('Ok').
+      json: async () => ({ status: 'Ok', version: '1.0.0' }),
     });
     await expect(defaultCheckHealth('127.0.0.1', 4823)).resolves.toBe(true);
 
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ service: 'not-geniro' }),
+    });
+    await expect(defaultCheckHealth('127.0.0.1', 4823)).resolves.toBe(false);
+
+    // A case drift ('ok' vs the enum's 'Ok') must be rejected — this exact
+    // mismatch shipped once and made every daemon spawn time out as unhealthy.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'ok', version: '1.0.0' }),
     });
     await expect(defaultCheckHealth('127.0.0.1', 4823)).resolves.toBe(false);
   });

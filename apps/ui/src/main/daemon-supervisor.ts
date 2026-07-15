@@ -111,10 +111,11 @@ export async function defaultCheckHealth(
       return false;
     }
     const body: unknown = await res.json();
+    // status is @packages/http-server's HealthStatus.Ok — the literal 'Ok'.
     return (
       typeof body === 'object' &&
       body !== null &&
-      (body as { status?: unknown }).status === 'ok' &&
+      (body as { status?: unknown }).status === 'Ok' &&
       typeof (body as { version?: unknown }).version === 'string'
     );
   } catch {

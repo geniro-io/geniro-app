@@ -736,8 +736,8 @@ describe('Chats workflow runs', () => {
       setValue.call(textarea, 'build it');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    const startButton = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Start run'),
+    const startButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Start run"]',
     )!;
     await act(async () => {
       startButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -787,8 +787,8 @@ describe('Chats workflow runs', () => {
       setValue.call(textarea, 'doomed task');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    const startButton = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Start run'),
+    const startButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Start run"]',
     )!;
     await act(async () => {
       startButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -1199,8 +1199,8 @@ describe('Chats defaults', () => {
       setValue.call(textarea, 'hello');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    const sendButton = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Send',
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Send"]',
     )!;
     await act(async () => {
       sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));

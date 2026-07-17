@@ -1,4 +1,10 @@
-import { FolderOpen, Plus, Terminal as TerminalIcon, Zap } from 'lucide-react';
+import {
+  ArrowUp,
+  FolderOpen,
+  Plus,
+  Terminal as TerminalIcon,
+  Zap,
+} from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -648,92 +654,104 @@ export function Chats({
       </aside>
 
       {activeRunId === null ? (
-        // The new-run composer — the landing view. The task text sits on top;
-        // beneath it: the graph/agent it targets, the folder it runs in, and
-        // the trigger the run starts from (a run only starts by firing one).
+        // The new-run composer — the landing view, one Cursor-style card: the
+        // task text on top and, inside the same card, the graph/agent it
+        // targets, the folder it runs in, and the trigger the run starts from
+        // (a run only starts by firing one), with a round send control.
         <section className="flex min-h-0 flex-col items-center justify-center overflow-y-auto p-6">
-          <div className="flex w-full max-w-2xl flex-col gap-3">
-            <Textarea
-              value={input}
-              rows={5}
-              aria-label="Task for the new run"
-              placeholder={
-                workflowSlug
-                  ? 'Describe the task for the workflow team…'
-                  : 'Message the agent…'
-              }
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  void send();
+          <div className="flex w-full max-w-2xl flex-col gap-5">
+            <h2 className="text-center text-xl font-semibold tracking-tight">
+              What are we building?
+            </h2>
+            <div className="rounded-2xl border border-border bg-card shadow-panel-md transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30">
+              <Textarea
+                value={input}
+                rows={4}
+                aria-label="Task for the new run"
+                className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                placeholder={
+                  workflowSlug
+                    ? 'Describe the task for the workflow team…'
+                    : 'Message the agent…'
                 }
-              }}
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={target}
-                className="w-auto min-w-40"
-                onChange={(event) => setTarget(event.target.value)}
-                aria-label="Agent or workflow for new runs">
-                <optgroup label="Agents">
-                  {CLI_KINDS.map((kind) => (
-                    <option key={kind} value={kind}>
-                      {kind}
-                    </option>
-                  ))}
-                </optgroup>
-                {workflows.length > 0 ? (
-                  <optgroup label="Workflows">
-                    {workflows.map((wf) => (
-                      <option key={wf.slug} value={`wf:${wf.slug}`}>
-                        {wf.name}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter' &&
+                    (event.metaKey || event.ctrlKey)
+                  ) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <div className="flex flex-wrap items-center gap-1.5 p-2">
+                <Select
+                  value={target}
+                  className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  onChange={(event) => setTarget(event.target.value)}
+                  aria-label="Agent or workflow for new runs">
+                  <optgroup label="Agents">
+                    {CLI_KINDS.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {kind}
                       </option>
                     ))}
                   </optgroup>
-                ) : null}
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                className="max-w-56 justify-start gap-2 font-normal"
-                title={folder ?? undefined}
-                aria-label="Choose the folder for new chats"
-                onClick={() => void pickFolder()}>
-                <FolderOpen className="shrink-0" />
-                <span className="truncate">
-                  {folder ? folderName(folder) : 'Choose folder…'}
-                </span>
-              </Button>
-              {workflowSlug && triggers.length > 0 ? (
-                <Select
-                  value={triggerId}
-                  className="w-auto"
-                  onChange={(event) => setTriggerId(event.target.value)}
-                  aria-label="Trigger the run starts from">
-                  {triggers.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {`${entry.name} · ${entry.trigger} trigger`}
-                    </option>
-                  ))}
+                  {workflows.length > 0 ? (
+                    <optgroup label="Workflows">
+                      {workflows.map((wf) => (
+                        <option key={wf.slug} value={`wf:${wf.slug}`}>
+                          {wf.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
                 </Select>
-              ) : null}
-              <Button
-                type="button"
-                className="ml-auto gap-1.5"
-                disabled={!input.trim() || streaming}
-                onClick={() => void send()}>
-                {workflowSlug ? (
-                  <>
-                    <Zap className="shrink-0" /> Start run
-                  </>
-                ) : (
-                  'Send'
-                )}
-              </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground"
+                  title={folder ?? undefined}
+                  aria-label="Choose the folder for new chats"
+                  onClick={() => void pickFolder()}>
+                  <FolderOpen className="size-3.5 shrink-0" />
+                  <span className="truncate">
+                    {folder ? folderName(folder) : 'Choose folder…'}
+                  </span>
+                </Button>
+                {workflowSlug && triggers.length > 0 ? (
+                  <Select
+                    value={triggerId}
+                    className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    onChange={(event) => setTriggerId(event.target.value)}
+                    aria-label="Trigger the run starts from">
+                    {triggers.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {`${entry.name} · ${entry.trigger} trigger`}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+                <Button
+                  type="button"
+                  size="icon"
+                  className="ml-auto size-8 rounded-full"
+                  disabled={!input.trim() || streaming}
+                  aria-label={workflowSlug ? 'Start run' : 'Send'}
+                  title={workflowSlug ? 'Start run' : 'Send'}
+                  onClick={() => void send()}>
+                  {workflowSlug ? (
+                    <Zap className="size-4 shrink-0" />
+                  ) : (
+                    <ArrowUp className="size-4 shrink-0" />
+                  )}
+                </Button>
+              </div>
             </div>
             {workflowSlug && triggers.length > 1 ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-center text-xs text-muted-foreground">
                 This graph has {triggers.length} triggers — v1 fires them all on
                 start.
               </p>

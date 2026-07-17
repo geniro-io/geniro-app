@@ -72,7 +72,11 @@ export function usePanelWidth({
   return { width, startResize };
 }
 
-/** The draggable edge itself — absolutely positioned inside a `relative` panel. */
+/**
+ * The draggable edge itself — absolutely positioned inside a `relative` panel.
+ * A centered grip pill keeps the affordance visible at rest; without it the
+ * handle is an invisible 6px strip nobody discovers.
+ */
 export function PanelResizeHandle({
   edge,
   label,
@@ -89,9 +93,13 @@ export function PanelResizeHandle({
       aria-label={label}
       onMouseDown={onMouseDown}
       className={cn(
-        'absolute inset-y-0 z-10 w-1.5 cursor-col-resize transition-colors hover:bg-primary/30 active:bg-primary/40',
+        'group absolute inset-y-0 z-10 flex w-1.5 cursor-col-resize items-center justify-center transition-colors hover:bg-primary/30 active:bg-primary/40',
         edge === 'right' ? 'right-0' : 'left-0',
-      )}
-    />
+      )}>
+      <span
+        aria-hidden="true"
+        className="h-8 w-1 shrink-0 rounded-full bg-border transition-colors group-hover:bg-primary/60 group-active:bg-primary"
+      />
+    </div>
   );
 }

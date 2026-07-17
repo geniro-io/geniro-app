@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   edges: [] as { source: string; target: string }[],
   nodes: [] as { id: string; data: { node: { kind: string } } }[],
   updateNodeInternals: vi.fn(),
+  deleteElements: vi.fn(),
 }));
 
 // The shell reads the live canvas (edges + node kinds) through React Flow's
@@ -23,6 +24,7 @@ vi.mock('@xyflow/react', () => ({
   Position: { Left: 'left', Right: 'right' },
   useUpdateNodeInternals: () => mocks.updateNodeInternals,
   useEdges: () => mocks.edges,
+  useReactFlow: () => ({ deleteElements: mocks.deleteElements }),
   useStore: (selector: (state: unknown) => unknown) =>
     selector({ nodes: mocks.nodes }),
 }));
@@ -146,6 +148,32 @@ describe('NodeCard', () => {
     mocks.edges = [{ source: 't1', target: 'a1' }];
     render(AGENT);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('deletes this node (edges follow) from the card button, without bubbling a canvas click', () => {
+    canvas(TRIGGER, AGENT);
+    // React Flow selects a node via a synthetic onClick on its wrapper —
+    // render the card under such a wrapper to pin that delete stops there.
+    const wrapperClicks = vi.fn();
+    act(() => {
+      root.render(
+        <div onClick={wrapperClicks}>
+          <NodeCard node={AGENT} selected={false} className="w-[240px]">
+            <span>header-content</span>
+          </NodeCard>
+        </div>,
+      );
+    });
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Delete a1"]',
+    )!;
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(mocks.deleteElements).toHaveBeenCalledWith({
+      nodes: [{ id: 'a1' }],
+    });
+    expect(wrapperClicks).not.toHaveBeenCalled();
   });
 });
 

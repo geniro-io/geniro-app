@@ -413,19 +413,6 @@ export function Graphs({
     [rfInstance, addNode],
   );
 
-  const deleteSelected = useCallback((): void => {
-    if (!selectedNodeId) {
-      return;
-    }
-    setNodes((prev) => prev.filter((n) => n.id !== selectedNodeId));
-    setEdges((prev) =>
-      prev.filter(
-        (e) => e.source !== selectedNodeId && e.target !== selectedNodeId,
-      ),
-    );
-    setSelectedNodeId(null);
-  }, [selectedNodeId, setNodes, setEdges]);
-
   const layout = useCallback(async (): Promise<void> => {
     try {
       const workflow = fromFlow(
@@ -904,13 +891,6 @@ export function Graphs({
                       ) : null}
                     </>
                   )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="gap-1.5"
-                    onClick={deleteSelected}>
-                    <Trash2 className="shrink-0" /> Delete node
-                  </Button>
                 </div>
               </div>
             </aside>

@@ -1,4 +1,10 @@
-import { type ReactFlowState, useEdges, useStore } from '@xyflow/react';
+import {
+  type ReactFlowState,
+  useEdges,
+  useReactFlow,
+  useStore,
+} from '@xyflow/react';
+import { Trash2 } from 'lucide-react';
 import { createContext, useContext, useMemo } from 'react';
 
 import type {
@@ -6,6 +12,7 @@ import type {
   WorkflowNode,
 } from '../../shared/contracts';
 import { ErrorText } from '../components/error-text';
+import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { NodePorts } from './node-ports';
 import { flowEdgeKind } from './node-schema';
@@ -104,11 +111,12 @@ export function NodeCard({
 }): React.JSX.Element {
   const errors = useNodeValidation(node);
   const callsWarning = useCursorCallsWarning(node);
+  const { deleteElements } = useReactFlow();
   const invalid = errors.length > 0;
   return (
     <div
       className={cn(
-        'rounded-xl border bg-card shadow-panel-sm transition-shadow hover:shadow-panel-md',
+        'group relative rounded-xl border bg-card shadow-panel-sm transition-shadow hover:shadow-panel-md',
         invalid
           ? 'border-destructive ring-2 ring-destructive/30'
           : selected
@@ -116,6 +124,25 @@ export function NodeCard({
             : 'border-border',
         className,
       )}>
+      {/* Per-node delete, revealed on hover/selection. `nodrag` keeps the
+          press from starting a node drag; deleteElements drops the node AND
+          its edges through the controlled onNodesChange/onEdgesChange. */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label={`Delete ${node.id}`}
+        title="Delete node"
+        className={cn(
+          'nodrag absolute top-1.5 right-1.5 z-10 size-6 rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 [&_svg]:size-3.5',
+          selected && 'opacity-100',
+        )}
+        onClick={(event) => {
+          event.stopPropagation();
+          void deleteElements({ nodes: [{ id: node.id }] });
+        }}>
+        <Trash2 />
+      </Button>
       <div className="border-b border-border/60 p-3">{children}</div>
       <NodePorts
         nodeId={node.id}

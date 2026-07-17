@@ -105,7 +105,7 @@ export function Graphs({
   const [description, setDescription] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  // The builder's "Rename" popup — the same meta form as create, prefilled.
+  // The builder's "Change workflow" popup — the create meta form, prefilled.
   const [renameOpen, setRenameOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>([]);
@@ -284,7 +284,7 @@ export function Graphs({
     });
   }, [persist, name, description]);
 
-  /** Rename-popup submit: adopt the new meta and persist it immediately —
+  /** Change-popup submit: adopt the new meta and persist it immediately —
    *  the popup only closes once the library file actually carries it. */
   const renameWorkflow = useCallback(
     async (meta: { name: string; description?: string }): Promise<void> => {
@@ -697,10 +697,9 @@ export function Graphs({
                 <Button
                   type="button"
                   variant="outline"
-                  className="gap-1.5"
-                  aria-label="Rename workflow"
+                  aria-label="Change workflow"
                   onClick={() => setRenameOpen(true)}>
-                  <Pencil className="shrink-0" /> Rename
+                  <Pencil className="shrink-0" />
                 </Button>
                 <ConfirmButton
                   variant="destructive"
@@ -922,7 +921,7 @@ export function Graphs({
           open={renameOpen}
           busy={renaming}
           error={renameOpen ? error : null}
-          title="Rename workflow"
+          title="Change workflow"
           submitLabel="Save"
           busyLabel="Saving…"
           initial={{

@@ -10,9 +10,9 @@ import { Textarea } from '../components/ui/textarea';
 /**
  * The one workflow-meta form (name + optional description), shared by BOTH
  * meta flows so they stay identical: "New workflow" (empty form; Create
- * persists a fresh workflow) and the builder's "Rename" (form prefilled from
- * the open workflow; Save persists the new meta). Submit hands the trimmed
- * meta to the caller; Cancel changes nothing.
+ * persists a fresh workflow) and the builder's "Change workflow" (form
+ * prefilled from the open workflow; Save persists the new meta). Submit hands
+ * the trimmed meta to the caller; Cancel changes nothing.
  */
 export function WorkflowMetaDialog({
   open,

@@ -15,6 +15,7 @@ import {
 import {
   ArrowLeft,
   Download,
+  Pencil,
   Plus,
   Trash2,
   Upload,
@@ -48,7 +49,6 @@ import { WorkflowApi } from '../workflow-api';
 import { AgentAvatar } from './agent-avatar';
 import { AgentNode } from './agent-node';
 import { CallEdge } from './call-edge';
-import { CreateWorkflowDialog } from './create-workflow-dialog';
 import {
   autoLayout,
   edgeId,
@@ -75,6 +75,7 @@ import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
+import { WorkflowMetaDialog } from './workflow-meta-dialog';
 
 const NODE_TYPES = { agent: AgentNode, trigger: TriggerNode };
 // Data edges keep React Flow's default; call edges render dashed amber.
@@ -104,6 +105,9 @@ export function Graphs({
   const [description, setDescription] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  // The builder's "Rename" popup — the same meta form as create, prefilled.
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -248,31 +252,55 @@ export function Graphs({
     void refreshList();
   }, [refreshList, setNodes, setEdges]);
 
+  /** Persist the canvas under the given meta; true on success. */
+  const persist = useCallback(
+    async (meta: { name: string; description?: string }): Promise<boolean> => {
+      if (!api) {
+        return false;
+      }
+      setError(null);
+      try {
+        const workflow = fromFlow(meta, nodes, edges);
+        const saved = activeSlug
+          ? await api.save(activeSlug, workflow)
+          : await api.create(workflow);
+        setActiveSlug(saved.slug);
+        setNotice(`Saved ${saved.slug}.geniro.yaml`);
+        await refreshList();
+        return true;
+      } catch (err) {
+        setError(String(err));
+        return false;
+      }
+    },
+    [api, nodes, edges, activeSlug, refreshList],
+  );
+
   const save = useCallback(async (): Promise<void> => {
-    if (!api) {
-      return;
-    }
-    setError(null);
-    try {
-      const trimmedDescription = description.trim();
-      const workflow = fromFlow(
-        {
-          name: name.trim() || 'workflow',
-          ...(trimmedDescription ? { description: trimmedDescription } : {}),
-        },
-        nodes,
-        edges,
-      );
-      const saved = activeSlug
-        ? await api.save(activeSlug, workflow)
-        : await api.create(workflow);
-      setActiveSlug(saved.slug);
-      setNotice(`Saved ${saved.slug}.geniro.yaml`);
-      await refreshList();
-    } catch (err) {
-      setError(String(err));
-    }
-  }, [api, name, description, nodes, edges, activeSlug, refreshList]);
+    const trimmedDescription = description.trim();
+    await persist({
+      name: name.trim() || 'workflow',
+      ...(trimmedDescription ? { description: trimmedDescription } : {}),
+    });
+  }, [persist, name, description]);
+
+  /** Rename-popup submit: adopt the new meta and persist it immediately —
+   *  the popup only closes once the library file actually carries it. */
+  const renameWorkflow = useCallback(
+    async (meta: { name: string; description?: string }): Promise<void> => {
+      setRenaming(true);
+      try {
+        if (await persist(meta)) {
+          setName(meta.name);
+          setDescription(meta.description ?? '');
+          setRenameOpen(false);
+        }
+      } finally {
+        setRenaming(false);
+      }
+    },
+    [persist],
+  );
 
   const remove = useCallback(async (): Promise<void> => {
     if (!api || !activeSlug) {
@@ -621,12 +649,15 @@ export function Graphs({
           </div>
         )}
 
-        <CreateWorkflowDialog
+        <WorkflowMetaDialog
           open={createOpen}
           busy={creating}
           error={createOpen ? error : null}
+          title="New workflow"
+          submitLabel="Create"
+          busyLabel="Creating…"
           onClose={() => setCreateOpen(false)}
-          onCreate={(meta) => void createWorkflow(meta)}
+          onSubmit={(meta) => void createWorkflow(meta)}
         />
       </div>
     );
@@ -645,20 +676,15 @@ export function Graphs({
             onClick={backToLibrary}>
             <ArrowLeft className="shrink-0" /> Library
           </Button>
-          <Input
-            value={name}
-            aria-label="Workflow name"
-            className="w-[220px]"
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            className="gap-1.5"
-            onClick={() => void layout()}>
-            <Wand2 className="shrink-0" /> Auto-layout
-          </Button>
+          <h2 className="min-w-0 truncate font-medium">{name}</h2>
           <div className="ml-auto flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => void layout()}>
+              <Wand2 className="shrink-0" /> Auto-layout
+            </Button>
             {activeSlug ? (
               <>
                 <Button
@@ -668,8 +694,16 @@ export function Graphs({
                   onClick={() => void exportWorkflow()}>
                   <Download className="shrink-0" /> Export
                 </Button>
-                <ConfirmButton
+                <Button
+                  type="button"
                   variant="outline"
+                  className="gap-1.5"
+                  aria-label="Rename workflow"
+                  onClick={() => setRenameOpen(true)}>
+                  <Pencil className="shrink-0" /> Rename
+                </Button>
+                <ConfirmButton
+                  variant="destructive"
                   className="gap-1.5"
                   aria-label="Delete workflow"
                   confirmLabel="Delete?"
@@ -883,6 +917,21 @@ export function Graphs({
             </aside>
           ) : null}
         </div>
+
+        <WorkflowMetaDialog
+          open={renameOpen}
+          busy={renaming}
+          error={renameOpen ? error : null}
+          title="Rename workflow"
+          submitLabel="Save"
+          busyLabel="Saving…"
+          initial={{
+            name,
+            ...(description.trim() ? { description } : {}),
+          }}
+          onClose={() => setRenameOpen(false)}
+          onSubmit={(meta) => void renameWorkflow(meta)}
+        />
       </section>
     </CursorCallsContext.Provider>
   );

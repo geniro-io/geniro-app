@@ -8,48 +8,61 @@ import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 
 /**
- * The "New workflow" dialog: collect the workflow meta (name + optional
- * description) BEFORE anything exists. Create hands the meta to the caller —
- * which persists the workflow to the library and redirects into the builder —
- * while Cancel leaves the library untouched.
+ * The one workflow-meta form (name + optional description), shared by BOTH
+ * meta flows so they stay identical: "New workflow" (empty form; Create
+ * persists a fresh workflow) and the builder's "Rename" (form prefilled from
+ * the open workflow; Save persists the new meta). Submit hands the trimmed
+ * meta to the caller; Cancel changes nothing.
  */
-export function CreateWorkflowDialog({
+export function WorkflowMetaDialog({
   open,
   busy,
   error,
+  title,
+  submitLabel,
+  busyLabel,
+  initial,
   onClose,
-  onCreate,
+  onSubmit,
 }: {
   open: boolean;
   busy: boolean;
   error?: string | null;
+  title: string;
+  submitLabel: string;
+  busyLabel: string;
+  /** Prefill for editing an existing workflow's meta; omit for a blank form. */
+  initial?: { name: string; description?: string };
   onClose: () => void;
-  onCreate: (meta: { name: string; description?: string }) => void;
+  onSubmit: (meta: { name: string; description?: string }) => void;
 }): React.JSX.Element {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
 
-  // A reopened dialog is a NEW workflow — never leak the previous draft.
+  // A reopened dialog starts from `initial` (or blank) — never from the
+  // previous visit's abandoned draft.
   useEffect(() => {
     if (open) {
-      setName('');
-      setDescription('');
+      setName(initial?.name ?? '');
+      setDescription(initial?.description ?? '');
     }
-  }, [open]);
+    // `initial` is compared by its fields: a rename dialog reopened for the
+    // same workflow must reset even when the caller rebuilt the object.
+  }, [open, initial?.name, initial?.description]);
 
-  const canCreate = name.trim().length > 0 && !busy;
+  const canSubmit = name.trim().length > 0 && !busy;
 
   return (
-    <Dialog open={open} onClose={onClose} title="New workflow">
+    <Dialog open={open} onClose={onClose} title={title}>
       <form
         className="flex flex-col gap-4"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!canCreate) {
+          if (!canSubmit) {
             return;
           }
           const trimmedDescription = description.trim();
-          onCreate({
+          onSubmit({
             name: name.trim(),
             ...(trimmedDescription ? { description: trimmedDescription } : {}),
           });
@@ -79,8 +92,8 @@ export function CreateWorkflowDialog({
           <Button type="button" variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={!canCreate}>
-            {busy ? 'Creating…' : 'Create'}
+          <Button type="submit" disabled={!canSubmit}>
+            {busy ? busyLabel : submitLabel}
           </Button>
         </div>
       </form>

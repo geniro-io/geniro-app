@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
 import { Input } from '../components/ui/input';
@@ -10,10 +10,12 @@ const CUSTOM = '__custom__';
 
 /**
  * The inspector's model picker: the agent CLI's documented aliases as a
- * select ("CLI default" = no `--model` flag) plus a Custom… option opening
- * free-text entry for full model ids (e.g. `claude-fable-5`). A stored model
- * outside the alias list (imported YAML, hand-edited file) starts in custom
- * mode showing exactly the value that will be passed to `--model`.
+ * select plus a Custom… option opening free-text entry for full model ids
+ * (e.g. `claude-fable-5`). Every node names its model explicitly — a node
+ * arriving with none (a fresh palette drop, imported YAML) adopts the first
+ * alias on mount so the select never shows a model the run wouldn't use. A
+ * stored model outside the alias list starts in custom mode showing exactly
+ * the value that will be passed to `--model`.
  *
  * Mount with `key={node.id}` — the select/custom mode is derived from the
  * value once per node, so it must not leak across node selections.
@@ -26,7 +28,7 @@ export function ModelSelect({
 }: {
   id: string;
   agent: CliKind;
-  /** The node's stored model ('' = unset → the CLI default). */
+  /** The node's stored model ('' = not set yet — adopts the first alias). */
   value: string;
   onChange: (model: string | undefined) => void;
 }): React.JSX.Element {
@@ -34,6 +36,14 @@ export function ModelSelect({
   const [custom, setCustom] = useState(
     () => value !== '' && !options.includes(value),
   );
+
+  // Adopt the first alias for a model-less node — but never while the custom
+  // input is open, where a transiently empty value is just mid-typing.
+  useEffect(() => {
+    if (value === '' && !custom && options.length > 0) {
+      onChange(options[0]);
+    }
+  }, [value, custom, options, onChange]);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -49,7 +59,6 @@ export function ModelSelect({
           setCustom(false);
           onChange(event.target.value || undefined);
         }}>
-        <option value="">CLI default</option>
         {options.map((model) => (
           <option key={model} value={model}>
             {model}

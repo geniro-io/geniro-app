@@ -696,7 +696,7 @@ describe('Chats workflow runs', () => {
     expect(container.textContent).not.toContain('Stop');
   });
 
-  it('starts a NEW workflow run on Send even while a chat run is open (never routes into the chat)', async () => {
+  it('starts a NEW workflow run from the + composer even while a chat run is open (never routes into the chat)', async () => {
     workflowApi.list.mockResolvedValue([
       {
         slug: 'review-team',
@@ -713,6 +713,11 @@ describe('Chats workflow runs', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
+    // The open chat shows no target select — a new run starts from +.
+    const plus = container.querySelector('[aria-label="New chat"]')!;
+    await act(async () => {
+      plus.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     const select = container.querySelector('select')!;
     await act(async () => {
       const setSelect = Object.getOwnPropertyDescriptor(
@@ -731,11 +736,11 @@ describe('Chats workflow runs', () => {
       setValue.call(textarea, 'build it');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    const sendButton = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Send',
+    const startButton = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Start run'),
     )!;
     await act(async () => {
-      sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      startButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(workflowApi.run).toHaveBeenCalledWith('review-team', {
@@ -782,11 +787,11 @@ describe('Chats workflow runs', () => {
       setValue.call(textarea, 'doomed task');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    const sendButton = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Send',
+    const startButton = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Start run'),
     )!;
     await act(async () => {
-      sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      startButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(workflowApi.run).toHaveBeenCalled();
@@ -833,6 +838,51 @@ describe('Chats workflow runs', () => {
     expect(container.querySelector('select')!.textContent).toContain(
       'demo-duo',
     );
+  });
+
+  it('surfaces the workflow trigger under the composer — the entry the run starts from', async () => {
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.get.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          { id: 'a1', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    // Agent target: no trigger select in the composer.
+    expect(
+      container.querySelector('[aria-label="Trigger the run starts from"]'),
+    ).toBeNull();
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const triggerSelect = container.querySelector(
+      '[aria-label="Trigger the run starts from"]',
+    )!;
+    expect(triggerSelect.textContent).toContain('Start · manual trigger');
   });
 
   it('routes Stop on a workflow run to the workflow cancel endpoint', async () => {
@@ -1134,15 +1184,26 @@ describe('Chats defaults', () => {
   it('creates a new chat with no model — new chats use the CLI default', async () => {
     // The default-model setting was removed; a new chat must NOT carry a model
     // (regressing it would re-introduce the concept this pins as gone).
+    // The run is only created when the composer sends its first message.
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendMessage.mockResolvedValue(msg(0, 'user', 'hello'));
     const { client } = makeClient();
     const container = await mount(client);
 
-    const newChat = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'New chat',
-    );
+    const textarea = container.querySelector('textarea')!;
     await act(async () => {
-      newChat?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'hello');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sendButton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Send',
+    )!;
+    await act(async () => {
+      sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(api.createChat).toHaveBeenCalled();

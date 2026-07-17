@@ -1,4 +1,4 @@
-import { FolderOpen, Terminal as TerminalIcon } from 'lucide-react';
+import { FolderOpen, Plus, Terminal as TerminalIcon, Zap } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -16,10 +16,10 @@ import type {
   DaemonHandle,
   TerminalSession,
   WorkflowSummary,
+  WorkflowTriggerNode,
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import { ChatApi } from '../chat-api';
-import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { NavListItem } from '../components/nav-list-item';
 import { Badge } from '../components/ui/badge';
@@ -155,6 +155,48 @@ export function Chats({
       .then(setWorkflows)
       .catch(() => setWorkflows([]));
   }, [active, workflowApi]);
+
+  // The selected workflow's entry points for the composer's trigger select —
+  // a run starts by firing a trigger, so the composer surfaces which one.
+  const [triggers, setTriggers] = useState<
+    { id: string; name: string; trigger: string }[]
+  >([]);
+  const [triggerId, setTriggerId] = useState('');
+  useEffect(() => {
+    if (!workflowSlug) {
+      setTriggers([]);
+      setTriggerId('');
+      return;
+    }
+    let stale = false;
+    workflowApi
+      .get(workflowSlug)
+      .then(({ workflow }) => {
+        if (stale) {
+          return;
+        }
+        const entries = workflow.nodes
+          .filter(
+            (node): node is WorkflowTriggerNode => node.kind === 'trigger',
+          )
+          .map((node) => ({
+            id: node.id,
+            name: node.name ?? node.id,
+            trigger: node.trigger,
+          }));
+        setTriggers(entries);
+        setTriggerId(entries[0]?.id ?? '');
+      })
+      .catch(() => {
+        if (!stale) {
+          setTriggers([]);
+          setTriggerId('');
+        }
+      });
+    return () => {
+      stale = true;
+    };
+  }, [workflowSlug, workflowApi]);
 
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
@@ -308,34 +350,22 @@ export function Chats({
     return run.id;
   }, [ensureFolder, createChatRun, activateRun]);
 
-  const newChat = useCallback(async (): Promise<void> => {
-    try {
-      if (workflowSlug) {
-        // A workflow run takes one task prompt: deselect so the composer
-        // seeds a fresh run on Send.
-        const previous = activeRunIdRef.current;
-        if (previous) {
-          client.leaveRun(previous);
-        }
-        activeRunIdRef.current = null;
-        setActiveRunId(null);
-        setItems([]);
-        setStreaming(false);
-        setError(null);
-        return;
-      }
-      const cwd = await ensureFolder();
-      if (!cwd) {
-        return;
-      }
-      const run = await createChatRun(cwd);
-      setRuns((prev) => [run, ...prev]);
-      await activateRun(run.id);
-    } catch (err) {
-      setError(String(err));
+  /** The sidebar's + : back to the new-run composer. Nothing is created —
+   *  the run (chat or workflow) is only seeded when the composer sends. */
+  const newChat = useCallback((): void => {
+    const previous = activeRunIdRef.current;
+    if (previous) {
+      client.leaveRun(previous);
     }
-  }, [workflowSlug, client, ensureFolder, createChatRun, activateRun]);
+    activeRunIdRef.current = null;
+    setActiveRunId(null);
+    setItems([]);
+    setStreaming(false);
+    setError(null);
+  }, [client]);
 
+  /** The new-run composer's start: seed a fresh workflow run (fired from its
+   *  trigger) or create a chat run and send its first message. */
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim();
     if (!text || streaming) {
@@ -388,6 +418,26 @@ export function Chats({
     chatApi,
     addItem,
   ]);
+
+  /** The open transcript's composer: a follow-up into the ACTIVE chat run —
+   *  never a run start (workflow runs take one task; their composer is off). */
+  const sendFollowUp = useCallback(async (): Promise<void> => {
+    const text = input.trim();
+    const runId = activeRunIdRef.current;
+    if (!text || streaming || !runId) {
+      return;
+    }
+    setError(null);
+    try {
+      setInput('');
+      setStreaming(true);
+      const userItem = await chatApi.sendMessage(runId, text);
+      addItem(userItem);
+    } catch (err) {
+      setError(String(err));
+      setStreaming(false);
+    }
+  }, [input, streaming, chatApi, addItem]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -560,46 +610,23 @@ export function Chats({
   // content width, or a long cwd path widens the grid past the window.
   return (
     <div className="grid h-full grid-cols-[260px_minmax(0,1fr)]">
-      <aside className="flex min-h-0 flex-col gap-3 border-r border-border bg-sidebar p-3">
-        <div className="flex flex-col gap-2">
-          <Select
-            value={target}
-            onChange={(event) => setTarget(event.target.value)}
-            aria-label="Agent or workflow for new runs">
-            <optgroup label="Agents">
-              {CLI_KINDS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {kind}
-                </option>
-              ))}
-            </optgroup>
-            {workflows.length > 0 ? (
-              <optgroup label="Workflows">
-                {workflows.map((wf) => (
-                  <option key={wf.slug} value={`wf:${wf.slug}`}>
-                    {wf.name}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-          </Select>
+      <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
+        <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
+          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Chats
+          </span>
           <Button
             type="button"
-            variant="outline"
-            className="justify-start gap-2 font-normal"
-            title={folder ?? undefined}
-            aria-label="Choose the folder for new chats"
-            onClick={() => void pickFolder()}>
-            <FolderOpen className="shrink-0" />
-            <span className="truncate">
-              {folder ? folderName(folder) : 'Choose folder…'}
-            </span>
-          </Button>
-          <Button type="button" onClick={() => void newChat()}>
-            {workflowSlug ? 'New run' : 'New chat'}
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label="New chat"
+            title="New chat"
+            onClick={newChat}>
+            <Plus className="shrink-0" />
           </Button>
         </div>
-        <ul className="flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-0">
+        <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
           {runs.length === 0 ? (
             <li className="px-2 py-1.5 text-sm text-muted-foreground">
               No chats yet
@@ -620,58 +647,150 @@ export function Chats({
         </ul>
       </aside>
 
-      <section className="flex min-h-0 flex-col">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-          {activeRun?.workflowId ? (
-            <Badge variant="secondary">workflow: {activeRun.workflowId}</Badge>
-          ) : activeRun?.agentKind ? (
-            <Badge variant="secondary">{activeRun.agentKind}</Badge>
-          ) : null}
-          {activeRun?.cwd ? (
-            <span className="max-w-full min-w-0 truncate text-xs text-muted-foreground">
-              cwd: {activeRun.cwd}
-            </span>
-          ) : null}
-          {/* Cursor's subscription TUI is deferred, so only claude gets a mirror. */}
-          {activeRun &&
-          !activeRun.workflowId &&
-          activeRun.agentKind === 'claude' ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="ml-auto gap-1.5"
-              onClick={() => void openTerminal(activeRun.id)}>
-              <TerminalIcon className="size-3.5 shrink-0" />
-              Terminal
-            </Button>
-          ) : null}
-          {activeRun?.workflowId && terminalNodeIds.length > 0 ? (
-            <span className="ml-auto flex flex-wrap gap-1">
-              {terminalNodeIds.map((nodeId) => (
-                <Button
-                  key={nodeId}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  title={`Open a terminal mirroring ${nodeId}`}
-                  onClick={() => void openTerminal(activeRun.id, nodeId)}>
-                  <TerminalIcon className="size-3.5 shrink-0" />
-                  {nodeId}
-                </Button>
-              ))}
-            </span>
-          ) : null}
-        </div>
+      {activeRunId === null ? (
+        // The new-run composer — the landing view. The task text sits on top;
+        // beneath it: the graph/agent it targets, the folder it runs in, and
+        // the trigger the run starts from (a run only starts by firing one).
+        <section className="flex min-h-0 flex-col items-center justify-center overflow-y-auto p-6">
+          <div className="flex w-full max-w-2xl flex-col gap-3">
+            <Textarea
+              value={input}
+              rows={5}
+              aria-label="Task for the new run"
+              placeholder={
+                workflowSlug
+                  ? 'Describe the task for the workflow team…'
+                  : 'Message the agent…'
+              }
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={target}
+                className="w-auto min-w-40"
+                onChange={(event) => setTarget(event.target.value)}
+                aria-label="Agent or workflow for new runs">
+                <optgroup label="Agents">
+                  {CLI_KINDS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {kind}
+                    </option>
+                  ))}
+                </optgroup>
+                {workflows.length > 0 ? (
+                  <optgroup label="Workflows">
+                    {workflows.map((wf) => (
+                      <option key={wf.slug} value={`wf:${wf.slug}`}>
+                        {wf.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                className="max-w-56 justify-start gap-2 font-normal"
+                title={folder ?? undefined}
+                aria-label="Choose the folder for new chats"
+                onClick={() => void pickFolder()}>
+                <FolderOpen className="shrink-0" />
+                <span className="truncate">
+                  {folder ? folderName(folder) : 'Choose folder…'}
+                </span>
+              </Button>
+              {workflowSlug && triggers.length > 0 ? (
+                <Select
+                  value={triggerId}
+                  className="w-auto"
+                  onChange={(event) => setTriggerId(event.target.value)}
+                  aria-label="Trigger the run starts from">
+                  {triggers.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {`${entry.name} · ${entry.trigger} trigger`}
+                    </option>
+                  ))}
+                </Select>
+              ) : null}
+              <Button
+                type="button"
+                className="ml-auto gap-1.5"
+                disabled={!input.trim() || streaming}
+                onClick={() => void send()}>
+                {workflowSlug ? (
+                  <>
+                    <Zap className="shrink-0" /> Start run
+                  </>
+                ) : (
+                  'Send'
+                )}
+              </Button>
+            </div>
+            {workflowSlug && triggers.length > 1 ? (
+              <p className="text-xs text-muted-foreground">
+                This graph has {triggers.length} triggers — v1 fires them all on
+                start.
+              </p>
+            ) : null}
+            {error ? <ErrorText>{error}</ErrorText> : null}
+          </div>
+        </section>
+      ) : (
+        <section className="flex min-h-0 flex-col">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+            {activeRun?.workflowId ? (
+              <Badge variant="secondary">
+                workflow: {activeRun.workflowId}
+              </Badge>
+            ) : activeRun?.agentKind ? (
+              <Badge variant="secondary">{activeRun.agentKind}</Badge>
+            ) : null}
+            {activeRun?.cwd ? (
+              <span className="max-w-full min-w-0 truncate text-xs text-muted-foreground">
+                cwd: {activeRun.cwd}
+              </span>
+            ) : null}
+            {/* Cursor's subscription TUI is deferred, so only claude gets a mirror. */}
+            {activeRun &&
+            !activeRun.workflowId &&
+            activeRun.agentKind === 'claude' ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-auto gap-1.5"
+                onClick={() => void openTerminal(activeRun.id)}>
+                <TerminalIcon className="size-3.5 shrink-0" />
+                Terminal
+              </Button>
+            ) : null}
+            {activeRun?.workflowId && terminalNodeIds.length > 0 ? (
+              <span className="ml-auto flex flex-wrap gap-1">
+                {terminalNodeIds.map((nodeId) => (
+                  <Button
+                    key={nodeId}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    title={`Open a terminal mirroring ${nodeId}`}
+                    onClick={() => void openTerminal(activeRun.id, nodeId)}>
+                    <TerminalIcon className="size-3.5 shrink-0" />
+                    {nodeId}
+                  </Button>
+                ))}
+              </span>
+            ) : null}
+          </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
-          {activeRunId === null ? (
-            <EmptyState>
-              Start a new chat or pick one to view its transcript.
-            </EmptyState>
-          ) : (
-            items.map((item) => {
+          <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+            {items.map((item) => {
               if (item.kind !== 'approval_request') {
                 return <TranscriptItem key={item.id} item={item} />;
               }
@@ -694,59 +813,54 @@ export function Chats({
                   }
                 />
               );
-            })
-          )}
-          <div ref={transcriptEndRef} />
-        </div>
+            })}
+            <div ref={transcriptEndRef} />
+          </div>
 
-        {error ? (
-          <ErrorText className="border-t border-border px-4 py-2">
-            {error}
-          </ErrorText>
-        ) : null}
+          {error ? (
+            <ErrorText className="border-t border-border px-4 py-2">
+              {error}
+            </ErrorText>
+          ) : null}
 
-        <div className="flex items-end gap-2 border-t border-border p-3">
-          <Textarea
-            value={input}
-            aria-label="Message the agent"
-            disabled={activeRun?.workflowId != null && !workflowSlug}
-            placeholder={
-              workflowSlug
-                ? 'Describe the task for the workflow team (starts a new run)…'
-                : activeRun?.workflowId
-                  ? 'Workflow runs take one task — pick a workflow or an agent to start another.'
+          <div className="flex items-end gap-2 border-t border-border p-3">
+            <Textarea
+              value={input}
+              aria-label="Message the agent"
+              disabled={activeRun?.workflowId != null}
+              placeholder={
+                activeRun?.workflowId
+                  ? 'Workflow runs take one task — press + to start another.'
                   : streaming
                     ? 'Agent is working…'
                     : 'Message the agent…'
-            }
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault();
-                void send();
               }
-            }}
-          />
-          {streaming ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void cancel()}>
-              Stop
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              disabled={
-                !input.trim() ||
-                (activeRun?.workflowId != null && !workflowSlug)
-              }
-              onClick={() => void send()}>
-              Send
-            </Button>
-          )}
-        </div>
-      </section>
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void sendFollowUp();
+                }
+              }}
+            />
+            {streaming ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void cancel()}>
+                Stop
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                disabled={!input.trim() || activeRun?.workflowId != null}
+                onClick={() => void sendFollowUp()}>
+                Send
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Render only while this tab is visible — the panel is fixed-position
           and would otherwise overlay Graphs/Settings from the hidden tab. */}

@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { cn } from '../components/ui/utils';
+import { DiffView, editDiffOf } from './diff-view';
 
 /** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -223,6 +224,13 @@ export function ApprovalCard({
     );
   }
 
+  // A file edit under review reads as a diff, not as raw JSON — the same
+  // red/green view the tool-group rows use once the call has run.
+  const diff = editDiffOf(toolName, input);
+  const filePath =
+    input && typeof input === 'object' && 'file_path' in input
+      ? String((input as { file_path: unknown }).file_path)
+      : null;
   let inputPreview: string;
   try {
     inputPreview = JSON.stringify(input, null, 2);
@@ -239,9 +247,22 @@ export function ApprovalCard({
         <span className="text-sm font-medium">Agent asks to run a tool</span>
         <Badge variant="secondary">{toolName}</Badge>
       </div>
-      <pre className="m-0 max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
-        {inputPreview}
-      </pre>
+      {diff ? (
+        <div className="flex flex-col gap-1.5">
+          {filePath ? (
+            <div className="font-mono text-xs text-muted-foreground">
+              {filePath}
+            </div>
+          ) : null}
+          <div className="max-h-48 overflow-auto">
+            <DiffView oldText={diff.oldText} newText={diff.newText} />
+          </div>
+        </div>
+      ) : (
+        <pre className="m-0 max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
+          {inputPreview}
+        </pre>
+      )}
       {expired && verdict === null ? (
         <p className="text-xs text-muted-foreground">
           ⏱ expired — the turn ended before an answer

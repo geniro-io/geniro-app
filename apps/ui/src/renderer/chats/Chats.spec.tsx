@@ -704,6 +704,29 @@ describe('Chats workflow runs', () => {
     expect(sidebarRow()).not.toContain('running');
   });
 
+  it('streamed tool calls land as a COLLAPSED group row, not raw payload rows', async () => {
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'tool_call', 'coder'),
+        payload: { id: 't1', name: 'Bash', input: { command: 'ls -la' } },
+      });
+      emitItem({
+        ...wfItem(6, 'tool_result', 'coder'),
+        payload: { id: 't1', name: null, result: 'file-list' },
+      });
+    });
+
+    expect(container.textContent).toContain('Used 1 tool');
+    // Collapsed by default: neither the input nor the result payload shows.
+    expect(container.textContent).not.toContain('ls -la');
+    expect(container.textContent).not.toContain('file-list');
+  });
+
   it("a workflow that rolled up failed settles the sidebar as failed — the terminal item's kind alone must not read as success", async () => {
     // The daemon ends EVERY workflow run with a run-level turn_complete whose
     // stopReason carries the roll-up; with a failed node the run row says

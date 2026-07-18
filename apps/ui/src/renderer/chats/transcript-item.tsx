@@ -1,7 +1,14 @@
 import { memo } from 'react';
 
 import type { ChatItem } from '../../shared/contracts';
+import { AlertRow } from './alert-row';
 import { MessageBubble } from './message-bubble';
+
+/** What the transcript knows about a workflow node (for display only). */
+export interface TranscriptNodeMeta {
+  name: string;
+  kind: 'agent' | 'trigger';
+}
 
 /** Read a string field out of an item's payload, defensively. */
 export function payloadString(payload: unknown, key: string): string | null {
@@ -32,13 +39,20 @@ const PRE_CLASS = 'm-0 overflow-x-auto whitespace-pre-wrap font-mono text-xs';
  */
 export const TranscriptItem = memo(function TranscriptItem({
   item,
+  nodes,
 }: {
   item: ChatItem;
+  /** Workflow node display metadata, keyed by node id (names + kinds). */
+  nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
 }): React.JSX.Element | null {
+  const nodeName = (id: string | null): string | null =>
+    id === null ? null : (nodes?.get(id)?.name ?? id);
   // Workflow-run items carry the node that produced them; tag each row so
   // parallel branches stay readable in the interleaved transcript.
-  const tag = (label: string): string =>
-    item.nodeId ? `${item.nodeId} · ${label}` : label;
+  const tag = (label: string): string => {
+    const name = nodeName(item.nodeId);
+    return name ? `${name} · ${label}` : label;
+  };
   switch (item.kind) {
     case 'message': {
       const text = payloadString(item.payload, 'text') ?? '';
@@ -81,25 +95,31 @@ export const TranscriptItem = memo(function TranscriptItem({
       );
     case 'error':
       return (
-        <MessageBubble variant="error" role={tag('error')}>
-          <div className="whitespace-pre-wrap">
-            {payloadString(item.payload, 'message') ?? 'unknown error'}
-          </div>
-        </MessageBubble>
+        <AlertRow
+          caption={tag('error')}
+          message={payloadString(item.payload, 'message') ?? 'unknown error'}
+        />
       );
     case 'turn_cancelled':
-      return <MessageBubble variant="note">{tag('⊘ cancelled')}</MessageBubble>;
+      // A node's cancel already lands as its "<Name> cancelled" status row —
+      // only the run-level cancel note remains.
+      return item.nodeId !== null ? null : (
+        <MessageBubble variant="note">⊘ cancelled</MessageBubble>
+      );
     case 'turn_complete': {
-      // A workflow run's final turn_complete carries the roll-up in
-      // stopReason — a failed/cancelled workflow must not read "✓ done".
+      // A node's finished turn already lands as its "<Name> finished" status
+      // row (its cost/context live in the agents panel) — only the run-level
+      // note renders. That note carries the workflow roll-up in stopReason:
+      // a failed/cancelled workflow must not read "✓ done".
+      if (item.nodeId !== null) {
+        return null;
+      }
       const stop = payloadString(item.payload, 'stopReason');
       if (stop === 'workflow_failed') {
-        return <MessageBubble variant="note">{tag('✗ failed')}</MessageBubble>;
+        return <MessageBubble variant="note">✗ failed</MessageBubble>;
       }
       if (stop === 'workflow_cancelled') {
-        return (
-          <MessageBubble variant="note">{tag('⊘ cancelled')}</MessageBubble>
-        );
+        return <MessageBubble variant="note">⊘ cancelled</MessageBubble>;
       }
       const usage = (item.payload as { usage?: unknown } | null)?.usage;
       const cost =
@@ -108,24 +128,42 @@ export const TranscriptItem = memo(function TranscriptItem({
           : null;
       return (
         <MessageBubble variant="note">
-          {tag(
-            `✓ done${typeof cost === 'number' ? ` · $${cost.toFixed(4)}` : ''}`,
-          )}
+          {`✓ done${typeof cost === 'number' ? ` · $${cost.toFixed(4)}` : ''}`}
         </MessageBubble>
       );
     }
     case 'status': {
       const status = payloadString(item.payload, 'status');
-      return status ? (
-        <MessageBubble variant="note">
-          {`${item.nodeId ?? 'run'} → ${status}`}
-        </MessageBubble>
-      ) : null;
+      if (!status) {
+        return null;
+      }
+      // A trigger firing is not news — the user's own message sits right
+      // above it. Only agent nodes narrate their lifecycle.
+      if (item.nodeId !== null && nodes?.get(item.nodeId)?.kind === 'trigger') {
+        return null;
+      }
+      const name = nodeName(item.nodeId) ?? 'run';
+      const reason = payloadString(item.payload, 'reason');
+      const line =
+        status === 'running'
+          ? `▸ ${name} started`
+          : status === 'completed'
+            ? `✓ ${name} finished`
+            : status === 'failed'
+              ? `✗ ${name} failed`
+              : status === 'cancelled'
+                ? `⊘ ${name} cancelled`
+                : status === 'skipped'
+                  ? `− ${name} skipped${reason ? ` — ${reason}` : ''}`
+                  : `${name} · ${status}`;
+      return <MessageBubble variant="note">{line}</MessageBubble>;
     }
     case 'system': {
       const message = payloadString(item.payload, 'message');
+      // The daemon's system items are failure advisories (a degraded caller,
+      // a persistence problem) — surface them like errors: red, expandable.
       return message ? (
-        <MessageBubble variant="note">{tag(message)}</MessageBubble>
+        <AlertRow caption={tag('system')} message={message} />
       ) : null;
     }
     case 'approval_verdict': {

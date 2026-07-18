@@ -54,11 +54,14 @@ import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
 import { RenameRunDialog } from './rename-run-dialog';
+import { ToolGroup } from './tool-group';
+import { groupTranscript } from './transcript-groups';
 import {
   collectVerdicts,
   expiredApprovalIds,
   payloadString,
   TranscriptItem,
+  type TranscriptNodeMeta,
 } from './transcript-item';
 
 // Code-split the terminal mirror: xterm.js (~250KB) must not ride the startup
@@ -861,6 +864,20 @@ export function Chats({
       cancelled = true;
     };
   }, [activeRun?.workflowId, workflowApi]);
+  // Node display metadata for the transcript (names + kinds), and the
+  // transcript folded into render entries — consecutive tool calls collapse
+  // into expandable groups.
+  const nodeMeta = useMemo(() => {
+    const map = new Map<string, TranscriptNodeMeta>();
+    for (const node of wfNodes.agents) {
+      map.set(node.id, { name: node.name ?? node.id, kind: 'agent' });
+    }
+    for (const node of wfNodes.triggers) {
+      map.set(node.id, { name: node.name ?? node.id, kind: 'trigger' });
+    }
+    return map;
+  }, [wfNodes]);
+  const transcriptEntries = useMemo(() => groupTranscript(items), [items]);
   // Live per-agent state for the agents panel, derived purely from the
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
@@ -1203,9 +1220,25 @@ export function Chats({
           ) : null}
 
           <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
-            {items.map((item) => {
+            {transcriptEntries.map((entry) => {
+              if (entry.type === 'tools') {
+                return (
+                  <ToolGroup
+                    key={entry.id}
+                    group={entry}
+                    label={
+                      entry.nodeId
+                        ? (nodeMeta.get(entry.nodeId)?.name ?? entry.nodeId)
+                        : null
+                    }
+                  />
+                );
+              }
+              const item = entry.item;
               if (item.kind !== 'approval_request') {
-                return <TranscriptItem key={item.id} item={item} />;
+                return (
+                  <TranscriptItem key={item.id} item={item} nodes={nodeMeta} />
+                );
               }
               const requestId = payloadString(item.payload, 'id');
               return (

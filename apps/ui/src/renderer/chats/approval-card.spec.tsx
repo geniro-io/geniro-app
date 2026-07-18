@@ -58,6 +58,28 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenLastCalledWith(false);
   });
 
+  it('renders an Edit permission as a red/green diff instead of raw JSON', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="Edit"
+        input={{
+          file_path: '/proj/stamp.txt',
+          old_string: 'APPROVED',
+          new_string: 'SEALED',
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const diff = el.querySelector('[data-slot="diff"]');
+    expect(diff).not.toBeNull();
+    expect(diff?.textContent).toContain('APPROVED');
+    expect(diff?.textContent).toContain('SEALED');
+    expect(el.textContent).toContain('/proj/stamp.txt');
+    // The raw JSON body is replaced by the diff for edits under review.
+    expect(el.textContent).not.toContain('"old_string"');
+  });
+
   it('renders the settled state with no buttons once a verdict exists', () => {
     const el = render(
       <ApprovalCard

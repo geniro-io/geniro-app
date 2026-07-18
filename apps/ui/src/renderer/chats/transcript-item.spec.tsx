@@ -4,7 +4,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ChatItem, ChatItemKind } from '../../shared/contracts';
-import { TranscriptItem } from './transcript-item';
+import { TranscriptItem, type TranscriptNodeMeta } from './transcript-item';
+
+const NODES: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
+  ['start', { name: 'Start', kind: 'trigger' }],
+  ['orch', { name: 'Orchestrator', kind: 'agent' }],
+  ['epilogue', { name: 'Epilogue', kind: 'agent' }],
+]);
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -188,6 +194,105 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     expect(container.textContent).toContain('undelivered');
+  });
+
+  it('status rows speak in node display names, not "id → status" arrows', () => {
+    render(
+      <TranscriptItem
+        item={item('status', { status: 'running' })}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toContain('Orchestrator started');
+
+    render(
+      <TranscriptItem
+        item={item('status', { status: 'completed' })}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toContain('✓ Orchestrator finished');
+    expect(container.textContent).not.toContain('→');
+
+    render(
+      <TranscriptItem
+        item={item(
+          'status',
+          { status: 'skipped', reason: 'an upstream node did not complete' },
+          'epilogue',
+        )}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toContain(
+      '− Epilogue skipped — an upstream node did not complete',
+    );
+  });
+
+  it('a trigger node\'s status row is hidden entirely ("start → completed" noise)', () => {
+    render(
+      <TranscriptItem
+        item={item('status', { status: 'completed' }, 'start')}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('a NODE-level turn_complete renders nothing — the status row narrates the finish', () => {
+    render(
+      <TranscriptItem
+        item={item('turn_complete', {
+          usage: { costUsd: 0.07 },
+          stopReason: 'end_turn',
+        })}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('a system advisory renders as a red expandable row with full details on click', () => {
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message: 'agent calls disabled\nspawn cursor-agent ENOENT',
+        })}
+        nodes={NODES}
+      />,
+    );
+    const row = container.querySelector('[data-role="error"]');
+    expect(row).not.toBeNull();
+    expect(row?.className).toContain('destructive');
+    expect(container.textContent).toContain('agent calls disabled');
+    expect(container.textContent).not.toContain('spawn cursor-agent ENOENT');
+
+    act(() => {
+      container
+        .querySelector('button[aria-expanded]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('spawn cursor-agent ENOENT');
+  });
+
+  it('an error renders red and expands to its full message on click', () => {
+    render(
+      <TranscriptItem
+        item={item('error', {
+          message: 'claude exited with code 143\nstderr tail here',
+        })}
+      />,
+    );
+    expect(container.querySelector('[data-role="error"]')?.className).toContain(
+      'destructive',
+    );
+    expect(container.textContent).not.toContain('stderr tail here');
+    act(() => {
+      container
+        .querySelector('button[aria-expanded]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('stderr tail here');
   });
 
   it('a workflow run-level turn_complete renders by its stopReason roll-up, never a blanket ✓ done', () => {

@@ -45,9 +45,16 @@ export interface CallBlockEntry {
   /** The caller node the call_started row was attributed to. */
   callerNodeId: string | null;
   mode: string | null;
+  /** The caller's ask — the block's REQUEST. */
   message: string | null;
   /** Sub-turn lifecycle, from the callId-tagged status items. */
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * The callee's final message once the sub-turn COMPLETED — the block's
+   * RESULT, pulled out of {@link entries} (geniro-style request → result
+   * framing). Null while running or when the sub-turn did not complete.
+   */
+  result: string | null;
   entries: TranscriptEntry[];
 }
 
@@ -236,6 +243,21 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
     }
     inner.push(item);
   }
+  // A COMPLETED sub-turn's last message is the call's RESULT — pull it out
+  // of the flow so the block can frame it (request at the top, result at
+  // the bottom). While running the tail message is just the latest stream.
+  let result: string | null = null;
+  if (status === 'completed') {
+    for (let i = inner.length - 1; i >= 0; i--) {
+      if (inner[i]!.kind === 'message') {
+        result = payloadString(inner[i]!.payload, 'text');
+        if (result !== null) {
+          inner.splice(i, 1);
+        }
+        break;
+      }
+    }
+  }
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -245,6 +267,7 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
     mode: payloadString(shell.started.payload, 'mode'),
     message: payloadString(shell.started.payload, 'message'),
     status,
+    result,
     entries: groupTranscript(inner),
   };
 }

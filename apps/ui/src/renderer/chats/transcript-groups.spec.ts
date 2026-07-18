@@ -156,12 +156,26 @@ describe('groupTranscript — call blocks', () => {
     expect(block.calleeNodeId).toBe('poet');
     expect(block.callerNodeId).toBe('orch');
     expect(block.mode).toBe('async');
+    // Request → result framing: the ask is the request, and the COMPLETED
+    // sub-turn's final message is pulled out of the flow as the RESULT. The
+    // old "▸ started"/"✓ finished" pair is the header status now.
     expect(block.message).toBe('Write a haiku.');
     expect(block.status).toBe('completed');
-    // Inside: ONLY the message — the old "▸ started"/"✓ finished" pair is
-    // the header now.
+    expect(block.result).toBe('Waves rise…');
+    expect(block.entries).toHaveLength(0);
+  });
+
+  it('a RUNNING sub-turn has no result yet — the tail message stays in the flow', () => {
+    const entries = groupTranscript([
+      startCall('call-1', 'poet', 'Write a haiku.'),
+      tagged('status', { status: 'running' }, 'poet', 'call-1'),
+      tagged('message', { text: 'draft so far…' }, 'poet', 'call-1'),
+    ]);
+
+    const block = entries[0] as CallBlockEntry;
+    expect(block.status).toBe('running');
+    expect(block.result).toBeNull();
     expect(block.entries).toHaveLength(1);
-    expect(block.entries[0]?.type).toBe('item');
   });
 
   it('two parallel calls to the SAME callee node keep their items apart by callId', () => {

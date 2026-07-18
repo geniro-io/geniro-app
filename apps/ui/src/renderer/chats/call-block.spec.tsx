@@ -105,4 +105,55 @@ describe('CallBlock', () => {
     });
     expect(container.textContent).toContain('Waves rise and retreat');
   });
+
+  it('a COMPLETED call frames request → result: preview line collapsed, cards expanded', () => {
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          mode: 'async',
+          message: 'Write a haiku about the sea.',
+        },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'message',
+        { text: 'Waves rise and retreat', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    // Collapsed: the ↳ result preview shows without expanding.
+    expect(container.textContent).toContain('Waves rise and retreat');
+    expect(container.querySelector('[data-role="result"]')).toBeNull();
+
+    act(() => {
+      container
+        .querySelector('button[aria-expanded]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // Expanded: the ask opens as the REQUEST card, the final answer closes
+    // as the RESULT card.
+    const request = container.querySelector('[data-role="request"]');
+    const result = container.querySelector('[data-role="result"]');
+    expect(request?.textContent).toContain('Write a haiku about the sea.');
+    expect(result?.textContent).toContain('Waves rise and retreat');
+  });
 });

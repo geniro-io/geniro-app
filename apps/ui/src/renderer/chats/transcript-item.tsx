@@ -198,14 +198,12 @@ export const TranscriptItem = memo(function TranscriptItem({
       const callee =
         nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       if (payloadString(item.payload, 'status') === 'ok') {
-        const result = (item.payload as { result?: unknown } | null)?.result;
-        const text =
-          result && typeof result === 'object' && 'text' in result
-            ? String((result as { text: unknown }).text)
-            : pretty(result ?? null);
+        // A compact receipt only: the result TEXT lives in the call block's
+        // RESULT card (or, in legacy flat transcripts, in the callee's own
+        // final bubble right above) — repeating it here doubled the payoff.
         return (
-          <MessageBubble variant="call" role={tag(`✓ result ← ${callee}`)}>
-            <div className="whitespace-pre-wrap">{text}</div>
+          <MessageBubble variant="note">
+            {tag(`✓ result from ${callee}`)}
           </MessageBubble>
         );
       }
@@ -218,11 +216,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       );
     }
     case 'await_collected':
-      return (
-        <MessageBubble variant="note">
-          {tag('⏳ result collected')}
-        </MessageBubble>
-      );
+      // Pure plumbing (the broker's pickup bookkeeping) — the ✓ result
+      // receipt right beside it says everything the user needs.
+      return null;
     case 'call_question': {
       // A call-initiated callee parked on a question — the CALLER (not the
       // user) is expected to answer it via answer_agent.

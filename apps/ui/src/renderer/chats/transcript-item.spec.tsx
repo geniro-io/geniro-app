@@ -70,7 +70,7 @@ describe('TranscriptItem — agent-call rows', () => {
     expect(text).not.toContain('call-1');
   });
 
-  it('renders an ok call_result with the returned text', () => {
+  it('renders an ok call_result as a COMPACT receipt — the result text lives in the call block', () => {
     render(
       <TranscriptItem
         item={item('call_result', {
@@ -81,10 +81,8 @@ describe('TranscriptItem — agent-call rows', () => {
         })}
       />,
     );
-    const el = container.querySelector('[data-role="call"]');
-    expect(el).not.toBeNull();
-    expect(el?.textContent).toContain('result ← helper');
-    expect(el?.textContent).toContain('the answer');
+    expect(container.textContent).toContain('✓ result from helper');
+    expect(container.textContent).not.toContain('the answer');
   });
 
   it('renders an error call_result via the error bubble with the envelope error', () => {
@@ -104,12 +102,11 @@ describe('TranscriptItem — agent-call rows', () => {
     expect(el?.textContent).toContain('CALLEE_FAILED: exit 1');
   });
 
-  it('renders await_collected as a plain receipt note without the call id', () => {
+  it('renders await_collected as NOTHING — broker pickup bookkeeping is not a message', () => {
     render(
       <TranscriptItem item={item('await_collected', { callId: 'call-2' })} />,
     );
-    expect(container.textContent).toContain('result collected');
-    expect(container.textContent).not.toContain('call-2');
+    expect(container.textContent).toBe('');
   });
 });
 

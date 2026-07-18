@@ -1,7 +1,8 @@
-import { Bot, ChevronRight } from 'lucide-react';
+import { Bot, ChevronRight, CornerDownRight } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '../components/ui/utils';
+import { MessageBubble } from './message-bubble';
 import { RunStatusIcon } from './run-status';
 import { ToolGroup } from './tool-group';
 import type { CallBlockEntry, TranscriptEntry } from './transcript-groups';
@@ -12,8 +13,11 @@ import { TranscriptItem, type TranscriptNodeMeta } from './transcript-item';
  * header carries the live sub-turn status (replacing the old separate
  * "call → B" row + "B started" note), and everything the callee streams
  * renders INSIDE, so parallel callees never interleave in the main flow.
- * Collapsed by default; the header spinner shows liveness, the caller's
- * ✓ result row still lands in the main flow when it collects the answer.
+ *
+ * Geniro-style request → result framing: expanded, the caller's ask opens
+ * the block as the REQUEST card and the callee's final answer closes it as
+ * the RESULT card (success-tinted); collapsed, the header shows the request
+ * one-liner and — once completed — a ↳ result preview line.
  */
 export function CallBlock({
   block,
@@ -66,14 +70,25 @@ export function CallBlock({
           </span>
         ) : null}
       </button>
+      {!open && block.result ? (
+        <div className="flex min-w-0 items-center gap-1.5 px-3 pb-2 pl-[34px] text-xs text-muted-foreground">
+          <CornerDownRight aria-hidden="true" className="size-3 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{block.result}</span>
+        </div>
+      ) : null}
       {open ? (
         <div className="flex flex-col gap-2 border-t border-warning/30 p-2.5">
           {block.message ? (
-            <p className="m-0 whitespace-pre-wrap text-xs text-muted-foreground">
-              {block.message}
-            </p>
+            <MessageBubble variant="request" role="request">
+              <div className="whitespace-pre-wrap">{block.message}</div>
+            </MessageBubble>
           ) : null}
           {block.entries.map(renderEntry)}
+          {block.result ? (
+            <MessageBubble variant="result" role="result">
+              <div className="whitespace-pre-wrap">{block.result}</div>
+            </MessageBubble>
+          ) : null}
         </div>
       ) : null}
     </div>

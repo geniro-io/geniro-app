@@ -1,9 +1,10 @@
 import {
   ArrowUp,
+  Clock,
   FolderOpen,
   Plus,
-  Terminal as TerminalIcon,
   Workflow as WorkflowIcon,
+  X,
   Zap,
 } from 'lucide-react';
 import {
@@ -71,6 +72,14 @@ const TERMINAL_KINDS = new Set<ChatItem['kind']>([
   'turn_cancelled',
   'error',
 ]);
+
+/**
+ * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
+ * persisted-then-emitted while the CLI process is still tearing down, so the
+ * daemon frees the turn slot a beat AFTER the renderer learns the turn ended —
+ * a queued auto-send racing into that gap is retried briefly, not failed.
+ */
+const QUEUED_BUSY_RETRIES_MS = [300, 600, 1200, 2400];
 
 /** The trailing path segment of an absolute folder path (a compact label). */
 function folderName(path: string): string {
@@ -147,6 +156,18 @@ export function Chats({
   // snapshot predates that terminal item.
   const sawTerminalRef = useRef(false);
 
+  // Messages written while the agent was still working — sent automatically,
+  // one per settled turn, in order (Claude Code / Cursor-style queueing).
+  // Scoped to the OPEN chat transcript: switching runs or pressing + clears it.
+  const [queued, setQueued] = useState<string[]>([]);
+  const queuedRef = useRef<string[]>([]);
+  useEffect(() => {
+    queuedRef.current = queued;
+  }, [queued]);
+  // Ref indirection: the stable addItem callback fires the drain on a turn's
+  // terminal item, but the drain itself needs the current chatApi closure.
+  const drainQueueRef = useRef<(runId: string) => void>(() => {});
+
   const addItem = useCallback((item: ChatItem): void => {
     if (item.runId !== activeRunIdRef.current) {
       return;
@@ -205,6 +226,11 @@ export function Chats({
             : run,
         ),
       );
+      // The turn ended — fire the next queued message into this chat (the
+      // early return above guarantees item.runId IS the active run).
+      if (queuedRef.current.length > 0) {
+        drainQueueRef.current(item.runId);
+      }
     }
   }, []);
 
@@ -366,6 +392,7 @@ export function Chats({
       setActiveRunId(runId);
       setItems([]);
       setStreaming(false);
+      setQueued([]); // queued messages belong to the transcript they were typed in
       setError(null);
       // Join FIRST so any live item published during the history fetch is
       // buffered through addItem; the seq de-dupe reconciles the overlap.
@@ -527,6 +554,7 @@ export function Chats({
     setActiveRunId(null);
     setItems([]);
     setStreaming(false);
+    setQueued([]);
     setError(null);
     refreshRuns();
   }, [client, refreshRuns]);
@@ -593,17 +621,11 @@ export function Chats({
     addItem,
   ]);
 
-  /** The open transcript's composer: a follow-up into the ACTIVE chat run —
-   *  never a run start (workflow runs take one task; their composer is off). */
-  const sendFollowUp = useCallback(async (): Promise<void> => {
-    const text = input.trim();
-    const runId = activeRunIdRef.current;
-    if (!text || streaming || !runId) {
-      return;
-    }
-    setError(null);
-    try {
-      setInput('');
+  /** Start one follow-up turn: mark the run working, send, render the user
+   *  message (addItem de-dupes when the WS copy arrives). */
+  const startTurn = useCallback(
+    async (runId: string, text: string): Promise<void> => {
+      setError(null);
       setStreaming(true);
       setRuns((prev) =>
         prev.map((run) =>
@@ -612,11 +634,76 @@ export function Chats({
       );
       const userItem = await chatApi.sendMessage(runId, text);
       addItem(userItem);
+    },
+    [chatApi, addItem],
+  );
+
+  /** Send the next queued message after a settled turn (called via ref from
+   *  the stable addItem callback). One message per settled turn, in order;
+   *  RUN_BUSY is retried per {@link QUEUED_BUSY_RETRIES_MS}. */
+  const drainQueue = useCallback(
+    async (runId: string): Promise<void> => {
+      const [next, ...rest] = queuedRef.current;
+      if (next === undefined) {
+        return;
+      }
+      setQueued(rest);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await startTurn(runId, next);
+          return;
+        } catch (err) {
+          const delay = QUEUED_BUSY_RETRIES_MS[attempt];
+          if (!String(err).includes('RUN_BUSY') || delay === undefined) {
+            // A real failure (no turn started, so no terminal item will fire
+            // another drain) — keep the message at the queue head for the
+            // user to edit or remove.
+            setError(String(err));
+            setStreaming(false);
+            setQueued((current) => [next, ...current]);
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          // The user may have switched transcripts mid-retry — the queue was
+          // cleared with the old one; never send into a run they left.
+          if (activeRunIdRef.current !== runId) {
+            return;
+          }
+        }
+      }
+    },
+    [startTurn],
+  );
+  useEffect(() => {
+    drainQueueRef.current = (runId) => void drainQueue(runId);
+  }, [drainQueue]);
+
+  /** The open transcript's composer: a follow-up into the ACTIVE chat run —
+   *  never a run start (workflow runs take one task; their composer is off).
+   *  While the agent is still working, the message QUEUES instead: it shows
+   *  above the composer and sends automatically when the turn ends. */
+  const sendFollowUp = useCallback(async (): Promise<void> => {
+    const text = input.trim();
+    const runId = activeRunIdRef.current;
+    if (!text || !runId) {
+      return;
+    }
+    if (streaming) {
+      // Queueing is a chat-run concept — the workflow composer is disabled.
+      if (runsRef.current.find((r) => r.id === runId)?.workflowId == null) {
+        setQueued((current) => [...current, text]);
+        setInput('');
+      }
+      return;
+    }
+    try {
+      setInput('');
+      await startTurn(runId, text);
     } catch (err) {
       setError(String(err));
       setStreaming(false);
     }
-  }, [input, streaming, chatApi, addItem]);
+  }, [input, streaming, startTurn]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -1118,6 +1205,40 @@ export function Chats({
             </ErrorText>
           ) : null}
 
+          {queued.length > 0 ? (
+            <div
+              className="flex flex-col gap-1 border-t border-border px-3 pt-2"
+              aria-label="Queued messages">
+              {queued.map((text, index) => (
+                <div
+                  // Index keys are safe here: rows are removed by index and
+                  // duplicate texts are legitimate queue entries.
+                  key={`${index}-${text}`}
+                  className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
+                  <Clock aria-hidden="true" className="size-3 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate" title={text}>
+                    {text}
+                  </span>
+                  <span className="shrink-0">sends next</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-5 shrink-0"
+                    aria-label={`Remove queued message ${index + 1}`}
+                    title="Remove from queue"
+                    onClick={() =>
+                      setQueued((current) =>
+                        current.filter((_, i) => i !== index),
+                      )
+                    }>
+                    <X className="size-3 shrink-0" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="flex items-end gap-2 border-t border-border p-3">
             <Textarea
               value={input}
@@ -1127,7 +1248,7 @@ export function Chats({
                 activeRun?.workflowId
                   ? 'Workflow runs take one task — press + to start another.'
                   : streaming
-                    ? 'Agent is working…'
+                    ? 'Agent is working — your message will queue…'
                     : 'Message the agent…'
               }
               onChange={(event) => setInput(event.target.value)}
@@ -1139,12 +1260,23 @@ export function Chats({
               }}
             />
             {streaming ? (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void cancel()}>
-                Stop
-              </Button>
+              <>
+                {input.trim() && activeRun?.workflowId == null ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    title="Send automatically when the current turn ends"
+                    onClick={() => void sendFollowUp()}>
+                    Queue
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void cancel()}>
+                  Stop
+                </Button>
+              </>
             ) : (
               <Button
                 type="button"

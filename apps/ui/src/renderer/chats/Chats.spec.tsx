@@ -1377,6 +1377,214 @@ describe('Chats defaults', () => {
   });
 });
 
+describe('Chats queued messages', () => {
+  async function type(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function clickButton(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((b) => b.textContent === label)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  // run1 is 'running' with an empty history → the open transcript arms the
+  // working state (Stop) straight from activation.
+  it('queues a message written mid-turn and auto-sends it when the turn ends', async () => {
+    api.sendMessage.mockResolvedValue(msg(10, 'user', 'queued question'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.textContent).toContain('Stop');
+
+    await type(container, 'queued question');
+    await clickButton(container, 'Queue');
+
+    // Nothing sent yet — the message waits, visibly, above the composer.
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    const queueRegion = container.querySelector(
+      '[aria-label="Queued messages"]',
+    )!;
+    expect(queueRegion.textContent).toContain('queued question');
+    expect(container.querySelector('textarea')!.value).toBe('');
+
+    // The turn settles → the queued message fires and the run works again.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendMessage).toHaveBeenCalledWith('r1', 'queued question');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+    expect(container.textContent).toContain('Stop');
+  });
+
+  it('Cmd+Enter also queues while the agent is working', async () => {
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'via keyboard');
+    await act(async () => {
+      container.querySelector('textarea')!.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          metaKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('via keyboard');
+  });
+
+  it('drains ONE queued message per settled turn, in order', async () => {
+    api.sendMessage
+      .mockResolvedValueOnce(msg(10, 'user', 'first'))
+      .mockResolvedValueOnce(msg(12, 'user', 'second'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'first');
+    await clickButton(container, 'Queue');
+    await type(container, 'second');
+    await clickButton(container, 'Queue');
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenLastCalledWith('r1', 'first');
+    // 'second' still waits its turn.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('second');
+
+    await act(async () => {
+      emitItem(terminal(11));
+    });
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith('r1', 'second');
+  });
+
+  it('a removed queued message never sends', async () => {
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'changed my mind');
+    await clickButton(container, 'Queue');
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Remove queued message 1"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('a failed auto-send keeps the message at the queue head with the error', async () => {
+    api.sendMessage.mockRejectedValue(new Error('daemon POST failed (400)'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'unlucky');
+    await clickButton(container, 'Queue');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    expect(api.sendMessage).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('daemon POST failed (400)');
+    // The message survives, editable/removable — and does NOT auto-retry
+    // (no turn started, so no terminal item will fire the drain).
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('unlucky');
+  });
+
+  it('retries a RUN_BUSY auto-send — the daemon frees the turn slot a beat after the terminal item', async () => {
+    vi.useFakeTimers();
+    try {
+      // The terminal item races the daemon's claim release: first two sends
+      // hit RUN_BUSY, the third lands.
+      api.sendMessage
+        .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
+        .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
+        .mockResolvedValueOnce(msg(10, 'user', 'delayed'));
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      await type(container, 'delayed');
+      await clickButton(container, 'Queue');
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+      expect(api.sendMessage).toHaveBeenCalledTimes(3);
+
+      // Third attempt succeeded: no error line, nothing left queued.
+      expect(container.textContent).not.toContain('RUN_BUSY');
+      expect(
+        container.querySelector('[aria-label="Queued messages"]'),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the queue belongs to the open transcript — pressing + clears it', async () => {
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'left behind');
+    await clickButton(container, 'Queue');
+    await act(async () => {
+      container
+        .querySelector('[aria-label="New chat"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+});
+
 describe('Chats sidebar list', () => {
   const wfSummary = {
     slug: 'review-team',

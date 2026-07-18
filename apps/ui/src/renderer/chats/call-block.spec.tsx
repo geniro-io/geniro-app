@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ChatItem } from '../../shared/contracts';
 import { CallBlock } from './call-block';
+import { TranscriptEntryView } from './transcript-entry';
 import { type CallBlockEntry, groupTranscript } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 
@@ -81,11 +82,18 @@ afterEach(() => {
 });
 
 describe('CallBlock', () => {
-  it('collapsed by default: header names caller → callee with live status; the callee text stays hidden', () => {
-    act(() => root.render(<CallBlock block={makeBlock()} nodes={NODES} />));
+  it('collapsed by default: the sender frame names caller → callee with avatar; the callee text stays hidden', () => {
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
+    );
 
+    // The messenger frame owns the identity: "Caller → Callee" name line and
+    // the callee's initials avatar; the block header holds status + ask.
     expect(container.textContent).toContain('Orchestrator → Poet');
-    // Wire plumbing stays out of the header — no mode label, no call id.
+    expect(container.querySelector('[data-slot="avatar"]')?.textContent).toBe(
+      'P',
+    );
+    // Wire plumbing stays out — no mode label, no call id.
     expect(container.textContent).not.toContain('async');
     expect(container.textContent).not.toContain('call-1');
     expect(container.textContent).toContain('Write a haiku about the sea.');

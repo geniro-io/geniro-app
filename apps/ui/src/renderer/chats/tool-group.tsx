@@ -99,11 +99,8 @@ function ToolRow({ pair }: { pair: ToolPair }): React.JSX.Element {
  */
 export function ToolGroup({
   group,
-  label,
 }: {
   group: ToolGroupEntry;
-  /** Node display tag for workflow runs (e.g. the agent's name). */
-  label?: string | null;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   return (
@@ -124,7 +121,6 @@ export function ToolGroup({
         />
         <Wrench aria-hidden="true" className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate">
-          {label ? `${label} · ` : ''}
           {toolGroupSummary(group.pairs)}
         </span>
       </button>

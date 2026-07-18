@@ -123,7 +123,10 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     const text = container.textContent ?? '';
-    expect(text).toContain('question ← helper');
+    // The sender frame names the asking callee — the bubble keeps only the
+    // question marker, the text, and the options.
+    expect(text).toContain('❓ question');
+    expect(text).not.toContain('helper');
     expect(text).not.toContain('call-1');
     expect(text).toContain('Which color?');
     expect(text).toContain('Red / Blue');

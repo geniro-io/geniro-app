@@ -50,18 +50,16 @@ import {
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
-import { CallBlock } from './call-block';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
 import { RenameRunDialog } from './rename-run-dialog';
-import { ToolGroup } from './tool-group';
+import { TranscriptEntryView } from './transcript-entry';
 import { groupTranscript } from './transcript-groups';
 import {
   collectVerdicts,
   expiredApprovalIds,
   payloadString,
-  TranscriptItem,
   type TranscriptNodeMeta,
 } from './transcript-item';
 
@@ -1221,30 +1219,21 @@ export function Chats({
 
           <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
             {transcriptEntries.map((entry) => {
-              if (entry.type === 'call-block') {
+              if (
+                entry.type !== 'item' ||
+                entry.item.kind !== 'approval_request'
+              ) {
+                const key = entry.type === 'item' ? entry.item.id : entry.id;
                 return (
-                  <CallBlock key={entry.id} block={entry} nodes={nodeMeta} />
-                );
-              }
-              if (entry.type === 'tools') {
-                return (
-                  <ToolGroup
-                    key={entry.id}
-                    group={entry}
-                    label={
-                      entry.nodeId
-                        ? (nodeMeta.get(entry.nodeId)?.name ?? entry.nodeId)
-                        : null
-                    }
+                  <TranscriptEntryView
+                    key={key}
+                    entry={entry}
+                    nodes={nodeMeta}
+                    chatAgentName={activeRun?.agentKind ?? null}
                   />
                 );
               }
               const item = entry.item;
-              if (item.kind !== 'approval_request') {
-                return (
-                  <TranscriptItem key={item.id} item={item} nodes={nodeMeta} />
-                );
-              }
               const requestId = payloadString(item.payload, 'id');
               return (
                 <ApprovalCard

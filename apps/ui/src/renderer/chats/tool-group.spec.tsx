@@ -51,8 +51,8 @@ afterEach(() => {
   container.remove();
 });
 
-function render(group: ToolGroupEntry, label: string | null = null): void {
-  act(() => root.render(<ToolGroup group={group} label={label} />));
+function render(group: ToolGroupEntry): void {
+  act(() => root.render(<ToolGroup group={group} />));
 }
 
 function click(el: Element | null): void {
@@ -79,11 +79,11 @@ describe('ToolGroup', () => {
     ]);
 
   it('is COLLAPSED by default: the summary line shows, the tool rows and payloads do not', () => {
-    render(bashGroup(), 'Orchestrator');
+    render(bashGroup());
 
-    expect(container.textContent).toContain(
-      'Orchestrator · Used 2 tools · ran 1 command',
-    );
+    // The sender frame around the group names the agent — the summary line
+    // itself stays name-free.
+    expect(container.textContent).toContain('Used 2 tools · ran 1 command');
     expect(container.textContent).not.toContain('ls -la');
     expect(container.textContent).not.toContain('file-list');
     const header = container.querySelector('button[aria-expanded]');

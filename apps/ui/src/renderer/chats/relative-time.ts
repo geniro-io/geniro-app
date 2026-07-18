@@ -35,3 +35,13 @@ export function formatRelativeTime(
     ...(sameYear ? {} : { year: 'numeric' }),
   });
 }
+
+/** A message's clock-time metadata line, e.g. "14:07". Empty when unparseable. */
+export function formatClockTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

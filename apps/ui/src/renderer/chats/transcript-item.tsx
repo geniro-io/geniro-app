@@ -55,17 +55,18 @@ export const TranscriptItem = memo(function TranscriptItem({
   };
   switch (item.kind) {
     case 'message': {
+      // The SenderRow frame (avatar + name + time) identifies the speaker —
+      // the bubble carries only the text.
       const text = payloadString(item.payload, 'text') ?? '';
-      const who = item.role === 'user' ? 'user' : 'assistant';
       return (
-        <MessageBubble variant={who} role={tag(who)}>
+        <MessageBubble variant={item.role === 'user' ? 'user' : 'assistant'}>
           <div className="whitespace-pre-wrap">{text}</div>
         </MessageBubble>
       );
     }
     case 'reasoning':
       return (
-        <MessageBubble variant="reasoning" role={tag('thinking')}>
+        <MessageBubble variant="reasoning" role="thinking">
           <div className="whitespace-pre-wrap italic">
             {payloadString(item.payload, 'text') ?? ''}
           </div>
@@ -96,7 +97,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'error':
       return (
         <AlertRow
-          caption={tag('error')}
+          caption="error"
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
         />
       );
@@ -162,9 +163,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       const message = payloadString(item.payload, 'message');
       // The daemon's system items are failure advisories (a degraded caller,
       // a persistence problem) — surface them like errors: red, expandable.
-      return message ? (
-        <AlertRow caption={tag('system')} message={message} />
-      ) : null;
+      return message ? <AlertRow caption="system" message={message} /> : null;
     }
     case 'approval_verdict': {
       const allow = (item.payload as { allow?: unknown } | null)?.allow;
@@ -221,15 +220,14 @@ export const TranscriptItem = memo(function TranscriptItem({
       return null;
     case 'call_question': {
       // A call-initiated callee parked on a question — the CALLER (not the
-      // user) is expected to answer it via answer_agent.
-      const callee =
-        nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
+      // user) is expected to answer it via answer_agent. The SenderRow frame
+      // names the asking callee; the bubble keeps only the question marker.
       const options = (item.payload as { options?: unknown } | null)?.options;
       const optionLine = Array.isArray(options)
         ? options.filter((o) => typeof o === 'string').join(' / ')
         : '';
       return (
-        <MessageBubble variant="call" role={tag(`❓ question ← ${callee}`)}>
+        <MessageBubble variant="call" role="❓ question">
           <div className="whitespace-pre-wrap">
             {payloadString(item.payload, 'question') ?? ''}
             {optionLine ? (

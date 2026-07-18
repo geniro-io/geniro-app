@@ -40,6 +40,8 @@ export interface CallBlockEntry {
   type: 'call-block';
   /** Stable identity (the call_started item's id) for keys and expansion. */
   id: string;
+  /** The call_started item's timestamp — the block's metadata time. */
+  createdAt: string;
   callId: string;
   calleeNodeId: string | null;
   /** The caller node the call_started row was attributed to. */
@@ -261,6 +263,7 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
   return {
     type: 'call-block',
     id: shell.started.id,
+    createdAt: shell.started.createdAt,
     callId,
     calleeNodeId: shell.calleeNodeId,
     callerNodeId: shell.started.nodeId,

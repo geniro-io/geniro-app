@@ -739,7 +739,8 @@ describe('Chats workflow runs', () => {
     const transcript = container.querySelector('section')!;
     expect(transcript.textContent).not.toContain('helper started');
     expect(transcript.textContent).not.toContain('the diff summary');
-    expect(block?.textContent).toContain('helper');
+    // The sender frame around the block carries the caller → callee names.
+    expect(transcript.textContent).toContain('helper');
     expect(block?.textContent).toContain('summarize the diff');
   });
 

@@ -2,7 +2,9 @@ import {
   ArrowUp,
   Clock,
   FolderOpen,
+  ListPlus,
   Plus,
+  Square,
   Workflow as WorkflowIcon,
   X,
   Zap,
@@ -50,6 +52,7 @@ import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
+import { ComposerCard } from './composer-card';
 import { RenameRunDialog } from './rename-run-dialog';
 import {
   collectVerdicts,
@@ -158,15 +161,28 @@ export function Chats({
 
   // Messages written while the agent was still working — sent automatically,
   // one per settled turn, in order (Claude Code / Cursor-style queueing).
-  // Scoped to the OPEN chat transcript: switching runs or pressing + clears it.
-  const [queued, setQueued] = useState<string[]>([]);
-  const queuedRef = useRef<string[]>([]);
+  // Keyed PER RUN and kept for the whole session: switching transcripts or
+  // pages never loses a queue; reopening a run that settled meanwhile drains
+  // it (activateRun fires the drain when the run is no longer working).
+  const [queues, setQueues] = useState<Record<string, string[]>>({});
+  const queuesRef = useRef<Record<string, string[]>>({});
   useEffect(() => {
-    queuedRef.current = queued;
-  }, [queued]);
+    queuesRef.current = queues;
+  }, [queues]);
+  const enqueueMessage = useCallback((runId: string, text: string): void => {
+    setQueues((prev) => ({
+      ...prev,
+      [runId]: [...(prev[runId] ?? []), text],
+    }));
+  }, []);
   // Ref indirection: the stable addItem callback fires the drain on a turn's
   // terminal item, but the drain itself needs the current chatApi closure.
   const drainQueueRef = useRef<(runId: string) => void>(() => {});
+  // One drain at a time. A history REPLAY of a multi-turn transcript fires
+  // the terminal-item trigger once per past turn in one synchronous sweep —
+  // without this gate those calls all read the same stale queue head (the
+  // ref syncs post-render) and double-send it.
+  const drainingRef = useRef(false);
 
   const addItem = useCallback((item: ChatItem): void => {
     if (item.runId !== activeRunIdRef.current) {
@@ -228,7 +244,7 @@ export function Chats({
       );
       // The turn ended — fire the next queued message into this chat (the
       // early return above guarantees item.runId IS the active run).
-      if (queuedRef.current.length > 0) {
+      if ((queuesRef.current[item.runId]?.length ?? 0) > 0) {
         drainQueueRef.current(item.runId);
       }
     }
@@ -392,7 +408,6 @@ export function Chats({
       setActiveRunId(runId);
       setItems([]);
       setStreaming(false);
-      setQueued([]); // queued messages belong to the transcript they were typed in
       setError(null);
       // Join FIRST so any live item published during the history fetch is
       // buffered through addItem; the seq de-dupe reconciles the overlap.
@@ -554,7 +569,6 @@ export function Chats({
     setActiveRunId(null);
     setItems([]);
     setStreaming(false);
-    setQueued([]);
     setError(null);
     refreshRuns();
   }, [client, refreshRuns]);
@@ -638,38 +652,57 @@ export function Chats({
     [chatApi, addItem],
   );
 
-  /** Send the next queued message after a settled turn (called via ref from
-   *  the stable addItem callback). One message per settled turn, in order;
-   *  RUN_BUSY is retried per {@link QUEUED_BUSY_RETRIES_MS}. */
+  /** Send this run's next queued message after a settled turn (called via
+   *  ref from the stable addItem callback, and from activateRun when a run
+   *  that settled while away is reopened). One message per settled turn, in
+   *  order; RUN_BUSY is retried per {@link QUEUED_BUSY_RETRIES_MS}. */
   const drainQueue = useCallback(
     async (runId: string): Promise<void> => {
-      const [next, ...rest] = queuedRef.current;
+      if (drainingRef.current) {
+        return;
+      }
+      const next = (queuesRef.current[runId] ?? [])[0];
       if (next === undefined) {
         return;
       }
-      setQueued(rest);
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          await startTurn(runId, next);
-          return;
-        } catch (err) {
-          const delay = QUEUED_BUSY_RETRIES_MS[attempt];
-          if (!String(err).includes('RUN_BUSY') || delay === undefined) {
-            // A real failure (no turn started, so no terminal item will fire
-            // another drain) — keep the message at the queue head for the
-            // user to edit or remove.
-            setError(String(err));
-            setStreaming(false);
-            setQueued((current) => [next, ...current]);
+      drainingRef.current = true;
+      setQueues((prev) => ({
+        ...prev,
+        [runId]: (prev[runId] ?? []).slice(1),
+      }));
+      const restoreHead = (): void =>
+        setQueues((prev) => ({
+          ...prev,
+          [runId]: [next, ...(prev[runId] ?? [])],
+        }));
+      try {
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            await startTurn(runId, next);
             return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          // The user may have switched transcripts mid-retry — the queue was
-          // cleared with the old one; never send into a run they left.
-          if (activeRunIdRef.current !== runId) {
-            return;
+          } catch (err) {
+            const delay = QUEUED_BUSY_RETRIES_MS[attempt];
+            if (!String(err).includes('RUN_BUSY') || delay === undefined) {
+              // A real failure (no turn started, so no terminal item will
+              // fire another drain) — keep the message at the queue head for
+              // the user to edit or remove.
+              setError(String(err));
+              setStreaming(false);
+              restoreHead();
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            // The user switched transcripts mid-retry: never send into a run
+            // they left. The message returns to that run's queue and goes
+            // out when they come back to it.
+            if (activeRunIdRef.current !== runId) {
+              restoreHead();
+              return;
+            }
           }
         }
+      } finally {
+        drainingRef.current = false;
       }
     },
     [startTurn],
@@ -691,7 +724,7 @@ export function Chats({
     if (streaming) {
       // Queueing is a chat-run concept — the workflow composer is disabled.
       if (runsRef.current.find((r) => r.id === runId)?.workflowId == null) {
-        setQueued((current) => [...current, text]);
+        enqueueMessage(runId, text);
         setInput('');
       }
       return;
@@ -703,7 +736,7 @@ export function Chats({
       setError(String(err));
       setStreaming(false);
     }
-  }, [input, streaming, startTurn]);
+  }, [input, streaming, startTurn, enqueueMessage]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -764,6 +797,8 @@ export function Chats({
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+  /** The open transcript's pending queue (queues persist per run). */
+  const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
 
   // The open PTY mirror. Session-scoped, NOT run-scoped: switching to another
   // run in the sidebar keeps the drawer open (the title names its session), so
@@ -774,18 +809,20 @@ export function Chats({
     title: string;
   } | null>(null);
 
-  // The active workflow's node inventory: its agent nodes (the agents panel)
-  // and every node id it knows (so trigger status items are never mistaken
-  // for an unknown agent's).
+  // The active workflow's node inventory: its agent nodes (the agents panel),
+  // its triggers (the run composer's inactive info chips), and every node id
+  // it knows (so trigger status items are never mistaken for an unknown
+  // agent's).
   const [wfNodes, setWfNodes] = useState<{
     agents: WorkflowAgentNode[];
+    triggers: WorkflowTriggerNode[];
     allIds: Set<string>;
-  }>({ agents: [], allIds: new Set() });
+  }>({ agents: [], triggers: [], allIds: new Set() });
   useEffect(() => {
     let cancelled = false;
     const workflowId = activeRun?.workflowId;
     if (!workflowId) {
-      setWfNodes({ agents: [], allIds: new Set() });
+      setWfNodes({ agents: [], triggers: [], allIds: new Set() });
       return;
     }
     void workflowApi
@@ -798,12 +835,15 @@ export function Chats({
           agents: workflow.nodes.filter(
             (node): node is WorkflowAgentNode => node.kind === 'agent',
           ),
+          triggers: workflow.nodes.filter(
+            (node): node is WorkflowTriggerNode => node.kind === 'trigger',
+          ),
           allIds: new Set(workflow.nodes.map((node) => node.id)),
         });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setWfNodes({ agents: [], allIds: new Set() });
+          setWfNodes({ agents: [], triggers: [], allIds: new Set() });
           setError(
             `Could not load workflow terminal targets: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -1005,7 +1045,7 @@ export function Chats({
             <h2 className="text-center text-xl font-semibold tracking-tight">
               What are we building?
             </h2>
-            <div className="rounded-2xl border border-border bg-card shadow-panel-md transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30">
+            <ComposerCard>
               <Textarea
                 value={input}
                 rows={4}
@@ -1091,7 +1131,7 @@ export function Chats({
                   )}
                 </Button>
               </div>
-            </div>
+            </ComposerCard>
             {/* Suggestion chips: recent folders + library workflows — one
                 click fills the matching composer control. */}
             {recentFolders.some((f) => f !== folder) ||
@@ -1188,86 +1228,160 @@ export function Chats({
             </ErrorText>
           ) : null}
 
-          {queued.length > 0 ? (
-            <div
-              className="flex flex-col gap-1 border-t border-border px-3 pt-2"
-              aria-label="Queued messages">
-              {queued.map((text, index) => (
-                <div
-                  // Index keys are safe here: rows are removed by index and
-                  // duplicate texts are legitimate queue entries.
-                  key={`${index}-${text}`}
-                  className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-                  <Clock aria-hidden="true" className="size-3 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate" title={text}>
-                    {text}
-                  </span>
-                  <span className="shrink-0">sends next</span>
+          <div className="flex flex-col gap-2 border-t border-border p-3">
+            {queued.length > 0 ? (
+              <div className="flex flex-col gap-1" aria-label="Queued messages">
+                {queued.map((text, index) => (
+                  <div
+                    // Index keys are safe here: rows are removed by index and
+                    // duplicate texts are legitimate queue entries.
+                    key={`${index}-${text}`}
+                    className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
+                    <Clock aria-hidden="true" className="size-3 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate" title={text}>
+                      {text}
+                    </span>
+                    <span className="shrink-0">sends next</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-5 shrink-0"
+                      aria-label={`Remove queued message ${index + 1}`}
+                      title="Remove from queue"
+                      onClick={() =>
+                        setQueues((prev) => ({
+                          ...prev,
+                          [activeRunId]: (prev[activeRunId] ?? []).filter(
+                            (_, i) => i !== index,
+                          ),
+                        }))
+                      }>
+                      <X className="size-3 shrink-0" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {/* The SAME composer card as the new-run screen, with the run's
+                fixed choices (agent/graph, folder, trigger) as inactive
+                chips — a run's identity can't change after creation. */}
+            <ComposerCard>
+              <Textarea
+                value={input}
+                rows={2}
+                aria-label="Message the agent"
+                disabled={activeRun?.workflowId != null}
+                className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                placeholder={
+                  activeRun?.workflowId
+                    ? 'Workflow runs take one task — press + to start another.'
+                    : streaming
+                      ? 'Agent is working — your message will queue…'
+                      : 'Message the agent…'
+                }
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter' &&
+                    (event.metaKey || event.ctrlKey)
+                  ) {
+                    event.preventDefault();
+                    void sendFollowUp();
+                  }
+                }}
+              />
+              <div className="flex flex-wrap items-center gap-1.5 p-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled
+                  className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
+                  {activeRun?.workflowId ? (
+                    <>
+                      <WorkflowIcon className="size-3.5 shrink-0" />
+                      <span className="max-w-52 truncate">
+                        {activeRun
+                          ? runLabel(
+                              { ...activeRun, title: null },
+                              workflowNames,
+                            )
+                          : ''}
+                      </span>
+                    </>
+                  ) : (
+                    (activeRun?.agentKind ?? 'agent')
+                  )}
+                </Button>
+                {activeRun?.cwd ? (
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
-                    className="size-5 shrink-0"
-                    aria-label={`Remove queued message ${index + 1}`}
-                    title="Remove from queue"
-                    onClick={() =>
-                      setQueued((current) =>
-                        current.filter((_, i) => i !== index),
-                      )
-                    }>
-                    <X className="size-3 shrink-0" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="flex items-end gap-2 border-t border-border p-3">
-            <Textarea
-              value={input}
-              aria-label="Message the agent"
-              disabled={activeRun?.workflowId != null}
-              placeholder={
-                activeRun?.workflowId
-                  ? 'Workflow runs take one task — press + to start another.'
-                  : streaming
-                    ? 'Agent is working — your message will queue…'
-                    : 'Message the agent…'
-              }
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  void sendFollowUp();
-                }
-              }}
-            />
-            {streaming ? (
-              <>
-                {input.trim() && activeRun?.workflowId == null ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    title="Send automatically when the current turn ends"
-                    onClick={() => void sendFollowUp()}>
-                    Queue
+                    size="sm"
+                    disabled
+                    title={activeRun.cwd}
+                    className="h-8 max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
+                    <FolderOpen className="size-3.5 shrink-0" />
+                    <span className="truncate">
+                      {folderName(activeRun.cwd)}
+                    </span>
                   </Button>
                 ) : null}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void cancel()}>
-                  Stop
-                </Button>
-              </>
-            ) : (
-              <Button
-                type="button"
-                disabled={!input.trim() || activeRun?.workflowId != null}
-                onClick={() => void sendFollowUp()}>
-                Send
-              </Button>
-            )}
+                {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled
+                    className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
+                    <Zap className="size-3.5 shrink-0" />
+                    <span className="max-w-52 truncate">
+                      {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                    </span>
+                  </Button>
+                ) : null}
+                <span className="ml-auto flex items-center gap-1.5">
+                  {streaming ? (
+                    <>
+                      {input.trim() && activeRun?.workflowId == null ? (
+                        <Button
+                          type="button"
+                          size="icon"
+                          className="size-8 rounded-full"
+                          aria-label="Queue"
+                          title="Send automatically when the current turn ends"
+                          onClick={() => void sendFollowUp()}>
+                          <ListPlus className="size-4 shrink-0" />
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="size-8 rounded-full"
+                        aria-label="Stop"
+                        title="Stop the current turn"
+                        onClick={() => void cancel()}>
+                        <Square className="size-3.5 shrink-0" />
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="icon"
+                      className="size-8 rounded-full"
+                      aria-label="Send"
+                      title="Send"
+                      disabled={!input.trim() || activeRun?.workflowId != null}
+                      onClick={() => void sendFollowUp()}>
+                      <ArrowUp className="size-4 shrink-0" />
+                    </Button>
+                  )}
+                </span>
+              </div>
+            </ComposerCard>
           </div>
         </section>
       )}

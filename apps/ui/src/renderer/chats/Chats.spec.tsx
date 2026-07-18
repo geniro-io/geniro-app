@@ -195,6 +195,16 @@ async function clickRun(container: HTMLElement, title: string): Promise<void> {
   });
 }
 
+/** The composer's round icon actions, looked up by their accessible name. */
+function composerButton(
+  container: HTMLElement,
+  label: 'Send' | 'Stop' | 'Queue',
+): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${label}"]`,
+  );
+}
+
 beforeEach(() => {
   // jsdom has no scrollIntoView; the transcript auto-scroll effect calls it.
   Element.prototype.scrollIntoView = vi.fn();
@@ -404,11 +414,8 @@ describe('Chats reconnect seam', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const buttons = [...container.querySelectorAll('button')].map(
-      (b) => b.textContent,
-    );
-    expect(buttons).toContain('Stop');
-    expect(buttons).not.toContain('Send');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+    expect(composerButton(container, 'Send')).toBeNull();
   });
 
   it('ignores a stale activateRun completion after switching to another run', async () => {
@@ -447,10 +454,7 @@ describe('Chats reconnect seam', () => {
       resolveSlow([msg(0, 'user', 'stale-A-item')]);
     });
 
-    const buttons = [...container.querySelectorAll('button')].map(
-      (b) => b.textContent,
-    );
-    expect(buttons).not.toContain('Stop');
+    expect(composerButton(container, 'Stop')).toBeNull();
     expect(container.textContent).not.toContain('stale-A-item');
     expect(container.textContent).toContain('finished-B-transcript');
   });
@@ -514,11 +518,8 @@ describe('Chats reconnect seam', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const buttons = [...container.querySelectorAll('button')].map(
-      (b) => b.textContent,
-    );
-    expect(buttons).toContain('Send');
-    expect(buttons).not.toContain('Stop');
+    expect(composerButton(container, 'Send')).not.toBeNull();
+    expect(composerButton(container, 'Stop')).toBeNull();
   });
 
   it('clears the stuck working state when Stop finds nothing in flight (cancelled:false)', async () => {
@@ -527,23 +528,17 @@ describe('Chats reconnect seam', () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    expect(
-      [...container.querySelectorAll('button')].map((b) => b.textContent),
-    ).toContain('Stop');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
 
-    const stop = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Stop',
-    );
     await act(async () => {
-      stop?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      composerButton(container, 'Stop')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
     });
 
     // cancel reported nothing was in flight → the composer returns to Send.
-    const buttons = [...container.querySelectorAll('button')].map(
-      (b) => b.textContent,
-    );
-    expect(buttons).toContain('Send');
-    expect(buttons).not.toContain('Stop');
+    expect(composerButton(container, 'Send')).not.toBeNull();
+    expect(composerButton(container, 'Stop')).toBeNull();
   });
 
   it('activates a run via Enter keyboard activation of the list row', async () => {
@@ -689,14 +684,14 @@ describe('Chats workflow runs', () => {
       [...container.querySelectorAll('aside li')].find((el) =>
         el.textContent?.includes('Review team'),
       )?.textContent ?? '';
-    expect(container.textContent).toContain('Stop');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
     expect(sidebarRow()).toContain('running');
 
     // A node's own turn_complete must NOT re-enable the composer…
     await act(async () => {
       emitItem(wfItem(5, 'turn_complete', 'coder'));
     });
-    expect(container.textContent).toContain('Stop');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
     expect(sidebarRow()).toContain('running');
 
     // …only the run-level terminal item does — and it settles the sidebar
@@ -704,7 +699,7 @@ describe('Chats workflow runs', () => {
     await act(async () => {
       emitItem(wfItem(6, 'turn_complete', null));
     });
-    expect(container.textContent).not.toContain('Stop');
+    expect(composerButton(container, 'Stop')).toBeNull();
     expect(sidebarRow()).toContain('completed');
     expect(sidebarRow()).not.toContain('running');
   });
@@ -808,7 +803,7 @@ describe('Chats workflow runs', () => {
     });
 
     expect(workflowApi.run).toHaveBeenCalled();
-    expect(container.textContent).not.toContain('Stop');
+    expect(composerButton(container, 'Stop')).toBeNull();
   });
 
   it('refetches the workflow library when the tab becomes active again', async () => {
@@ -904,11 +899,10 @@ describe('Chats workflow runs', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    const stop = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Stop',
-    )!;
     await act(async () => {
-      stop.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      composerButton(container, 'Stop')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
     });
     expect(workflowApi.cancelRun).toHaveBeenCalledWith('w1');
     expect(api.cancel).not.toHaveBeenCalled();
@@ -1371,8 +1365,8 @@ describe('Chats queued messages', () => {
     label: string,
   ): Promise<void> {
     await act(async () => {
-      [...container.querySelectorAll('button')]
-        .find((b) => b.textContent === label)
+      container
+        .querySelector(`button[aria-label="${label}"]`)
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
   }
@@ -1384,7 +1378,7 @@ describe('Chats queued messages', () => {
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    expect(container.textContent).toContain('Stop');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
 
     await type(container, 'queued question');
     await clickButton(container, 'Queue');
@@ -1405,7 +1399,7 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
-    expect(container.textContent).toContain('Stop');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
   });
 
   it('Cmd+Enter also queues while the agent is working', async () => {
@@ -1542,22 +1536,128 @@ describe('Chats queued messages', () => {
     }
   });
 
-  it('the queue belongs to the open transcript — pressing + clears it', async () => {
+  it('the queue SURVIVES leaving the transcript and shows again on return', async () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await type(container, 'left behind');
+    await type(container, 'kept safe');
+    await clickButton(container, 'Queue');
+    // Leave for the new-run composer — the queue is hidden there, not lost.
+    await act(async () => {
+      container
+        .querySelector('[aria-label="New chat"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+
+    // Back into the still-running chat: the queued message is still there
+    // (and stays queued — the run has not settled).
+    await clickRun(container, 'My chat');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('kept safe');
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('reopening a run that SETTLED while away drains its queue automatically', async () => {
+    api.sendMessage.mockResolvedValue(msg(10, 'user', 'later message'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'later message');
     await clickButton(container, 'Queue');
     await act(async () => {
       container
         .querySelector('[aria-label="New chat"]')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
+    expect(api.sendMessage).not.toHaveBeenCalled();
 
+    // While away the turn finished — the reopened transcript replays a
+    // history that ends on a terminal item, which fires the drain.
+    api.getHistory.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    await clickRun(container, 'My chat');
+
+    expect(api.sendMessage).toHaveBeenCalledWith('r1', 'later message');
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
+  });
+});
+
+describe('Chats run composer chips', () => {
+  function chips(container: HTMLElement): HTMLButtonElement[] {
+    // The inactive info chips are the DISABLED buttons inside the composer
+    // card's controls row.
+    return [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+      (b) => b.disabled && b.className.includes('rounded-lg'),
+    );
+  }
+
+  it("a chat run shows its agent + folder as INACTIVE chips with the create screen's card", async () => {
+    api.getHistory.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const labels = chips(container).map((b) => b.textContent);
+    expect(labels).toContain('claude');
+    expect(labels.some((l) => l?.includes('proj'))).toBe(true);
+    // The send action is the same round icon button as the create screen.
+    expect(composerButton(container, 'Send')).not.toBeNull();
+  });
+
+  it('a workflow run shows workflow + folder + trigger chips and a disabled send', async () => {
+    workflowApi.listRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.get.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          { id: 'a1', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const labels = chips(container).map((b) => b.textContent);
+    expect(labels.some((l) => l?.includes('Review team'))).toBe(true);
+    expect(labels.some((l) => l?.includes('proj'))).toBe(true);
+    expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
+      true,
+    );
+    // Workflow runs take one task — the round send stays disabled.
+    expect(composerButton(container, 'Send')?.disabled).toBe(true);
   });
 });
 

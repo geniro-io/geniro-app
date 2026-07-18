@@ -27,13 +27,17 @@ const SESSION_ID_KEYS = [
 
 function readUsage(root: Record<string, unknown>): AgentUsage {
   const usage = asRecord(root.usage);
+  const inputTokens = usage
+    ? (asNumber(usage.input_tokens) ?? asNumber(usage.inputTokens))
+    : null;
   return {
-    inputTokens: usage
-      ? (asNumber(usage.input_tokens) ?? asNumber(usage.inputTokens))
-      : null,
+    inputTokens,
     outputTokens: usage
       ? (asNumber(usage.output_tokens) ?? asNumber(usage.outputTokens))
       : null,
+    // Cursor doesn't break out cache tokens — its input count IS the best
+    // available context figure.
+    contextTokens: inputTokens,
     costUsd: asNumber(root.total_cost_usd) ?? asNumber(root.cost_usd),
   };
 }

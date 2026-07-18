@@ -138,7 +138,7 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
-  it('maps a successful result to turn_complete with usage', () => {
+  it('maps a successful result to turn_complete with usage, summing cache tokens into contextTokens', () => {
     expect(
       mapClaudeMessage({
         type: 'result',
@@ -146,13 +146,25 @@ describe('mapClaudeMessage', () => {
         is_error: false,
         result: 'pong',
         stop_reason: 'end_turn',
-        usage: { input_tokens: 12, output_tokens: 3 },
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+          // The bulk of a resumed session's context rides the cache counters —
+          // contextTokens must include them, not just input_tokens.
+          cache_creation_input_tokens: 100,
+          cache_read_input_tokens: 900,
+        },
         total_cost_usd: 0.14,
       }),
     ).toEqual([
       {
         type: 'turn_complete',
-        usage: { inputTokens: 12, outputTokens: 3, costUsd: 0.14 },
+        usage: {
+          inputTokens: 12,
+          outputTokens: 3,
+          contextTokens: 1012,
+          costUsd: 0.14,
+        },
         stopReason: 'end_turn',
         finalText: 'pong',
       },
@@ -206,7 +218,12 @@ describe('ClaudeAdapter', () => {
       { type: 'text', text: 'hi' },
       {
         type: 'turn_complete',
-        usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 },
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          contextTokens: 1,
+          costUsd: 0.01,
+        },
         stopReason: 'end_turn',
         finalText: 'hi',
       },

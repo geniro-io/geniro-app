@@ -1001,8 +1001,10 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    const nodeButton = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'agent-1',
+    // Target the TERMINAL affordance by its title — the header also shows an
+    // agent chip whose text is the same node id.
+    const nodeButton = container.querySelector<HTMLButtonElement>(
+      'button[title="Open a terminal mirroring agent-1"]',
     );
     expect(nodeButton).toBeTruthy();
     await act(async () => {
@@ -1070,12 +1072,13 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Mixed team');
 
-    const labels = [...container.querySelectorAll('button')].map((button) =>
-      button.textContent?.trim(),
-    );
-    expect(labels).toContain('claude');
-    expect(labels).not.toContain('start');
-    expect(labels).not.toContain('cursor');
+    // Scope to the terminal affordances (their title names the mirrored
+    // node) — agent chips in the header legitimately show 'cursor' as a
+    // WORKING agent, but must not offer it a terminal.
+    const mirrored = [
+      ...container.querySelectorAll('button[title^="Open a terminal"]'),
+    ].map((button) => button.textContent?.trim());
+    expect(mirrored).toEqual(['claude']);
   });
 
   it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
@@ -1434,6 +1437,154 @@ describe('Chats sidebar list', () => {
       el.textContent?.includes('My chat'),
     );
     expect(row!.textContent).toContain('Deploy finished cleanly.');
+  });
+
+  it('header chips track live agent state and the panel lists every agent with usage', async () => {
+    workflowApi.listRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        title: 'Big team',
+        agentKind: null,
+        workflowId: 'big-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.get.mockResolvedValue({
+      slug: 'big-team',
+      workflow: {
+        name: 'Big team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'orch',
+            kind: 'agent',
+            name: 'Orchestrator',
+            agent: 'claude',
+            approval: 'auto',
+          },
+          {
+            id: 'w-a',
+            kind: 'agent',
+            name: 'Worker A',
+            agent: 'claude',
+            approval: 'auto',
+          },
+          {
+            id: 'w-b',
+            kind: 'agent',
+            name: 'Worker B',
+            agent: 'claude',
+            approval: 'auto',
+          },
+          {
+            id: 'w-c',
+            kind: 'agent',
+            name: 'Worker C',
+            agent: 'claude',
+            approval: 'auto',
+          },
+        ],
+        edges: [],
+      },
+    });
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Big team');
+
+    // 4 agents → 3 chips + a "+1" overflow; the trigger is NOT an agent.
+    expect(
+      container.querySelectorAll('button[aria-label^="Agent "]'),
+    ).toHaveLength(3);
+    const overflow = container.querySelector(
+      'button[aria-label="Show all 4 agents"]',
+    )!;
+    expect(overflow.textContent).toBe('+1');
+
+    // Two parallel callee turns for Worker A → its chip surfaces first with ×2.
+    await act(async () => {
+      emitItem({
+        id: 's1',
+        runId: 'w1',
+        nodeId: 'w-a',
+        seq: 10,
+        kind: 'status',
+        role: null,
+        payload: { nodeId: 'w-a', status: 'running' },
+        createdAt: 'now',
+      });
+      emitItem({
+        id: 's2',
+        runId: 'w1',
+        nodeId: 'w-a',
+        seq: 11,
+        kind: 'status',
+        role: null,
+        payload: { nodeId: 'w-a', status: 'running' },
+        createdAt: 'now',
+      });
+    });
+    const chips = [
+      ...container.querySelectorAll('button[aria-label^="Agent "]'),
+    ];
+    expect(chips[0]!.textContent).toContain('Worker A');
+    expect(chips[0]!.textContent).toContain('×2');
+    expect(chips[0]!.querySelector('svg.animate-spin')).not.toBeNull();
+
+    // A settled turn with usage feeds the panel's context/spend line.
+    await act(async () => {
+      emitItem({
+        id: 't1',
+        runId: 'w1',
+        nodeId: 'w-a',
+        seq: 12,
+        kind: 'turn_complete',
+        role: null,
+        payload: {
+          usage: { contextTokens: 45_200, costUsd: 0.23 },
+          stopReason: null,
+        },
+        createdAt: 'now',
+      });
+      emitItem({
+        id: 's3',
+        runId: 'w1',
+        nodeId: 'w-a',
+        seq: 13,
+        kind: 'status',
+        role: null,
+        payload: { nodeId: 'w-a', status: 'completed' },
+        createdAt: 'now',
+      });
+    });
+    await act(async () => {
+      overflow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
+    const rows = [...panel.querySelectorAll('li')].map(
+      (row) => row.textContent,
+    );
+    expect(rows).toHaveLength(4);
+    const workerRow = rows.find((text) => text?.includes('Worker A'));
+    // One of its two turns settled — one still live, usage recorded.
+    expect(workerRow).toContain('running');
+    expect(workerRow).toContain('ctx 45.2k');
+    expect(workerRow).toContain('$0.23');
+    expect(rows.some((text) => text?.includes('start'))).toBe(false);
+
+    // ✕ closes the panel.
+    await act(async () => {
+      panel
+        .querySelector('button[aria-label="Close agents panel"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container.querySelector('aside[aria-label="Run agents"]'),
+    ).toBeNull();
   });
 
   it('shows the activity time for a settled run and hides it while running', async () => {

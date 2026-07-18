@@ -1,34 +1,10 @@
-import {
-  Ban,
-  CircleCheck,
-  CircleX,
-  Clock,
-  Loader2,
-  Pencil,
-  Workflow as WorkflowIcon,
-} from 'lucide-react';
+import { Pencil, Workflow as WorkflowIcon } from 'lucide-react';
 
 import type { ChatRunStatus } from '../../shared/contracts';
 import { NavListItem } from '../components/nav-list-item';
 import { Button } from '../components/ui/button';
-import { cn } from '../components/ui/utils';
 import { formatRelativeTime } from './relative-time';
-
-/**
- * The one status → icon/tone mapping for run rows, so a run's state reads the
- * same everywhere: running spins in the accent tone, terminal states are
- * success/destructive/muted.
- */
-const STATUS_META: Record<
-  ChatRunStatus,
-  { icon: typeof Clock; className: string }
-> = {
-  pending: { icon: Clock, className: 'text-muted-foreground' },
-  running: { icon: Loader2, className: 'text-primary' },
-  completed: { icon: CircleCheck, className: 'text-success' },
-  failed: { icon: CircleX, className: 'text-destructive' },
-  cancelled: { icon: Ban, className: 'text-muted-foreground' },
-};
+import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 
 /**
  * One chat-list row: the run's label (custom title, else its workflow's name,
@@ -58,8 +34,7 @@ export function ChatListItem({
   onActivate: () => void;
   onRename: () => void;
 }): React.JSX.Element {
-  const meta = STATUS_META[status];
-  const StatusIcon = meta.icon;
+  const meta = RUN_STATUS_META[status];
   return (
     <NavListItem active={active} className="group" onActivate={onActivate}>
       <span className="flex items-center gap-1.5">
@@ -92,14 +67,7 @@ export function ChatListItem({
         </span>
       ) : null}
       <span className="flex items-center gap-1 text-xs">
-        <StatusIcon
-          aria-hidden="true"
-          className={cn(
-            'size-3 shrink-0',
-            meta.className,
-            status === 'running' && 'animate-spin',
-          )}
-        />
+        <RunStatusIcon status={status} />
         <span className={meta.className}>{status}</span>
         {status !== 'running' ? (
           <span className="ml-auto pl-2 text-muted-foreground">

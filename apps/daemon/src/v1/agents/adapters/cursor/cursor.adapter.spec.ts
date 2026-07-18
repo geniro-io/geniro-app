@@ -107,7 +107,12 @@ describe('mapCursorMessage', () => {
     ).toEqual([
       {
         type: 'turn_complete',
-        usage: { inputTokens: 5, outputTokens: 1, costUsd: 0.02 },
+        usage: {
+          inputTokens: 5,
+          outputTokens: 1,
+          contextTokens: 5,
+          costUsd: 0.02,
+        },
         stopReason: 'end_turn',
         finalText: null,
       },
@@ -169,7 +174,12 @@ describe('CursorAdapter', () => {
       { type: 'text', text: 'done' },
       {
         type: 'turn_complete',
-        usage: { inputTokens: null, outputTokens: null, costUsd: null },
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          contextTokens: null,
+          costUsd: null,
+        },
         stopReason: null,
         finalText: null,
       },

@@ -6,6 +6,14 @@
 export interface AgentUsage {
   inputTokens: number | null;
   outputTokens: number | null;
+  /**
+   * The turn's full prompt-side footprint — what the agent's context window
+   * actually held. For claude this is input + cache-creation + cache-read
+   * tokens (`input_tokens` alone excludes cache traffic and wildly
+   * understates a resumed conversation); CLIs that don't break out cache
+   * tokens report their plain input count here.
+   */
+  contextTokens: number | null;
   costUsd: number | null;
 }
 

@@ -156,9 +156,22 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
         ];
       }
       const usageRec = asRecord(root.usage);
+      // Context = everything on the prompt side of the window. Claude splits
+      // it across three counters; a resumed session is almost all cache-read.
+      const contextParts = usageRec
+        ? [
+            asNumber(usageRec.input_tokens),
+            asNumber(usageRec.cache_creation_input_tokens),
+            asNumber(usageRec.cache_read_input_tokens),
+          ].filter((part): part is number => part !== null)
+        : [];
       const usage: AgentUsage = {
         inputTokens: usageRec ? asNumber(usageRec.input_tokens) : null,
         outputTokens: usageRec ? asNumber(usageRec.output_tokens) : null,
+        contextTokens:
+          contextParts.length > 0
+            ? contextParts.reduce((sum, part) => sum + part, 0)
+            : null,
         costUsd: asNumber(root.total_cost_usd),
       };
       return [

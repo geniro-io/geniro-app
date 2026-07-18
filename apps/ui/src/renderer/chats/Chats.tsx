@@ -23,20 +23,29 @@ import type {
   CliKind,
   DaemonHandle,
   TerminalSession,
+  WorkflowAgentNode,
   WorkflowSummary,
   WorkflowTriggerNode,
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import { ChatApi } from '../chat-api';
 import { ErrorText } from '../components/error-text';
-import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
+import { cn } from '../components/ui/utils';
 import { DaemonClient } from '../daemon-client';
 import { TerminalApi } from '../terminal-api';
 import { WorkflowApi } from '../workflow-api';
+import {
+  type AgentDisplay,
+  CHAT_AGENT_KEY,
+  computeAgentActivity,
+  displayStatus,
+} from './agent-activity';
+import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
+import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { RenameRunDialog } from './rename-run-dialog';
 import {
@@ -682,14 +691,18 @@ export function Chats({
     ],
     [items],
   );
-  const [mirrorableNodeIds, setMirrorableNodeIds] = useState<Set<string>>(
-    new Set(),
-  );
+  // The active workflow's node inventory: its agent nodes (header chips +
+  // agents panel) and every node id it knows (so trigger status items are
+  // never mistaken for an unknown agent's).
+  const [wfNodes, setWfNodes] = useState<{
+    agents: WorkflowAgentNode[];
+    allIds: Set<string>;
+  }>({ agents: [], allIds: new Set() });
   useEffect(() => {
     let cancelled = false;
     const workflowId = activeRun?.workflowId;
     if (!workflowId) {
-      setMirrorableNodeIds(new Set());
+      setWfNodes({ agents: [], allIds: new Set() });
       return;
     }
     void workflowApi
@@ -698,19 +711,16 @@ export function Chats({
         if (cancelled) {
           return;
         }
-        setMirrorableNodeIds(
-          new Set(
-            workflow.nodes
-              .filter(
-                (node) => node.kind === 'agent' && node.agent === 'claude',
-              )
-              .map((node) => node.id),
+        setWfNodes({
+          agents: workflow.nodes.filter(
+            (node): node is WorkflowAgentNode => node.kind === 'agent',
           ),
-        );
+          allIds: new Set(workflow.nodes.map((node) => node.id)),
+        });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setMirrorableNodeIds(new Set());
+          setWfNodes({ agents: [], allIds: new Set() });
           setError(
             `Could not load workflow terminal targets: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -720,10 +730,74 @@ export function Chats({
       cancelled = true;
     };
   }, [activeRun?.workflowId, workflowApi]);
-  const terminalNodeIds = useMemo(
-    () => seenNodeIds.filter((nodeId) => mirrorableNodeIds.has(nodeId)),
-    [seenNodeIds, mirrorableNodeIds],
+  const terminalNodeIds = useMemo(() => {
+    // Cursor's subscription TUI is deferred, so only claude nodes mirror.
+    const mirrorable = new Set(
+      wfNodes.agents
+        .filter((node) => node.agent === 'claude')
+        .map((node) => node.id),
+    );
+    return seenNodeIds.filter((nodeId) => mirrorable.has(nodeId));
+  }, [seenNodeIds, wfNodes]);
+
+  // Live per-agent state for the header chips + the agents panel, derived
+  // purely from the transcript (status items count parallel turns;
+  // turn_complete usage carries context/spend).
+  const activity = useMemo(() => computeAgentActivity(items), [items]);
+  const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
+  const toggleAgentsPanel = useCallback(
+    () => setAgentsPanelOpen((open) => !open),
+    [],
   );
+  const agents = useMemo((): AgentDisplay[] => {
+    if (!activeRun) {
+      return [];
+    }
+    if (!activeRun.workflowId) {
+      // A 1:1 chat has exactly one agent; its working state is the run's.
+      const chatActivity = activity.get(CHAT_AGENT_KEY);
+      const running = streaming || activeRun.status === 'running';
+      return [
+        {
+          id: CHAT_AGENT_KEY,
+          name: activeRun.agentKind ?? 'agent',
+          agent: activeRun.agentKind,
+          status: running ? 'running' : activeRun.status,
+          activeTurns: running ? 1 : 0,
+          contextTokens: chatActivity?.contextTokens ?? null,
+          spentUsd: chatActivity?.spentUsd ?? null,
+        },
+      ];
+    }
+    const known = wfNodes.agents.map((node): AgentDisplay => {
+      const nodeActivity = activity.get(node.id);
+      return {
+        id: node.id,
+        name: node.name ?? node.id,
+        agent: node.agent,
+        status: displayStatus(nodeActivity),
+        activeTurns: nodeActivity?.activeTurns ?? 0,
+        contextTokens: nodeActivity?.contextTokens ?? null,
+        spentUsd: nodeActivity?.spentUsd ?? null,
+      };
+    });
+    // Items can reference nodes a since-edited workflow no longer has — list
+    // them too (unnamed) rather than hiding work that visibly happened.
+    const extras = [...activity.entries()]
+      .filter(
+        ([nodeId]) => nodeId !== CHAT_AGENT_KEY && !wfNodes.allIds.has(nodeId),
+      )
+      .map(([nodeId, nodeActivity]): AgentDisplay => ({
+        id: nodeId,
+        name: nodeId,
+        agent: null,
+        status: displayStatus(nodeActivity),
+        activeTurns: nodeActivity.activeTurns,
+        contextTokens: nodeActivity.contextTokens,
+        spentUsd: nodeActivity.spentUsd,
+      }));
+    return [...known, ...extras];
+  }, [activeRun, activity, streaming, wfNodes]);
 
   const openTerminal = useCallback(
     async (runId: string, nodeId?: string) => {
@@ -774,10 +848,20 @@ export function Chats({
     });
   }, [terminal, terminalApi]);
 
+  const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
+
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
-  // content width, or a long cwd path widens the grid past the window.
+  // content width, or a long cwd path widens the grid past the window. The
+  // third `auto` column appears only while the agents panel is open (the
+  // panel's own resizable width drives it).
   return (
-    <div className="grid h-full grid-cols-[260px_minmax(0,1fr)]">
+    <div
+      className={cn(
+        'grid h-full',
+        showAgentsPanel
+          ? 'grid-cols-[260px_minmax(0,1fr)_auto]'
+          : 'grid-cols-[260px_minmax(0,1fr)]',
+      )}>
       <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
         <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
           <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -964,51 +1048,45 @@ export function Chats({
         </section>
       ) : (
         <section className="flex min-h-0 flex-col">
-          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-            {activeRun?.workflowId ? (
-              <Badge variant="secondary">
-                workflow: {activeRun.workflowId}
-              </Badge>
-            ) : activeRun?.agentKind ? (
-              <Badge variant="secondary">{activeRun.agentKind}</Badge>
-            ) : null}
-            {activeRun?.cwd ? (
-              <span className="max-w-full min-w-0 truncate text-xs text-muted-foreground">
-                cwd: {activeRun.cwd}
-              </span>
-            ) : null}
-            {/* Cursor's subscription TUI is deferred, so only claude gets a mirror. */}
-            {activeRun &&
-            !activeRun.workflowId &&
-            activeRun.agentKind === 'claude' ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="ml-auto gap-1.5"
-                onClick={() => void openTerminal(activeRun.id)}>
-                <TerminalIcon className="size-3.5 shrink-0" />
-                Terminal
-              </Button>
-            ) : null}
-            {activeRun?.workflowId && terminalNodeIds.length > 0 ? (
-              <span className="ml-auto flex flex-wrap gap-1">
-                {terminalNodeIds.map((nodeId) => (
-                  <Button
-                    key={nodeId}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    title={`Open a terminal mirroring ${nodeId}`}
-                    onClick={() => void openTerminal(activeRun.id, nodeId)}>
-                    <TerminalIcon className="size-3.5 shrink-0" />
-                    {nodeId}
-                  </Button>
-                ))}
-              </span>
-            ) : null}
-          </div>
+          {activeRun ? (
+            <ChatHeader
+              label={runLabel(activeRun, workflowNames)}
+              isWorkflow={activeRun.workflowId != null}
+              status={activeRun.status}
+              lastActivityAt={activeRun.updatedAt}
+              cwd={activeRun.cwd}
+              agents={agents}
+              agentsPanelOpen={agentsPanelOpen}
+              onToggleAgents={toggleAgentsPanel}>
+              {/* Cursor's subscription TUI is deferred, so only claude mirrors. */}
+              {!activeRun.workflowId && activeRun.agentKind === 'claude' ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => void openTerminal(activeRun.id)}>
+                  <TerminalIcon className="size-3.5 shrink-0" />
+                  Terminal
+                </Button>
+              ) : null}
+              {activeRun.workflowId
+                ? terminalNodeIds.map((nodeId) => (
+                    <Button
+                      key={nodeId}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      title={`Open a terminal mirroring ${nodeId}`}
+                      onClick={() => void openTerminal(activeRun.id, nodeId)}>
+                      <TerminalIcon className="size-3.5 shrink-0" />
+                      {nodeId}
+                    </Button>
+                  ))
+                : null}
+            </ChatHeader>
+          ) : null}
 
           <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
             {items.map((item) => {
@@ -1082,6 +1160,13 @@ export function Chats({
           </div>
         </section>
       )}
+
+      {showAgentsPanel ? (
+        <AgentsPanel
+          agents={agents}
+          onClose={() => setAgentsPanelOpen(false)}
+        />
+      ) : null}
 
       <RenameRunDialog
         open={renaming !== null}

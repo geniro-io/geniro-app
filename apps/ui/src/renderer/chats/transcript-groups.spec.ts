@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ChatItem } from '../../shared/contracts';
 import {
+  buildTurnBlocks,
   type CallBlockEntry,
   groupTranscript,
   toolCallSummary,
@@ -15,6 +16,7 @@ function item(
   kind: ChatItem['kind'],
   payload: unknown,
   nodeId: string | null = 'orch',
+  role: string | null = null,
 ): ChatItem {
   seq += 1;
   return {
@@ -23,7 +25,7 @@ function item(
     nodeId,
     seq,
     kind,
-    role: null,
+    role,
     payload,
     createdAt: 'now',
   };
@@ -378,5 +380,59 @@ describe('toolResultText', () => {
 
   it('pretty-prints anything else as JSON', () => {
     expect(toolResultText({ a: 1 })).toBe('{\n  "a": 1\n}');
+  });
+});
+
+describe('buildTurnBlocks', () => {
+  it("folds one agent's messages, tool groups and call cards into ONE block; a user message breaks it", () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'ask' }, null, 'user'),
+        item('message', { text: 'starting the team' }, 'orch'),
+        call('Bash', 't1', { command: 'ls' }),
+        item(
+          'call_started',
+          {
+            callId: 'call-1',
+            calleeNodeId: 'poet',
+            mode: 'sync',
+            message: 'haiku',
+          },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item('message', { text: 'the final RIVERS brief' }, 'orch'),
+      ]),
+    );
+
+    // user bubble stays alone; EVERYTHING the orchestrator did is one block.
+    expect(entries.map((e) => e.type)).toEqual(['item', 'turn-block']);
+    const block = entries[1];
+    if (block?.type !== 'turn-block') {
+      throw new Error('expected a turn block');
+    }
+    expect(block.nodeId).toBe('orch');
+    expect(block.entries.map((e) => e.type)).toEqual([
+      'item',
+      'tools',
+      'call-block',
+      'item',
+    ]);
+  });
+
+  it('notes and other agents break the fold into separate blocks', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'from orch' }, 'orch'),
+        item('status', { status: 'completed' }, 'orch'),
+        item('message', { text: 'from writer' }, 'writer'),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'turn-block',
+      'item',
+      'turn-block',
+    ]);
   });
 });

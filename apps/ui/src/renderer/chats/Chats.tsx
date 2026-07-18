@@ -55,7 +55,7 @@ import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
 import { RenameRunDialog } from './rename-run-dialog';
 import { TranscriptEntryView } from './transcript-entry';
-import { groupTranscript } from './transcript-groups';
+import { buildTurnBlocks, groupTranscript } from './transcript-groups';
 import {
   collectVerdicts,
   expiredApprovalIds,
@@ -876,7 +876,10 @@ export function Chats({
     }
     return map;
   }, [wfNodes]);
-  const transcriptEntries = useMemo(() => groupTranscript(items), [items]);
+  const transcriptEntries = useMemo(
+    () => buildTurnBlocks(groupTranscript(items)),
+    [items],
+  );
   // Live per-agent state for the agents panel, derived purely from the
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).

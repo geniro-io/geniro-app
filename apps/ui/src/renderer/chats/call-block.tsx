@@ -9,6 +9,7 @@ import { useState } from 'react';
 
 import { avatarTone, initialsOf } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
+import { MarkdownContent } from './markdown-content';
 import { TranscriptEntryView } from './transcript-entry';
 import type { CallBlockEntry } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
@@ -83,21 +84,18 @@ function InlineClampText({
         accentClass,
       )}>
       <div
-        className={cn(
-          'whitespace-pre-wrap',
-          !expanded && isLong && 'overflow-hidden',
-        )}
+        className={cn(!expanded && isLong && 'overflow-hidden')}
         style={
           !expanded && isLong
             ? {
-                maxHeight: `${lines * 1.6}em`,
+                maxHeight: `${lines * 1.8}em`,
                 maskImage: 'linear-gradient(to bottom, black 40%, transparent)',
                 WebkitMaskImage:
                   'linear-gradient(to bottom, black 40%, transparent)',
               }
             : undefined
         }>
-        {text}
+        <MarkdownContent content={text} className="text-[11px]" />
       </div>
       {isLong ? (
         <button

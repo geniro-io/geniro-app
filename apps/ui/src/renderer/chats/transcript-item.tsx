@@ -2,6 +2,7 @@ import { memo } from 'react';
 
 import type { ChatItem } from '../../shared/contracts';
 import { AlertRow } from './alert-row';
+import { MarkdownContent } from './markdown-content';
 import { MessageBubble } from './message-bubble';
 
 /** What the transcript knows about a workflow node (for display only). */
@@ -56,11 +57,11 @@ export const TranscriptItem = memo(function TranscriptItem({
   switch (item.kind) {
     case 'message': {
       // The SenderRow frame (avatar + name + time) identifies the speaker —
-      // the bubble carries only the text.
+      // the bubble carries only the markdown-rendered text.
       const text = payloadString(item.payload, 'text') ?? '';
       return (
         <MessageBubble variant={item.role === 'user' ? 'user' : 'assistant'}>
-          <div className="whitespace-pre-wrap">{text}</div>
+          <MarkdownContent content={text} />
         </MessageBubble>
       );
     }

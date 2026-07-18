@@ -60,7 +60,98 @@ export interface CallBlockEntry {
   entries: TranscriptEntry[];
 }
 
-export type TranscriptEntry = ItemEntry | ToolGroupEntry | CallBlockEntry;
+/**
+ * One agent's contiguous run of work — geniro-style: the agent's messages,
+ * tool groups and communication cards folded into ONE avatar-framed block,
+ * so a turn reads top-to-bottom as a single story.
+ */
+export interface TurnBlockEntry {
+  type: 'turn-block';
+  /** Stable identity: the first inner entry's identity. */
+  id: string;
+  createdAt: string;
+  /** Owner node; null = the 1:1 chat's agent. */
+  nodeId: string | null;
+  entries: TranscriptEntry[];
+}
+
+export type TranscriptEntry =
+  ItemEntry | ToolGroupEntry | CallBlockEntry | TurnBlockEntry;
+
+/** Sentinel: entry has no agent owner and breaks a turn block. */
+const NO_OWNER = Symbol('no-owner');
+
+/** The agent a top-level entry belongs to (NO_OWNER breaks the block). */
+function ownerOf(entry: TranscriptEntry): string | null | typeof NO_OWNER {
+  if (entry.type === 'tools') {
+    return entry.nodeId;
+  }
+  if (entry.type === 'call-block') {
+    return entry.callerNodeId;
+  }
+  if (entry.type === 'turn-block') {
+    return entry.nodeId;
+  }
+  const item = entry.item;
+  if (item.kind === 'message' && item.role !== 'user') {
+    return item.nodeId;
+  }
+  if (
+    item.kind === 'reasoning' ||
+    item.kind === 'error' ||
+    item.kind === 'system'
+  ) {
+    return item.nodeId;
+  }
+  return NO_OWNER;
+}
+
+function entryId(entry: TranscriptEntry): string {
+  return entry.type === 'item' ? entry.item.id : entry.id;
+}
+
+function entryCreatedAt(entry: TranscriptEntry): string {
+  if (entry.type === 'item') {
+    return entry.item.createdAt;
+  }
+  if (entry.type === 'tools') {
+    return entry.pairs[0]?.call.createdAt ?? '';
+  }
+  return entry.createdAt;
+}
+
+/**
+ * Fold consecutive same-agent entries into turn blocks. Applied by the
+ * MAIN flow only (a communication card's inner content is already one
+ * story); user messages, notes and approval cards break a block.
+ */
+export function buildTurnBlocks(
+  entries: readonly TranscriptEntry[],
+): TranscriptEntry[] {
+  const out: TranscriptEntry[] = [];
+  let open: TurnBlockEntry | null = null;
+  for (const entry of entries) {
+    const owner = ownerOf(entry);
+    if (owner === NO_OWNER) {
+      open = null;
+      out.push(entry);
+      continue;
+    }
+    if (open && open.nodeId === owner) {
+      open.entries.push(entry);
+      continue;
+    }
+    open = {
+      type: 'turn-block',
+      id: entryId(entry),
+      createdAt: entryCreatedAt(entry),
+      nodeId: owner,
+      entries: [entry],
+    };
+    out.push(open);
+  }
+  return out;
+}
 
 /**
  * Caller-attributed rows of the SAME call (the parked question, its answer,

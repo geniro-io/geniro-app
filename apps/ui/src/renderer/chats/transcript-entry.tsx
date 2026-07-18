@@ -8,6 +8,7 @@ import {
   TranscriptItem,
   type TranscriptNodeMeta,
 } from './transcript-item';
+import { TurnBlock } from './turn-block';
 
 /** Item kinds that read as a MESSAGE from someone (avatar + name + time). */
 const SENDER_KINDS = new Set([
@@ -41,6 +42,11 @@ export function TranscriptEntryView({
   const agentName = (id: string | null): string =>
     nameOf(id) ?? chatAgentName ?? 'agent';
 
+  if (entry.type === 'turn-block') {
+    return (
+      <TurnBlock block={entry} nodes={nodes} chatAgentName={chatAgentName} />
+    );
+  }
   if (entry.type === 'tools') {
     // Geniro's WorkingBlock sits bare in the turn flow — no avatar frame.
     return <ToolGroup group={entry} />;

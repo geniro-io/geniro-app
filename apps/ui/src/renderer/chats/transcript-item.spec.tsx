@@ -183,14 +183,16 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toContain('undelivered');
   });
 
-  it('status rows speak in node display names, not "id → status" arrows', () => {
+  it('status rows speak in node display names, not "id → status" arrows — and starts are silent', () => {
     render(
       <TranscriptItem
         item={item('status', { status: 'running' })}
         nodes={NODES}
       />,
     );
-    expect(container.textContent).toContain('Orchestrator started');
+    // A start renders nothing — spinners carry liveness; the old "▸ started"
+    // note read as a collapse toggle.
+    expect(container.textContent).toBe('');
 
     render(
       <TranscriptItem

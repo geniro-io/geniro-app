@@ -135,7 +135,7 @@ function AvatarPair({
     <span
       aria-hidden="true"
       className={cn(
-        'flex size-5 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-primary-foreground',
+        'flex size-5 shrink-0 items-center justify-center rounded-full text-[8px] leading-none font-bold text-primary-foreground',
         avatarTone(key),
       )}>
       {initialsOf(name)}

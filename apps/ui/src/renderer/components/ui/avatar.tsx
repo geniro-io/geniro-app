@@ -77,7 +77,7 @@ export function InitialsAvatar({
       aria-hidden="true"
       title={name}
       className={cn(
-        'flex shrink-0 items-center justify-center rounded-full font-semibold text-primary-foreground uppercase select-none',
+        'flex shrink-0 items-center justify-center rounded-full leading-none font-semibold text-primary-foreground uppercase select-none',
         SIZES[size],
         solid ? 'bg-avatar-user' : avatarTone(colorKey ?? name),
         className,

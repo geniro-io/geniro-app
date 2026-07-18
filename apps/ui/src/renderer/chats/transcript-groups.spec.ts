@@ -254,10 +254,26 @@ describe('groupTranscript — call blocks', () => {
     ).toBe(true);
   });
 
-  it("the caller's call_result receipt stays in the main flow, never inside the block", () => {
+  it('the WHOLE exchange claims into the block: question/answer nest, the ok settle drops', () => {
     const entries = groupTranscript([
       startCall('call-1', 'poet'),
       tagged('status', { status: 'running' }, 'poet', 'call-1'),
+      item(
+        'call_question',
+        { callId: 'call-1', calleeNodeId: 'poet', question: 'Which sea?' },
+        'orch',
+      ),
+      item(
+        'call_answer',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          outcome: 'answered',
+          answer: 'Baltic',
+        },
+        'orch',
+      ),
+      tagged('message', { text: 'haiku!' }, 'poet', 'call-1'),
       tagged('status', { status: 'completed' }, 'poet', 'call-1'),
       item(
         'call_result',
@@ -266,7 +282,37 @@ describe('groupTranscript — call blocks', () => {
       ),
     ]);
 
-    expect(entries.map((e) => e.type)).toEqual(['call-block', 'item']);
+    // Nothing about the call remains in the main flow.
+    expect(entries.map((e) => e.type)).toEqual(['call-block']);
+    const block = entries[0] as CallBlockEntry;
+    const innerJson = JSON.stringify(block.entries);
+    expect(innerJson).toContain('Which sea?');
+    expect(innerJson).toContain('Baltic');
+    // The ok settle envelope is bookkeeping — the done chip + result own it.
+    expect(innerJson).not.toContain('call_result');
+  });
+
+  it('an ERROR settle keeps its row inside the block', () => {
+    const entries = groupTranscript([
+      startCall('call-1', 'poet'),
+      tagged('status', { status: 'running' }, 'poet', 'call-1'),
+      tagged('status', { status: 'failed' }, 'poet', 'call-1'),
+      item(
+        'call_result',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          status: 'error',
+          error: 'CALLEE_FAILED: exit 1',
+        },
+        'orch',
+      ),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['call-block']);
+    expect(JSON.stringify((entries[0] as CallBlockEntry).entries)).toContain(
+      'CALLEE_FAILED',
+    );
   });
 });
 

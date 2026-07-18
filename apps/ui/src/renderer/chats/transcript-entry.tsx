@@ -42,14 +42,8 @@ export function TranscriptEntryView({
     nameOf(id) ?? chatAgentName ?? 'agent';
 
   if (entry.type === 'tools') {
-    return (
-      <SenderRow
-        name={agentName(entry.nodeId)}
-        colorKey={entry.nodeId ?? undefined}
-        time={formatClockTime(entry.pairs[0]?.call.createdAt ?? '')}>
-        <ToolGroup group={entry} />
-      </SenderRow>
-    );
+    // Geniro's WorkingBlock sits bare in the turn flow — no avatar frame.
+    return <ToolGroup group={entry} />;
   }
   if (entry.type === 'call-block') {
     // The communication card carries its own identity (the eyebrow line,

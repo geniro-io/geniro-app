@@ -62,22 +62,27 @@ export interface CallBlockEntry {
 
 export type TranscriptEntry = ItemEntry | ToolGroupEntry | CallBlockEntry;
 
-/** Caller-side call bookkeeping rows — never claimed into a callee block. */
-const CALL_ROW_KINDS = new Set<ChatItem['kind']>([
-  'call_started',
-  'call_result',
+/**
+ * Caller-attributed rows of the SAME call (the parked question, its answer,
+ * the settle envelope) — everything about a sub-agent call belongs inside
+ * its block, so these claim into the bucket by callId alone (their nodeId
+ * is the CALLER's).
+ */
+const CALL_FOLLOWUP_KINDS = new Set<ChatItem['kind']>([
   'call_question',
   'call_answer',
-  'await_collected',
+  'call_result',
 ]);
 
 /**
- * Kinds that must stay in the MAIN flow even when callId-tagged: the call
- * bookkeeping rows above, plus approval requests/verdicts — a pending card
- * hidden inside a collapsed block could never be answered.
+ * Kinds that must stay in the MAIN flow even when callId-tagged: the block
+ * anchor itself, the broker's pickup note (renders as nothing), and
+ * approval requests/verdicts — a pending card hidden inside a block's flow
+ * could never be answered.
  */
 const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
-  ...CALL_ROW_KINDS,
+  'call_started',
+  'await_collected',
   'approval_request',
   'approval_verdict',
 ]);
@@ -101,9 +106,10 @@ interface CallShell {
  *   attributed to the callee node folds inside it (its status items drive
  *   the block's live status instead of rendering as rows — merging the old
  *   redundant "call → B" + "B started" pair into one block header).
- * - caller-side call rows and approval requests/verdicts are never claimed
- *   (see {@link UNCLAIMABLE_KINDS}); untagged items (legacy transcripts)
- *   stay in the main flow.
+ * - the caller-attributed rows about the call (question/answer/settle)
+ *   claim in too — the WHOLE exchange lives in the block; only the anchor
+ *   and approval requests/verdicts stay out (see {@link UNCLAIMABLE_KINDS}),
+ *   and untagged items (legacy transcripts) keep the flat flow.
  *
  * Tool-grouping rules:
  * - a `tool_call` joins its node's OPEN group (or opens one); any other
@@ -140,7 +146,16 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       }
       const callId = payloadString(item.payload, 'callId');
       const shell = callId ? shells.get(callId) : undefined;
-      if (shell && item.nodeId !== null && item.nodeId === shell.calleeNodeId) {
+      if (!shell) {
+        continue;
+      }
+      // The callee's own streamed items claim by callId + callee nodeId; the
+      // caller-attributed rows ABOUT this call (question/answer/settle)
+      // claim by callId alone — the whole exchange lives in the block.
+      if (
+        CALL_FOLLOWUP_KINDS.has(item.kind) ||
+        (item.nodeId !== null && item.nodeId === shell.calleeNodeId)
+      ) {
         shell.bucket.push(item);
         claimed.add(item.id);
       }
@@ -260,6 +275,15 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
       }
     }
   }
+  // The ok settle envelope is pure bookkeeping once the block shows the
+  // result and the done chip; only the error arm keeps a row (in-block).
+  const visibleInner = inner.filter(
+    (item) =>
+      !(
+        item.kind === 'call_result' &&
+        payloadString(item.payload, 'status') === 'ok'
+      ),
+  );
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -271,7 +295,7 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
     message: payloadString(shell.started.payload, 'message'),
     status,
     result,
-    entries: groupTranscript(inner),
+    entries: groupTranscript(visibleInner),
   };
 }
 

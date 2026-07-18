@@ -204,9 +204,12 @@ beforeEach(() => {
     getSettings: vi.fn().mockResolvedValue({
       onboardingComplete: true,
       projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
       cliPaths: {},
       checkForUpdates: true,
     }),
+    updateSettings: vi.fn().mockResolvedValue({}),
   };
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.getHistory.mockReset().mockResolvedValue([]);
@@ -1177,6 +1180,116 @@ describe('Chats terminal mirror', () => {
     expect(
       container.querySelector('[data-testid="terminal-panel"]'),
     ).toBeNull();
+  });
+});
+
+describe('Chats composer memory & suggestions', () => {
+  function stubSettings(overrides: Record<string, unknown>): void {
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      ...overrides,
+    });
+  }
+
+  const reviewTeamSummary = {
+    slug: 'review-team',
+    name: 'Review team',
+    description: null,
+    nodeCount: 2,
+    updatedAt: 'now',
+  };
+
+  it('restores the remembered target once the workflow library confirms it', async () => {
+    stubSettings({ lastChatTarget: 'wf:review-team' });
+    workflowApi.list.mockResolvedValue([reviewTeamSummary]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.querySelector('select')!.value).toBe('wf:review-team');
+  });
+
+  it('falls back to claude when the remembered workflow no longer exists', async () => {
+    stubSettings({ lastChatTarget: 'wf:deleted-team' });
+    workflowApi.list.mockResolvedValue([reviewTeamSummary]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.querySelector('select')!.value).toBe('claude');
+  });
+
+  it('persists a target change as the next default', async () => {
+    workflowApi.list.mockResolvedValue([reviewTeamSummary]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastChatTarget: 'wf:review-team',
+    });
+  });
+
+  it('a recent-folder chip adopts the folder and re-persists recency order', async () => {
+    stubSettings({ recentFolders: ['/proj', '/alpha', '/beta'] });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    // The CURRENT folder (/proj) is not suggested — only the other two.
+    const chips = [...container.querySelectorAll('button')].filter((b) =>
+      /alpha|beta|proj/.test(b.textContent ?? ''),
+    );
+    expect(chips.map((b) => b.textContent?.trim())).toEqual([
+      'proj', // the folder control inside the card
+      'alpha',
+      'beta',
+    ]);
+
+    await act(async () => {
+      chips[2]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      projectFolder: '/beta',
+      recentFolders: ['/beta', '/proj', '/alpha'],
+    });
+  });
+
+  it('a workflow chip targets that workflow (and the chip disappears)', async () => {
+    workflowApi.list.mockResolvedValue([reviewTeamSummary]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const chip = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Review team'),
+    )!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.querySelector('select')!.value).toBe('wf:review-team');
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastChatTarget: 'wf:review-team',
+    });
+    // The chip for the now-selected workflow is gone.
+    expect(
+      [...container.querySelectorAll('button')].filter((b) =>
+        b.textContent?.includes('Review team'),
+      ),
+    ).toHaveLength(0);
   });
 });
 

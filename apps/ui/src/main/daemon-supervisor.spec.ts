@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   readSettings: vi.fn((): Settings => ({
     onboardingComplete: true,
     projectFolder: null,
+    recentFolders: [],
+    lastChatTarget: null,
     cliPaths: { claude: '/opt/tools/claude' },
     checkForUpdates: true,
   })),
@@ -133,6 +135,8 @@ beforeEach(() => {
   mocks.readSettings.mockReturnValue({
     onboardingComplete: true,
     projectFolder: null,
+    recentFolders: [],
+    lastChatTarget: null,
     cliPaths: { claude: '/opt/tools/claude' },
     checkForUpdates: true,
   });
@@ -387,6 +391,8 @@ describe('DaemonSupervisor.restart', () => {
       mocks.readSettings.mockReturnValue({
         onboardingComplete: true,
         projectFolder: null,
+        recentFolders: [],
+        lastChatTarget: null,
         cliPaths: { 'cursor-agent': '/opt/tools/cursor-agent' },
         checkForUpdates: true,
       });

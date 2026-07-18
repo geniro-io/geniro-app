@@ -236,6 +236,10 @@ export interface Settings {
   onboardingComplete: boolean;
   /** Absolute path to the user's working project folder (agent cwd). */
   projectFolder: string | null;
+  /** Recently used project folders, most recent first (composer suggestions). */
+  recentFolders: string[];
+  /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
+  lastChatTarget: string | null;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -246,6 +250,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
   projectFolder: null,
+  recentFolders: [],
+  lastChatTarget: null,
   cliPaths: {},
   checkForUpdates: true,
 };

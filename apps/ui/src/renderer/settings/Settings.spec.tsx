@@ -16,6 +16,8 @@ import { Settings } from './Settings';
 const settings: SettingsShape = {
   onboardingComplete: true,
   projectFolder: '/proj',
+  recentFolders: [],
+  lastChatTarget: null,
   cliPaths: {},
   checkForUpdates: false,
 };

@@ -3,6 +3,7 @@ import {
   FolderOpen,
   Plus,
   Terminal as TerminalIcon,
+  Workflow as WorkflowIcon,
   Zap,
 } from 'lucide-react';
 import {
@@ -92,6 +93,8 @@ export function Chats({
   // (persisted in settings); each chat records its own cwd, so this is only the
   // default the picker starts from.
   const [folder, setFolder] = useState<string | null>(null);
+  // Recently used folders (persisted), surfaced as composer suggestion chips.
+  const [recentFolders, setRecentFolders] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -152,15 +155,39 @@ export function Chats({
   // mounted (hidden), so refetch it every time the tab becomes visible — a
   // mount-only fetch would leave the target selector stale after a save or
   // delete over there.
+  const [workflowsLoaded, setWorkflowsLoaded] = useState(false);
   useEffect(() => {
     if (!active) {
       return;
     }
     void workflowApi
       .list()
-      .then(setWorkflows)
+      .then((list) => {
+        setWorkflows(list);
+        setWorkflowsLoaded(true);
+      })
       .catch(() => setWorkflows([]));
   }, [active, workflowApi]);
+
+  // A remembered workflow target can be gone (deleted/renamed on the Graphs
+  // page): once the library has ACTUALLY loaded, fall back instead of keeping
+  // a dead selection. Gated on workflowsLoaded so the initial empty list (or
+  // a failed fetch) never clobbers a target the restore just set.
+  useEffect(() => {
+    if (
+      workflowsLoaded &&
+      workflowSlug &&
+      !workflows.some((wf) => wf.slug === workflowSlug)
+    ) {
+      setTarget('claude');
+    }
+  }, [workflowsLoaded, workflowSlug, workflows]);
+
+  /** Composer target change — remembered as the default for next time. */
+  const changeTarget = useCallback((value: string): void => {
+    setTarget(value);
+    void window.geniro.updateSettings({ lastChatTarget: value });
+  }, []);
 
   // The selected workflow's entry points for the composer's trigger select —
   // a run starts by firing a trigger, so the composer surfaces which one.
@@ -252,7 +279,13 @@ export function Chats({
   );
 
   useEffect(() => {
-    void window.geniro.getSettings().then((s) => setFolder(s.projectFolder));
+    void window.geniro.getSettings().then((s) => {
+      setFolder(s.projectFolder);
+      setRecentFolders(s.recentFolders ?? []);
+      if (s.lastChatTarget) {
+        setTarget(s.lastChatTarget);
+      }
+    });
     void Promise.all([chatApi.listChats(), workflowApi.listRuns()])
       .then(([chats, workflowRuns]) =>
         setRuns(
@@ -310,11 +343,23 @@ export function Chats({
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
 
-  // Persist a chosen folder as the last-used default for the next new chat.
-  const chooseFolder = useCallback((chosen: string): void => {
-    setFolder(chosen);
-    void window.geniro.updateSettings({ projectFolder: chosen });
-  }, []);
+  // Persist a chosen folder as the last-used default for the next new chat,
+  // and remember it among the recent-folder suggestions (most recent first).
+  const chooseFolder = useCallback(
+    (chosen: string): void => {
+      setFolder(chosen);
+      const next = [chosen, ...recentFolders.filter((f) => f !== chosen)].slice(
+        0,
+        5,
+      );
+      setRecentFolders(next);
+      void window.geniro.updateSettings({
+        projectFolder: chosen,
+        recentFolders: next,
+      });
+    },
+    [recentFolders],
+  );
 
   const pickFolder = useCallback(async (): Promise<void> => {
     const chosen = await window.geniro.pickProjectFolder();
@@ -689,7 +734,7 @@ export function Chats({
                 <Select
                   value={target}
                   className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  onChange={(event) => setTarget(event.target.value)}
+                  onChange={(event) => changeTarget(event.target.value)}
                   aria-label="Agent or workflow for new runs">
                   <optgroup label="Agents">
                     {CLI_KINDS.map((kind) => (
@@ -750,6 +795,45 @@ export function Chats({
                 </Button>
               </div>
             </div>
+            {/* Suggestion chips: recent folders + library workflows — one
+                click fills the matching composer control. */}
+            {recentFolders.some((f) => f !== folder) ||
+            workflows.some((wf) => `wf:${wf.slug}` !== target) ? (
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                {recentFolders
+                  .filter((f) => f !== folder)
+                  .slice(0, 3)
+                  .map((f) => (
+                    <Button
+                      key={f}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 rounded-full px-3 text-xs font-normal text-muted-foreground"
+                      title={f}
+                      onClick={() => chooseFolder(f)}>
+                      <FolderOpen className="size-3 shrink-0" />
+                      <span className="max-w-40 truncate">{folderName(f)}</span>
+                    </Button>
+                  ))}
+                {workflows
+                  .filter((wf) => `wf:${wf.slug}` !== target)
+                  .slice(0, 3)
+                  .map((wf) => (
+                    <Button
+                      key={wf.slug}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 rounded-full px-3 text-xs font-normal text-muted-foreground"
+                      title={`Run the ${wf.name} workflow`}
+                      onClick={() => changeTarget(`wf:${wf.slug}`)}>
+                      <WorkflowIcon className="size-3 shrink-0" />
+                      <span className="max-w-40 truncate">{wf.name}</span>
+                    </Button>
+                  ))}
+              </div>
+            ) : null}
             {workflowSlug && triggers.length > 1 ? (
               <p className="text-center text-xs text-muted-foreground">
                 This graph has {triggers.length} triggers — v1 fires them all on

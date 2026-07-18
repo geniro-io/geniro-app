@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => {
   const settings: Settings = {
     onboardingComplete: false,
     projectFolder: null,
+    recentFolders: [],
+    lastChatTarget: null,
     cliPaths: {},
     checkForUpdates: true,
   };

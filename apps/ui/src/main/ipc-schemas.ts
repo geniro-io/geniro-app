@@ -31,6 +31,12 @@ const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
 export const settingsPatchSchema = z.strictObject({
   onboardingComplete: z.boolean().optional(),
   projectFolder: absolutePath.nullable().optional(),
+  recentFolders: z.array(absolutePath).max(10).optional(),
+  // A CLI kind or a `wf:<slug>` workflow reference (the composer target).
+  lastChatTarget: z
+    .union([cliKind, z.string().regex(/^wf:.+/)])
+    .nullable()
+    .optional(),
   // partialRecord, not record: in zod v4 z.record over an enum key is
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),

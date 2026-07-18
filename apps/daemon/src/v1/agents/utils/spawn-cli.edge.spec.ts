@@ -115,6 +115,81 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
     ]);
   });
 
+  it('normalizes a post-cancel error terminal to turn_cancelled', async () => {
+    // On Stop the CLI reacts to the SIGTERM by printing an is_error result
+    // (or exiting non-zero) BEFORE the signal-kill close — that error would
+    // win the one-terminal race and record a fake failure for a deliberate
+    // user cancel. After cancel(), an error terminal must read as cancelled.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const mapper = (obj: unknown): AgentEvent[] =>
+      obj &&
+      typeof obj === 'object' &&
+      (obj as { type?: string }).type === 'result'
+        ? [{ type: 'error', message: 'claude run failed' }]
+        : [];
+
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    handle.cancel();
+    child.stdout.emitData('{"type":"result","is_error":true}\n');
+    child.emit('close', 143, null);
+    await handle.done;
+
+    const terminal = events.filter(
+      (e) =>
+        e.type === 'error' ||
+        e.type === 'turn_complete' ||
+        e.type === 'turn_cancelled',
+    );
+    expect(terminal).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('a genuine turn_complete that raced the cancel still wins over the kill', async () => {
+    // The turn REALLY finished — the result line was already on the wire when
+    // the user hit Stop. The completed outcome (and its usage) must survive;
+    // only errors are rewritten by a pending cancel.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const mapper = (obj: unknown): AgentEvent[] =>
+      obj &&
+      typeof obj === 'object' &&
+      (obj as { type?: string }).type === 'result'
+        ? [{ type: 'turn_complete', usage: null, stopReason: 'end_turn' }]
+        : [];
+
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    handle.cancel();
+    child.stdout.emitData('{"type":"result","is_error":false}\n');
+    child.emit('close', 0, 'SIGTERM');
+    await handle.done;
+
+    const terminal = events.filter(
+      (e) =>
+        e.type === 'error' ||
+        e.type === 'turn_complete' ||
+        e.type === 'turn_cancelled',
+    );
+    expect(terminal).toEqual([
+      { type: 'turn_complete', usage: null, stopReason: 'end_turn' },
+    ]);
+  });
+
   it('does not throw out of the call when writing the stdin payload fails', () => {
     // A child whose stdin is already closed/destroyed (e.g. an unauthenticated
     // CLI that exited before we wrote) makes stdin.write throw synchronously.

@@ -138,14 +138,25 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   // success `result` AND then exits non-zero (or fires `error` then `close`)
   // would emit two contradictory terminal items for one turn.
   let terminalEmitted = false;
+  // A cancel() was requested: the CLI usually reacts to the SIGTERM by
+  // printing an is_error result line (or exiting non-zero) BEFORE the
+  // signal-kill reaches `close`, and that error would win the one-terminal
+  // race — recording a fake failure for a deliberate stop. So after a cancel
+  // an `error` terminal is normalized to `turn_cancelled`; a genuine
+  // `turn_complete` that raced the kill still wins (the turn really finished).
+  let cancelRequested = false;
   // Assigned once the child's stdin is wired; a kept-open stdin is closed on
   // the terminal event so the stream-json CLI stops waiting and exits.
   let endStdin: (() => void) | null = null;
   const emit = (event: AgentEvent): void => {
+    const normalized: AgentEvent =
+      cancelRequested && event.type === 'error'
+        ? { type: 'turn_cancelled' }
+        : event;
     if (
-      event.type === 'turn_complete' ||
-      event.type === 'turn_cancelled' ||
-      event.type === 'error'
+      normalized.type === 'turn_complete' ||
+      normalized.type === 'turn_cancelled' ||
+      normalized.type === 'error'
     ) {
       if (terminalEmitted) {
         return;
@@ -153,7 +164,7 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       terminalEmitted = true;
       endStdin?.();
     }
-    opts.onEvent(event);
+    opts.onEvent(normalized);
   };
 
   let child: SpawnedProcess;
@@ -302,6 +313,7 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       if (settled) {
         return;
       }
+      cancelRequested = true;
       // Kill the whole process group — the CLI plus any tool/MCP grandchildren —
       // not just the direct child a single-PID SIGTERM would reach. Escalate to
       // SIGKILL if the group is still alive after the grace window.

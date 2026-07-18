@@ -94,7 +94,7 @@ const session: TerminalSession = {
 let container: HTMLDivElement;
 let root: Root;
 
-function render(onClose = vi.fn(), onEndSession = vi.fn()) {
+function render(onClose = vi.fn()) {
   act(() => {
     root.render(
       <TerminalPanel
@@ -102,11 +102,10 @@ function render(onClose = vi.fn(), onEndSession = vi.fn()) {
         session={session}
         title="claude · demo"
         onClose={onClose}
-        onEndSession={onEndSession}
       />,
     );
   });
-  return { onClose, onEndSession };
+  return { onClose };
 }
 
 beforeEach(() => {
@@ -182,7 +181,6 @@ describe('TerminalPanel', () => {
           session={{ ...session, id: 't-2' }}
           title="claude · demo"
           onClose={vi.fn()}
-          onEndSession={vi.fn()}
         />,
       );
     });
@@ -214,29 +212,26 @@ describe('TerminalPanel', () => {
     expect(mocks.term.dispose).toHaveBeenCalled();
   });
 
-  it('reports header actions to the caller (End session is two-step)', () => {
-    const { onClose, onEndSession } = render();
+  it('closes via the standard ✕ icon — and offers NO End session control', () => {
+    const { onClose } = render();
 
-    const click = (label: string): void => {
-      act(() => {
-        [...container.querySelectorAll('button')]
-          .find((b) => b.textContent === label)
-          ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      });
-    };
+    // The one header action: the standard icon close (no text label).
+    const close = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close terminal"]',
+    )!;
+    expect(close.textContent).toBe('');
+    expect(close.querySelector('svg')).not.toBeNull();
+    // Ending a session happens inside the TUI, never from the popup chrome.
+    expect(container.textContent).not.toContain('End session');
 
-    // First click only ARMS the destructive control — nothing fires yet.
-    click('End session');
-    expect(onEndSession).not.toHaveBeenCalled();
-    click('End it?');
-    expect(onEndSession).toHaveBeenCalled();
-
-    click('Close');
-    expect(onClose).toHaveBeenCalled();
+    act(() => {
+      close.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('is a modal popup: a backdrop click detaches, a click inside does not', () => {
-    const { onClose, onEndSession } = render();
+    const { onClose } = render();
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
 
     act(() => {
@@ -252,7 +247,5 @@ describe('TerminalPanel', () => {
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(onClose).toHaveBeenCalledOnce();
-    // Backdrop close is a DETACH — never an End session.
-    expect(onEndSession).not.toHaveBeenCalled();
   });
 });

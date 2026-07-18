@@ -2,6 +2,7 @@ import '@xterm/xterm/css/xterm.css';
 
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
+import { X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import type {
@@ -9,7 +10,6 @@ import type {
   TerminalSession,
   TerminalStatus,
 } from '../../shared/contracts';
-import { ConfirmButton } from '../components/confirm-button';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { TerminalClient } from '../terminal-client';
@@ -26,25 +26,23 @@ function tokenColor(name: string): string | undefined {
  * Modal popup showing one live PTY mirror: the agent's original TUI,
  * byte-for-byte, in an xterm.js view over a dimmed backdrop. Colours come
  * from the design tokens (resolved at mount — xterm needs concrete values,
- * not var() references). Closing — the Close button or a backdrop click —
- * DETACHES (the session keeps running for a later re-open); "End session"
- * kills the PTY via the REST dispose route. Escape deliberately does NOT
- * close: the key belongs to the TUI inside (claude uses it to interrupt).
+ * not var() references). Closing — the ✕ or a backdrop click — always
+ * DETACHES (the session keeps running for a later re-open); ending a session
+ * happens inside the TUI itself (exit the REPL), never from this chrome.
+ * Escape deliberately does NOT close: the key belongs to the TUI inside
+ * (claude uses it to interrupt).
  */
 export function TerminalPanel({
   handle,
   session,
   title,
   onClose,
-  onEndSession,
 }: {
   handle: DaemonHandle;
   session: TerminalSession;
   /** Header label, e.g. "claude · run title" or the node id. */
   title: string;
   onClose: () => void;
-  /** Kill the PTY (REST dispose) — the panel only reports the click. */
-  onEndSession: () => void;
 }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -152,19 +150,15 @@ export function TerminalPanel({
           ) : (
             <Badge>live</Badge>
           )}
-          <ConfirmButton
-            variant="outline"
-            size="sm"
-            confirmLabel="End it?"
-            onConfirm={onEndSession}>
-            End session
-          </ConfirmButton>
           <Button
+            type="button"
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="size-7"
             onClick={onClose}
-            aria-label="Close terminal">
-            Close
+            aria-label="Close terminal"
+            title="Close">
+            <X className="size-4 shrink-0" />
           </Button>
         </header>
         <div className="relative min-h-0 flex-1">

@@ -58,14 +58,9 @@ vi.mock('../terminal-api', () => ({
   }),
 }));
 vi.mock('../terminals/terminal-panel', () => ({
-  TerminalPanel: (props: {
-    title: string;
-    onClose: () => void;
-    onEndSession: () => void;
-  }) => (
+  TerminalPanel: (props: { title: string; onClose: () => void }) => (
     <div data-testid="terminal-panel">
       {props.title}
-      <button onClick={props.onEndSession}>stub-end-session</button>
       <button onClick={props.onClose}>stub-close</button>
     </div>
   ),
@@ -1179,32 +1174,13 @@ describe('Chats terminal mirror', () => {
     ).toBeTruthy();
   });
 
-  it('End session disposes the PTY and closes the panel; Close only detaches', async () => {
+  it('Close only DETACHES — the popup never disposes the daemon session', async () => {
     terminalApi.create.mockResolvedValue(session);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     await openThreadTerminal(container, 'claude');
 
-    const end = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'stub-end-session',
-    );
-    await act(async () => {
-      end?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(terminalApi.dispose).toHaveBeenCalledWith('t-1');
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
-
-    // Re-open, then Close: the panel goes away but the session is NOT disposed.
-    terminalApi.dispose.mockClear();
-    await act(async () => {
-      container
-        .querySelector('button[aria-label="Open terminal for claude — main"]')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
     const close = [...container.querySelectorAll('button')].find(
       (b) => b.textContent === 'stub-close',
     );

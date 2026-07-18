@@ -942,23 +942,6 @@ export function Chats({
     [terminalApi],
   );
 
-  const endTerminalSession = useCallback(() => {
-    if (!terminal) {
-      return;
-    }
-    const id = terminal.session.id;
-    setTerminal(null);
-    terminalApi.dispose(id).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      // A 404 means the daemon already reaped the session — nothing to end.
-      // Anything else (daemon restart, transient failure) must surface: the
-      // panel is already closed, but the REPL may still be running.
-      if (!message.includes('(404)')) {
-        setError(message);
-      }
-    });
-  }, [terminal, terminalApi]);
-
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
 
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
@@ -1318,7 +1301,6 @@ export function Chats({
             session={terminal.session}
             title={terminal.title}
             onClose={() => setTerminal(null)}
-            onEndSession={endTerminalSession}
           />
         </Suspense>
       ) : null}

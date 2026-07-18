@@ -11,20 +11,17 @@ import { cn } from '../components/ui/utils';
 const bubbleVariants = cva('flex flex-col gap-1 rounded-xl text-sm', {
   variants: {
     variant: {
-      user: 'self-end max-w-[85%] bg-primary text-primary-foreground px-3.5 py-2.5',
+      // The user/assistant pair mirrors geniro web's ChatBubble classes
+      // (bg-primary/10 human, bg-muted/40 agent, px-4 py-3 leading-relaxed).
+      user: 'self-end max-w-[76%] bg-primary/10 border border-primary/20 px-4 py-3 leading-relaxed',
       assistant:
-        'self-start max-w-[85%] bg-card border border-border px-3.5 py-2.5',
+        'self-start max-w-[76%] bg-muted/40 border border-border px-4 py-3 leading-relaxed',
       reasoning:
         'self-start max-w-[85%] bg-muted/50 text-muted-foreground px-3.5 py-2.5',
       tool: 'self-start w-full bg-muted text-muted-foreground px-3.5 py-2.5',
       // Agent-to-agent call rows share the call features' amber language
       // (the dashed call edge, the amber ports) via the warning token.
       call: 'self-start w-full bg-warning/10 border border-warning/30 px-3.5 py-2.5',
-      // A call block's framing pair: the caller's ask going in…
-      request: 'self-start w-full bg-card border border-border px-3.5 py-2.5',
-      // …and the callee's final answer coming out (success-tinted payoff).
-      result:
-        'self-start w-full bg-success/5 border border-success/40 px-3.5 py-2.5',
       error:
         'self-start max-w-[85%] bg-destructive/10 border border-destructive/30 text-destructive px-3.5 py-2.5',
       note: 'self-center text-xs text-muted-foreground py-1',

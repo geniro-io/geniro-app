@@ -45,21 +45,18 @@ export function TranscriptEntryView({
     return (
       <SenderRow
         name={agentName(entry.nodeId)}
+        colorKey={entry.nodeId ?? undefined}
         time={formatClockTime(entry.pairs[0]?.call.createdAt ?? '')}>
         <ToolGroup group={entry} />
       </SenderRow>
     );
   }
   if (entry.type === 'call-block') {
-    const callee = nameOf(entry.calleeNodeId) ?? 'agent';
-    const caller = nameOf(entry.callerNodeId);
+    // The communication card carries its own identity (the eyebrow line,
+    // the avatar-pair header) — no sender frame around it, per the
+    // geniro web reference.
     return (
-      <SenderRow
-        name={caller ? `${caller} → ${callee}` : callee}
-        avatarName={callee}
-        time={formatClockTime(entry.createdAt)}>
-        <CallBlock block={entry} nodes={nodes} chatAgentName={chatAgentName} />
-      </SenderRow>
+      <CallBlock block={entry} nodes={nodes} chatAgentName={chatAgentName} />
     );
   }
 
@@ -78,16 +75,21 @@ export function TranscriptEntryView({
   }
   if (item.kind === 'call_question') {
     // The question comes FROM the callee (parked for its caller).
+    const calleeId = payloadString(item.payload, 'calleeNodeId');
     return (
       <SenderRow
-        name={agentName(payloadString(item.payload, 'calleeNodeId'))}
+        name={agentName(calleeId)}
+        colorKey={calleeId ?? undefined}
         time={time}>
         {content}
       </SenderRow>
     );
   }
   return (
-    <SenderRow name={agentName(item.nodeId)} time={time}>
+    <SenderRow
+      name={agentName(item.nodeId)}
+      colorKey={item.nodeId ?? undefined}
+      time={time}>
       {content}
     </SenderRow>
   );

@@ -82,39 +82,31 @@ afterEach(() => {
 });
 
 describe('CallBlock', () => {
-  it('collapsed by default: the sender frame names caller → callee with avatar; the callee text stays hidden', () => {
+  it('renders the geniro communication card: eyebrow, avatar pair, name line, status chip — always open', () => {
     act(() =>
       root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
     );
 
-    // The messenger frame owns the identity: "Caller → Callee" name line and
-    // the callee's initials avatar; the block header holds status + ask.
+    // Always-open card (no collapse toggle), identity in the header.
+    expect(container.textContent).toContain('Agent communication');
     expect(container.textContent).toContain('Orchestrator → Poet');
-    expect(container.querySelector('[data-slot="avatar"]')?.textContent).toBe(
-      'P',
-    );
+    expect(container.querySelector('button[aria-expanded]')).toBeNull();
     // Wire plumbing stays out — no mode label, no call id.
     expect(container.textContent).not.toContain('async');
     expect(container.textContent).not.toContain('call-1');
+    // The ask renders as the clamped instructions section.
+    expect(container.textContent).toContain('Providing instructions for Poet');
     expect(container.textContent).toContain('Write a haiku about the sea.');
-    // Live sub-turn: the running spinner is the status (no "Poet started" row).
+    // Live sub-turn: spinner + running chip + thinking line, no status rows.
     expect(container.querySelector('svg.animate-spin')).not.toBeNull();
+    expect(container.textContent).toContain('running');
+    expect(container.textContent).toContain('Poet is thinking...');
     expect(container.textContent).not.toContain('Poet started');
-    expect(container.textContent).not.toContain('Waves rise and retreat');
-  });
-
-  it("a click expands the callee's own messages inside the block", () => {
-    act(() => root.render(<CallBlock block={makeBlock()} nodes={NODES} />));
-
-    act(() => {
-      container
-        .querySelector('button[aria-expanded]')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    // The callee's streamed messages render INSIDE the card, live.
     expect(container.textContent).toContain('Waves rise and retreat');
   });
 
-  it('a COMPLETED call frames request → result: preview line collapsed, cards expanded', () => {
+  it('a COMPLETED call ends with the "Result from X" section', () => {
     const entries = groupTranscript([
       item(
         'call_started',
@@ -148,20 +140,11 @@ describe('CallBlock', () => {
     }
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
 
-    // Collapsed: the ↳ result preview shows without expanding.
+    // The final message renders under the "Result from X" label (pulled out
+    // of the flow), the status chip flips to done.
+    expect(container.textContent).toContain('Result from Poet');
     expect(container.textContent).toContain('Waves rise and retreat');
-    expect(container.querySelector('[data-role="result"]')).toBeNull();
-
-    act(() => {
-      container
-        .querySelector('button[aria-expanded]')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    // Expanded: the ask opens as the REQUEST card, the final answer closes
-    // as the RESULT card.
-    const request = container.querySelector('[data-role="request"]');
-    const result = container.querySelector('[data-role="result"]');
-    expect(request?.textContent).toContain('Write a haiku about the sea.');
-    expect(result?.textContent).toContain('Waves rise and retreat');
+    expect(container.textContent).toContain('done');
+    expect(container.textContent).not.toContain('is thinking');
   });
 });

@@ -45,10 +45,10 @@ describe('InitialsAvatar', () => {
     );
   });
 
-  it("the user's own avatar is the solid primary variant", () => {
+  it("the user's own avatar is the neutral-gray variant (geniro's bg-gray-500)", () => {
     act(() => root.render(<InitialsAvatar name="U" solid />));
     expect(
       container.querySelector('[data-slot="avatar"]')?.className,
-    ).toContain('bg-primary text-primary-foreground');
+    ).toContain('bg-avatar-user');
   });
 });

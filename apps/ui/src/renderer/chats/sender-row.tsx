@@ -2,52 +2,62 @@ import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 
 /**
- * Messenger-style frame around one transcript entry: the sender's initials
- * avatar in the gutter, the sender name above the content, and the time
- * metadata line under it. The user's own messages mirror to the right with
- * the solid avatar.
+ * Geniro web's ChatBubble frame: the sender's solid-colour initials avatar
+ * beside the content, and ONE metadata line UNDER it — `sender · time` —
+ * mirrored to the right for the user's own messages. (No name line above;
+ * identity lives in the metadata, exactly like the reference.)
  */
 export function SenderRow({
   name,
   avatarName,
+  colorKey,
   solid = false,
   align = 'start',
   time,
   children,
 }: {
-  /** Display name on the header line. */
+  /** Sender name shown in the metadata line. */
   name: string;
   /** Name the avatar initials derive from (defaults to `name`). */
   avatarName?: string;
-  /** The user's own filled avatar style. */
+  /** Deterministic avatar colour key (a node id); defaults to the name. */
+  colorKey?: string;
+  /** The user's own neutral-gray avatar. */
   solid?: boolean;
   align?: 'start' | 'end';
-  /** Clock-time metadata under the content; empty hides the line. */
+  /** Time metadata; empty hides that segment. */
   time?: string;
   children: React.ReactNode;
 }): React.JSX.Element {
+  const reversed = align === 'end';
   return (
     <div
       data-slot="sender-row"
-      className={cn(
-        'flex w-full items-start gap-2',
-        align === 'end' && 'flex-row-reverse',
-      )}>
-      <InitialsAvatar name={avatarName ?? name} solid={solid} />
+      className={cn('flex w-full gap-3', reversed && 'flex-row-reverse')}>
+      <InitialsAvatar
+        name={avatarName ?? name}
+        colorKey={colorKey}
+        solid={solid}
+      />
       <div
         className={cn(
-          'flex min-w-0 flex-1 flex-col gap-1',
-          align === 'end' ? 'items-end' : 'items-start',
+          'flex min-w-0 flex-1 flex-col',
+          reversed ? 'items-end' : 'items-start',
         )}>
-        <span className="text-[11px] leading-none font-medium text-muted-foreground">
-          {name}
-        </span>
         {children}
-        {time ? (
-          <span className="text-[10px] leading-none text-muted-foreground/80">
-            {time}
-          </span>
-        ) : null}
+        <div
+          className={cn(
+            'mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground',
+            reversed && 'flex-row-reverse',
+          )}>
+          <span className="font-medium text-foreground/60">{name}</span>
+          {time ? (
+            <>
+              <span>·</span>
+              <span>{time}</span>
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );

@@ -40,6 +40,17 @@
   --success-foreground: #ffffff;
   --warning: #916518;
   --warning-foreground: #ffffff;
+  /* Agent avatar palette — mirrors geniro web's AGENT_AVATAR_COLORS
+     (tailwind 500s), hashed deterministically per node id. */
+  --avatar-1: #3b82f6;
+  --avatar-2: #a855f7;
+  --avatar-3: #22c55e;
+  --avatar-4: #f97316;
+  --avatar-5: #ec4899;
+  --avatar-6: #6366f1;
+  --avatar-7: #14b8a6;
+  --avatar-8: #ef4444;
+  --avatar-user: #6b7280;
   --border: #ddd4c8;
   --input: transparent;
   --input-background: #fdfcfa;
@@ -115,6 +126,15 @@
   --color-sidebar-primary-strong: var(--sidebar-primary-strong);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
+  --color-avatar-1: var(--avatar-1);
+  --color-avatar-2: var(--avatar-2);
+  --color-avatar-3: var(--avatar-3);
+  --color-avatar-4: var(--avatar-4);
+  --color-avatar-5: var(--avatar-5);
+  --color-avatar-6: var(--avatar-6);
+  --color-avatar-7: var(--avatar-7);
+  --color-avatar-8: var(--avatar-8);
+  --color-avatar-user: var(--avatar-user);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);

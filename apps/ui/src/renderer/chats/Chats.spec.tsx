@@ -704,7 +704,7 @@ describe('Chats workflow runs', () => {
     expect(sidebarRow()).not.toContain('running');
   });
 
-  it('a callee sub-turn streams into ONE collapsed call block — no separate "started" row, no interleaved text', async () => {
+  it('a callee sub-turn streams into ONE communication card — no separate "started" row, no interleaved text', async () => {
     workflowApi.listRuns.mockResolvedValue([wfRun]);
     const { client, emitItem } = makeClient();
     const container = await mount(client);
@@ -732,16 +732,18 @@ describe('Chats workflow runs', () => {
 
     const block = container.querySelector('[data-role="call-block"]');
     expect(block).not.toBeNull();
-    // ONE block, not the old redundant pair: no separate started note, and
-    // the callee's text stays inside the collapsed block. (Scoped to the
-    // transcript section — the SIDEBAR legitimately previews the text as the
-    // run's last message.)
+    // ONE communication card, not the old redundant pair: no separate
+    // started note, and everything the callee streams renders INSIDE the
+    // card — the main flow never interleaves it.
     const transcript = container.querySelector('section')!;
     expect(transcript.textContent).not.toContain('helper started');
-    expect(transcript.textContent).not.toContain('the diff summary');
-    // The sender frame around the block carries the caller → callee names.
-    expect(transcript.textContent).toContain('helper');
+    expect(block?.textContent).toContain('orch → helper');
     expect(block?.textContent).toContain('summarize the diff');
+    expect(block?.textContent).toContain('the diff summary');
+    // The callee text lives ONLY in the card (one occurrence in the section).
+    const occurrences =
+      transcript.textContent?.split('the diff summary').length ?? 0;
+    expect(occurrences - 1).toBe(1);
   });
 
   it('streamed tool calls land as a COLLAPSED group row, not raw payload rows', async () => {

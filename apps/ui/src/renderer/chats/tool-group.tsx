@@ -1,4 +1,4 @@
-import { ChevronRight, Wrench } from 'lucide-react';
+import { ChevronRight, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '../components/ui/utils';
@@ -92,9 +92,10 @@ function ToolRow({ pair }: { pair: ToolPair }): React.JSX.Element {
 }
 
 /**
- * A collapsed run of tool calls — Claude/Cursor-style. The header reads
- * "Used N tools · edited M files…" and expands to one row per invocation;
- * each row expands again to the full input (a red/green diff for
+ * A collapsed run of tool calls — geniro web's WorkingBlock: a bare
+ * summary header ("Used N tools · edited M files…", chevron, a spinner
+ * while a call is still in flight), with the per-invocation rows behind
+ * it; each row expands again to the full input (a red/green diff for
  * Edit/Write) and the tool's result.
  */
 export function ToolGroup({
@@ -103,29 +104,33 @@ export function ToolGroup({
   group: ToolGroupEntry;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const running = group.pairs.some((pair) => pair.result === null);
   return (
     <div
       data-role="tool-group"
-      className="flex w-full flex-col rounded-xl bg-muted px-2 py-1.5 text-sm text-muted-foreground">
+      className="flex w-full flex-col gap-1.5 text-sm">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs hover:bg-accent/50">
+        className="flex items-center gap-1.5 text-left text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            'size-3 shrink-0 transition-transform',
+            'size-3.5 shrink-0 transition-transform',
             open && 'rotate-90',
           )}
         />
-        <Wrench aria-hidden="true" className="size-3 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">
-          {toolGroupSummary(group.pairs)}
-        </span>
+        <span className="truncate">{toolGroupSummary(group.pairs)}</span>
+        {running ? (
+          <Loader2
+            aria-hidden="true"
+            className="size-3 shrink-0 animate-spin text-primary"
+          />
+        ) : null}
       </button>
       {open ? (
-        <div className="flex flex-col gap-0.5 pt-1">
+        <div className="flex flex-col gap-1.5 text-muted-foreground">
           {group.pairs.map((pair) => (
             <ToolRow key={pair.call.id} pair={pair} />
           ))}

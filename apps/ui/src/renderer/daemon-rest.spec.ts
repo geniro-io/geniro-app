@@ -65,6 +65,20 @@ describe('DaemonRestApi', () => {
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
   });
 
+  it('sends a bodyless POST WITHOUT a content-type header', async () => {
+    // The cancel routes are bodyless POSTs; an application/json claim with an
+    // empty body is rejected by Fastify (FST_ERR_CTP_EMPTY_JSON_BODY), which
+    // broke Stop for chats and workflow runs alike.
+    const fetchMock = stubFetch({ ok: true });
+    const api = new ProbeApi(handle);
+
+    await api.call('POST', '/v1/chats/r1/cancel');
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toEqual({ authorization: 'Bearer tok' });
+  });
+
   it('throws the uniform error shape with the response detail', async () => {
     stubFetch({
       ok: false,

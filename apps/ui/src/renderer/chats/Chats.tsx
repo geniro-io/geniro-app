@@ -229,12 +229,20 @@ export function Chats({
       setStreaming(false);
       // Mirror the daemon's settle write into the sidebar list — without this
       // a finished run keeps its stale 'running' badge until an app restart.
+      // A workflow run always ends in a turn_complete whose stopReason carries
+      // the roll-up (workflow_completed/failed/cancelled) — a failed workflow
+      // must not be patched to 'completed' just because the item kind says so.
+      const stopReason = payloadString(item.payload, 'stopReason');
       const settledStatus: ChatRun['status'] =
-        item.kind === 'turn_complete'
-          ? 'completed'
-          : item.kind === 'turn_cancelled'
+        stopReason === 'workflow_failed'
+          ? 'failed'
+          : stopReason === 'workflow_cancelled'
             ? 'cancelled'
-            : 'failed';
+            : item.kind === 'turn_complete'
+              ? 'completed'
+              : item.kind === 'turn_cancelled'
+                ? 'cancelled'
+                : 'failed';
       setRuns((prev) =>
         prev.map((run) =>
           run.id === item.runId

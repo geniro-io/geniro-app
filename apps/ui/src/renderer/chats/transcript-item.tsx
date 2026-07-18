@@ -90,6 +90,17 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'turn_cancelled':
       return <MessageBubble variant="note">{tag('⊘ cancelled')}</MessageBubble>;
     case 'turn_complete': {
+      // A workflow run's final turn_complete carries the roll-up in
+      // stopReason — a failed/cancelled workflow must not read "✓ done".
+      const stop = payloadString(item.payload, 'stopReason');
+      if (stop === 'workflow_failed') {
+        return <MessageBubble variant="note">{tag('✗ failed')}</MessageBubble>;
+      }
+      if (stop === 'workflow_cancelled') {
+        return (
+          <MessageBubble variant="note">{tag('⊘ cancelled')}</MessageBubble>
+        );
+      }
       const usage = (item.payload as { usage?: unknown } | null)?.usage;
       const cost =
         usage && typeof usage === 'object' && 'costUsd' in usage

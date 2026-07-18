@@ -25,12 +25,18 @@ export abstract class DaemonRestApi {
     path: string,
     body?: unknown,
   ): Promise<T> {
+    // content-type only travels WITH a body: Fastify 400s a bodyless POST
+    // that claims application/json (FST_ERR_CTP_EMPTY_JSON_BODY), and the
+    // cancel routes are exactly that shape.
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.token}`,
+    };
+    if (body !== undefined) {
+      headers['content-type'] = 'application/json';
+    }
     const res = await fetch(`${this.base}${path}`, {
       method,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.token}`,
-      },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (!res.ok) {

@@ -10,7 +10,11 @@ import { TranscriptItem } from './transcript-item';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-function item(kind: ChatItemKind, payload: unknown, nodeId = 'orch'): ChatItem {
+function item(
+  kind: ChatItemKind,
+  payload: unknown,
+  nodeId: string | null = 'orch',
+): ChatItem {
   return {
     id: `${kind}-1`,
     runId: 'run-1',
@@ -184,6 +188,45 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     expect(container.textContent).toContain('undelivered');
+  });
+
+  it('a workflow run-level turn_complete renders by its stopReason roll-up, never a blanket ✓ done', () => {
+    // The daemon ends EVERY workflow run with a turn_complete whose
+    // stopReason carries the roll-up — a failed run must not read "✓ done".
+    render(
+      <TranscriptItem
+        item={item(
+          'turn_complete',
+          { usage: null, stopReason: 'workflow_failed' },
+          null,
+        )}
+      />,
+    );
+    expect(container.textContent).toContain('✗ failed');
+    expect(container.textContent).not.toContain('✓ done');
+
+    render(
+      <TranscriptItem
+        item={item(
+          'turn_complete',
+          { usage: null, stopReason: 'workflow_cancelled' },
+          null,
+        )}
+      />,
+    );
+    expect(container.textContent).toContain('⊘ cancelled');
+    expect(container.textContent).not.toContain('✓ done');
+
+    render(
+      <TranscriptItem
+        item={item(
+          'turn_complete',
+          { usage: null, stopReason: 'workflow_completed' },
+          null,
+        )}
+      />,
+    );
+    expect(container.textContent).toContain('✓ done');
   });
 
   it('an approval_verdict with an answer shows the answered line', () => {

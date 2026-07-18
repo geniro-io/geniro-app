@@ -704,6 +704,34 @@ describe('Chats workflow runs', () => {
     expect(sidebarRow()).not.toContain('running');
   });
 
+  it("a workflow that rolled up failed settles the sidebar as failed — the terminal item's kind alone must not read as success", async () => {
+    // The daemon ends EVERY workflow run with a run-level turn_complete whose
+    // stopReason carries the roll-up; with a failed node the run row says
+    // 'failed' while the item kind still says turn_complete.
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const sidebarRow = (): string =>
+      [...container.querySelectorAll('aside li')].find((el) =>
+        el.textContent?.includes('Review team'),
+      )?.textContent ?? '';
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(6, 'turn_complete', null),
+        payload: { usage: null, stopReason: 'workflow_failed' },
+      });
+    });
+    expect(composerButton(container, 'Stop')).toBeNull();
+    expect(sidebarRow()).toContain('failed');
+    expect(sidebarRow()).not.toContain('completed');
+    // The transcript's run-level note tells the same story.
+    expect(container.textContent).toContain('✗ failed');
+    expect(container.textContent).not.toContain('✓ done');
+  });
+
   it('starts a NEW workflow run from the + composer even while a chat run is open (never routes into the chat)', async () => {
     workflowApi.list.mockResolvedValue([
       {

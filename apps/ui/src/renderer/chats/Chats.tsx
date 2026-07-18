@@ -50,6 +50,7 @@ import {
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
+import { CallBlock } from './call-block';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
@@ -1220,6 +1221,11 @@ export function Chats({
 
           <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
             {transcriptEntries.map((entry) => {
+              if (entry.type === 'call-block') {
+                return (
+                  <CallBlock key={entry.id} block={entry} nodes={nodeMeta} />
+                );
+              }
               if (entry.type === 'tools') {
                 return (
                   <ToolGroup

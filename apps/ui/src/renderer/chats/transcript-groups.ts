@@ -30,14 +30,73 @@ export interface ItemEntry {
   item: ChatItem;
 }
 
-export type TranscriptEntry = ItemEntry | ToolGroupEntry;
+/**
+ * One agent-to-agent call folded into a single nested block: the
+ * call_started row becomes the header (callee, mode, ask, LIVE status) and
+ * every item of the callee's sub-turn renders inside — so two parallel
+ * callees never interleave their messages in the main flow.
+ */
+export interface CallBlockEntry {
+  type: 'call-block';
+  /** Stable identity (the call_started item's id) for keys and expansion. */
+  id: string;
+  callId: string;
+  calleeNodeId: string | null;
+  /** The caller node the call_started row was attributed to. */
+  callerNodeId: string | null;
+  mode: string | null;
+  message: string | null;
+  /** Sub-turn lifecycle, from the callId-tagged status items. */
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  entries: TranscriptEntry[];
+}
+
+export type TranscriptEntry = ItemEntry | ToolGroupEntry | CallBlockEntry;
+
+/** Caller-side call bookkeeping rows — never claimed into a callee block. */
+const CALL_ROW_KINDS = new Set<ChatItem['kind']>([
+  'call_started',
+  'call_result',
+  'call_question',
+  'call_answer',
+  'await_collected',
+]);
 
 /**
- * Fold a transcript into render entries: tool calls collapse into per-node
- * groups (Claude/Cursor-style "used N tools" rows), everything else stays a
- * plain item entry.
+ * Kinds that must stay in the MAIN flow even when callId-tagged: the call
+ * bookkeeping rows above, plus approval requests/verdicts — a pending card
+ * hidden inside a collapsed block could never be answered.
+ */
+const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
+  ...CALL_ROW_KINDS,
+  'approval_request',
+  'approval_verdict',
+]);
+
+const BLOCK_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
+
+/** A pending agent-call block under assembly (one per call_started). */
+interface CallShell {
+  started: ChatItem;
+  calleeNodeId: string | null;
+  bucket: ChatItem[];
+}
+
+/**
+ * Fold a transcript into render entries: agent calls collapse into nested
+ * call blocks, tool calls collapse into per-node groups (Claude/Cursor-style
+ * "used N tools" rows), everything else stays a plain item entry.
  *
- * Grouping rules:
+ * Call-block rules:
+ * - a `call_started` opens a block; every item TAGGED with that callId and
+ *   attributed to the callee node folds inside it (its status items drive
+ *   the block's live status instead of rendering as rows — merging the old
+ *   redundant "call → B" + "B started" pair into one block header).
+ * - caller-side call rows and approval requests/verdicts are never claimed
+ *   (see {@link UNCLAIMABLE_KINDS}); untagged items (legacy transcripts)
+ *   stay in the main flow.
+ *
+ * Tool-grouping rules:
  * - a `tool_call` joins its node's OPEN group (or opens one); any other
  *   rendered kind from the SAME node closes that node's group — another
  *   node's interleaved rows do not, so a parallel branch doesn't shred the
@@ -49,12 +108,65 @@ export type TranscriptEntry = ItemEntry | ToolGroupEntry;
  *   {@link GENIRO_TOOL_PREFIX}).
  */
 export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
+  // Pass 1 — collect the call shells and claim each callee sub-turn's items.
+  const shells = new Map<string, CallShell>();
+  for (const item of items) {
+    if (item.kind !== 'call_started') {
+      continue;
+    }
+    const callId = payloadString(item.payload, 'callId');
+    if (callId && !shells.has(callId)) {
+      shells.set(callId, {
+        started: item,
+        calleeNodeId: payloadString(item.payload, 'calleeNodeId'),
+        bucket: [],
+      });
+    }
+  }
+  const claimed = new Set<string>();
+  if (shells.size > 0) {
+    for (const item of items) {
+      if (UNCLAIMABLE_KINDS.has(item.kind)) {
+        continue;
+      }
+      const callId = payloadString(item.payload, 'callId');
+      const shell = callId ? shells.get(callId) : undefined;
+      if (shell && item.nodeId !== null && item.nodeId === shell.calleeNodeId) {
+        shell.bucket.push(item);
+        claimed.add(item.id);
+      }
+    }
+  }
+
+  // Pass 2 — the main fold over everything not claimed into a block.
   const entries: TranscriptEntry[] = [];
   const hiddenCallIds = new Set<string>();
   const pairsByCallId = new Map<string, ToolPair>();
   const openGroups = new Map<string | null, ToolGroupEntry>();
 
   for (const item of items) {
+    if (claimed.has(item.id)) {
+      continue;
+    }
+    if (item.kind === 'call_started') {
+      const callId = payloadString(item.payload, 'callId');
+      const shell = callId ? shells.get(callId) : undefined;
+      openGroups.delete(item.nodeId);
+      if (
+        callId &&
+        shell &&
+        shell.started.id === item.id &&
+        shell.bucket.length > 0
+      ) {
+        entries.push(buildCallBlock(callId, shell));
+      } else {
+        // No tagged sub-turn yet (a legacy transcript, a call rejected
+        // before any turn started, or the spawn racing this render) — keep
+        // the flat call row; it upgrades to a block once tagged items land.
+        entries.push({ type: 'item', item });
+      }
+      continue;
+    }
     if (item.kind === 'tool_call') {
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');
@@ -102,6 +214,39 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     entries.push({ type: 'item', item });
   }
   return entries;
+}
+
+/**
+ * Assemble one call's block: status items drive the header's live status
+ * (they never render as rows — the old "▸ B started"/"✓ B finished" pair
+ * folds into the header icon), everything else re-folds recursively (tool
+ * groups work inside a block; the bucket holds no call rows, so no blocks
+ * nest from here).
+ */
+function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
+  let status: CallBlockEntry['status'] = 'pending';
+  const inner: ChatItem[] = [];
+  for (const item of shell.bucket) {
+    if (item.kind === 'status') {
+      const value = payloadString(item.payload, 'status');
+      if (value && BLOCK_STATUSES.has(value)) {
+        status = value as CallBlockEntry['status'];
+      }
+      continue;
+    }
+    inner.push(item);
+  }
+  return {
+    type: 'call-block',
+    id: shell.started.id,
+    callId,
+    calleeNodeId: shell.calleeNodeId,
+    callerNodeId: shell.started.nodeId,
+    mode: payloadString(shell.started.payload, 'mode'),
+    message: payloadString(shell.started.payload, 'message'),
+    status,
+    entries: groupTranscript(inner),
+  };
 }
 
 /** File-touching tools, for the group summary's edit/create counts. */

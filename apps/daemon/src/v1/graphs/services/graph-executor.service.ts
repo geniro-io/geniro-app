@@ -503,9 +503,14 @@ export class GraphExecutorService {
     /**
      * The node's "turn is starting" bookkeeping shared by DAG launches and
      * callee sub-turns: node_state → running, the status item, and the
-     * cursor ask→auto degrade note.
+     * cursor ask→auto degrade note. A callee sub-turn passes its callId so
+     * the renderer can attribute the status to ONE call even when two
+     * parallel calls target the same node.
      */
-    const persistTurnStart = (node: WorkflowAgentNode): void => {
+    const persistTurnStart = (
+      node: WorkflowAgentNode,
+      callId: string | null = null,
+    ): void => {
       enqueue(async () => {
         await this.nodeStateDao.setStatus(
           runId,
@@ -516,6 +521,7 @@ export class GraphExecutorService {
         await persistItem(node.id, 'status', null, {
           nodeId: node.id,
           status: 'running',
+          ...(callId ? { callId } : {}),
         });
         if (node.agent === 'cursor-agent' && node.approval === 'ask') {
           await persistItem(node.id, 'system', null, {
@@ -824,9 +830,13 @@ export class GraphExecutorService {
           }
           const mapped = mapEventToItem(event);
           if (mapped) {
+            // A callee sub-turn tags every streamed item with its callId so
+            // the renderer can nest the whole sub-turn under its call block —
+            // unambiguous even when parallel calls hit the SAME node.
             await persistItem(node.id, mapped.kind, mapped.role, {
               ...(mapped.payload as Record<string, unknown>),
               nodeId: node.id,
+              ...(callContext ? { callId: callContext.callId } : {}),
             });
           }
           if (event.type === 'approval_request') {
@@ -1084,7 +1094,7 @@ export class GraphExecutorService {
             sessionId: string | null;
           };
           try {
-            persistTurnStart(callee);
+            persistTurnStart(callee, callId);
             ({ handle, finish } = beginAgentTurn(callee, message, {
               callId,
               resumeSessionId,
@@ -1162,6 +1172,7 @@ export class GraphExecutorService {
                 await persistItem(callee.id, 'status', null, {
                   nodeId: callee.id,
                   status: outcome,
+                  callId,
                 });
               } finally {
                 resolve(result);

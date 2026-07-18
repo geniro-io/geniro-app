@@ -704,6 +704,45 @@ describe('Chats workflow runs', () => {
     expect(sidebarRow()).not.toContain('running');
   });
 
+  it('a callee sub-turn streams into ONE collapsed call block — no separate "started" row, no interleaved text', async () => {
+    workflowApi.listRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-1',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'summarize the diff',
+        },
+      });
+      emitItem({
+        ...wfItem(6, 'status', 'helper'),
+        payload: { nodeId: 'helper', status: 'running', callId: 'call-1' },
+      });
+      emitItem({
+        ...wfItem(7, 'message', 'helper'),
+        payload: { text: 'the diff summary', callId: 'call-1' },
+      });
+    });
+
+    const block = container.querySelector('[data-role="call-block"]');
+    expect(block).not.toBeNull();
+    // ONE block, not the old redundant pair: no separate started note, and
+    // the callee's text stays inside the collapsed block. (Scoped to the
+    // transcript section — the SIDEBAR legitimately previews the text as the
+    // run's last message.)
+    const transcript = container.querySelector('section')!;
+    expect(transcript.textContent).not.toContain('helper started');
+    expect(transcript.textContent).not.toContain('the diff summary');
+    expect(block?.textContent).toContain('helper');
+    expect(block?.textContent).toContain('summarize the diff');
+  });
+
   it('streamed tool calls land as a COLLAPSED group row, not raw payload rows', async () => {
     workflowApi.listRuns.mockResolvedValue([wfRun]);
     const { client, emitItem } = makeClient();

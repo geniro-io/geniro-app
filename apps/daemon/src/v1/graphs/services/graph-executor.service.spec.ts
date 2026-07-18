@@ -965,7 +965,7 @@ describe('GraphExecutorService — agent calls', () => {
   };
 
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
-    const { service, claude, callTokens, callBroker } = setup();
+    const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'c',
       workflow: triggered(CALL_WF),
@@ -1009,6 +1009,36 @@ describe('GraphExecutorService — agent calls', () => {
     completeTurn(caller, 'done');
     await drain();
     expect(callTokens.get(run.id, 'orch')).toBeNull();
+
+    // EVERY item of the callee sub-turn — the running/terminal status rows
+    // and the streamed items between them — carries the call's id, so the
+    // renderer can nest the whole sub-turn under its call block even when
+    // parallel calls target the same node. The caller's own items carry none.
+    const items = itemDao.items.filter((item) => item.runId === run.id);
+    const payloadOf = (item: Item): { callId?: unknown } =>
+      JSON.parse(item.payload) as { callId?: unknown };
+    const calleeItems = items.filter((item) => item.nodeId === 'helper');
+    expect(calleeItems.length).toBeGreaterThanOrEqual(3);
+    for (const item of calleeItems) {
+      expect(
+        payloadOf(item).callId,
+        `callee item kind=${item.kind} must carry the callId`,
+      ).toBe('call-1');
+    }
+    // The caller's own STREAMED turn items stay untagged (its call_started/
+    // call_result rows carry the callId as call bookkeeping, not as a
+    // sub-turn tag).
+    const callerTurnItems = items.filter(
+      (entry) =>
+        entry.nodeId === 'orch' &&
+        !['call_started', 'call_result', 'await_collected'].includes(
+          entry.kind,
+        ),
+    );
+    expect(callerTurnItems.length).toBeGreaterThanOrEqual(2);
+    for (const item of callerTurnItems) {
+      expect(payloadOf(item).callId).toBeUndefined();
+    }
   });
 
   const CURSOR_CALLER_WF: Workflow = {

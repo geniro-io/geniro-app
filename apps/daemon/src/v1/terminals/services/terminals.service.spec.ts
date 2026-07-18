@@ -182,6 +182,45 @@ describe('TerminalsService', () => {
     expect(a.id).toBe(b.id);
   });
 
+  it('an explicit sessionId mirrors THAT thread instead of node_state', async () => {
+    const { service, pty, nodeStateDao } = build({
+      run: { id: 'run-1', workflowId: 'wf', cwd: '/tmp' },
+      nodeState: { agentSessionId: 'sess-latest' },
+      workflow: { nodes: [{ id: 'n1', kind: 'agent', agent: 'claude' }] },
+    });
+
+    await service.createForRun({
+      runId: 'run-1',
+      nodeId: 'n1',
+      sessionId: 'sess-call-7',
+    });
+
+    expect(pty.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ['--resume', 'sess-call-7'],
+        resumeSessionId: 'sess-call-7',
+      }),
+    );
+    // node_state (the node's LATEST session) must not even be consulted.
+    expect(nodeStateDao.getByRunNode).not.toHaveBeenCalled();
+    expect(pty.findRunning).toHaveBeenCalledWith('run-1', 'n1', 'sess-call-7');
+  });
+
+  it('distinct thread sessions are distinct targets — concurrent creates both spawn', async () => {
+    const { service, pty } = build({
+      run: { id: 'run-1', workflowId: 'wf', cwd: '/tmp' },
+      workflow: { nodes: [{ id: 'n1', kind: 'agent', agent: 'claude' }] },
+    });
+
+    const [a, b] = await Promise.all([
+      service.createForRun({ runId: 'run-1', nodeId: 'n1', sessionId: 's-1' }),
+      service.createForRun({ runId: 'run-1', nodeId: 'n1', sessionId: 's-2' }),
+    ]);
+
+    expect(pty.create).toHaveBeenCalledTimes(2);
+    expect(a.id).not.toBe(b.id);
+  });
+
   it('rejects a nodeId alias for a chat terminal target', async () => {
     const { service, pty } = build({ run: CHAT_RUN });
 

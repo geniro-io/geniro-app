@@ -70,6 +70,8 @@ export interface PtyServiceOptions {
 export interface CreateTerminalInput {
   runId: string;
   nodeId: string | null;
+  /** The CLI session this mirror resumes (its thread identity), if any. */
+  resumeSessionId?: string | null;
   command: string;
   args: string[];
   /** Pre-validated absolute cwd (callers run `resolveValidCwd` first). */
@@ -82,6 +84,7 @@ interface PtySession {
   id: string;
   runId: string;
   nodeId: string | null;
+  resumeSessionId: string | null;
   cwd: string;
   pty: PtyLike;
   scrollback: string[];
@@ -177,6 +180,7 @@ export class PtyService {
       id,
       runId: input.runId,
       nodeId: input.nodeId,
+      resumeSessionId: input.resumeSessionId ?? null,
       cwd: input.cwd,
       pty,
       scrollback: [],
@@ -238,21 +242,23 @@ export class PtyService {
   }
 
   /**
-   * The still-active session for a (run, node), or null. Lets the create path
-   * stay idempotent per mirror target — the daemon owns that invariant rather
-   * than trusting every client to do a list-then-create dance. A `closing`
-   * session counts as busy: its PTY may live for up to the kill-escalation
-   * grace, and spawning a sibling would put two `--resume` TUIs on one CLI
-   * session file.
+   * The still-active session for a (run, node, resume-session) target, or
+   * null. Lets the create path stay idempotent per mirror target — the daemon
+   * owns that invariant rather than trusting every client to do a
+   * list-then-create dance. A `closing` session counts as busy: its PTY may
+   * live for up to the kill-escalation grace, and spawning a sibling would
+   * put two `--resume` TUIs on one CLI session file.
    */
   findRunning(
     runId: string,
     nodeId: string | null,
+    resumeSessionId: string | null = null,
   ): TerminalSessionWire | null {
     for (const session of this.sessions.values()) {
       if (
         session.runId === runId &&
         session.nodeId === nodeId &&
+        session.resumeSessionId === resumeSessionId &&
         session.status !== 'exited'
       ) {
         return this.toWire(session);
@@ -362,6 +368,7 @@ export class PtyService {
       id: session.id,
       runId: session.runId,
       nodeId: session.nodeId,
+      resumeSessionId: session.resumeSessionId,
       cwd: session.cwd,
       status: session.status,
       exitCode: session.exitCode,

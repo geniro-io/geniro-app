@@ -241,6 +241,9 @@ export class CallBroker {
       ...(args.thread !== undefined ? { thread: args.thread } : {}),
     });
 
+    // The settled turn's CLI session id, mirrored into the call_result item so
+    // the UI can open a terminal on (or reason about) that specific thread.
+    let threadSessionId: string | null = null;
     call.settled = state.capability
       .launchCalleeTurn(callee, args.message, callId, depth, resumeSessionId)
       .then((outcome) => {
@@ -251,6 +254,7 @@ export class CallBroker {
           calleeId: callee.id,
           sessionId: outcome.sessionId,
         });
+        threadSessionId = outcome.sessionId;
         return toEnvelope(callId, callee.id, outcome);
       })
       .catch((err: unknown): CallEnvelope => ({
@@ -275,6 +279,7 @@ export class CallBroker {
           callerNodeId,
           calleeNodeId: callee.id,
           mode,
+          sessionId: threadSessionId,
           ...final,
         });
         return final;

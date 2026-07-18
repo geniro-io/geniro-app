@@ -10,6 +10,8 @@ export class TerminalApi extends DaemonRestApi {
   create(input: {
     runId: string;
     nodeId?: string;
+    /** Mirror one specific thread's CLI session instead of the node's latest. */
+    sessionId?: string;
     cols?: number;
     rows?: number;
   }): Promise<TerminalSession> {

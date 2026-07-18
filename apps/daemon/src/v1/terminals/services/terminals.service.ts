@@ -16,17 +16,21 @@ import { PtyService } from './pty.service';
 /**
  * Resolves "open a terminal for this run/node" into a concrete PTY spawn: the
  * run supplies the cwd, the node (workflow YAML for graph runs, the run row
- * itself for chats) supplies the agent kind, and `node_state` supplies the CLI
- * session id so the TUI resumes the very session the headless run produced.
+ * itself for chats) supplies the agent kind, and the CLI session id comes from
+ * `node_state` (the node's latest session) — or, when the caller passes an
+ * explicit `sessionId`, from a specific thread of the node (a call thread's
+ * resume id recorded on its `call_result` item), so every thread of an agent
+ * can be mirrored, not just the most recent one.
  */
 @Injectable()
 export class TerminalsService {
   /**
-   * In-flight creates keyed by `runId:nodeId`. The daemon owns the
-   * one-running-mirror-per-target invariant: without this single-flight, two
-   * concurrent POSTs (a double-click) both miss {@link PtyService.findRunning}
-   * during their awaits and spawn two `claude --resume <same session>` REPLs —
-   * the second invisible to the UI until daemon shutdown.
+   * In-flight creates keyed by the mirror target — `runId:nodeId:sessionId`
+   * (the RESOLVED session). The daemon owns the one-running-mirror-per-target
+   * invariant: without this single-flight, two concurrent POSTs (a
+   * double-click) both miss {@link PtyService.findRunning} during their awaits
+   * and spawn two `claude --resume <same session>` REPLs — the second
+   * invisible to the UI until daemon shutdown.
    */
   private readonly pending = new Map<string, Promise<TerminalSessionWire>>();
 
@@ -39,13 +43,15 @@ export class TerminalsService {
   ) {}
 
   /**
-   * Idempotent per (run, node): a still-running mirror for the same target is
-   * returned instead of spawning a duplicate; concurrent calls coalesce onto
-   * one create.
+   * Idempotent per (run, node, session): a still-running mirror of the same
+   * CLI session is returned instead of spawning a duplicate; concurrent calls
+   * coalesce onto one create. Distinct threads of one node are distinct
+   * targets — each call thread gets its own mirror.
    */
   async createForRun(input: {
     runId: string;
     nodeId?: string | null;
+    sessionId?: string | null;
     cols?: number;
     rows?: number;
   }): Promise<TerminalSessionWire> {
@@ -61,16 +67,26 @@ export class TerminalsService {
       );
     }
     const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
-    const key = `${input.runId}:${nodeId ?? ''}`;
+    const { agentKind, stateNodeId, wireNodeId } = await this.resolveNode(
+      run,
+      nodeId,
+    );
+    const resumeSessionId =
+      input.sessionId ??
+      (await this.nodeStateDao.getByRunNode(run.id, stateNodeId, em))
+        ?.agentSessionId ??
+      null;
+    const key = `${input.runId}:${nodeId ?? ''}:${resumeSessionId ?? ''}`;
     const inFlight = this.pending.get(key);
     if (inFlight) {
       return inFlight;
     }
-    const create = this.doCreateForRun({ ...input, nodeId }, run, em).finally(
-      () => {
-        this.pending.delete(key);
-      },
-    );
+    const create = this.doCreateForRun(
+      { ...input, nodeId: wireNodeId, agentKind, resumeSessionId },
+      run,
+    ).finally(() => {
+      this.pending.delete(key);
+    });
     this.pending.set(key, create);
     return create;
   }
@@ -78,14 +94,19 @@ export class TerminalsService {
   private async doCreateForRun(
     input: {
       runId: string;
-      nodeId?: string | null;
+      nodeId: string | null;
+      agentKind: AgentKind;
+      resumeSessionId: string | null;
       cols?: number;
       rows?: number;
     },
     run: Run,
-    em: EntityManager,
   ): Promise<TerminalSessionWire> {
-    const existing = this.pty.findRunning(input.runId, input.nodeId ?? null);
+    const existing = this.pty.findRunning(
+      input.runId,
+      input.nodeId,
+      input.resumeSessionId,
+    );
     if (existing) {
       return existing;
     }
@@ -96,18 +117,14 @@ export class TerminalsService {
       );
     }
     const cwd = resolveValidCwd(run.cwd);
-    const { agentKind, stateNodeId, wireNodeId } = await this.resolveNode(
-      run,
-      input.nodeId ?? null,
-    );
-    const state = await this.nodeStateDao.getByRunNode(run.id, stateNodeId, em);
     const { command, args } = terminalCommand(
-      agentKind,
-      state?.agentSessionId ?? null,
+      input.agentKind,
+      input.resumeSessionId,
     );
     return this.pty.create({
       runId: run.id,
-      nodeId: wireNodeId,
+      nodeId: input.nodeId,
+      resumeSessionId: input.resumeSessionId,
       command,
       args,
       cwd,

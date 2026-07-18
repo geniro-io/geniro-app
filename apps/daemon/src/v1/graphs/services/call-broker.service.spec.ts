@@ -131,6 +131,9 @@ describe('CallBroker', () => {
     expect(items[1]!.payload).toMatchObject({
       callId: 'call-1',
       status: 'ok',
+      // The settled thread's CLI session rides the call_result item — the
+      // UI's handle for opening a terminal on THIS thread.
+      sessionId: 'sess-call-1',
     });
   });
 

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDisplay } from './agent-activity';
+import type { AgentDisplay, AgentThread } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 
 (
@@ -33,6 +33,20 @@ afterEach(() => {
   localStorage.clear();
 });
 
+function click(el: Element | null): void {
+  act(() => {
+    el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+const mainThread: AgentThread = {
+  id: 'main',
+  kind: 'main',
+  label: 'Main conversation',
+  status: 'completed',
+  sessionId: null,
+};
+
 const agents: AgentDisplay[] = [
   {
     id: 'orchestrator',
@@ -42,6 +56,7 @@ const agents: AgentDisplay[] = [
     activeTurns: 1,
     contextTokens: 45_200,
     spentUsd: 0.236,
+    threads: [{ ...mainThread, status: 'running' }],
   },
   {
     id: 'worker',
@@ -51,6 +66,22 @@ const agents: AgentDisplay[] = [
     activeTurns: 3,
     contextTokens: 12_000,
     spentUsd: 0.004,
+    threads: [
+      {
+        id: 'call-1',
+        kind: 'call',
+        label: 'call-1 · Write a haiku about rivers.',
+        status: 'completed',
+        sessionId: 'sess-call-1',
+      },
+      {
+        id: 'call-2',
+        kind: 'call',
+        label: 'call-2 · Write a haiku about mountains.',
+        status: 'running',
+        sessionId: null,
+      },
+    ],
   },
   {
     id: 'reviewer',
@@ -60,17 +91,20 @@ const agents: AgentDisplay[] = [
     activeTurns: 0,
     contextTokens: null,
     spentUsd: null,
+    threads: [mainThread],
   },
 ];
 
 describe('AgentsPanel', () => {
-  it('lists EVERY agent with status, parallel turns, used/window context + fill ring, and spend', () => {
-    const el = render(<AgentsPanel agents={agents} onClose={vi.fn()} />);
-    const rows = [...el.querySelectorAll('li')];
+  it('lists EVERY agent with status, active/total thread counts, context + ring, and spend', () => {
+    const el = render(
+      <AgentsPanel agents={agents} onOpenThread={vi.fn()} onClose={vi.fn()} />,
+    );
+    const rows = [...el.querySelectorAll('ul > li')];
     expect(rows).toHaveLength(3);
 
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
-    expect(worker.textContent).toContain('3 parallel turns');
+    expect(worker.textContent).toContain('3 active · 2 threads');
     expect(worker.textContent).toContain('ctx 12k / 200k');
     expect(worker.textContent).toContain('<$0.01');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
@@ -81,17 +115,61 @@ describe('AgentsPanel', () => {
     const orchestrator = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;
+    expect(orchestrator.textContent).toContain('1 active · 1 thread');
     expect(orchestrator.textContent).toContain('ctx 45.2k / 200k');
     expect(orchestrator.textContent).toContain('$0.24');
-    expect(
-      orchestrator.querySelector('svg[aria-label="Context 23% full"]'),
-    ).not.toBeNull();
 
     const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
     expect(reviewer.textContent).toContain('idle');
     expect(reviewer.textContent).toContain('cursor-agent');
     expect(reviewer.textContent).not.toContain('ctx');
-    expect(reviewer.querySelector('svg[aria-label^="Context"]')).toBeNull();
+  });
+
+  it('expanding an agent lists its threads; per-thread terminals need claude + a session', () => {
+    const onOpenThread = vi.fn();
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        onOpenThread={onOpenThread}
+        onClose={vi.fn()}
+      />,
+    );
+    // Collapsed: no thread labels yet.
+    expect(el.textContent).not.toContain('Write a haiku about rivers.');
+
+    click(el.querySelector('button[aria-label="Worker threads"]'));
+    expect(el.textContent).toContain('call-1 · Write a haiku about rivers.');
+    expect(el.textContent).toContain('call-2 · Write a haiku about mountains.');
+
+    // call-1 settled with a session id → openable; call-2 still running → not.
+    const openCall1 = el.querySelector(
+      'button[aria-label="Open terminal for Worker — call-1"]',
+    );
+    expect(openCall1).not.toBeNull();
+    expect(
+      el.querySelector(
+        'button[aria-label="Open terminal for Worker — call-2"]',
+      ),
+    ).toBeNull();
+
+    click(openCall1);
+    expect(onOpenThread).toHaveBeenCalledWith(agents[1], agents[1]!.threads[0]);
+
+    // The main thread of a claude agent opens without an explicit session.
+    click(el.querySelector('button[aria-label="Orchestrator threads"]'));
+    expect(
+      el.querySelector(
+        'button[aria-label="Open terminal for Orchestrator — main"]',
+      ),
+    ).not.toBeNull();
+
+    // Cursor has no interactive mirror — threads list, but no terminal.
+    click(el.querySelector('button[aria-label="Reviewer threads"]'));
+    expect(
+      el.querySelector(
+        'button[aria-label="Open terminal for Reviewer — main"]',
+      ),
+    ).toBeNull();
   });
 
   it('the fill ring escalates its tone as the context window fills', () => {
@@ -103,6 +181,7 @@ describe('AgentsPanel', () => {
       activeTurns: 0,
       contextTokens,
       spentUsd: null,
+      threads: [],
     });
     const el = render(
       <AgentsPanel
@@ -111,6 +190,7 @@ describe('AgentsPanel', () => {
           withContext('hot', 150_000), // 75% → warning
           withContext('critical', 185_000), // 92.5% → destructive
         ]}
+        onOpenThread={vi.fn()}
         onClose={vi.fn()}
       />,
     );
@@ -129,20 +209,20 @@ describe('AgentsPanel', () => {
 
   it('closes via the ✕ and offers the resize handle', () => {
     const onClose = vi.fn();
-    const el = render(<AgentsPanel agents={agents} onClose={onClose} />);
+    const el = render(
+      <AgentsPanel agents={agents} onOpenThread={vi.fn()} onClose={onClose} />,
+    );
     expect(
       el.querySelector('[role="separator"][aria-label="Resize agents panel"]'),
     ).not.toBeNull();
-    act(() => {
-      el.querySelector(
-        'button[aria-label="Close agents panel"]',
-      )?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    click(el.querySelector('button[aria-label="Close agents panel"]'));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('shows an empty state when the run has no agents', () => {
-    const el = render(<AgentsPanel agents={[]} onClose={vi.fn()} />);
+    const el = render(
+      <AgentsPanel agents={[]} onOpenThread={vi.fn()} onClose={vi.fn()} />,
+    );
     expect(el.textContent).toContain('No agents in this run');
   });
 });

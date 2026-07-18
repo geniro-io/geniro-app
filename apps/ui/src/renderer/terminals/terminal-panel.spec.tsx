@@ -84,6 +84,7 @@ const session: TerminalSession = {
   id: 't-1',
   runId: 'run-1',
   nodeId: null,
+  resumeSessionId: null,
   cwd: '/tmp',
   status: 'running',
   exitCode: null,

@@ -6,6 +6,7 @@ import {
   computeAgentActivity,
   formatTokens,
   formatUsd,
+  threadsOf,
 } from './agent-activity';
 
 let seq = 0;
@@ -103,6 +104,84 @@ describe('computeAgentActivity', () => {
       item('turn_complete', 'worker', { usage: null, stopReason: null }),
     ]);
     expect(activity.get('worker')).toBeUndefined();
+  });
+});
+
+describe('call threads', () => {
+  // Call items are persisted under the CALLER's node; the thread belongs to
+  // the callee named in the payload.
+  const callStarted = (callId: string, message: string): ChatItem =>
+    item('call_started', 'orch', {
+      callId,
+      callerNodeId: 'orch',
+      calleeNodeId: 'worker',
+      mode: 'async',
+      message,
+    });
+  const callResult = (
+    callId: string,
+    status: 'ok' | 'error',
+    sessionId: string | null,
+  ): ChatItem =>
+    item('call_result', 'orch', {
+      callId,
+      callerNodeId: 'orch',
+      calleeNodeId: 'worker',
+      mode: 'async',
+      status,
+      sessionId,
+    });
+
+  it('attributes call threads to the CALLEE with settle status and session id', () => {
+    const activity = computeAgentActivity([
+      callStarted('call-1', 'haiku about rivers'),
+      callStarted('call-2', 'haiku about mountains'),
+      callResult('call-1', 'ok', 'sess-1'),
+    ]);
+    const worker = activity.get('worker')!;
+    expect(worker.callThreads).toEqual([
+      {
+        callId: 'call-1',
+        message: 'haiku about rivers',
+        status: 'completed',
+        sessionId: 'sess-1',
+      },
+      {
+        callId: 'call-2',
+        message: 'haiku about mountains',
+        status: 'running',
+        sessionId: null,
+      },
+    ]);
+    // The caller gained no thread from its own call items.
+    expect(activity.get('orch')?.callThreads ?? []).toEqual([]);
+  });
+
+  it('threadsOf: a call-only node lists ONLY its call threads (no main)', () => {
+    const activity = computeAgentActivity([
+      callStarted('call-1', 'go'),
+      status('worker', 'running'),
+      status('worker', 'completed'),
+      callResult('call-1', 'ok', 'sess-1'),
+    ]);
+    const threads = threadsOf(activity.get('worker'));
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({ id: 'call-1', kind: 'call' });
+  });
+
+  it('threadsOf: a DAG node with calls lists its main conversation FIRST', () => {
+    const activity = computeAgentActivity([
+      status('worker', 'running'), // the DAG turn
+      callStarted('call-1', 'go'),
+      status('worker', 'running'), // the callee sub-turn
+      callResult('call-1', 'error', null),
+      status('worker', 'failed'), // the call thread settles
+    ]);
+    const threads = threadsOf(activity.get('worker'));
+    expect(threads.map((t) => t.id)).toEqual(['main', 'call-1']);
+    // The DAG turn is still live — one active turn beyond the settled call.
+    expect(threads[0]!.status).toBe('running');
+    expect(threads[1]).toMatchObject({ status: 'failed', sessionId: null });
   });
 });
 

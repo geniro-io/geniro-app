@@ -13,6 +13,15 @@ import { MAX_COLS, MAX_ROWS } from '../services/pty.service';
 export const createTerminalSchema = z.object({
   runId: z.string().min(1),
   nodeId: z.string().min(1).optional(),
+  /**
+   * Mirror one SPECIFIC CLI session of the node (a call thread's resume id
+   * from its `call_result` item) instead of the node's latest session.
+   * Shape-checked here; `terminalCommand` re-validates before argv.
+   */
+  sessionId: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+    .optional(),
   cols: z.coerce.number().int().min(1).max(MAX_COLS).optional(),
   rows: z.coerce.number().int().min(1).max(MAX_ROWS).optional(),
 });

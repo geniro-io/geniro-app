@@ -925,11 +925,41 @@ describe('Chats terminal mirror', () => {
     id: 't-1',
     runId: 'r1',
     nodeId: null,
+    resumeSessionId: null,
     cwd: '/proj',
     status: 'running',
     exitCode: null,
     createdAt: 0,
   };
+
+  /** Terminals live in the agents side panel: open it, expand the agent,
+   *  click the thread's terminal action. */
+  async function openThreadTerminal(
+    container: HTMLElement,
+    agentLabel: string,
+    threadId = 'main',
+  ): Promise<void> {
+    const toggle = container.querySelector(
+      'button[aria-label="Open side panel"]',
+    );
+    if (toggle) {
+      await act(async () => {
+        toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    }
+    await act(async () => {
+      container
+        .querySelector(`button[aria-label="${agentLabel} threads"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector(
+          `button[aria-label="Open terminal for ${agentLabel} — ${threadId}"]`,
+        )
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
 
   it('opens a terminal panel for a claude chat run', async () => {
     terminalApi.create.mockResolvedValue(session);
@@ -937,13 +967,7 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const button = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Terminal'),
-    );
-    expect(button).toBeTruthy();
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await openThreadTerminal(container, 'claude');
 
     expect(terminalApi.create).toHaveBeenCalledWith({ runId: 'r1' });
     expect(
@@ -981,6 +1005,18 @@ describe('Chats terminal mirror', () => {
       },
     });
     api.getHistory.mockResolvedValue([
+      // The node's DAG turn started — that running transition IS its main
+      // thread (the panel derives threads from status items).
+      {
+        id: 'w-s1',
+        runId: 'w1',
+        nodeId: 'agent-1',
+        seq: 0,
+        kind: 'status',
+        role: null,
+        payload: { nodeId: 'agent-1', status: 'running' },
+        createdAt: 'now',
+      },
       {
         id: 'w-i1',
         runId: 'w1',
@@ -1001,15 +1037,7 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    // Target the TERMINAL affordance by its title — the header also shows an
-    // agent chip whose text is the same node id.
-    const nodeButton = container.querySelector<HTMLButtonElement>(
-      'button[title="Open a terminal mirroring agent-1"]',
-    );
-    expect(nodeButton).toBeTruthy();
-    await act(async () => {
-      nodeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await openThreadTerminal(container, 'agent-1');
 
     expect(terminalApi.create).toHaveBeenCalledWith({
       runId: 'w1',
@@ -1072,13 +1100,32 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Mixed team');
 
-    // Scope to the terminal affordances (their title names the mirrored
-    // node) — agent chips in the header legitimately show 'cursor' as a
-    // WORKING agent, but must not offer it a terminal.
-    const mirrored = [
-      ...container.querySelectorAll('button[title^="Open a terminal"]'),
-    ].map((button) => button.textContent?.trim());
-    expect(mirrored).toEqual(['claude']);
+    // The panel lists cursor as a WORKING agent with its thread, but only
+    // claude gets a terminal affordance; the trigger is no agent at all.
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
+    expect(panel.textContent).not.toContain('start');
+    for (const agentLabel of ['cursor', 'claude']) {
+      await act(async () => {
+        panel
+          .querySelector(`button[aria-label="${agentLabel} threads"]`)
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    }
+    expect(
+      panel.querySelector(
+        'button[aria-label="Open terminal for claude — main"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      panel.querySelector(
+        'button[aria-label="Open terminal for cursor — main"]',
+      ),
+    ).toBeNull();
   });
 
   it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
@@ -1092,12 +1139,7 @@ describe('Chats terminal mirror', () => {
       root.render(<Chats client={client} handle={handle} active />);
     });
     await clickRun(container, 'My chat');
-    const open = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Terminal'),
-    );
-    await act(async () => {
-      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await openThreadTerminal(container, 'claude');
     expect(
       container.querySelector('[data-testid="terminal-panel"]'),
     ).toBeTruthy();
@@ -1129,12 +1171,7 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const button = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Terminal'),
-    );
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await openThreadTerminal(container, 'claude');
 
     expect(terminalApi.create).not.toHaveBeenCalled();
     expect(
@@ -1147,12 +1184,7 @@ describe('Chats terminal mirror', () => {
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    const open = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Terminal'),
-    );
-    await act(async () => {
-      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await openThreadTerminal(container, 'claude');
 
     const end = [...container.querySelectorAll('button')].find(
       (b) => b.textContent === 'stub-end-session',
@@ -1169,7 +1201,9 @@ describe('Chats terminal mirror', () => {
     // Re-open, then Close: the panel goes away but the session is NOT disposed.
     terminalApi.dispose.mockClear();
     await act(async () => {
-      open?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      container
+        .querySelector('button[aria-label="Open terminal for claude — main"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     const close = [...container.querySelectorAll('button')].find(
       (b) => b.textContent === 'stub-close',
@@ -1191,12 +1225,7 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const button = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Terminal'),
-    );
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await openThreadTerminal(container, 'claude');
 
     expect(container.textContent).toContain('TERMINAL_UNSUPPORTED');
     expect(
@@ -1532,7 +1561,7 @@ describe('Chats sidebar list', () => {
     const workerRowEl = [...panel.querySelectorAll('li')].find((row) =>
       row.textContent?.includes('Worker A'),
     )!;
-    expect(workerRowEl.textContent).toContain('2 parallel turns');
+    expect(workerRowEl.textContent).toContain('2 active');
     expect(workerRowEl.querySelector('svg.animate-spin')).not.toBeNull();
 
     await act(async () => {

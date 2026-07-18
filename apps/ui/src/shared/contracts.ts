@@ -224,6 +224,8 @@ export interface TerminalSession {
   runId: string;
   /** Graph node within the run, or null for a single-agent chat. */
   nodeId: string | null;
+  /** The CLI session this mirror resumes — the node thread it targets. */
+  resumeSessionId: string | null;
   cwd: string;
   status: TerminalStatus;
   exitCode: number | null;

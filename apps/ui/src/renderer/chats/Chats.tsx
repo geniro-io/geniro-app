@@ -39,9 +39,11 @@ import { TerminalApi } from '../terminal-api';
 import { WorkflowApi } from '../workflow-api';
 import {
   type AgentDisplay,
+  type AgentThread,
   CHAT_AGENT_KEY,
   computeAgentActivity,
   displayStatus,
+  threadsOf,
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
@@ -685,15 +687,9 @@ export function Chats({
     title: string;
   } | null>(null);
 
-  const seenNodeIds = useMemo(
-    () => [
-      ...new Set(items.flatMap((item) => (item.nodeId ? [item.nodeId] : []))),
-    ],
-    [items],
-  );
-  // The active workflow's node inventory: its agent nodes (header chips +
-  // agents panel) and every node id it knows (so trigger status items are
-  // never mistaken for an unknown agent's).
+  // The active workflow's node inventory: its agent nodes (the agents panel)
+  // and every node id it knows (so trigger status items are never mistaken
+  // for an unknown agent's).
   const [wfNodes, setWfNodes] = useState<{
     agents: WorkflowAgentNode[];
     allIds: Set<string>;
@@ -730,18 +726,8 @@ export function Chats({
       cancelled = true;
     };
   }, [activeRun?.workflowId, workflowApi]);
-  const terminalNodeIds = useMemo(() => {
-    // Cursor's subscription TUI is deferred, so only claude nodes mirror.
-    const mirrorable = new Set(
-      wfNodes.agents
-        .filter((node) => node.agent === 'claude')
-        .map((node) => node.id),
-    );
-    return seenNodeIds.filter((nodeId) => mirrorable.has(nodeId));
-  }, [seenNodeIds, wfNodes]);
-
-  // Live per-agent state for the header chips + the agents panel, derived
-  // purely from the transcript (status items count parallel turns;
+  // Live per-agent state for the agents panel, derived purely from the
+  // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
   const activity = useMemo(() => computeAgentActivity(items), [items]);
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
@@ -754,7 +740,8 @@ export function Chats({
       return [];
     }
     if (!activeRun.workflowId) {
-      // A 1:1 chat has exactly one agent; its working state is the run's.
+      // A 1:1 chat has exactly one agent; its working state is the run's,
+      // and its one thread IS the conversation.
       const chatActivity = activity.get(CHAT_AGENT_KEY);
       const running = streaming || activeRun.status === 'running';
       return [
@@ -766,6 +753,15 @@ export function Chats({
           activeTurns: running ? 1 : 0,
           contextTokens: chatActivity?.contextTokens ?? null,
           spentUsd: chatActivity?.spentUsd ?? null,
+          threads: [
+            {
+              id: 'main',
+              kind: 'main',
+              label: 'Conversation',
+              status: running ? 'running' : activeRun.status,
+              sessionId: null,
+            },
+          ],
         },
       ];
     }
@@ -779,6 +775,7 @@ export function Chats({
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens: nodeActivity?.contextTokens ?? null,
         spentUsd: nodeActivity?.spentUsd ?? null,
+        threads: threadsOf(nodeActivity),
       };
     });
     // Items can reference nodes a since-edited workflow no longer has — list
@@ -795,40 +792,67 @@ export function Chats({
         activeTurns: nodeActivity.activeTurns,
         contextTokens: nodeActivity.contextTokens,
         spentUsd: nodeActivity.spentUsd,
+        threads: threadsOf(nodeActivity),
       }));
     return [...known, ...extras];
   }, [activeRun, activity, streaming, wfNodes]);
 
-  const openTerminal = useCallback(
-    async (runId: string, nodeId?: string) => {
+  /** Open a terminal mirroring ONE thread of one agent (the panel's action). */
+  const openThreadTerminal = useCallback(
+    async (agent: AgentDisplay, thread: AgentThread) => {
+      const runId = activeRunIdRef.current;
+      if (!runId) {
+        return;
+      }
+      const nodeId = agent.id === CHAT_AGENT_KEY ? undefined : agent.id;
       try {
         setError(null);
-        // Re-attach to a still-running session for this (run, node) when one
-        // exists — the daemon keeps detached sessions alive for exactly this.
-        // The daemon's createForRun is itself idempotent per (run, node), so
-        // this pre-check is an optimization (skip a create round-trip), not
-        // the leak guard.
+        // Re-attach to a still-running mirror of this thread when one exists —
+        // the daemon keeps detached sessions alive for exactly this. A call
+        // thread matches by its recorded session id; the main thread matches
+        // any mirror of the node that is NOT one of its call threads. The
+        // daemon's createForRun is itself idempotent per target, so this
+        // pre-check is an optimization (skip a create round-trip), not the
+        // leak guard.
+        const callSessionIds = new Set(
+          agent.threads.flatMap((t) =>
+            t.kind === 'call' && t.sessionId !== null ? [t.sessionId] : [],
+          ),
+        );
         const existing = (await terminalApi.list()).find(
           (s) =>
             s.runId === runId &&
             s.nodeId === (nodeId ?? null) &&
-            s.status === 'running',
+            s.status === 'running' &&
+            (thread.sessionId !== null
+              ? s.resumeSessionId === thread.sessionId
+              : s.resumeSessionId === null ||
+                !callSessionIds.has(s.resumeSessionId)),
         );
         const session =
           existing ??
-          (await terminalApi.create(nodeId ? { runId, nodeId } : { runId }));
-        const run = runs.find((r) => r.id === runId);
+          (await terminalApi.create({
+            runId,
+            ...(nodeId ? { nodeId } : {}),
+            ...(thread.sessionId !== null
+              ? { sessionId: thread.sessionId }
+              : {}),
+          }));
+        const run = runsRef.current.find((r) => r.id === runId);
+        const base =
+          agent.id === CHAT_AGENT_KEY ? (run?.title ?? agent.name) : agent.name;
         setTerminal({
           session,
-          title: nodeId
-            ? `${nodeId} — terminal`
-            : `${run?.title ?? run?.agentKind ?? 'agent'} — terminal`,
+          title:
+            thread.kind === 'call'
+              ? `${base} · ${thread.id} — terminal`
+              : `${base} — terminal`,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [terminalApi, runs],
+    [terminalApi],
   );
 
   const endTerminalSession = useCallback(() => {
@@ -1056,35 +1080,8 @@ export function Chats({
               lastActivityAt={activeRun.updatedAt}
               cwd={activeRun.cwd}
               sidePanelOpen={agentsPanelOpen}
-              onToggleSidePanel={toggleAgentsPanel}>
-              {/* Cursor's subscription TUI is deferred, so only claude mirrors. */}
-              {!activeRun.workflowId && activeRun.agentKind === 'claude' ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => void openTerminal(activeRun.id)}>
-                  <TerminalIcon className="size-3.5 shrink-0" />
-                  Terminal
-                </Button>
-              ) : null}
-              {activeRun.workflowId
-                ? terminalNodeIds.map((nodeId) => (
-                    <Button
-                      key={nodeId}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      title={`Open a terminal mirroring ${nodeId}`}
-                      onClick={() => void openTerminal(activeRun.id, nodeId)}>
-                      <TerminalIcon className="size-3.5 shrink-0" />
-                      {nodeId}
-                    </Button>
-                  ))
-                : null}
-            </ChatHeader>
+              onToggleSidePanel={toggleAgentsPanel}
+            />
           ) : null}
 
           <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
@@ -1163,6 +1160,9 @@ export function Chats({
       {showAgentsPanel ? (
         <AgentsPanel
           agents={agents}
+          onOpenThread={(agent, thread) =>
+            void openThreadTerminal(agent, thread)
+          }
           onClose={() => setAgentsPanelOpen(false)}
         />
       ) : null}

@@ -9,9 +9,9 @@ import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 /**
  * The open transcript's header: the same identity the sidebar row carries —
  * label, live status (spinning while running), last activity — plus the run's
- * working directory. On the right, a single generic side-panel toggle (the
- * panel hosts the run's agents today and more run info later) and `children`,
- * the slot for run-specific actions (the terminal buttons).
+ * working directory. On the right, ONLY the generic side-panel toggle — the
+ * panel owns everything per-agent (status, threads, terminals) and will host
+ * more run info later.
  */
 export function ChatHeader({
   label,
@@ -21,7 +21,6 @@ export function ChatHeader({
   cwd,
   sidePanelOpen,
   onToggleSidePanel,
-  children,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -30,7 +29,6 @@ export function ChatHeader({
   cwd: string | null;
   sidePanelOpen: boolean;
   onToggleSidePanel: () => void;
-  children?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
@@ -65,7 +63,6 @@ export function ChatHeader({
         ) : null}
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
-        {children}
         <Button
           type="button"
           variant={sidePanelOpen ? 'secondary' : 'ghost'}

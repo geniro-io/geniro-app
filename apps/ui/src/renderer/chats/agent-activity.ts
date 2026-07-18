@@ -13,20 +13,38 @@ import type { RunStatusKind } from './run-status';
 export interface AgentActivity {
   /** Turns of this agent live RIGHT NOW (an orchestrator can run several). */
   activeTurns: number;
+  /** How many turns of this agent have STARTED over the run's lifetime. */
+  turnStarts: number;
   /** The node's most recent status transition; null before its first one. */
   lastStatus: NodeRunStatus | null;
   /** Prompt-side tokens of the agent's LATEST settled turn (its context). */
   contextTokens: number | null;
   /** Cumulative cost across all of the agent's settled turns. */
   spentUsd: number | null;
+  /**
+   * The agent's call threads — one per `call_agent` conversation targeting it,
+   * derived from the caller's call_started/call_result items (which carry the
+   * callee node id and, on settle, the thread's CLI session id).
+   */
+  callThreads: AgentCallThread[];
+}
+
+/** One `call_agent` conversation of an agent, as the transcript records it. */
+export interface AgentCallThread {
+  callId: string;
+  /** The first message of the thread — its display label. */
+  message: string | null;
+  status: 'running' | 'completed' | 'failed';
+  /** The thread's CLI session id once settled — its terminal/resume handle. */
+  sessionId: string | null;
 }
 
 /** The activity-map key for single-agent chat items (their nodeId is null). */
 export const CHAT_AGENT_KEY = 'agent';
 
 /**
- * One agent as the header chips and the agents panel display it — workflow
- * node metadata merged with its live {@link AgentActivity}.
+ * One agent as the agents panel displays it — workflow node metadata merged
+ * with its live {@link AgentActivity}.
  */
 export interface AgentDisplay {
   /** Node id ({@link CHAT_AGENT_KEY} for a single-agent chat). */
@@ -38,6 +56,61 @@ export interface AgentDisplay {
   activeTurns: number;
   contextTokens: number | null;
   spentUsd: number | null;
+  /** Every conversation the agent has run — the panel's expandable list. */
+  threads: AgentThread[];
+}
+
+/** One conversation of an agent, as the agents panel lists it. */
+export interface AgentThread {
+  /** 'main' for the node's own DAG/chat conversation, else the call id. */
+  id: string;
+  kind: 'main' | 'call';
+  label: string;
+  status: RunStatusKind;
+  /**
+   * Resume handle for a call thread's terminal (from its call_result item);
+   * null for main threads — the daemon resolves those from node_state.
+   */
+  sessionId: string | null;
+}
+
+/**
+ * The display threads an agent's activity implies: its main conversation
+ * (when the node ran a DAG turn — detected as more turn starts than call
+ * threads) followed by each call thread.
+ */
+export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
+  if (!activity) {
+    return [];
+  }
+  const calls = activity.callThreads.map((thread): AgentThread => ({
+    id: thread.callId,
+    kind: 'call',
+    label: thread.message
+      ? `${thread.callId} · ${thread.message}`
+      : thread.callId,
+    status: thread.status,
+    sessionId: thread.sessionId,
+  }));
+  if (activity.turnStarts <= activity.callThreads.length) {
+    return calls; // a call-only node never ran a main DAG turn
+  }
+  const runningCalls = calls.filter((t) => t.status === 'running').length;
+  const main: AgentThread = {
+    id: 'main',
+    kind: 'main',
+    label: 'Main conversation',
+    // The node's live turns beyond its live calls ARE the main turn; once
+    // settled, the node's last transition is the best record of how it ended.
+    status:
+      activity.activeTurns > runningCalls
+        ? 'running'
+        : activity.lastStatus && activity.lastStatus !== 'running'
+          ? activity.lastStatus
+          : 'completed',
+    sessionId: null,
+  };
+  return [main, ...calls];
 }
 
 /** The display status an agent's activity implies (any live turn = running). */
@@ -78,9 +151,11 @@ export function computeAgentActivity(
     if (!existing) {
       existing = {
         activeTurns: 0,
+        turnStarts: 0,
         lastStatus: null,
         contextTokens: null,
         spentUsd: null,
+        callThreads: [],
       };
       byAgent.set(key, existing);
     }
@@ -97,11 +172,50 @@ export function computeAgentActivity(
       agent.lastStatus = status as NodeRunStatus;
       if (status === 'running') {
         agent.activeTurns += 1;
+        agent.turnStarts += 1;
       } else if (status !== 'pending') {
         // A terminal transition settles ONE live turn. `skipped` (and a
         // defensive clamp) can arrive without a matching start — never
         // go negative.
         agent.activeTurns = Math.max(0, agent.activeTurns - 1);
+      }
+      continue;
+    }
+    // Call items are persisted under the CALLER's node — the thread belongs
+    // to the CALLEE named in the payload.
+    if (item.kind === 'call_started') {
+      const payload = asRecord(item.payload);
+      const callId = payload?.callId;
+      const calleeNodeId = payload?.calleeNodeId;
+      if (typeof callId !== 'string' || typeof calleeNodeId !== 'string') {
+        continue;
+      }
+      const message = payload?.message;
+      entry(calleeNodeId).callThreads.push({
+        callId,
+        message: typeof message === 'string' ? message : null,
+        status: 'running',
+        sessionId: null,
+      });
+      continue;
+    }
+    if (item.kind === 'call_result') {
+      const payload = asRecord(item.payload);
+      const callId = payload?.callId;
+      const calleeNodeId = payload?.calleeNodeId;
+      if (typeof callId !== 'string' || typeof calleeNodeId !== 'string') {
+        continue;
+      }
+      const thread = entry(calleeNodeId).callThreads.find(
+        (t) => t.callId === callId,
+      );
+      if (!thread) {
+        continue;
+      }
+      thread.status = payload?.status === 'ok' ? 'completed' : 'failed';
+      const sessionId = payload?.sessionId;
+      if (typeof sessionId === 'string') {
+        thread.sessionId = sessionId;
       }
       continue;
     }

@@ -1,4 +1,4 @@
-import { ChevronRight, PhoneOutgoing } from 'lucide-react';
+import { Bot, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '../components/ui/utils';
@@ -54,18 +54,11 @@ export function CallBlock({
             open && 'rotate-90',
           )}
         />
-        <PhoneOutgoing
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-warning"
-        />
+        <Bot aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
         <RunStatusIcon status={block.status} />
         <span className="shrink-0 font-medium">
           {caller ? `${caller} → ` : ''}
           {callee}
-        </span>
-        <span className="shrink-0 text-muted-foreground">
-          {block.mode && block.mode !== 'sync' ? `${block.mode} · ` : ''}
-          {block.callId}
         </span>
         {block.message ? (
           <span className="min-w-0 flex-1 truncate text-muted-foreground">

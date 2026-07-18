@@ -182,15 +182,10 @@ export const TranscriptItem = memo(function TranscriptItem({
       );
     }
     case 'call_started': {
-      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
-      const mode = payloadString(item.payload, 'mode') ?? 'sync';
-      const callId = payloadString(item.payload, 'callId');
+      const callee =
+        nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       return (
-        <MessageBubble
-          variant="call"
-          role={tag(
-            `📞 call → ${callee}${mode === 'sync' ? '' : ` · ${mode}`}${callId ? ` · ${callId}` : ''}`,
-          )}>
+        <MessageBubble variant="call" role={tag(`📞 call → ${callee}`)}>
           <div className="whitespace-pre-wrap">
             {payloadString(item.payload, 'message') ?? ''}
           </div>
@@ -200,9 +195,8 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'call_result': {
       // Payload spreads the call ENVELOPE: status 'ok' carries
       // result.{call_id,agent,text}; 'error' carries the prefixed error line.
-      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
-      const callId = payloadString(item.payload, 'callId');
-      const suffix = callId ? ` · ${callId}` : '';
+      const callee =
+        nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       if (payloadString(item.payload, 'status') === 'ok') {
         const result = (item.payload as { result?: unknown } | null)?.result;
         const text =
@@ -210,17 +204,13 @@ export const TranscriptItem = memo(function TranscriptItem({
             ? String((result as { text: unknown }).text)
             : pretty(result ?? null);
         return (
-          <MessageBubble
-            variant="call"
-            role={tag(`✓ result ← ${callee}${suffix}`)}>
+          <MessageBubble variant="call" role={tag(`✓ result ← ${callee}`)}>
             <div className="whitespace-pre-wrap">{text}</div>
           </MessageBubble>
         );
       }
       return (
-        <MessageBubble
-          variant="error"
-          role={tag(`✗ call failed ← ${callee}${suffix}`)}>
+        <MessageBubble variant="error" role={tag(`✗ call failed ← ${callee}`)}>
           <div className="whitespace-pre-wrap">
             {payloadString(item.payload, 'error') ?? 'call failed'}
           </div>
@@ -230,24 +220,20 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'await_collected':
       return (
         <MessageBubble variant="note">
-          {tag(
-            `⏳ collected ${payloadString(item.payload, 'callId') ?? 'call'}`,
-          )}
+          {tag('⏳ result collected')}
         </MessageBubble>
       );
     case 'call_question': {
       // A call-initiated callee parked on a question — the CALLER (not the
       // user) is expected to answer it via answer_agent.
-      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
-      const callId = payloadString(item.payload, 'callId');
+      const callee =
+        nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       const options = (item.payload as { options?: unknown } | null)?.options;
       const optionLine = Array.isArray(options)
         ? options.filter((o) => typeof o === 'string').join(' / ')
         : '';
       return (
-        <MessageBubble
-          variant="call"
-          role={tag(`❓ question ← ${callee}${callId ? ` · ${callId}` : ''}`)}>
+        <MessageBubble variant="call" role={tag(`❓ question ← ${callee}`)}>
           <div className="whitespace-pre-wrap">
             {payloadString(item.payload, 'question') ?? ''}
             {optionLine ? (
@@ -258,15 +244,12 @@ export const TranscriptItem = memo(function TranscriptItem({
       );
     }
     case 'call_answer': {
-      const callee = payloadString(item.payload, 'calleeNodeId') ?? 'agent';
-      const callId = payloadString(item.payload, 'callId');
-      const suffix = callId ? ` · ${callId}` : '';
+      const callee =
+        nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       const outcome = payloadString(item.payload, 'outcome');
       if (outcome === 'answered') {
         return (
-          <MessageBubble
-            variant="call"
-            role={tag(`💬 answered → ${callee}${suffix}`)}>
+          <MessageBubble variant="call" role={tag(`💬 answered → ${callee}`)}>
             <div className="whitespace-pre-wrap">
               {payloadString(item.payload, 'answer') ?? ''}
             </div>
@@ -274,7 +257,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         );
       }
       return (
-        <MessageBubble variant="error" role={tag(`✗ question${suffix}`)}>
+        <MessageBubble variant="error" role={tag('✗ question')}>
           <div className="whitespace-pre-wrap">
             {outcome === 'timeout'
               ? 'timed out — the caller never answered'

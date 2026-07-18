@@ -52,7 +52,7 @@ function render(el: React.ReactNode): void {
 }
 
 describe('TranscriptItem — agent-call rows', () => {
-  it('renders call_started with the callee, mode, id, and message', () => {
+  it('renders call_started with the callee and message — no wire plumbing (mode, call id)', () => {
     render(
       <TranscriptItem
         item={item('call_started', {
@@ -65,23 +65,9 @@ describe('TranscriptItem — agent-call rows', () => {
     );
     const text = container.textContent ?? '';
     expect(text).toContain('call → helper');
-    expect(text).toContain('async');
-    expect(text).toContain('call-1');
     expect(text).toContain('summarize the diff');
-  });
-
-  it("a sync call_started omits the redundant 'sync' mode tag", () => {
-    render(
-      <TranscriptItem
-        item={item('call_started', {
-          callId: 'call-1',
-          calleeNodeId: 'helper',
-          mode: 'sync',
-          message: 'go',
-        })}
-      />,
-    );
-    expect(container.textContent).not.toContain('sync');
+    expect(text).not.toContain('async');
+    expect(text).not.toContain('call-1');
   });
 
   it('renders an ok call_result with the returned text', () => {
@@ -118,11 +104,12 @@ describe('TranscriptItem — agent-call rows', () => {
     expect(el?.textContent).toContain('CALLEE_FAILED: exit 1');
   });
 
-  it('renders await_collected as a note referencing the call id', () => {
+  it('renders await_collected as a plain receipt note without the call id', () => {
     render(
       <TranscriptItem item={item('await_collected', { callId: 'call-2' })} />,
     );
-    expect(container.textContent).toContain('collected call-2');
+    expect(container.textContent).toContain('result collected');
+    expect(container.textContent).not.toContain('call-2');
   });
 });
 
@@ -140,7 +127,7 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     );
     const text = container.textContent ?? '';
     expect(text).toContain('question ← helper');
-    expect(text).toContain('call-1');
+    expect(text).not.toContain('call-1');
     expect(text).toContain('Which color?');
     expect(text).toContain('Red / Blue');
   });

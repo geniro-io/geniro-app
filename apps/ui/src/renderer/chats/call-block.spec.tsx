@@ -85,7 +85,9 @@ describe('CallBlock', () => {
     act(() => root.render(<CallBlock block={makeBlock()} nodes={NODES} />));
 
     expect(container.textContent).toContain('Orchestrator → Poet');
-    expect(container.textContent).toContain('async · call-1');
+    // Wire plumbing stays out of the header — no mode label, no call id.
+    expect(container.textContent).not.toContain('async');
+    expect(container.textContent).not.toContain('call-1');
     expect(container.textContent).toContain('Write a haiku about the sea.');
     // Live sub-turn: the running spinner is the status (no "Poet started" row).
     expect(container.querySelector('svg.animate-spin')).not.toBeNull();

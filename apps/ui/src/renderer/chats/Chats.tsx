@@ -1055,9 +1055,8 @@ export function Chats({
               status={activeRun.status}
               lastActivityAt={activeRun.updatedAt}
               cwd={activeRun.cwd}
-              agents={agents}
-              agentsPanelOpen={agentsPanelOpen}
-              onToggleAgents={toggleAgentsPanel}>
+              sidePanelOpen={agentsPanelOpen}
+              onToggleSidePanel={toggleAgentsPanel}>
               {/* Cursor's subscription TUI is deferred, so only claude mirrors. */}
               {!activeRun.workflowId && activeRun.agentKind === 'claude' ? (
                 <Button

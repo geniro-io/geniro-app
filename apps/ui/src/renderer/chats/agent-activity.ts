@@ -123,6 +123,13 @@ export function computeAgentActivity(
   return byAgent;
 }
 
+/**
+ * The context window an agent's fill ring is measured against. The headless
+ * CLIs don't report their model's window, so v1 uses the default claude/cursor
+ * window; a per-model map can replace this when the CLIs expose it.
+ */
+export const CONTEXT_WINDOW_TOKENS = 200_000;
+
 /** Compact token count: 950 → "950", 12_400 → "12.4k", 1_200_000 → "1.2M". */
 export function formatTokens(count: number): string {
   if (count >= 1_000_000) {

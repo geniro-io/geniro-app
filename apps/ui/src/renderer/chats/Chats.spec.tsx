@@ -1439,7 +1439,7 @@ describe('Chats sidebar list', () => {
     expect(row!.textContent).toContain('Deploy finished cleanly.');
   });
 
-  it('header chips track live agent state and the panel lists every agent with usage', async () => {
+  it('the side panel tracks live agent state — parallel turns, context ring, spend', async () => {
     workflowApi.listRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -1496,16 +1496,16 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
     await clickRun(container, 'Big team');
 
-    // 4 agents → 3 chips + a "+1" overflow; the trigger is NOT an agent.
-    expect(
-      container.querySelectorAll('button[aria-label^="Agent "]'),
-    ).toHaveLength(3);
-    const overflow = container.querySelector(
-      'button[aria-label="Show all 4 agents"]',
+    // The header carries NO per-agent chips — only the one generic toggle.
+    expect(container.querySelector('button[aria-label^="Agent "]')).toBeNull();
+    const toggle = container.querySelector(
+      'button[aria-label="Open side panel"]',
     )!;
-    expect(overflow.textContent).toBe('+1');
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
 
-    // Two parallel callee turns for Worker A → its chip surfaces first with ×2.
+    // Two parallel callee turns for Worker A + a settled turn with usage.
     await act(async () => {
       emitItem({
         id: 's1',
@@ -1528,14 +1528,13 @@ describe('Chats sidebar list', () => {
         createdAt: 'now',
       });
     });
-    const chips = [
-      ...container.querySelectorAll('button[aria-label^="Agent "]'),
-    ];
-    expect(chips[0]!.textContent).toContain('Worker A');
-    expect(chips[0]!.textContent).toContain('×2');
-    expect(chips[0]!.querySelector('svg.animate-spin')).not.toBeNull();
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
+    const workerRowEl = [...panel.querySelectorAll('li')].find((row) =>
+      row.textContent?.includes('Worker A'),
+    )!;
+    expect(workerRowEl.textContent).toContain('2 parallel turns');
+    expect(workerRowEl.querySelector('svg.animate-spin')).not.toBeNull();
 
-    // A settled turn with usage feeds the panel's context/spend line.
     await act(async () => {
       emitItem({
         id: 't1',
@@ -1561,19 +1560,18 @@ describe('Chats sidebar list', () => {
         createdAt: 'now',
       });
     });
-    await act(async () => {
-      overflow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
     const rows = [...panel.querySelectorAll('li')].map(
       (row) => row.textContent,
     );
     expect(rows).toHaveLength(4);
     const workerRow = rows.find((text) => text?.includes('Worker A'));
-    // One of its two turns settled — one still live, usage recorded.
+    // One of its two turns settled — one still live, usage + ring recorded.
     expect(workerRow).toContain('running');
-    expect(workerRow).toContain('ctx 45.2k');
+    expect(workerRow).toContain('ctx 45.2k / 200k');
     expect(workerRow).toContain('$0.23');
+    expect(
+      panel.querySelector('svg[aria-label="Context 23% full"]'),
+    ).not.toBeNull();
     expect(rows.some((text) => text?.includes('start'))).toBe(false);
 
     // ✕ closes the panel.

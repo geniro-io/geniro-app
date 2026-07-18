@@ -3,7 +3,14 @@ import { X } from 'lucide-react';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { type AgentDisplay, formatTokens, formatUsd } from './agent-activity';
+import { ProgressRing } from '../components/ui/progress-ring';
+import { cn } from '../components/ui/utils';
+import {
+  type AgentDisplay,
+  CONTEXT_WINDOW_TOKENS,
+  formatTokens,
+  formatUsd,
+} from './agent-activity';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 
 /**
@@ -57,45 +64,66 @@ export function AgentsPanel({
             No agents in this run
           </li>
         ) : (
-          agents.map((agent) => (
-            <li
-              key={agent.id}
-              className="flex flex-col gap-1 rounded-lg border border-border bg-card px-2.5 py-2 shadow-panel-sm">
-              <div className="flex items-center gap-1.5">
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  {agent.name}
-                </span>
-                {agent.agent ? (
-                  <Badge variant="muted">{agent.agent}</Badge>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-1 text-xs">
-                <RunStatusIcon status={agent.status} />
-                <span className={RUN_STATUS_META[agent.status].className}>
-                  {agent.status}
-                </span>
-                {agent.activeTurns > 1 ? (
-                  <span className="text-muted-foreground">
-                    · {agent.activeTurns} parallel turns
+          agents.map((agent) => {
+            const fraction =
+              agent.contextTokens !== null
+                ? agent.contextTokens / CONTEXT_WINDOW_TOKENS
+                : null;
+            return (
+              <li
+                key={agent.id}
+                className="flex flex-col gap-1 rounded-lg border border-border bg-card px-2.5 py-2 shadow-panel-sm">
+                <div className="flex items-center gap-1.5">
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {agent.name}
                   </span>
-                ) : null}
-              </div>
-              {agent.contextTokens !== null || agent.spentUsd !== null ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  {agent.contextTokens !== null ? (
-                    <span title="Context of the latest turn">
-                      ctx {formatTokens(agent.contextTokens)}
-                    </span>
+                  {agent.agent ? (
+                    <Badge variant="muted">{agent.agent}</Badge>
                   ) : null}
-                  {agent.spentUsd !== null ? (
-                    <span title="Total spend across this run's turns">
-                      {formatUsd(agent.spentUsd)}
+                </div>
+                <div className="flex items-center gap-1 text-xs">
+                  <RunStatusIcon status={agent.status} />
+                  <span className={RUN_STATUS_META[agent.status].className}>
+                    {agent.status}
+                  </span>
+                  {agent.activeTurns > 1 ? (
+                    <span className="text-muted-foreground">
+                      · {agent.activeTurns} parallel turns
                     </span>
                   ) : null}
                 </div>
-              ) : null}
-            </li>
-          ))
+                {fraction !== null || agent.spentUsd !== null ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {agent.contextTokens !== null ? (
+                      <span title="Context of the latest turn / the model's window">
+                        ctx {formatTokens(agent.contextTokens)} /{' '}
+                        {formatTokens(CONTEXT_WINDOW_TOKENS)}
+                      </span>
+                    ) : null}
+                    {agent.spentUsd !== null ? (
+                      <span title="Total spend across this run's turns">
+                        {formatUsd(agent.spentUsd)}
+                      </span>
+                    ) : null}
+                    {fraction !== null ? (
+                      <ProgressRing
+                        fraction={fraction}
+                        label={`Context ${Math.round(fraction * 100)}% full`}
+                        className={cn(
+                          'ml-auto',
+                          fraction >= 0.9
+                            ? 'text-destructive'
+                            : fraction >= 0.7
+                              ? 'text-warning'
+                              : 'text-primary',
+                        )}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })
         )}
       </ul>
     </aside>

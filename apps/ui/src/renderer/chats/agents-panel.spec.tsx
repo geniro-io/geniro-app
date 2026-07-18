@@ -64,27 +64,67 @@ const agents: AgentDisplay[] = [
 ];
 
 describe('AgentsPanel', () => {
-  it('lists EVERY agent with status, parallel turns, context, and spend', () => {
+  it('lists EVERY agent with status, parallel turns, used/window context + fill ring, and spend', () => {
     const el = render(<AgentsPanel agents={agents} onClose={vi.fn()} />);
     const rows = [...el.querySelectorAll('li')];
     expect(rows).toHaveLength(3);
 
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
     expect(worker.textContent).toContain('3 parallel turns');
-    expect(worker.textContent).toContain('ctx 12k');
+    expect(worker.textContent).toContain('ctx 12k / 200k');
     expect(worker.textContent).toContain('<$0.01');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
+    expect(
+      worker.querySelector('svg[aria-label="Context 6% full"]'),
+    ).not.toBeNull();
 
     const orchestrator = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;
-    expect(orchestrator.textContent).toContain('ctx 45.2k');
+    expect(orchestrator.textContent).toContain('ctx 45.2k / 200k');
     expect(orchestrator.textContent).toContain('$0.24');
+    expect(
+      orchestrator.querySelector('svg[aria-label="Context 23% full"]'),
+    ).not.toBeNull();
 
     const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
     expect(reviewer.textContent).toContain('idle');
     expect(reviewer.textContent).toContain('cursor-agent');
     expect(reviewer.textContent).not.toContain('ctx');
+    expect(reviewer.querySelector('svg[aria-label^="Context"]')).toBeNull();
+  });
+
+  it('the fill ring escalates its tone as the context window fills', () => {
+    const withContext = (id: string, contextTokens: number): AgentDisplay => ({
+      id,
+      name: id,
+      agent: 'claude',
+      status: 'completed',
+      activeTurns: 0,
+      contextTokens,
+      spentUsd: null,
+    });
+    const el = render(
+      <AgentsPanel
+        agents={[
+          withContext('calm', 45_200), // 23% → accent
+          withContext('hot', 150_000), // 75% → warning
+          withContext('critical', 185_000), // 92.5% → destructive
+        ]}
+        onClose={vi.fn()}
+      />,
+    );
+    const ring = (label: string): SVGElement =>
+      el.querySelector<SVGElement>(`svg[aria-label="${label}"]`)!;
+    expect(ring('Context 23% full').classList.contains('text-primary')).toBe(
+      true,
+    );
+    expect(ring('Context 75% full').classList.contains('text-warning')).toBe(
+      true,
+    );
+    expect(
+      ring('Context 93% full').classList.contains('text-destructive'),
+    ).toBe(true);
   });
 
   it('closes via the ✕ and offers the resize handle', () => {

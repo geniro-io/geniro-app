@@ -3,7 +3,6 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDisplay } from './agent-activity';
 import { ChatHeader } from './chat-header';
 
 (
@@ -32,29 +31,14 @@ afterEach(() => {
   container = null;
 });
 
-function agent(
-  overrides: Partial<AgentDisplay> & { id: string },
-): AgentDisplay {
-  return {
-    name: overrides.id,
-    agent: 'claude',
-    status: 'idle',
-    activeTurns: 0,
-    contextTokens: null,
-    spentUsd: null,
-    ...overrides,
-  };
-}
-
 const baseProps = {
   label: 'Review team',
   isWorkflow: true,
   status: 'running' as const,
   lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
   cwd: '/proj/deep/path',
-  agents: [] as AgentDisplay[],
-  agentsPanelOpen: false,
-  onToggleAgents: vi.fn(),
+  sidePanelOpen: false,
+  onToggleSidePanel: vi.fn(),
 };
 
 describe('ChatHeader', () => {
@@ -73,57 +57,25 @@ describe('ChatHeader', () => {
     expect(el.querySelector('svg.animate-spin')).toBeNull();
   });
 
-  it('caps chips at 3 — WORKING agents first — and collapses the rest into +N', () => {
+  it('offers ONE generic side-panel toggle — no per-agent chips in the header', () => {
+    const onToggleSidePanel = vi.fn();
     const el = render(
-      <ChatHeader
-        {...baseProps}
-        agents={[
-          agent({ id: 'a' }),
-          agent({ id: 'b' }),
-          agent({ id: 'worker', status: 'running', activeTurns: 2 }),
-          agent({ id: 'd' }),
-          agent({ id: 'e' }),
-        ]}
-      />,
+      <ChatHeader {...baseProps} onToggleSidePanel={onToggleSidePanel} />,
     );
-    const chips = [...el.querySelectorAll('button[aria-label^="Agent "]')].map(
-      (chip) => chip.textContent,
-    );
-    expect(chips).toHaveLength(3);
-    // The busy worker surfaces even though it is declared third, with its
-    // parallel-turn count on the chip.
-    expect(chips[0]).toContain('worker');
-    expect(chips[0]).toContain('×2');
-    const overflow = el.querySelector('button[aria-label="Show all 5 agents"]');
-    expect(overflow?.textContent).toBe('+2');
+    // The old agent chips must stay gone — the panel is the agents surface.
+    expect(el.querySelector('button[aria-label^="Agent "]')).toBeNull();
+    const toggle = el.querySelector('button[aria-label="Open side panel"]')!;
+    act(() => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onToggleSidePanel).toHaveBeenCalledOnce();
   });
 
-  it('every agent affordance toggles the panel', () => {
-    const onToggleAgents = vi.fn();
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        agents={[agent({ id: 'a' })]}
-        onToggleAgents={onToggleAgents}
-      />,
-    );
-    for (const selector of [
-      'button[aria-label="Agent a: idle"]',
-      'button[aria-label="Open agents panel"]',
-    ]) {
-      act(() => {
-        el.querySelector(selector)?.dispatchEvent(
-          new MouseEvent('click', { bubbles: true }),
-        );
-      });
-    }
-    expect(onToggleAgents).toHaveBeenCalledTimes(2);
-  });
-
-  it('hides the panel toggle when the run has no agents to show', () => {
-    const el = render(<ChatHeader {...baseProps} agents={[]} />);
+  it('labels the toggle as closing while the panel is open', () => {
+    const el = render(<ChatHeader {...baseProps} sidePanelOpen />);
     expect(
-      el.querySelector('button[aria-label="Open agents panel"]'),
-    ).toBeNull();
+      el.querySelector('button[aria-label="Close side panel"]'),
+    ).not.toBeNull();
+    expect(el.querySelector('button[aria-label="Open side panel"]')).toBeNull();
   });
 });

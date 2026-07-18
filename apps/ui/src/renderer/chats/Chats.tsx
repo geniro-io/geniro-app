@@ -12,6 +12,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from 'react';
@@ -28,7 +29,6 @@ import type {
 import { CLI_KINDS } from '../../shared/contracts';
 import { ChatApi } from '../chat-api';
 import { ErrorText } from '../components/error-text';
-import { NavListItem } from '../components/nav-list-item';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
@@ -37,6 +37,8 @@ import { DaemonClient } from '../daemon-client';
 import { TerminalApi } from '../terminal-api';
 import { WorkflowApi } from '../workflow-api';
 import { ApprovalCard } from './approval-card';
+import { ChatListItem } from './chat-list-item';
+import { RenameRunDialog } from './rename-run-dialog';
 import {
   collectVerdicts,
   expiredApprovalIds,
@@ -63,6 +65,21 @@ const TERMINAL_KINDS = new Set<ChatItem['kind']>([
 function folderName(path: string): string {
   const parts = path.split('/').filter(Boolean);
   return parts.at(-1) ?? path;
+}
+
+/**
+ * A run's sidebar label: its custom title when renamed, else the NAME of the
+ * workflow it ran (falling back to the slug once the workflow is deleted),
+ * else the agent driving the 1:1 chat.
+ */
+function runLabel(run: ChatRun, workflowNames: Map<string, string>): string {
+  if (run.title) {
+    return run.title;
+  }
+  if (run.workflowId) {
+    return workflowNames.get(run.workflowId) ?? run.workflowId;
+  }
+  return run.agentKind ?? 'chat';
 }
 
 export function Chats({
@@ -142,6 +159,20 @@ export function Chats({
     if (item.seq > lastSeqRef.current) {
       lastSeqRef.current = item.seq;
     }
+    // Mirror a streamed message into the sidebar row's preview + activity
+    // time, so the list stays live without a refetch.
+    if (item.kind === 'message') {
+      const text = payloadString(item.payload, 'text');
+      if (text !== null) {
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === item.runId
+              ? { ...run, lastMessage: text, updatedAt: item.createdAt }
+              : run,
+          ),
+        );
+      }
+    }
     // Only a RUN-level terminal item ends the working state — a workflow's
     // per-node turn_complete/error (nodeId set) must not re-enable the composer
     // while sibling branches are still running.
@@ -158,7 +189,9 @@ export function Chats({
             : 'failed';
       setRuns((prev) =>
         prev.map((run) =>
-          run.id === item.runId ? { ...run, status: settledStatus } : run,
+          run.id === item.runId
+            ? { ...run, status: settledStatus, updatedAt: item.createdAt }
+            : run,
         ),
       );
     }
@@ -201,6 +234,57 @@ export function Chats({
     setTarget(value);
     void window.geniro.updateSettings({ lastChatTarget: value });
   }, []);
+
+  // Sidebar labels show the workflow's NAME, not its slug.
+  const workflowNames = useMemo(
+    () => new Map(workflows.map((wf) => [wf.slug, wf.name])),
+    [workflows],
+  );
+
+  // Relative "last activity" labels drift as time passes — re-render the list
+  // once a minute while the tab is visible so "3m" doesn't freeze forever.
+  const [, bumpClock] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const id = window.setInterval(bumpClock, 60_000);
+    return () => window.clearInterval(id);
+  }, [active]);
+
+  // The run being renamed from the sidebar (null = dialog closed).
+  const [renaming, setRenaming] = useState<ChatRun | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const openRename = useCallback((run: ChatRun): void => {
+    setRenameError(null);
+    setRenaming(run);
+  }, []);
+  const submitRename = useCallback(
+    async (title: string): Promise<void> => {
+      if (!renaming) {
+        return;
+      }
+      setRenameBusy(true);
+      setRenameError(null);
+      try {
+        const updated = await chatApi.rename(renaming.id, title);
+        // Patch only the title — a concurrent WS item may have fresher
+        // status/preview in state than this response's snapshot.
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === updated.id ? { ...run, title: updated.title } : run,
+          ),
+        );
+        setRenaming(null);
+      } catch (err) {
+        setRenameError(String(err));
+      } finally {
+        setRenameBusy(false);
+      }
+    },
+    [renaming, chatApi],
+  );
 
   // The selected workflow's entry points for the composer's trigger select —
   // a run starts by firing a trigger, so the composer surfaces which one.
@@ -717,14 +801,16 @@ export function Chats({
             </li>
           ) : (
             runs.map((run) => (
-              <NavListItem
+              <ChatListItem
                 key={run.id}
                 active={run.id === activeRunId}
-                title={run.title ?? run.agentKind ?? 'chat'}
-                subtitle={
-                  run.workflowId ? `workflow · ${run.status}` : run.status
-                }
+                label={runLabel(run, workflowNames)}
+                isWorkflow={run.workflowId != null}
+                status={run.status}
+                lastMessage={run.lastMessage}
+                lastActivityAt={run.updatedAt}
                 onActivate={() => void activateRun(run.id)}
+                onRename={() => openRename(run)}
               />
             ))
           )}
@@ -996,6 +1082,15 @@ export function Chats({
           </div>
         </section>
       )}
+
+      <RenameRunDialog
+        open={renaming !== null}
+        busy={renameBusy}
+        error={renameError}
+        initial={renaming ? runLabel(renaming, workflowNames) : ''}
+        onClose={() => setRenaming(null)}
+        onSubmit={(title) => void submitRename(title)}
+      />
 
       {/* Render only while this tab is visible — the panel is fixed-position
           and would otherwise overlay Graphs/Settings from the hidden tab. */}

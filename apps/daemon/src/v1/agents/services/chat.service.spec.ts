@@ -37,6 +37,7 @@ class FakeRunDao {
       agentKind: null,
       model: null,
       createdAt: new Date(0),
+      updatedAt: new Date(0),
       ...data,
     } as unknown as Run;
     this.runs.set(run.id, run);
@@ -87,6 +88,22 @@ class FakeItemDao {
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
+  }
+  // Mirrors the real DAO: text of the highest-seq `message` item per run.
+  async latestMessageTextPerRun(
+    runIds: string[],
+  ): Promise<Map<string, string>> {
+    const previews = new Map<string, string>();
+    for (const item of [...this.items].sort((a, b) => a.seq - b.seq)) {
+      if (item.kind !== 'message' || !runIds.includes(item.runId)) {
+        continue;
+      }
+      const text = (JSON.parse(item.payload) as { text?: string }).text;
+      if (typeof text === 'string') {
+        previews.set(item.runId, text);
+      }
+    }
+    return previews;
   }
 }
 
@@ -388,5 +405,60 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.status).toBe('failed');
     const items = await itemDao.getByRun(run.id);
     expect(items.at(-1)?.kind).toBe('error');
+  });
+
+  it('listChats enriches each run with its latest message text and updatedAt', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'first question');
+    claude.emit({ type: 'text', text: 'the reply' });
+    claude.emit({ type: 'turn_complete', usage: null, stopReason: null });
+    claude.finish();
+    await drain();
+
+    const listed = await service.listChats();
+    const wire = listed.find((r) => r.id === run.id);
+    // The LATEST message wins (the assistant reply, not the user question),
+    // and the wire carries the run row's updatedAt for the activity label.
+    expect(wire?.lastMessage).toBe('the reply');
+    expect(wire?.updatedAt).toBe(new Date(0).toISOString());
+
+    const fresh = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const relisted = await service.listChats();
+    expect(relisted.find((r) => r.id === fresh.id)?.lastMessage).toBeNull();
+  });
+
+  it('rename updates the title and returns the enriched wire', async () => {
+    const { service, runDao, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hello');
+    claude.emit({ type: 'turn_complete', usage: null, stopReason: null });
+    claude.finish();
+    await drain();
+
+    const wire = await service.rename(run.id, 'Auth refactor');
+    expect(wire.title).toBe('Auth refactor');
+    expect(wire.lastMessage).toBe('hello');
+    expect((await runDao.getById(run.id))?.title).toBe('Auth refactor');
+  });
+
+  it('rename deliberately accepts a WORKFLOW run (run-level, not kind-guarded)', async () => {
+    const { service, runDao } = setup();
+    const run = await runDao.create({
+      workflowId: 'review-team',
+      status: 'completed',
+    });
+
+    const wire = await service.rename(run.id, 'Nightly review');
+    expect(wire.title).toBe('Nightly review');
+    expect((await runDao.getById(run.id))?.title).toBe('Nightly review');
+  });
+
+  it('rename 404s on an unknown run', async () => {
+    const { service } = setup();
+    await expect(service.rename('nope', 'x')).rejects.toThrow(
+      /RUN_NOT_FOUND|not found/,
+    );
   });
 });

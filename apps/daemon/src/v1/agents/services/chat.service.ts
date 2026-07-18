@@ -123,7 +123,29 @@ export class ChatService {
   async listChats(): Promise<RunWire[]> {
     const em = this.em.fork();
     const runs = await this.runDao.listChats(em);
-    return runs.map((run) => this.toRunWire(run));
+    const previews = await this.itemDao.latestMessageTextPerRun(
+      runs.map((run) => run.id),
+      em,
+    );
+    return runs.map((run) => this.toRunWire(run, previews.get(run.id) ?? null));
+  }
+
+  /**
+   * Run-level rename shared by BOTH run kinds — the sidebar lists chat and
+   * workflow runs together, so this route deliberately skips the chat-kind
+   * guard the message/cancel routes apply: `title` is a run-row property,
+   * not an execution command that must reach the right engine.
+   */
+  async rename(runId: string, title: string): Promise<RunWire> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    await this.runDao.updateById(runId, { title }, em);
+    run.title = title;
+    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    return this.toRunWire(run, previews.get(runId) ?? null);
   }
 
   async getHistory(runId: string, afterSeq = -1): Promise<ItemWire[]> {
@@ -327,8 +349,8 @@ export class ChatService {
     });
   }
 
-  private toRunWire(run: Run): RunWire {
-    return runToWire(run);
+  private toRunWire(run: Run, lastMessage: string | null = null): RunWire {
+    return runToWire(run, lastMessage);
   }
 
   private itemToWire(item: Item): ItemWire {

@@ -21,6 +21,13 @@ export class ChatApi extends DaemonRestApi {
     return this.request('GET', '/v1/chats');
   }
 
+  /** Run-level rename — the daemon accepts chat AND workflow runs here. */
+  rename(runId: string, title: string): Promise<ChatRun> {
+    return this.request('PATCH', `/v1/chats/${encodeURIComponent(runId)}`, {
+      title,
+    });
+  }
+
   getHistory(runId: string, afterSeq?: number): Promise<ChatItem[]> {
     const query = afterSeq === undefined ? '' : `?afterSeq=${afterSeq}`;
     return this.request(

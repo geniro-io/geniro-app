@@ -53,7 +53,10 @@ export async function persistItemAndEmit(
 }
 
 /** The one Run → wire projection (chat and workflow runs share the shape). */
-export function runToWire(run: Run): RunWire {
+export function runToWire(
+  run: Run,
+  lastMessage: string | null = null,
+): RunWire {
   return {
     id: run.id,
     status: run.status,
@@ -63,5 +66,7 @@ export function runToWire(run: Run): RunWire {
     cwd: run.cwd,
     model: run.model,
     createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
+    lastMessage,
   };
 }

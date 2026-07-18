@@ -20,6 +20,12 @@ export const sendMessageSchema = z.object({
 });
 export class SendMessageDto extends createZodDto(sendMessageSchema) {}
 
+export const renameRunSchema = z.object({
+  /** New sidebar label for the run — non-blank, sanely bounded. */
+  title: z.string().trim().min(1).max(200),
+});
+export class RenameRunDto extends createZodDto(renameRunSchema) {}
+
 export const historyQuerySchema = z.object({
   /** Replay cursor — return only items with seq greater than this. */
   afterSeq: z.coerce.number().int().optional(),

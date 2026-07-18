@@ -69,6 +69,10 @@ export interface ChatRun {
   cwd: string | null;
   model: string | null;
   createdAt: string;
+  /** Last write to the run row (sends/settles bump it) — its last activity. */
+  updatedAt: string;
+  /** Latest `message` item's text — the sidebar preview; null when none yet. */
+  lastMessage: string | null;
 }
 
 /** A persisted transcript item streamed over `/ws` and read back over REST. */

@@ -54,4 +54,15 @@ export interface RunWire {
   cwd: string | null;
   model: string | null;
   createdAt: string;
+  /**
+   * Last write to the run row — every send flips status to `running` and every
+   * settle writes the terminal status, so this is the run's last-activity time.
+   */
+  updatedAt: string;
+  /**
+   * Text of the run's latest `message` item (the chat list's preview line).
+   * Null when the run has no messages yet; list endpoints enrich it, while
+   * create paths return null (a fresh run genuinely has none).
+   */
+  lastMessage: string | null;
 }

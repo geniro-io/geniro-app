@@ -209,7 +209,11 @@ export class GraphExecutorService {
   async listRuns(): Promise<RunWire[]> {
     const em = this.em.fork();
     const runs = await this.runDao.listWorkflowRuns(em);
-    return runs.map(runToWire);
+    const previews = await this.itemDao.latestMessageTextPerRun(
+      runs.map((run) => run.id),
+      em,
+    );
+    return runs.map((run) => runToWire(run, previews.get(run.id) ?? null));
   }
 
   /** Per-node execution states of one run (node chips + reconnect snapshot). */

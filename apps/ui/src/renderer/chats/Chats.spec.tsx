@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   cancel: vi.fn(),
   createChat: vi.fn(),
+  rename: vi.fn(),
 }));
 // A constructable mock (an arrow fn can't be `new`-ed) whose instance exposes
 // the shared spies — so `new ChatApi(handle)` inside the component returns them.
@@ -120,6 +121,8 @@ const run1: ChatRun = {
   cwd: '/proj',
   model: null,
   createdAt: 'now',
+  updatedAt: 'now',
+  lastMessage: null,
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -216,6 +219,7 @@ beforeEach(() => {
   api.sendMessage.mockReset();
   api.cancel.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
+  api.rename.mockReset();
   workflowApi.list.mockReset().mockResolvedValue([]);
   workflowApi.get.mockReset().mockResolvedValue({
     slug: 'review-team',
@@ -659,6 +663,8 @@ describe('Chats workflow runs', () => {
     cwd: '/proj',
     model: null,
     createdAt: 'later',
+    updatedAt: 'later',
+    lastMessage: null,
   };
 
   function wfItem(
@@ -684,15 +690,19 @@ describe('Chats workflow runs', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
+    const sidebarRow = (): string =>
+      [...container.querySelectorAll('aside li')].find((el) =>
+        el.textContent?.includes('Review team'),
+      )?.textContent ?? '';
     expect(container.textContent).toContain('Stop');
-    expect(container.textContent).toContain('workflow · running');
+    expect(sidebarRow()).toContain('running');
 
     // A node's own turn_complete must NOT re-enable the composer…
     await act(async () => {
       emitItem(wfItem(5, 'turn_complete', 'coder'));
     });
     expect(container.textContent).toContain('Stop');
-    expect(container.textContent).toContain('workflow · running');
+    expect(sidebarRow()).toContain('running');
 
     // …only the run-level terminal item does — and it settles the sidebar
     // status too (a finished run must not keep its stale 'running' badge).
@@ -700,8 +710,8 @@ describe('Chats workflow runs', () => {
       emitItem(wfItem(6, 'turn_complete', null));
     });
     expect(container.textContent).not.toContain('Stop');
-    expect(container.textContent).toContain('workflow · completed');
-    expect(container.textContent).not.toContain('workflow · running');
+    expect(sidebarRow()).toContain('completed');
+    expect(sidebarRow()).not.toContain('running');
   });
 
   it('starts a NEW workflow run from the + composer even while a chat run is open (never routes into the chat)', async () => {
@@ -951,6 +961,8 @@ describe('Chats terminal mirror', () => {
       cwd: '/proj',
       model: null,
       createdAt: 'later',
+      updatedAt: 'later',
+      lastMessage: null,
     };
     workflowApi.listRuns.mockResolvedValue([wfRun]);
     workflowApi.get.mockResolvedValue({
@@ -1016,6 +1028,8 @@ describe('Chats terminal mirror', () => {
       cwd: '/proj',
       model: null,
       createdAt: 'later',
+      updatedAt: 'later',
+      lastMessage: null,
     };
     workflowApi.listRuns.mockResolvedValue([wfRun]);
     workflowApi.get.mockResolvedValue({
@@ -1328,5 +1342,126 @@ describe('Chats defaults', () => {
     for (const [arg] of api.createChat.mock.calls) {
       expect(arg).not.toHaveProperty('model');
     }
+  });
+});
+
+describe('Chats sidebar list', () => {
+  const wfSummary = {
+    slug: 'review-team',
+    name: 'Review team',
+    description: null,
+    nodeCount: 2,
+    updatedAt: 'now',
+  };
+
+  it('labels an untitled workflow run with its workflow NAME, not the slug', async () => {
+    workflowApi.list.mockResolvedValue([wfSummary]);
+    workflowApi.listRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: new Date().toISOString(),
+        lastMessage: 'Merged the fix.',
+      },
+    ]);
+    api.listChats.mockResolvedValue([]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const row = [...container.querySelectorAll('aside li')].find((el) =>
+      el.textContent?.includes('Review team'),
+    );
+    expect(row).toBeDefined();
+    // The slug never shows as the label; the preview line does.
+    expect(row!.textContent).not.toContain('review-team');
+    expect(row!.textContent).toContain('Merged the fix.');
+  });
+
+  it('renames a run through the dialog and updates the row label', async () => {
+    api.rename.mockResolvedValue({ ...run1, title: 'Auth deep-dive' });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const pencil = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Rename My chat"]',
+    )!;
+    await act(async () => {
+      pencil.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const input =
+      container.querySelector<HTMLInputElement>('#chat-rename-title')!;
+    expect(input.value).toBe('My chat');
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(input, 'Auth deep-dive');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector('[role="dialog"] form')!
+        .dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        );
+    });
+
+    expect(api.rename).toHaveBeenCalledWith('r1', 'Auth deep-dive');
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    const row = [...container.querySelectorAll('aside li')].find((el) =>
+      el.textContent?.includes('Auth deep-dive'),
+    );
+    expect(row).toBeDefined();
+  });
+
+  it('mirrors a streamed message into the active row as the live preview', async () => {
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitItem(msg(0, 'assistant', 'Deploy finished cleanly.'));
+    });
+
+    const row = [...container.querySelectorAll('aside li')].find((el) =>
+      el.textContent?.includes('My chat'),
+    );
+    expect(row!.textContent).toContain('Deploy finished cleanly.');
+  });
+
+  it('shows the activity time for a settled run and hides it while running', async () => {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    api.listChats.mockResolvedValue([
+      {
+        ...run1,
+        id: 'done',
+        title: 'Done chat',
+        status: 'completed',
+        updatedAt: fiveMinAgo,
+      },
+      {
+        ...run1,
+        id: 'live',
+        title: 'Live chat',
+        status: 'running',
+        updatedAt: fiveMinAgo,
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const rowText = (title: string): string =>
+      [...container.querySelectorAll('aside li')].find((el) =>
+        el.textContent?.includes(title),
+      )!.textContent!;
+    expect(rowText('Done chat')).toContain('5m');
+    expect(rowText('Live chat')).not.toContain('5m');
   });
 });

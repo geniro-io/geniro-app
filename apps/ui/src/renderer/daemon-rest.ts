@@ -1,7 +1,7 @@
 import type { DaemonHandle } from '../shared/contracts';
 
 /** HTTP verbs the loopback REST clients use. */
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
  * Base for every loopback-daemon REST client. Owns the one transport concern —

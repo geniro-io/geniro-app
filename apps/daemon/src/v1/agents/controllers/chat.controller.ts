@@ -1,9 +1,18 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 import type { ItemWire, RunWire } from '../chat.types';
 import {
   CreateChatDto,
   HistoryQueryDto,
+  RenameRunDto,
   SendMessageDto,
 } from '../dto/chat.dto';
 import { ChatService } from '../services/chat.service';
@@ -25,6 +34,14 @@ export class ChatController {
   @Get()
   listChats(): Promise<RunWire[]> {
     return this.chatService.listChats();
+  }
+
+  @Patch(':runId')
+  rename(
+    @Param('runId') runId: string,
+    @Body() dto: RenameRunDto,
+  ): Promise<RunWire> {
+    return this.chatService.rename(runId, dto.title);
   }
 
   @Get(':runId/items')

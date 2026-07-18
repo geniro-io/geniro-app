@@ -46,6 +46,7 @@ class FakeRunDao {
       agentKind: null,
       model: null,
       createdAt: new Date(0),
+      updatedAt: new Date(0),
       ...data,
     } as unknown as Run;
     this.runs.set(run.id, run);

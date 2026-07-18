@@ -1213,7 +1213,6 @@ export function Chats({
               isWorkflow={activeRun.workflowId != null}
               status={activeRun.status}
               lastActivityAt={activeRun.updatedAt}
-              cwd={activeRun.cwd}
               sidePanelOpen={agentsPanelOpen}
               onToggleSidePanel={toggleAgentsPanel}
             />

@@ -36,19 +36,20 @@ const baseProps = {
   isWorkflow: true,
   status: 'running' as const,
   lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
-  cwd: '/proj/deep/path',
   sidePanelOpen: false,
   onToggleSidePanel: vi.fn(),
 };
 
 describe('ChatHeader', () => {
-  it('shows the sidebar identity — label, status, cwd — and hides the date while running', () => {
+  it('shows the sidebar identity — label + status — and hides the date while running', () => {
     const el = render(<ChatHeader {...baseProps} />);
     expect(el.querySelector('h2')?.textContent).toBe('Review team');
     expect(el.textContent).toContain('running');
-    expect(el.textContent).toContain('/proj/deep/path');
     expect(el.querySelector('svg.animate-spin')).not.toBeNull();
     expect(el.textContent).not.toContain('1m');
+    // The working directory moved to the composer's folder chip — the header
+    // carries no cwd line anymore.
+    expect(el.textContent).not.toContain('/proj');
   });
 
   it('shows the activity time once settled', () => {

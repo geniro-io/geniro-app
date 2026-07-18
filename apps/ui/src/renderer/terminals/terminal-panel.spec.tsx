@@ -234,4 +234,25 @@ describe('TerminalPanel', () => {
     click('Close');
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('is a modal popup: a backdrop click detaches, a click inside does not', () => {
+    const { onClose, onEndSession } = render();
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+
+    act(() => {
+      container
+        .querySelector('header')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() => {
+      container
+        .querySelector('[data-testid="terminal-backdrop"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+    // Backdrop close is a DETACH — never an End session.
+    expect(onEndSession).not.toHaveBeenCalled();
+  });
 });

@@ -23,11 +23,13 @@ function tokenColor(name: string): string | undefined {
 }
 
 /**
- * Right-side drawer showing one live PTY mirror: the agent's original TUI,
- * byte-for-byte, in an xterm.js view. Colours come from the design tokens
- * (resolved at mount — xterm needs concrete values, not var() references).
- * Closing DETACHES (the session keeps running for a later re-open); "End
- * session" kills the PTY via the REST dispose route.
+ * Modal popup showing one live PTY mirror: the agent's original TUI,
+ * byte-for-byte, in an xterm.js view over a dimmed backdrop. Colours come
+ * from the design tokens (resolved at mount — xterm needs concrete values,
+ * not var() references). Closing — the Close button or a backdrop click —
+ * DETACHES (the session keeps running for a later re-open); "End session"
+ * kills the PTY via the REST dispose route. Escape deliberately does NOT
+ * close: the key belongs to the TUI inside (claude uses it to interrupt).
  */
 export function TerminalPanel({
   handle,
@@ -121,46 +123,58 @@ export function TerminalPanel({
   }, [handle, session.id]);
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 flex w-[620px] max-w-[90vw] flex-col border-l border-border bg-card shadow-[var(--shadow-md)]">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-          {title}
-        </span>
-        {gone ? (
-          <Badge variant="secondary">gone</Badge>
-        ) : !connected ? (
-          <Badge variant="secondary">connecting</Badge>
-        ) : status === 'exited' ? (
-          <Badge variant="secondary">
-            exited{exitCode !== null ? ` (${exitCode})` : ''}
-          </Badge>
-        ) : status === 'closing' ? (
-          <Badge variant="secondary">closing</Badge>
-        ) : (
-          <Badge>live</Badge>
-        )}
-        <ConfirmButton
-          variant="outline"
-          size="sm"
-          confirmLabel="End it?"
-          onConfirm={onEndSession}>
-          End session
-        </ConfirmButton>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          aria-label="Close terminal">
-          Close
-        </Button>
-      </header>
-      <div className="relative min-h-0 flex-1">
-        {!connected && !gone ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-muted-foreground">
-            Connecting…
-          </div>
-        ) : null}
-        <div ref={containerRef} className="h-full bg-card p-2" />
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      className="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div
+        className="absolute inset-0 bg-foreground/30"
+        aria-hidden="true"
+        data-testid="terminal-backdrop"
+        onClick={onClose}
+      />
+      <div className="relative z-10 flex h-[78vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-panel-md">
+        <header className="flex items-center gap-2 border-b border-border px-4 py-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {title}
+          </span>
+          {gone ? (
+            <Badge variant="secondary">gone</Badge>
+          ) : !connected ? (
+            <Badge variant="secondary">connecting</Badge>
+          ) : status === 'exited' ? (
+            <Badge variant="secondary">
+              exited{exitCode !== null ? ` (${exitCode})` : ''}
+            </Badge>
+          ) : status === 'closing' ? (
+            <Badge variant="secondary">closing</Badge>
+          ) : (
+            <Badge>live</Badge>
+          )}
+          <ConfirmButton
+            variant="outline"
+            size="sm"
+            confirmLabel="End it?"
+            onConfirm={onEndSession}>
+            End session
+          </ConfirmButton>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            aria-label="Close terminal">
+            Close
+          </Button>
+        </header>
+        <div className="relative min-h-0 flex-1">
+          {!connected && !gone ? (
+            <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-muted-foreground">
+              Connecting…
+            </div>
+          ) : null}
+          <div ref={containerRef} className="h-full bg-card p-2" />
+        </div>
       </div>
     </div>
   );

@@ -66,6 +66,21 @@ interface ActiveCall {
   failReason: string | null;
 }
 
+/**
+ * One settled call's conversation handle: `call_agent` with
+ * `thread: <call_id>` resumes this record's callee CLI session, continuing
+ * the conversation instead of starting fresh. Retained for the run's whole
+ * life (bounded by the per-run turn cap) so any earlier point of a
+ * conversation can be continued.
+ */
+interface ThreadRecord {
+  /** The caller that made the call — only it may continue the thread. */
+  owner: string;
+  calleeId: string;
+  /** The resumable CLI session; null = the turn recorded none. */
+  sessionId: string | null;
+}
+
 interface RunCallState {
   capability: RunCallCapability;
   callSeq: number;
@@ -74,6 +89,8 @@ interface RunCallState {
   activeCalls: Map<string, ActiveCall>;
   /** Results retained until their caller collects them via await_agent. */
   pendingAsync: Map<string, AsyncCallEntry>;
+  /** Settled calls' resume handles keyed by call id (thread continuation). */
+  threads: Map<string, ThreadRecord>;
 }
 
 /**
@@ -97,6 +114,7 @@ export class CallBroker {
       turnsStarted: 0,
       activeCalls: new Map(),
       pendingAsync: new Map(),
+      threads: new Map(),
     });
   }
 
@@ -139,7 +157,7 @@ export class CallBroker {
   async callAgent(
     runId: string,
     callerNodeId: string,
-    args: { agent: string; message: string; mode?: CallMode },
+    args: { agent: string; message: string; mode?: CallMode; thread?: string },
   ): Promise<CallEnvelope> {
     const state = this.runs.get(runId);
     if (!state) {
@@ -173,6 +191,32 @@ export class CallBroker {
         error: `TURN_LIMIT: this run already started ${MAX_CALL_TURNS_PER_RUN} callee turns`,
       };
     }
+    // Thread continuation: resume the callee CLI session a prior call of THIS
+    // caller recorded. Ownership gates the lookup like await/answer do — one
+    // caller can never continue (and thus read) another caller's conversation.
+    let resumeSessionId: string | null = null;
+    if (args.thread !== undefined) {
+      const thread = state.threads.get(args.thread);
+      if (!thread || thread.owner !== callerNodeId) {
+        return {
+          status: 'error',
+          error: `UNKNOWN_THREAD: no settled call '${args.thread}' started by you`,
+        };
+      }
+      if (thread.calleeId !== callee.id) {
+        return {
+          status: 'error',
+          error: `THREAD_AGENT_MISMATCH: call '${args.thread}' was a conversation with '${thread.calleeId}', not '${callee.id}'`,
+        };
+      }
+      if (!thread.sessionId) {
+        return {
+          status: 'error',
+          error: `THREAD_UNAVAILABLE: call '${args.thread}' recorded no resumable session`,
+        };
+      }
+      resumeSessionId = thread.sessionId;
+    }
     state.turnsStarted += 1;
     state.callSeq += 1;
     const callId = `call-${state.callSeq}`;
@@ -194,11 +238,21 @@ export class CallBroker {
       calleeNodeId: callee.id,
       mode,
       message: args.message,
+      ...(args.thread !== undefined ? { thread: args.thread } : {}),
     });
 
     call.settled = state.capability
-      .launchCalleeTurn(callee, args.message, callId, depth)
-      .then((outcome) => toEnvelope(callId, callee.id, outcome))
+      .launchCalleeTurn(callee, args.message, callId, depth, resumeSessionId)
+      .then((outcome) => {
+        // Every settled turn leaves a resume handle so the conversation can
+        // be continued from THIS point with `thread: <this call_id>`.
+        state.threads.set(callId, {
+          owner: callerNodeId,
+          calleeId: callee.id,
+          sessionId: outcome.sessionId,
+        });
+        return toEnvelope(callId, callee.id, outcome);
+      })
       .catch((err: unknown): CallEnvelope => ({
         status: 'error',
         error: `CALL_FAILED: ${err instanceof Error ? err.message : String(err)}`,

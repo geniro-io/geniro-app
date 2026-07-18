@@ -701,16 +701,22 @@ export class GraphExecutorService {
     const beginAgentTurn = (
       node: WorkflowAgentNode,
       prompt: string,
-      callContext?: { callId: string },
+      callContext?: { callId: string; resumeSessionId?: string | null },
     ): {
       handle: AgentTurnHandle;
-      finish: () => { outcome: NodeOutcome; finalText: string | null };
+      finish: () => {
+        outcome: NodeOutcome;
+        finalText: string | null;
+        sessionId: string | null;
+      };
     } => {
       const adapter: AgentAdapter =
         node.agent === 'claude' ? this.claude : this.cursor;
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
+      // The turn's own CLI session — the broker's thread-resume handle.
+      let capturedSessionId: string | null = null;
 
       const saveSessionId = createSessionIdSaver(
         this.nodeStateDao,
@@ -736,7 +742,7 @@ export class GraphExecutorService {
         prompt,
         cwd,
         model: node.model ?? null,
-        resumeSessionId: null,
+        resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: systemPromptFor(node),
         approvalMode: questionCapable ? 'ask' : node.approval,
         mcpEndpoint: mcpEndpointFor(node),
@@ -744,6 +750,7 @@ export class GraphExecutorService {
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {
           if (event.type === 'session') {
+            capturedSessionId = event.sessionId;
             await saveSessionId(event.sessionId);
             return;
           }
@@ -873,7 +880,11 @@ export class GraphExecutorService {
             )
           : adapter.start(input, onEvent);
 
-      const finish = (): { outcome: NodeOutcome; finalText: string | null } => {
+      const finish = (): {
+        outcome: NodeOutcome;
+        finalText: string | null;
+        sessionId: string | null;
+      } => {
         // A clean exit with no result line still completes the node — the
         // synthetic-completion mirror of the chat turn's finalizer.
         const finalOutcome: NodeOutcome =
@@ -882,7 +893,11 @@ export class GraphExecutorService {
           finalOutcome === 'completed'
             ? (finalText ?? textChunks.join(''))
             : finalText;
-        return { outcome: finalOutcome, finalText: text };
+        return {
+          outcome: finalOutcome,
+          finalText: text,
+          sessionId: capturedSessionId,
+        };
       };
       return { handle, finish };
     };
@@ -902,7 +917,11 @@ export class GraphExecutorService {
       // DAG walking — drive()/startRun promise "never throws", and letting it
       // escape would leave the aggregate handle registered but never settling.
       let handle: AgentTurnHandle;
-      let finish: () => { outcome: NodeOutcome; finalText: string | null };
+      let finish: () => {
+        outcome: NodeOutcome;
+        finalText: string | null;
+        sessionId: string | null;
+      };
       try {
         ({ handle, finish } = beginAgentTurn(node, prompt));
       } catch (err) {
@@ -1007,6 +1026,7 @@ export class GraphExecutorService {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      sessionId: null,
     };
 
     /**
@@ -1027,6 +1047,7 @@ export class GraphExecutorService {
       message: string,
       callId: string,
       depth: number,
+      resumeSessionId: string | null,
     ): Promise<CalleeTurnOutcome> => {
       liveSubTurns += 1;
       try {
@@ -1053,10 +1074,17 @@ export class GraphExecutorService {
           // suppress this node's approval sweep for the rest of the run) nor
           // reject into the broker with an unbalanced ledger.
           let handle: AgentTurnHandle;
-          let finish: () => { outcome: NodeOutcome; finalText: string | null };
+          let finish: () => {
+            outcome: NodeOutcome;
+            finalText: string | null;
+            sessionId: string | null;
+          };
           try {
             persistTurnStart(callee);
-            ({ handle, finish } = beginAgentTurn(callee, message, { callId }));
+            ({ handle, finish } = beginAgentTurn(callee, message, {
+              callId,
+              resumeSessionId,
+            }));
           } catch (err) {
             if (releaseNodeTurn(callee.id)) {
               this.approvals.sweepNode(runId, callee.id);
@@ -1080,6 +1108,7 @@ export class GraphExecutorService {
               status: 'failed',
               finalText: null,
               error: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+              sessionId: null,
             };
           }
           subTurnHandles.set(callId, handle);
@@ -1093,6 +1122,7 @@ export class GraphExecutorService {
                 status: 'failed',
                 finalText: null,
                 error: 'callee bookkeeping failed',
+                sessionId: null,
               };
               try {
                 if (releaseNodeTurn(callee.id)) {
@@ -1102,7 +1132,7 @@ export class GraphExecutorService {
                   this.callBroker.drainCaller(runId, callee.id);
                 }
                 subTurnHandles.delete(callId);
-                const { outcome, finalText } = finish();
+                const { outcome, finalText, sessionId } = finish();
                 const status =
                   outcome === 'completed'
                     ? 'completed'
@@ -1113,6 +1143,7 @@ export class GraphExecutorService {
                   status,
                   finalText,
                   error: status === 'failed' ? 'callee turn failed' : null,
+                  sessionId,
                 };
                 await this.nodeStateDao.setStatus(
                   runId,

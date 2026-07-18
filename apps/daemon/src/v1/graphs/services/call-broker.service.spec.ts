@@ -41,11 +41,18 @@ function harness(options?: {
   launch?: 'instant' | 'defer' | 'throw';
   /** Node-liveness override; default: every node has a live turn. */
   isNodeLive?: (nodeId: string) => boolean;
+  /** Instant turns record no resumable session (thread continuation off). */
+  noSession?: boolean;
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
   items: RecordedItem[];
-  launches: { callee: WorkflowAgentNode; message: string; callId: string }[];
+  launches: {
+    callee: WorkflowAgentNode;
+    message: string;
+    callId: string;
+    resumeSessionId: string | null;
+  }[];
   deferred: Deferred[];
 } {
   const items: RecordedItem[] = [];
@@ -53,13 +60,14 @@ function harness(options?: {
     callee: WorkflowAgentNode;
     message: string;
     callId: string;
+    resumeSessionId: string | null;
   }[] = [];
   const deferred: Deferred[] = [];
   const mode = options?.launch ?? 'instant';
   const capability: RunCallCapability = {
     calleesOf: options?.calleesOf ?? new Map([['orch', [HELPER, WRITER]]]),
-    launchCalleeTurn: (callee, message, callId) => {
-      launches.push({ callee, message, callId });
+    launchCalleeTurn: (callee, message, callId, _depth, resumeSessionId) => {
+      launches.push({ callee, message, callId, resumeSessionId });
       if (mode === 'throw') {
         return Promise.reject(new Error('spawn exploded'));
       }
@@ -72,6 +80,7 @@ function harness(options?: {
         status: 'completed',
         finalText: `done by ${callee.id}`,
         error: null,
+        sessionId: options?.noSession ? null : `sess-${callId}`,
       });
     },
     persistItem: (nodeId, kind, _role, payload) => {
@@ -101,7 +110,12 @@ describe('CallBroker', () => {
       result: { call_id: 'call-1', agent: 'helper', text: 'done by helper' },
     });
     expect(launches).toEqual([
-      { callee: HELPER, message: 'summarize X', callId: 'call-1' },
+      {
+        callee: HELPER,
+        message: 'summarize X',
+        callId: 'call-1',
+        resumeSessionId: null,
+      },
     ]);
     // Transcript: call_started then call_result, both on the CALLER's node.
     expect(items.map((i) => [i.kind, i.nodeId])).toEqual([
@@ -188,6 +202,7 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      sessionId: null,
     });
     const collected = await awaiting;
     expect(collected).toEqual({
@@ -224,6 +239,7 @@ describe('CallBroker', () => {
       status: 'completed',
       finalText: 'async done',
       error: null,
+      sessionId: null,
     });
     const envelopes = await Promise.all([first, second]);
     const okCount = envelopes.filter((e) => e.status === 'ok').length;
@@ -249,7 +265,12 @@ describe('CallBroker', () => {
       call_id: 'call-1',
     });
     expect(stolen.error).toContain('UNKNOWN_CALL');
-    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: '',
+      error: null,
+      sessionId: null,
+    });
   });
 
   it('fire_and_forget detaches: transcript only, never awaitable', async () => {
@@ -300,7 +321,12 @@ describe('CallBroker', () => {
     expect(refused.status).toBe('error');
     expect(refused.error).toContain('DEPTH_LIMIT');
     for (const d of deferred) {
-      d.resolve({ status: 'completed', finalText: '', error: null });
+      d.resolve({
+        status: 'completed',
+        finalText: '',
+        error: null,
+        sessionId: null,
+      });
     }
     await Promise.all([p1, p2, p3]);
   });
@@ -333,6 +359,7 @@ describe('CallBroker', () => {
       status: 'failed',
       finalText: null,
       error: 'exit 1',
+      sessionId: null,
     });
     expect((await failing).error).toContain('CALLEE_FAILED: exit 1');
 
@@ -344,6 +371,7 @@ describe('CallBroker', () => {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      sessionId: null,
     });
     expect((await cancelled).error).toContain('CALLEE_CANCELLED');
   });
@@ -451,6 +479,7 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'completed',
       finalText: 'chose blue',
       error: null,
+      sessionId: null,
     });
     expect(await awaiting).toEqual({
       status: 'ok',
@@ -491,7 +520,12 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(question.status).toBe('question');
     broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'Red' });
     const second = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
-    deferred[0]!.resolve({ status: 'completed', finalText: 'ok', error: null });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'ok',
+      error: null,
+      sessionId: null,
+    });
     expect((await second).status).toBe('ok');
   });
 
@@ -509,6 +543,7 @@ describe('CallBroker — parked questions (M4)', () => {
           status: 'cancelled',
           finalText: null,
           error: 'run cancelled',
+          sessionId: null,
         }),
     });
     expect((await sync).status).toBe('question');
@@ -558,7 +593,12 @@ describe('CallBroker — parked questions (M4)', () => {
       answer: 'b',
     });
     expect(twice.error).toContain('NO_QUESTION');
-    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: '',
+      error: null,
+      sessionId: null,
+    });
   });
 
   it('reports DELIVERY_FAILED when the callee turn died before the answer — and resolves the question row', async () => {
@@ -574,7 +614,12 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(items.find((i) => i.kind === 'call_answer')!.payload).toMatchObject({
       outcome: 'undelivered',
     });
-    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: '',
+      error: null,
+      sessionId: null,
+    });
   });
 
   it('orphans immediately when the question parks AFTER its owner settled — no 5-minute TTL grind', async () => {
@@ -598,6 +643,7 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: 'cancelled',
+      sessionId: null,
     });
     expect((await sync).error).toContain('QUESTION_ORPHANED');
   });
@@ -620,7 +666,12 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
     });
     expect(collected.error).toContain('UNKNOWN_CALL');
-    deferred[0]!.resolve({ status: 'cancelled', finalText: null, error: null });
+    deferred[0]!.resolve({
+      status: 'cancelled',
+      finalText: null,
+      error: null,
+      sessionId: null,
+    });
   });
 
   it('drainCaller fails a settling caller’s parked questions as QUESTION_ORPHANED', async () => {
@@ -640,6 +691,7 @@ describe('CallBroker — parked questions (M4)', () => {
       status: 'cancelled',
       finalText: null,
       error: 'run cancelled',
+      sessionId: null,
     });
     const final = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
@@ -669,7 +721,12 @@ describe('CallBroker — parked questions (M4)', () => {
         fail: () => {},
       }),
     ).toBe(false);
-    deferred[0]!.resolve({ status: 'completed', finalText: '', error: null });
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: '',
+      error: null,
+      sessionId: null,
+    });
   });
 
   it('unregisterRun defuses parked TTL timers — a dead run’s callee is never failed by a late timer', async () => {
@@ -677,8 +734,114 @@ describe('CallBroker — parked questions (M4)', () => {
     void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
     const { failed } = park(broker, { ttlMs: 10 });
     broker.unregisterRun('run-1');
-    deferred[0]!.resolve({ status: 'cancelled', finalText: null, error: null });
+    deferred[0]!.resolve({
+      status: 'cancelled',
+      finalText: null,
+      error: null,
+      sessionId: null,
+    });
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(failed.count).toBe(0);
+  });
+});
+
+describe('CallBroker — thread continuation', () => {
+  it('continuing a thread resumes the recorded callee session', async () => {
+    const { broker, launches, items } = harness();
+    const first = await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'remember the codeword BANANA',
+    });
+    expect(first.status).toBe('ok');
+
+    const second = await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'what was the codeword?',
+      thread: 'call-1',
+    });
+    expect(second).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-2', agent: 'helper', text: 'done by helper' },
+    });
+    // The continuation turn resumed call-1's recorded CLI session…
+    expect(launches[1]!.resumeSessionId).toBe('sess-call-1');
+    // …while the first turn started fresh.
+    expect(launches[0]!.resumeSessionId).toBeNull();
+    // The transcript's call_started row names the continued thread.
+    const started = items.filter((i) => i.kind === 'call_started');
+    expect(started[1]!.payload).toMatchObject({
+      callId: 'call-2',
+      thread: 'call-1',
+    });
+    expect(started[0]!.payload).not.toHaveProperty('thread');
+  });
+
+  it('a continued thread can itself be continued (chained resumes)', async () => {
+    const { broker, launches } = harness();
+    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'a' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'b',
+      thread: 'call-1',
+    });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'c',
+      thread: 'call-2',
+    });
+    expect(launches.map((l) => l.resumeSessionId)).toEqual([
+      null,
+      'sess-call-1',
+      'sess-call-2',
+    ]);
+  });
+
+  it('refuses an unknown thread and a thread another caller started', async () => {
+    const calleesOf = new Map([
+      ['orch', [HELPER]],
+      ['other', [HELPER]],
+    ]);
+    const { broker, launches } = harness({ calleesOf });
+    const unknown = await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      thread: 'call-99',
+    });
+    expect(unknown.status).toBe('error');
+    expect(unknown.error).toContain('UNKNOWN_THREAD');
+    expect(launches).toHaveLength(0);
+
+    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    const foreign = await broker.callAgent('run-1', 'other', {
+      agent: 'helper',
+      message: 'm',
+      thread: 'call-1',
+    });
+    expect(foreign.status).toBe('error');
+    expect(foreign.error).toContain('UNKNOWN_THREAD');
+  });
+
+  it('refuses continuing a thread with a different agent', async () => {
+    const { broker } = harness();
+    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    const mismatch = await broker.callAgent('run-1', 'orch', {
+      agent: 'writer',
+      message: 'm',
+      thread: 'call-1',
+    });
+    expect(mismatch.status).toBe('error');
+    expect(mismatch.error).toContain('THREAD_AGENT_MISMATCH');
+  });
+
+  it('refuses a thread whose turn recorded no resumable session', async () => {
+    const { broker } = harness({ noSession: true });
+    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    const envelope = await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      thread: 'call-1',
+    });
+    expect(envelope.status).toBe('error');
+    expect(envelope.error).toContain('THREAD_UNAVAILABLE');
   });
 });

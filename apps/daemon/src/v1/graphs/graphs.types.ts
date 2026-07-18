@@ -236,6 +236,12 @@ export interface CalleeTurnOutcome {
   status: 'completed' | 'failed' | 'cancelled';
   finalText: string | null;
   error: string | null;
+  /**
+   * The callee's CLI session id captured during this turn — the resume handle
+   * a follow-up call passes as `thread` to CONTINUE the conversation. Null
+   * when the adapter emitted no session event (the thread is not resumable).
+   */
+  sessionId: string | null;
 }
 
 /**
@@ -318,16 +324,19 @@ export interface RunCallCapability {
   /** Callees each caller may invoke: caller node id → callee agent nodes. */
   readonly calleesOf: ReadonlyMap<string, readonly WorkflowAgentNode[]>;
   /**
-   * Spawn one fresh callee turn; resolves once the turn fully settles.
+   * Spawn one callee turn; resolves once the turn fully settles.
    * `depth` is the call's chain depth (1 = a top-level caller's callee): the
    * executor bounds only depth-1 turns with its sub-turn slot pool, so a
    * nested sync chain can't hold every slot while blocked on a deeper call.
+   * `resumeSessionId` continues a prior callee CLI session (a thread
+   * continuation); null starts a fresh conversation.
    */
   launchCalleeTurn(
     callee: WorkflowAgentNode,
     message: string,
     callId: string,
     depth: number,
+    resumeSessionId: string | null,
   ): Promise<CalleeTurnOutcome>;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(

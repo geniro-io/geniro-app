@@ -180,7 +180,12 @@ export class McpServerService {
                 message: {
                   type: 'string',
                   description:
-                    'The task for the callee. It starts a FRESH turn seeing only this text (plus its own role) — include all context it needs.',
+                    'The task for the callee. Without `thread` it starts a FRESH conversation seeing only this text (plus its own role) — include all context it needs.',
+                },
+                thread: {
+                  type: 'string',
+                  description:
+                    'Optional: a previous call_id of YOUR call to this same agent — the callee CONTINUES that conversation with its full memory. Omit to start a new thread.',
                 },
                 mode: {
                   type: 'string',
@@ -247,6 +252,7 @@ export class McpServerService {
             agent: args.agent as string,
             message: args.message as string,
             mode: args.mode as CallMode | undefined,
+            thread: args.thread as string | undefined,
           }));
       } else if (name === 'await_agent') {
         envelope =
@@ -290,6 +296,12 @@ function validateCallAgentArgs(
   }
   if (args.mode !== undefined && !CALL_MODES.includes(args.mode as CallMode)) {
     return invalidArgs("'mode' must be sync, async, or fire_and_forget");
+  }
+  if (
+    args.thread !== undefined &&
+    (typeof args.thread !== 'string' || args.thread.length === 0)
+  ) {
+    return invalidArgs("'thread' must be a non-empty call_id string");
   }
   return null;
 }

@@ -685,18 +685,23 @@ describe('Chats workflow runs', () => {
     await clickRun(container, 'Review team');
 
     expect(container.textContent).toContain('Stop');
+    expect(container.textContent).toContain('workflow · running');
 
     // A node's own turn_complete must NOT re-enable the composer…
     await act(async () => {
       emitItem(wfItem(5, 'turn_complete', 'coder'));
     });
     expect(container.textContent).toContain('Stop');
+    expect(container.textContent).toContain('workflow · running');
 
-    // …only the run-level terminal item does.
+    // …only the run-level terminal item does — and it settles the sidebar
+    // status too (a finished run must not keep its stale 'running' badge).
     await act(async () => {
       emitItem(wfItem(6, 'turn_complete', null));
     });
     expect(container.textContent).not.toContain('Stop');
+    expect(container.textContent).toContain('workflow · completed');
+    expect(container.textContent).not.toContain('workflow · running');
   });
 
   it('starts a NEW workflow run from the + composer even while a chat run is open (never routes into the chat)', async () => {

@@ -148,6 +148,19 @@ export function Chats({
     if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
       sawTerminalRef.current = true;
       setStreaming(false);
+      // Mirror the daemon's settle write into the sidebar list — without this
+      // a finished run keeps its stale 'running' badge until an app restart.
+      const settledStatus: ChatRun['status'] =
+        item.kind === 'turn_complete'
+          ? 'completed'
+          : item.kind === 'turn_cancelled'
+            ? 'cancelled'
+            : 'failed';
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === item.runId ? { ...run, status: settledStatus } : run,
+        ),
+      );
     }
   }, []);
 
@@ -231,6 +244,21 @@ export function Chats({
     };
   }, [workflowSlug, workflowApi]);
 
+  /** Reload the sidebar's run list from the daemon (statuses included) —
+   *  live items only reach the ACTIVE run's room, so other runs' settles are
+   *  picked up by refetching at natural moments (mount, pressing +). */
+  const refreshRuns = useCallback((): void => {
+    void Promise.all([chatApi.listChats(), workflowApi.listRuns()])
+      .then(([chats, workflowRuns]) =>
+        setRuns(
+          [...chats, ...workflowRuns].sort((a, b) =>
+            b.createdAt.localeCompare(a.createdAt),
+          ),
+        ),
+      )
+      .catch((err: unknown) => setError(String(err)));
+  }, [chatApi, workflowApi]);
+
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
       const previous = activeRunIdRef.current;
@@ -286,15 +314,7 @@ export function Chats({
         setTarget(s.lastChatTarget);
       }
     });
-    void Promise.all([chatApi.listChats(), workflowApi.listRuns()])
-      .then(([chats, workflowRuns]) =>
-        setRuns(
-          [...chats, ...workflowRuns].sort((a, b) =>
-            b.createdAt.localeCompare(a.createdAt),
-          ),
-        ),
-      )
-      .catch((err: unknown) => setError(String(err)));
+    refreshRuns();
     const unsubscribeItem = client.onItem(addItem);
     const unsubscribeDisconnect = client.onDisconnect(() => {
       reconnectAfterSeqRef.current = lastSeqRef.current;
@@ -337,7 +357,7 @@ export function Chats({
         client.leaveRun(active);
       }
     };
-  }, [client, chatApi, workflowApi, addItem, activateRun]);
+  }, [client, chatApi, addItem, activateRun, refreshRuns]);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -413,7 +433,8 @@ export function Chats({
     setItems([]);
     setStreaming(false);
     setError(null);
-  }, [client]);
+    refreshRuns();
+  }, [client, refreshRuns]);
 
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
@@ -450,6 +471,13 @@ export function Chats({
       }
       setInput('');
       setStreaming(true);
+      // The daemon flips the run to 'running' for the turn — mirror it in the
+      // sidebar list (the terminal item flips it back on settle).
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === runId ? { ...run, status: 'running' } : run,
+        ),
+      );
       // Render the user message even if join raced the publish; addItem de-dupes
       // when the WS copy arrives.
       const userItem = await chatApi.sendMessage(runId, text);
@@ -482,6 +510,11 @@ export function Chats({
     try {
       setInput('');
       setStreaming(true);
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === runId ? { ...run, status: 'running' } : run,
+        ),
+      );
       const userItem = await chatApi.sendMessage(runId, text);
       addItem(userItem);
     } catch (err) {

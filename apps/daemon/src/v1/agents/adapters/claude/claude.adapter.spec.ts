@@ -531,13 +531,30 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
   });
 
   it('a turn without mcpEndpoint keeps argv and env untouched', () => {
-    const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
-      { prompt: 'p', cwd: '/proj', env: { FOO: 'bar' } },
-      () => {},
+    // "Untouched" means the ADAPTER adds nothing: the daemon's own process
+    // env may legitimately carry MCP_TOOL_TIMEOUT (it does under some dev
+    // harnesses), and runHeadlessCli passes the parent env through — so the
+    // variable is scrubbed for this test or the assertion measures the
+    // environment, not the adapter.
+    const hadTimeout = Object.prototype.hasOwnProperty.call(
+      process.env,
+      'MCP_TOOL_TIMEOUT',
     );
-    expect(captured.args!.join(' ')).not.toContain('--mcp-config');
-    expect(captured.env?.MCP_TOOL_TIMEOUT).toBeUndefined();
-    expect(captured.env?.FOO).toBe('bar');
+    const previousTimeout = process.env.MCP_TOOL_TIMEOUT;
+    delete process.env.MCP_TOOL_TIMEOUT;
+    try {
+      const { spawn, captured } = fakeSpawn();
+      new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+        { prompt: 'p', cwd: '/proj', env: { FOO: 'bar' } },
+        () => {},
+      );
+      expect(captured.args!.join(' ')).not.toContain('--mcp-config');
+      expect(captured.env?.MCP_TOOL_TIMEOUT).toBeUndefined();
+      expect(captured.env?.FOO).toBe('bar');
+    } finally {
+      if (hadTimeout) {
+        process.env.MCP_TOOL_TIMEOUT = previousTimeout;
+      }
+    }
   });
 });

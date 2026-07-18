@@ -137,6 +137,8 @@ export function TerminalPanel({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {title}
           </span>
+          {/* A healthy live mirror needs no badge — only the exceptional
+              states (still connecting, ended, reaped) get labeled. */}
           {gone ? (
             <Badge variant="secondary">gone</Badge>
           ) : !connected ? (
@@ -147,9 +149,7 @@ export function TerminalPanel({
             </Badge>
           ) : status === 'closing' ? (
             <Badge variant="secondary">closing</Badge>
-          ) : (
-            <Badge>live</Badge>
-          )}
+          ) : null}
           <Button
             type="button"
             variant="ghost"

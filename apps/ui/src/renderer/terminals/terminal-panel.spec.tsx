@@ -137,33 +137,35 @@ describe('TerminalPanel', () => {
     expect(client?.resize).toHaveBeenCalledWith(80, 24);
   });
 
-  it('shows a connecting state until the attach delivers its first payload', () => {
+  it('shows a connecting state, then NO badge once the mirror is healthy', () => {
     render();
 
     expect(container.textContent).toContain('Connecting…');
     expect(container.textContent).toContain('connecting');
-    expect(container.textContent).not.toContain('live');
 
     const client = mocks.clients[0];
     act(() => client?.events.onSnapshot?.('history', 'running', null));
 
+    // A healthy live mirror carries no badge at all (the old 'live' label
+    // is deliberately gone) — only exceptional states get labeled.
     expect(container.textContent).not.toContain('Connecting…');
-    expect(container.textContent).toContain('live');
+    expect(container.textContent).not.toContain('connecting');
+    expect(container.querySelector('[data-slot="badge"]')).toBeNull();
+    expect(container.textContent).not.toContain('live');
   });
 
-  it('writes live data and flips the badge on exit', () => {
+  it('writes live data and shows the exited badge on exit', () => {
     render();
     const client = mocks.clients[0];
 
-    act(() => client?.events.onData?.('live'));
-    expect(mocks.term.write).toHaveBeenCalledWith('live');
-    expect(container.textContent).toContain('live');
+    act(() => client?.events.onData?.('output'));
+    expect(mocks.term.write).toHaveBeenCalledWith('output');
 
     act(() => client?.events.onExit?.(0));
     expect(container.textContent).toContain('exited (0)');
   });
 
-  it('shows the live badge when a fresh running session replaces an exited one', () => {
+  it('drops the exited badge when a fresh running session replaces an exited one', () => {
     render();
     const first = mocks.clients[0];
     act(() => first?.events.onExit?.(1));
@@ -189,7 +191,6 @@ describe('TerminalPanel', () => {
     act(() => second?.events.onSnapshot?.('', 'running', null));
 
     expect(container.textContent).not.toContain('exited');
-    expect(container.textContent).toContain('live');
   });
 
   it('shows the gone badge when the attach targets a reaped session', () => {
@@ -199,7 +200,6 @@ describe('TerminalPanel', () => {
     act(() => client?.events.onGone?.());
 
     expect(container.textContent).toContain('gone');
-    expect(container.textContent).not.toContain('live');
   });
 
   it('detaches the client and disposes xterm on unmount', () => {

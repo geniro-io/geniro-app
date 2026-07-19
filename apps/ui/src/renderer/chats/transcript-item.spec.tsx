@@ -194,13 +194,22 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     // note read as a collapse toggle.
     expect(container.textContent).toBe('');
 
+    // A clean finish is silent too — the blocks and status chips narrate it.
     render(
       <TranscriptItem
         item={item('status', { status: 'completed' })}
         nodes={NODES}
       />,
     );
-    expect(container.textContent).toContain('✓ Orchestrator finished');
+    expect(container.textContent).toBe('');
+
+    render(
+      <TranscriptItem
+        item={item('status', { status: 'failed' })}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toContain('✗ Orchestrator failed');
     expect(container.textContent).not.toContain('→');
 
     render(

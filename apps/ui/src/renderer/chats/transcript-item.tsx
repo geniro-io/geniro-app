@@ -144,23 +144,22 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (item.nodeId !== null && nodes?.get(item.nodeId)?.kind === 'trigger') {
         return null;
       }
-      // A start is not news (the block/tool spinners show liveness), and the
-      // "▸" glyph read as a collapse toggle — only settle states narrate.
-      if (status === 'running') {
+      // Starts and clean finishes are not news — the blocks, spinners and
+      // status chips already narrate them; only the EXCEPTIONAL settles
+      // (failed / cancelled / skipped) keep a note.
+      if (status === 'running' || status === 'completed') {
         return null;
       }
       const name = nodeName(item.nodeId) ?? 'run';
       const reason = payloadString(item.payload, 'reason');
       const line =
-        status === 'completed'
-          ? `✓ ${name} finished`
-          : status === 'failed'
-            ? `✗ ${name} failed`
-            : status === 'cancelled'
-              ? `⊘ ${name} cancelled`
-              : status === 'skipped'
-                ? `− ${name} skipped${reason ? ` — ${reason}` : ''}`
-                : `${name} · ${status}`;
+        status === 'failed'
+          ? `✗ ${name} failed`
+          : status === 'cancelled'
+            ? `⊘ ${name} cancelled`
+            : status === 'skipped'
+              ? `− ${name} skipped${reason ? ` — ${reason}` : ''}`
+              : `${name} · ${status}`;
       return <MessageBubble variant="note">{line}</MessageBubble>;
     }
     case 'system': {

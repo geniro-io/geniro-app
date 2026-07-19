@@ -53,7 +53,9 @@ import { ApprovalCard } from './approval-card';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
+import { formatClockTime } from './relative-time';
 import { RenameRunDialog } from './rename-run-dialog';
+import { SenderRow } from './sender-row';
 import { TranscriptEntryView } from './transcript-entry';
 import { buildTurnBlocks, groupTranscript } from './transcript-groups';
 import {
@@ -1238,23 +1240,39 @@ export function Chats({
               }
               const item = entry.item;
               const requestId = payloadString(item.payload, 'id');
+              const askerName =
+                (item.nodeId
+                  ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
+                  : activeRun?.agentKind) ?? 'agent';
               return (
-                <ApprovalCard
+                <SenderRow
                   key={item.id}
-                  toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
-                  input={
-                    (item.payload as { input?: unknown } | null)?.input ?? null
-                  }
-                  verdict={requestId ? (verdicts.get(requestId) ?? null) : null}
-                  expired={
-                    requestId !== null &&
-                    (expiredIds.has(requestId) ||
-                      deadRequestKeys.has(`${item.runId}:${requestId}`))
-                  }
-                  onRespond={(allow, answer) =>
-                    respondApproval(item, allow, answer)
-                  }
-                />
+                  name={askerName}
+                  colorKey={item.nodeId ?? undefined}
+                  time={formatClockTime(item.createdAt)}>
+                  <div className="w-full">
+                    <ApprovalCard
+                      toolName={
+                        payloadString(item.payload, 'toolName') ?? 'tool'
+                      }
+                      input={
+                        (item.payload as { input?: unknown } | null)?.input ??
+                        null
+                      }
+                      verdict={
+                        requestId ? (verdicts.get(requestId) ?? null) : null
+                      }
+                      expired={
+                        requestId !== null &&
+                        (expiredIds.has(requestId) ||
+                          deadRequestKeys.has(`${item.runId}:${requestId}`))
+                      }
+                      onRespond={(allow, answer) =>
+                        respondApproval(item, allow, answer)
+                      }
+                    />
+                  </div>
+                </SenderRow>
               );
             })}
             <div ref={transcriptEndRef} />

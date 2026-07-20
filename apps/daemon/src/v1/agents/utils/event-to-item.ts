@@ -14,6 +14,8 @@ export function mapEventToItem(
   switch (event.type) {
     case 'session':
       return null; // captured into node_state, not a transcript item
+    case 'slash_commands':
+      return null; // captured into the skill-harvest store, not a transcript item
     case 'text':
       return {
         kind: 'message',

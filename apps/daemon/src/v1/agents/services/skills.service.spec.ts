@@ -1,9 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { SkillHarvestStore } from './skill-harvest.store';
 import { SkillsService } from './skills.service';
 
 const dirs: string[] = [];
@@ -41,14 +48,27 @@ function writeCommand(
   writeFileSync(path, content);
 }
 
-function build(): { service: SkillsService; cwd: string; home: string } {
+function build(): {
+  service: SkillsService;
+  cwd: string;
+  home: string;
+  harvest: SkillHarvestStore;
+} {
   const cwd = tempDir('skills-cwd-');
   const home = tempDir('skills-home-');
-  return { service: new SkillsService({ homeDir: home }), cwd, home };
+  const harvest = new SkillHarvestStore({
+    file: join(tempDir('skills-harvest-'), 'claude-skills.json'),
+  });
+  return {
+    service: new SkillsService(harvest, { homeDir: home }),
+    cwd,
+    home,
+    harvest,
+  };
 }
 
 describe('SkillsService', () => {
-  it('lists claude project + user skills and commands, sorted by name', async () => {
+  it('lists claude skills and commands — project before user, each sorted by name', async () => {
     const { service, cwd, home } = build();
     writeSkill(cwd, '.claude', 'deploy', 'name: deploy\ndescription: Ship it');
     writeCommand(
@@ -63,12 +83,6 @@ describe('SkillsService', () => {
     const skills = await service.list('claude', cwd);
     expect(skills).toEqual([
       {
-        name: 'auth',
-        description: 'Check auth flows.',
-        kind: 'command',
-        source: 'user',
-      },
-      {
         name: 'deploy',
         description: 'Ship it',
         kind: 'skill',
@@ -81,12 +95,49 @@ describe('SkillsService', () => {
         source: 'project',
       },
       {
+        name: 'auth',
+        description: 'Check auth flows.',
+        kind: 'command',
+        source: 'user',
+      },
+      {
         name: 'zsh-help',
         description: 'Home skill',
         kind: 'skill',
         source: 'user',
       },
     ]);
+  });
+
+  it('appends the claude session-reported names as trailing cli entries; scanned names keep their metadata', async () => {
+    const { service, cwd, harvest } = build();
+    writeSkill(cwd, '.claude', 'deploy', 'name: deploy\ndescription: Ship it');
+    // The harvest is keyed by the CANONICAL cwd — exactly what the executor
+    // records (its cwd went through resolveValidCwd).
+    harvest.record(realpathSync(cwd), ['compact', 'deploy', 'review']);
+
+    const skills = await service.list('claude', cwd);
+    expect(skills).toEqual([
+      // The scanned entry wins its collision and keeps its description…
+      {
+        name: 'deploy',
+        description: 'Ship it',
+        kind: 'skill',
+        source: 'project',
+      },
+      // …and the CLI-only names (built-ins/plugins) trail as bare entries.
+      { name: 'compact', description: null, kind: 'command', source: 'cli' },
+      { name: 'review', description: null, kind: 'command', source: 'cli' },
+    ]);
+  });
+
+  it('never applies the claude harvest to a cursor-agent listing', async () => {
+    const { service, cwd, harvest } = build();
+    writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
+    harvest.record(realpathSync(cwd), ['compact', 'review']);
+
+    const skills = await service.list('cursor-agent', cwd);
+    expect(skills.map((s) => s.name)).toEqual(['fix']);
   });
 
   it('scans only .cursor/commands for cursor-agent — never .claude', async () => {

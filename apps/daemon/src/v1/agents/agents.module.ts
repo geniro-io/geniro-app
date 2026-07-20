@@ -15,6 +15,7 @@ import { ApprovalRegistry } from './services/approval-registry';
 import { ChatService } from './services/chat.service';
 import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
 import { ProcessRegistry } from './services/process-registry';
+import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 
 /**
@@ -30,8 +31,13 @@ import { SkillsService } from './services/skills.service';
   controllers: [ChatController, SkillsController],
   providers: [
     ChatService,
-    // Factory because the options bag (homeDir) is a test seam, not a DI token.
-    { provide: SkillsService, useFactory: () => new SkillsService() },
+    // Factories because the trailing options bags are test seams, not DI tokens.
+    { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
+    {
+      provide: SkillsService,
+      useFactory: (harvest: SkillHarvestStore) => new SkillsService(harvest),
+      inject: [SkillHarvestStore],
+    },
     AgentEventBus,
     ApprovalRegistry,
     ProcessRegistry,
@@ -60,6 +66,7 @@ import { SkillsService } from './services/skills.service';
     AgentEventBus,
     ApprovalRegistry,
     ProcessRegistry,
+    SkillHarvestStore,
     ItemDao,
     NodeStateDao,
     RunDao,

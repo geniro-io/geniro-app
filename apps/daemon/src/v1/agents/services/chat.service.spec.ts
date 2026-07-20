@@ -19,6 +19,7 @@ import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
 import { ProcessRegistry } from './process-registry';
+import type { SkillHarvestStore } from './skill-harvest.store';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -177,6 +178,10 @@ function setup() {
   const em = {
     fork: () => ({ clear: () => undefined }),
   } as unknown as EntityManager;
+  const skillHarvest = {
+    record: vi.fn(),
+    get: () => null,
+  } as unknown as SkillHarvestStore;
   const service = new ChatService(
     em,
     runDao as unknown as RunDao,
@@ -186,8 +191,18 @@ function setup() {
     registry,
     claude.adapter,
     cursor.adapter as unknown as CursorAdapter,
+    skillHarvest,
   );
-  return { service, runDao, itemDao, nodeDao, published, registry, claude };
+  return {
+    service,
+    runDao,
+    itemDao,
+    nodeDao,
+    published,
+    registry,
+    claude,
+    skillHarvest,
+  };
 }
 
 describe('ChatService', () => {
@@ -261,6 +276,32 @@ describe('ChatService', () => {
     await drain();
 
     expect(nodeDao.saved).toEqual(['new-sid']);
+  });
+
+  it('records a slash_commands report for the run cwd, off the transcript', async () => {
+    const { service, itemDao, claude, skillHarvest } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'slash_commands', commands: ['deploy', 'compact'] });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(skillHarvest.record).toHaveBeenCalledWith(realpathSync(dir), [
+      'deploy',
+      'compact',
+    ]);
+    // The report never becomes a transcript row — no persisted payload
+    // carries the harvested names.
+    expect(
+      itemDao.items.filter((item) => item.payload.includes('compact')),
+    ).toEqual([]);
   });
 
   it('synthesizes a turn_complete when the turn ends with no terminal event', async () => {

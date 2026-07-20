@@ -41,7 +41,9 @@ export function applySkill(skill: AgentSkill): string {
 /**
  * Union the per-agent-kind lists (a workflow trigger can fan out to mixed
  * agents), de-duped by name — first list wins, mirroring the daemon's own
- * first-occurrence-wins collision rule — and sorted for a stable menu.
+ * first-occurrence-wins collision rule. Order is PRESERVED, not re-sorted:
+ * the daemon ranks each list (project → user → cli-reported) so the user's
+ * own skills lead the popup; later lists' new names append in their order.
  */
 export function mergeSkills(
   lists: readonly (readonly AgentSkill[])[],
@@ -54,5 +56,5 @@ export function mergeSkills(
       }
     }
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...byName.values()];
 }

@@ -97,8 +97,9 @@ export interface AgentSkill {
   description: string | null;
   /** A skill directory (SKILL.md) vs a plain command file. */
   kind: 'skill' | 'command';
-  /** Discovered in the project folder vs the user's home dir. */
-  source: 'project' | 'user';
+  /** Discovered in the project folder, the user's home dir, or reported by
+   *  the CLI session itself (claude built-ins + plugin skills). */
+  source: 'project' | 'user' | 'cli';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

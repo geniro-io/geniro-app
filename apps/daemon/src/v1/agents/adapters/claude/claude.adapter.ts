@@ -52,8 +52,21 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
   switch (asString(root.type)) {
     case 'system': {
       if (asString(root.subtype) === 'init') {
+        const events: AgentEvent[] = [];
         const sessionId = asString(root.session_id);
-        return sessionId ? [{ type: 'session', sessionId }] : [];
+        if (sessionId) {
+          events.push({ type: 'session', sessionId });
+        }
+        // init's `slash_commands` is the session's authoritative invokable
+        // set (built-ins + plugins + skills + commands) — harvested for the
+        // composer's `/` autocomplete. Verified live on 2.1.211.
+        const commands = asArray(root.slash_commands)
+          .map((entry) => asString(entry))
+          .filter((entry): entry is string => entry !== null && entry !== '');
+        if (commands.length > 0) {
+          events.push({ type: 'slash_commands', commands });
+        }
+        return events;
       }
       return [];
     }

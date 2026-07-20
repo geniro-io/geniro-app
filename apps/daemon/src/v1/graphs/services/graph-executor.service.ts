@@ -26,6 +26,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
   mapEventToItem,
   terminalStatus,
@@ -128,6 +129,7 @@ export class GraphExecutorService {
     private readonly callBroker: CallBroker,
     private readonly cursorProbe: CursorProbeService,
     private readonly cursorMerge: CursorMcpMergeService,
+    private readonly skillHarvest: SkillHarvestStore,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -762,6 +764,12 @@ export class GraphExecutorService {
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
             await saveSessionId(event.sessionId);
+            return;
+          }
+          if (event.type === 'slash_commands') {
+            // The CLI's own invokable set for this run's cwd — feeds the
+            // composer's `/` autocomplete, never the transcript.
+            this.skillHarvest.record(cwd, event.commands);
             return;
           }
           if (event.type === 'text') {

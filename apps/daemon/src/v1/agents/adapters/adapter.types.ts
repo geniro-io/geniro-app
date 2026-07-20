@@ -52,6 +52,17 @@ export type AgentEvent =
   | { type: 'session'; sessionId: string }
   | {
       /**
+       * The CLI reported the session's invokable slash commands (claude's
+       * `system/init` `slash_commands`: built-ins + plugin skills + user and
+       * project skills/commands, shadowing already resolved — verified live
+       * on 2.1.211). Captured into the skill-harvest store keyed by the
+       * turn's cwd — never a transcript item.
+       */
+      type: 'slash_commands';
+      commands: string[];
+    }
+  | {
+      /**
        * The CLI paused mid-turn asking permission for a tool call (`ask`
        * approval mode). The turn stays blocked until the verdict goes back via
        * `AgentTurnHandle.respondApproval(id, …)`.

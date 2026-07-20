@@ -57,15 +57,21 @@ describe('applySkill', () => {
 });
 
 describe('mergeSkills', () => {
-  it('unions lists sorted by name; the first list wins a name clash', () => {
-    const claude = [skill('deploy', { description: 'from claude' })];
+  it('unions lists preserving order; the first list wins a name clash', () => {
+    // Order is the daemon's ranking (project → user → cli) — merging must
+    // keep it, never re-sort alphabetically.
+    const claude = [
+      skill('zeta', { description: 'ranked first by the daemon' }),
+      skill('deploy', { description: 'from claude' }),
+    ];
     const cursor = [
       skill('deploy', { description: 'from cursor' }),
       skill('audit'),
     ];
     expect(mergeSkills([claude, cursor])).toEqual([
-      skill('audit'),
+      skill('zeta', { description: 'ranked first by the daemon' }),
       skill('deploy', { description: 'from claude' }),
+      skill('audit'),
     ]);
   });
 });

@@ -23,6 +23,7 @@ import { assertChatRun } from '../utils/run-kind';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { AgentEventBus } from './agent-events.bus';
 import { ProcessRegistry } from './process-registry';
+import { SkillHarvestStore } from './skill-harvest.store';
 
 function parsePayload(raw: string): unknown {
   try {
@@ -52,6 +53,7 @@ export class ChatService {
     private readonly registry: ProcessRegistry,
     private readonly claude: ClaudeAdapter,
     private readonly cursor: CursorAdapter,
+    private readonly skillHarvest: SkillHarvestStore,
   ) {}
 
   /**
@@ -245,6 +247,12 @@ export class ChatService {
           enqueue(async () => {
             if (event.type === 'session') {
               await saveSessionId(event.sessionId);
+              return;
+            }
+            if (event.type === 'slash_commands') {
+              // The CLI's own invokable set for this cwd — feeds the
+              // composer's `/` autocomplete, never the transcript.
+              this.skillHarvest.record(cwd, event.commands);
               return;
             }
             const mapped = mapEventToItem(event);

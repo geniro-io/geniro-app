@@ -83,6 +83,20 @@ describe('mapClaudeMessage', () => {
     ).toEqual([{ type: 'session', sessionId: 'sess-1' }]);
   });
 
+  it('harvests init slash_commands alongside the session id, dropping non-strings', () => {
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-1',
+        slash_commands: ['review', 42, '', 'compact'],
+      }),
+    ).toEqual([
+      { type: 'session', sessionId: 'sess-1' },
+      { type: 'slash_commands', commands: ['review', 'compact'] },
+    ]);
+  });
+
   it('ignores non-init system events (hook_*, post_turn_summary)', () => {
     expect(
       mapClaudeMessage({ type: 'system', subtype: 'hook_started' }),

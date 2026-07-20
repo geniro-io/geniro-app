@@ -9,6 +9,7 @@ import type { AgentKind } from '../../runs/runs.types';
 import type { AgentSkillWire } from '../chat.types';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { parseCommandMd, parseSkillMd } from '../utils/skill-markdown';
+import { SkillHarvestStore } from './skill-harvest.store';
 
 /** Recursion bound for the commands walk (namespaced subdirectories). */
 const MAX_COMMAND_DEPTH = 3;
@@ -21,14 +22,29 @@ interface SkillsServiceOptions {
   homeDir?: string;
 }
 
+/** Popup ordering: the user's own entries first, CLI-reported extras last. */
+const SOURCE_RANK: Record<AgentSkillWire['source'], number> = {
+  project: 0,
+  user: 1,
+  cli: 2,
+};
+
 /**
  * Discovers the skills / slash commands a CLI agent can be invoked with in a
- * given working directory — the composer's `/` autocomplete. Purely a read of
- * each CLI's own on-disk convention (nothing is registered daemon-side), so
- * the list is exactly what the spawned agent itself would accept:
- * - `claude`: skills (`.claude/skills/<dir>/SKILL.md`) and commands
- *   (`.claude/commands/**.md`), from the project folder and from `~`.
- * - `cursor-agent`: commands (`.cursor/commands/*.md`), project and `~`.
+ * given working directory — the composer's `/` autocomplete. Two sources:
+ *
+ * - **Disk scan** of each CLI's own on-disk convention (nothing is registered
+ *   daemon-side) — `claude`: skills (`.claude/skills/<dir>/SKILL.md`) and
+ *   commands (`.claude/commands/**.md`), project folder and `~`;
+ *   `cursor-agent`: commands (`.cursor/commands/*.md`), project and `~`.
+ *   The scan is the only source of descriptions and the only pre-first-turn
+ *   source.
+ * - **The CLI's own report** (claude only): the `slash_commands` list its
+ *   `system/init` event carried on a previous turn in this cwd (the
+ *   {@link SkillHarvestStore}) — adds built-ins and plugin skills the scan
+ *   can never see, as `source: 'cli'` entries without descriptions. Scanned
+ *   entries are kept even when a stale harvest misses them: they are on disk
+ *   NOW and the next turn will load them.
  *
  * Unreadable or malformed entries are skipped by design (the parse util's
  * tolerance contract): one broken skill file on disk must not 500 the list.
@@ -37,13 +53,17 @@ interface SkillsServiceOptions {
 export class SkillsService {
   private readonly homeDir: string;
 
-  constructor(options: SkillsServiceOptions = {}) {
+  constructor(
+    private readonly harvest: SkillHarvestStore,
+    options: SkillsServiceOptions = {},
+  ) {
     this.homeDir = options.homeDir ?? homedir();
   }
 
   async list(agent: AgentKind, cwd: string): Promise<AgentSkillWire[]> {
+    const projectDir = resolveValidCwd(cwd);
     const roots = [
-      { source: 'project' as const, dir: resolveValidCwd(cwd) },
+      { source: 'project' as const, dir: projectDir },
       { source: 'user' as const, dir: this.homeDir },
     ];
     const found: AgentSkillWire[] = [];
@@ -76,8 +96,27 @@ export class SkillsService {
         byName.set(skill.name, skill);
       }
     }
+    // Merge the CLI-reported set (claude only): names the scan already found
+    // keep their scanned metadata (kind/source/description); the rest — the
+    // built-ins and plugin skills — join as bare `cli` entries.
+    if (agent === 'claude') {
+      for (const name of this.harvest.get(projectDir) ?? []) {
+        if (!byName.has(name)) {
+          byName.set(name, {
+            name,
+            description: null,
+            kind: 'command',
+            source: 'cli',
+          });
+        }
+      }
+    }
     return [...byName.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort(
+        (a, b) =>
+          SOURCE_RANK[a.source] - SOURCE_RANK[b.source] ||
+          a.name.localeCompare(b.name),
+      )
       .slice(0, MAX_SKILLS);
   }
 

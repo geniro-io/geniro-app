@@ -20,6 +20,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
@@ -325,6 +326,10 @@ function setup(
     reconcileStranded: () => 0,
   } as unknown as CursorMcpMergeService;
   const em = { fork: () => ({ clear: () => {} }) } as unknown as EntityManager;
+  const skillHarvest = {
+    record: vi.fn(),
+    get: () => null,
+  } as unknown as SkillHarvestStore;
   const service = new GraphExecutorService(
     em,
     runDao as unknown as RunDao,
@@ -339,6 +344,7 @@ function setup(
     callBroker,
     cursorProbe,
     cursorMerge,
+    skillHarvest,
     {
       token: 'launch-token',
       version: '0.0.0-test',
@@ -360,6 +366,7 @@ function setup(
     ensureVerdict,
     mergeAcquire,
     mergeReleases,
+    skillHarvest,
   };
 }
 
@@ -579,6 +586,33 @@ describe('GraphExecutorService', () => {
     const seqs = itemDao.items.map((i) => i.seq);
     expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
     expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it("harvests a node turn's slash_commands report for the run cwd, off the transcript", async () => {
+    const { service, claude, itemDao, skillHarvest } = setup();
+    await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+
+    claude.starts[0]!.emit({
+      type: 'slash_commands',
+      commands: ['review', 'compact'],
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(skillHarvest.record).toHaveBeenCalledWith(realpathSync(dir), [
+      'review',
+      'compact',
+    ]);
+    // The report never becomes a transcript row.
+    expect(
+      itemDao.items.filter((item) => item.payload.includes('compact')),
+    ).toEqual([]);
   });
 
   it('fails a node on error and skips its consumers; the run rolls up failed', async () => {

@@ -87,6 +87,20 @@ export interface ChatItem {
   createdAt: string;
 }
 
+/**
+ * One skill / slash command an agent can be invoked with (`/name …`) in a
+ * given working directory — a row of the composer's `/` autocomplete
+ * (mirrors the daemon `AgentSkillWire`).
+ */
+export interface AgentSkill {
+  name: string;
+  description: string | null;
+  /** A skill directory (SKILL.md) vs a plain command file. */
+  kind: 'skill' | 'command';
+  /** Discovered in the project folder vs the user's home dir. */
+  source: 'project' | 'user';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Workflows (mirrors the daemon's v1/graphs wire shapes)
 // ─────────────────────────────────────────────────────────────────────────────

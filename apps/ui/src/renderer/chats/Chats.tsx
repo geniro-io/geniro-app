@@ -21,6 +21,7 @@ import {
 } from 'react';
 
 import type {
+  AgentSkill,
   ChatItem,
   ChatRun,
   CliKind,
@@ -56,6 +57,8 @@ import { ComposerCard } from './composer-card';
 import { formatClockTime } from './relative-time';
 import { RenameRunDialog } from './rename-run-dialog';
 import { SenderRow } from './sender-row';
+import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
+import { SkillMenu } from './skill-menu';
 import { TranscriptEntryView } from './transcript-entry';
 import { buildTurnBlocks, groupTranscript } from './transcript-groups';
 import {
@@ -64,6 +67,7 @@ import {
   payloadString,
   type TranscriptNodeMeta,
 } from './transcript-item';
+import { useAgentSkills } from './use-agent-skills';
 
 // Code-split the terminal mirror: xterm.js (~250KB) must not ride the startup
 // chunk of the always-mounted Chats tab for a panel most sessions never open.
@@ -353,8 +357,11 @@ export function Chats({
 
   // The selected workflow's entry points for the composer's trigger select —
   // a run starts by firing a trigger, so the composer surfaces which one.
+  // Each entry also records which agent KINDS its data edges feed: the run
+  // prompt is delivered to exactly those agents, so the `/` skill
+  // autocomplete resolves through the selected trigger.
   const [triggers, setTriggers] = useState<
-    { id: string; name: string; trigger: string }[]
+    { id: string; name: string; trigger: string; agentKinds: CliKind[] }[]
   >([]);
   const [triggerId, setTriggerId] = useState('');
   useEffect(() => {
@@ -370,6 +377,11 @@ export function Chats({
         if (stale) {
           return;
         }
+        const agentsById = new Map(
+          workflow.nodes
+            .filter((node): node is WorkflowAgentNode => node.kind === 'agent')
+            .map((node) => [node.id, node]),
+        );
         const entries = workflow.nodes
           .filter(
             (node): node is WorkflowTriggerNode => node.kind === 'trigger',
@@ -378,6 +390,18 @@ export function Chats({
             id: node.id,
             name: node.name ?? node.id,
             trigger: node.trigger,
+            agentKinds: [
+              ...new Set(
+                workflow.edges
+                  .filter(
+                    (edge) => edge.from === node.id && edge.kind === 'data',
+                  )
+                  .flatMap((edge) => {
+                    const target = agentsById.get(edge.to);
+                    return target ? [target.agent] : [];
+                  }),
+              ),
+            ],
           }));
         setTriggers(entries);
         setTriggerId(entries[0]?.id ?? '');
@@ -812,6 +836,81 @@ export function Chats({
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
 
+  // ── The composer's `/` skill autocomplete ──────────────────────────────
+  // Which agent kinds the current composer's message reaches, and in which
+  // folder. A new-run workflow target resolves through its SELECTED trigger
+  // (the run prompt is delivered to the agents that trigger feeds); an open
+  // workflow run has a disabled composer, so it gets no kinds at all.
+  const skillKinds = useMemo((): CliKind[] => {
+    if (activeRunId !== null) {
+      return activeRun && activeRun.workflowId === null && activeRun.agentKind
+        ? [activeRun.agentKind]
+        : [];
+    }
+    if (workflowSlug) {
+      return triggers.find((entry) => entry.id === triggerId)?.agentKinds ?? [];
+    }
+    return [agentKind];
+  }, [activeRunId, activeRun, workflowSlug, triggers, triggerId, agentKind]);
+  const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
+  const skills = useAgentSkills(chatApi, skillKinds, skillCwd);
+  const skillQuery = slashQuery(input);
+  const skillMatches = useMemo(
+    () => (skillQuery === null ? [] : filterSkills(skills, skillQuery)),
+    [skills, skillQuery],
+  );
+  const [skillHighlight, setSkillHighlight] = useState(0);
+  // The one query string Escape dismissed — editing the token re-opens.
+  const [dismissedQuery, setDismissedQuery] = useState<string | null>(null);
+  useEffect(() => setSkillHighlight(0), [skillQuery]);
+  const skillMenuOpen =
+    skillQuery !== null &&
+    skillQuery !== dismissedQuery &&
+    skillMatches.length > 0;
+  // Narrowing the query can shrink the list under the highlight — clamp.
+  const highlightedIndex = Math.min(skillHighlight, skillMatches.length - 1);
+  const pickSkill = useCallback((skill: AgentSkill): void => {
+    // `/name ` no longer parses as a bare slash token, so picking closes
+    // the menu by construction; the caret lands ready for arguments.
+    setInput(applySkill(skill));
+  }, []);
+  /** Menu-first key protocol for both composer textareas; true = consumed. */
+  const handleSkillMenuKeys = (
+    event: React.KeyboardEvent<HTMLTextAreaElement>,
+  ): boolean => {
+    if (!skillMenuOpen) {
+      return false;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      setSkillHighlight(
+        (highlightedIndex + delta + skillMatches.length) % skillMatches.length,
+      );
+      return true;
+    }
+    if (
+      event.key === 'Tab' ||
+      (event.key === 'Enter' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.shiftKey)
+    ) {
+      event.preventDefault();
+      const highlighted = skillMatches[highlightedIndex];
+      if (highlighted) {
+        pickSkill(highlighted);
+      }
+      return true;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setDismissedQuery(skillQuery);
+      return true;
+    }
+    return false;
+  };
+
   // The open PTY mirror. Session-scoped, NOT run-scoped: switching to another
   // run in the sidebar keeps the drawer open (the title names its session), so
   // a mirror can be watched while browsing other transcripts. Closing the
@@ -1074,93 +1173,106 @@ export function Chats({
             <h2 className="text-center text-xl font-semibold tracking-tight">
               What are we building?
             </h2>
-            <ComposerCard>
-              <Textarea
-                value={input}
-                rows={4}
-                aria-label="Task for the new run"
-                className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                placeholder={
-                  workflowSlug
-                    ? 'Describe the task for the workflow team…'
-                    : 'Message the agent…'
-                }
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter' &&
-                    (event.metaKey || event.ctrlKey)
-                  ) {
-                    event.preventDefault();
-                    void send();
+            <div className="relative">
+              {skillMenuOpen ? (
+                <SkillMenu
+                  skills={skillMatches}
+                  highlightIndex={highlightedIndex}
+                  onSelect={pickSkill}
+                  onHighlight={setSkillHighlight}
+                />
+              ) : null}
+              <ComposerCard>
+                <Textarea
+                  value={input}
+                  rows={4}
+                  aria-label="Task for the new run"
+                  className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                  placeholder={
+                    workflowSlug
+                      ? 'Describe the task for the workflow team…'
+                      : 'Message the agent…'
                   }
-                }}
-              />
-              <div className="flex flex-wrap items-center gap-1.5 p-2">
-                <Select
-                  value={target}
-                  className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  onChange={(event) => changeTarget(event.target.value)}
-                  aria-label="Agent or workflow for new runs">
-                  <optgroup label="Agents">
-                    {CLI_KINDS.map((kind) => (
-                      <option key={kind} value={kind}>
-                        {kind}
-                      </option>
-                    ))}
-                  </optgroup>
-                  {workflows.length > 0 ? (
-                    <optgroup label="Workflows">
-                      {workflows.map((wf) => (
-                        <option key={wf.slug} value={`wf:${wf.slug}`}>
-                          {wf.name}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (handleSkillMenuKeys(event)) {
+                      return;
+                    }
+                    if (
+                      event.key === 'Enter' &&
+                      (event.metaKey || event.ctrlKey)
+                    ) {
+                      event.preventDefault();
+                      void send();
+                    }
+                  }}
+                />
+                <div className="flex flex-wrap items-center gap-1.5 p-2">
+                  <Select
+                    value={target}
+                    className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    onChange={(event) => changeTarget(event.target.value)}
+                    aria-label="Agent or workflow for new runs">
+                    <optgroup label="Agents">
+                      {CLI_KINDS.map((kind) => (
+                        <option key={kind} value={kind}>
+                          {kind}
                         </option>
                       ))}
                     </optgroup>
-                  ) : null}
-                </Select>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground"
-                  title={folder ?? undefined}
-                  aria-label="Choose the folder for new chats"
-                  onClick={() => void pickFolder()}>
-                  <FolderOpen className="size-3.5 shrink-0" />
-                  <span className="truncate">
-                    {folder ? folderName(folder) : 'Choose folder…'}
-                  </span>
-                </Button>
-                {workflowSlug && triggers.length > 0 ? (
-                  <Select
-                    value={triggerId}
-                    className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    onChange={(event) => setTriggerId(event.target.value)}
-                    aria-label="Trigger the run starts from">
-                    {triggers.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {`${entry.name} · ${entry.trigger} trigger`}
-                      </option>
-                    ))}
+                    {workflows.length > 0 ? (
+                      <optgroup label="Workflows">
+                        {workflows.map((wf) => (
+                          <option key={wf.slug} value={`wf:${wf.slug}`}>
+                            {wf.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                   </Select>
-                ) : null}
-                <Button
-                  type="button"
-                  size="icon"
-                  className="ml-auto size-8 rounded-full"
-                  disabled={!input.trim() || streaming}
-                  aria-label={workflowSlug ? 'Start run' : 'Send'}
-                  title={workflowSlug ? 'Start run' : 'Send'}
-                  onClick={() => void send()}>
-                  {workflowSlug ? (
-                    <Zap className="size-4 shrink-0" />
-                  ) : (
-                    <ArrowUp className="size-4 shrink-0" />
-                  )}
-                </Button>
-              </div>
-            </ComposerCard>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground"
+                    title={folder ?? undefined}
+                    aria-label="Choose the folder for new chats"
+                    onClick={() => void pickFolder()}>
+                    <FolderOpen className="size-3.5 shrink-0" />
+                    <span className="truncate">
+                      {folder ? folderName(folder) : 'Choose folder…'}
+                    </span>
+                  </Button>
+                  {workflowSlug && triggers.length > 0 ? (
+                    <Select
+                      value={triggerId}
+                      className="h-8 w-auto min-w-0 rounded-lg border-0 bg-transparent px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      onChange={(event) => setTriggerId(event.target.value)}
+                      aria-label="Trigger the run starts from">
+                      {triggers.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {`${entry.name} · ${entry.trigger} trigger`}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="icon"
+                    className="ml-auto size-8 rounded-full"
+                    disabled={!input.trim() || streaming}
+                    aria-label={workflowSlug ? 'Start run' : 'Send'}
+                    title={workflowSlug ? 'Start run' : 'Send'}
+                    onClick={() => void send()}>
+                    {workflowSlug ? (
+                      <Zap className="size-4 shrink-0" />
+                    ) : (
+                      <ArrowUp className="size-4 shrink-0" />
+                    )}
+                  </Button>
+                </div>
+              </ComposerCard>
+            </div>
             {/* Suggestion chips: recent folders + library workflows — one
                 click fills the matching composer control. */}
             {recentFolders.some((f) => f !== folder) ||
@@ -1323,121 +1435,136 @@ export function Chats({
             {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
                 chips — a run's identity can't change after creation. */}
-            <ComposerCard>
-              <Textarea
-                value={input}
-                rows={2}
-                aria-label="Message the agent"
-                disabled={activeRun?.workflowId != null}
-                className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                placeholder={
-                  activeRun?.workflowId
-                    ? 'Workflow runs take one task — press + to start another.'
-                    : streaming
-                      ? 'Agent is working — your message will queue…'
-                      : 'Message the agent…'
-                }
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter' &&
-                    (event.metaKey || event.ctrlKey)
-                  ) {
-                    event.preventDefault();
-                    void sendFollowUp();
+            <div className="relative">
+              {skillMenuOpen ? (
+                <SkillMenu
+                  skills={skillMatches}
+                  highlightIndex={highlightedIndex}
+                  onSelect={pickSkill}
+                  onHighlight={setSkillHighlight}
+                />
+              ) : null}
+              <ComposerCard>
+                <Textarea
+                  value={input}
+                  rows={2}
+                  aria-label="Message the agent"
+                  disabled={activeRun?.workflowId != null}
+                  className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                  placeholder={
+                    activeRun?.workflowId
+                      ? 'Workflow runs take one task — press + to start another.'
+                      : streaming
+                        ? 'Agent is working — your message will queue…'
+                        : 'Message the agent…'
                   }
-                }}
-              />
-              <div className="flex flex-wrap items-center gap-1.5 p-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled
-                  className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
-                  {activeRun?.workflowId ? (
-                    <>
-                      <WorkflowIcon className="size-3.5 shrink-0" />
-                      <span className="max-w-52 truncate">
-                        {activeRun
-                          ? runLabel(
-                              { ...activeRun, title: null },
-                              workflowNames,
-                            )
-                          : ''}
-                      </span>
-                    </>
-                  ) : (
-                    (activeRun?.agentKind ?? 'agent')
-                  )}
-                </Button>
-                {activeRun?.cwd ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled
-                    title={activeRun.cwd}
-                    className="h-8 max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
-                    <FolderOpen className="size-3.5 shrink-0" />
-                    <span className="truncate">
-                      {folderName(activeRun.cwd)}
-                    </span>
-                  </Button>
-                ) : null}
-                {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (handleSkillMenuKeys(event)) {
+                      return;
+                    }
+                    if (
+                      event.key === 'Enter' &&
+                      (event.metaKey || event.ctrlKey)
+                    ) {
+                      event.preventDefault();
+                      void sendFollowUp();
+                    }
+                  }}
+                />
+                <div className="flex flex-wrap items-center gap-1.5 p-2">
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     disabled
                     className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
-                    <Zap className="size-3.5 shrink-0" />
-                    <span className="max-w-52 truncate">
-                      {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                    </span>
+                    {activeRun?.workflowId ? (
+                      <>
+                        <WorkflowIcon className="size-3.5 shrink-0" />
+                        <span className="max-w-52 truncate">
+                          {activeRun
+                            ? runLabel(
+                                { ...activeRun, title: null },
+                                workflowNames,
+                              )
+                            : ''}
+                        </span>
+                      </>
+                    ) : (
+                      (activeRun?.agentKind ?? 'agent')
+                    )}
                   </Button>
-                ) : null}
-                <span className="ml-auto flex items-center gap-1.5">
-                  {streaming ? (
-                    <>
-                      {input.trim() && activeRun?.workflowId == null ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          className="size-8 rounded-full"
-                          aria-label="Queue"
-                          title="Send automatically when the current turn ends"
-                          onClick={() => void sendFollowUp()}>
-                          <ListPlus className="size-4 shrink-0" />
-                        </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="size-8 rounded-full"
-                        aria-label="Stop"
-                        title="Stop the current turn"
-                        onClick={() => void cancel()}>
-                        <Square className="size-3.5 shrink-0" />
-                      </Button>
-                    </>
-                  ) : (
+                  {activeRun?.cwd ? (
                     <Button
                       type="button"
-                      size="icon"
-                      className="size-8 rounded-full"
-                      aria-label="Send"
-                      title="Send"
-                      disabled={!input.trim() || activeRun?.workflowId != null}
-                      onClick={() => void sendFollowUp()}>
-                      <ArrowUp className="size-4 shrink-0" />
+                      variant="ghost"
+                      size="sm"
+                      disabled
+                      title={activeRun.cwd}
+                      className="h-8 max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
+                      <FolderOpen className="size-3.5 shrink-0" />
+                      <span className="truncate">
+                        {folderName(activeRun.cwd)}
+                      </span>
                     </Button>
-                  )}
-                </span>
-              </div>
-            </ComposerCard>
+                  ) : null}
+                  {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled
+                      className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
+                      <Zap className="size-3.5 shrink-0" />
+                      <span className="max-w-52 truncate">
+                        {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                      </span>
+                    </Button>
+                  ) : null}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {streaming ? (
+                      <>
+                        {input.trim() && activeRun?.workflowId == null ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            className="size-8 rounded-full"
+                            aria-label="Queue"
+                            title="Send automatically when the current turn ends"
+                            onClick={() => void sendFollowUp()}>
+                            <ListPlus className="size-4 shrink-0" />
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="size-8 rounded-full"
+                          aria-label="Stop"
+                          title="Stop the current turn"
+                          onClick={() => void cancel()}>
+                          <Square className="size-3.5 shrink-0" />
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="icon"
+                        className="size-8 rounded-full"
+                        aria-label="Send"
+                        title="Send"
+                        disabled={
+                          !input.trim() || activeRun?.workflowId != null
+                        }
+                        onClick={() => void sendFollowUp()}>
+                        <ArrowUp className="size-4 shrink-0" />
+                      </Button>
+                    )}
+                  </span>
+                </div>
+              </ComposerCard>
+            </div>
           </div>
         </section>
       )}

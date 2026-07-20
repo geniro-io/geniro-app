@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   cancel: vi.fn(),
   createChat: vi.fn(),
   rename: vi.fn(),
+  listSkills: vi.fn(),
 }));
 // A constructable mock (an arrow fn can't be `new`-ed) whose instance exposes
 // the shared spies — so `new ChatApi(handle)` inside the component returns them.
@@ -225,6 +226,7 @@ beforeEach(() => {
   api.cancel.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
   api.rename.mockReset();
+  api.listSkills.mockReset().mockResolvedValue([]);
   workflowApi.list.mockReset().mockResolvedValue([]);
   workflowApi.get.mockReset().mockResolvedValue({
     slug: 'review-team',
@@ -2018,5 +2020,137 @@ describe('Chats sidebar list', () => {
       )!.textContent!;
     expect(rowText('Done chat')).toContain('5m');
     expect(rowText('Live chat')).not.toContain('5m');
+  });
+});
+
+describe('Chats skill autocomplete', () => {
+  const SKILLS = [
+    {
+      name: 'deploy',
+      description: 'Ship the app',
+      kind: 'skill' as const,
+      source: 'project' as const,
+    },
+    {
+      name: 'review',
+      description: null,
+      kind: 'command' as const,
+      source: 'user' as const,
+    },
+  ];
+
+  /** Type `value` into the (only) composer textarea through React's setter. */
+  async function type(textarea: HTMLTextAreaElement, value: string) {
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, value);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function keydown(textarea: HTMLTextAreaElement, key: string) {
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      );
+    });
+  }
+
+  it('lists the open chat agent\'s skills on "/", filters, and inserts the pick on Enter', async () => {
+    api.listSkills.mockResolvedValue(SKILLS);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // The list is fetched for the RUN's agent in the RUN's folder.
+    expect(api.listSkills).toHaveBeenCalledWith('claude', '/proj');
+
+    const textarea = container.querySelector('textarea')!;
+    await type(textarea, '/');
+    const listbox = container.querySelector('[role="listbox"]')!;
+    expect(listbox).not.toBeNull();
+    expect(listbox.textContent).toContain('/deploy');
+    expect(listbox.textContent).toContain('Ship the app');
+    expect(listbox.textContent).toContain('/review');
+
+    // Typing narrows the list…
+    await type(textarea, '/rev');
+    expect(
+      container.querySelector('[role="listbox"]')!.textContent,
+    ).not.toContain('/deploy');
+
+    // …and Enter inserts the highlighted skill (never sends, never newlines).
+    await keydown(textarea, 'Enter');
+    expect(textarea.value).toBe('/review ');
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('closes on Escape for that query, stays closed for arguments, reopens on edit', async () => {
+    api.listSkills.mockResolvedValue(SKILLS);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const textarea = container.querySelector('textarea')!;
+    await type(textarea, '/de');
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    await keydown(textarea, 'Escape');
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    // Same dismissed query stays closed; editing the token reopens.
+    await type(textarea, '/dep');
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    // Arguments after the command never show the menu.
+    await type(textarea, '/deploy now');
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+  });
+
+  it("resolves a workflow target's skills through the selected trigger's downstream agents", async () => {
+    api.listSkills.mockResolvedValue([]);
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        edgeCount: 1,
+        agentCounts: [],
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.get.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'coder',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+        ],
+        edges: [{ from: 'start', to: 'coder', kind: 'data' }],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    // The skills fetched are the TRIGGER's downstream agent's, not the
+    // composer's bare-agent default.
+    expect(api.listSkills).toHaveBeenCalledWith('cursor-agent', '/proj');
   });
 });

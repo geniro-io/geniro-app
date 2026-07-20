@@ -1,4 +1,9 @@
-import type { ChatItem, ChatRun, CliKind } from '../shared/contracts';
+import type {
+  AgentSkill,
+  ChatItem,
+  ChatRun,
+  CliKind,
+} from '../shared/contracts';
 import { DaemonRestApi } from './daemon-rest';
 
 /**
@@ -42,6 +47,12 @@ export class ChatApi extends DaemonRestApi {
       `/v1/chats/${encodeURIComponent(runId)}/messages`,
       { text },
     );
+  }
+
+  /** Skills / slash commands `agentKind` accepts in `cwd` (`/` autocomplete). */
+  listSkills(agentKind: CliKind, cwd: string): Promise<AgentSkill[]> {
+    const query = `agent=${encodeURIComponent(agentKind)}&cwd=${encodeURIComponent(cwd)}`;
+    return this.request('GET', `/v1/agents/skills?${query}`);
   }
 
   cancel(runId: string): Promise<{ cancelled: boolean }> {

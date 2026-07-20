@@ -6,6 +6,7 @@ import { environment } from '../../environments';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CursorAdapter } from './adapters/cursor/cursor.adapter';
 import { ChatController } from './controllers/chat.controller';
+import { SkillsController } from './controllers/skills.controller';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
@@ -14,6 +15,7 @@ import { ApprovalRegistry } from './services/approval-registry';
 import { ChatService } from './services/chat.service';
 import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
 import { ProcessRegistry } from './services/process-registry';
+import { SkillsService } from './services/skills.service';
 
 /**
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
@@ -25,9 +27,11 @@ import { ProcessRegistry } from './services/process-registry';
  * events out to per-run Socket.IO rooms.
  */
 @Module({
-  controllers: [ChatController],
+  controllers: [ChatController, SkillsController],
   providers: [
     ChatService,
+    // Factory because the options bag (homeDir) is a test seam, not a DI token.
+    { provide: SkillsService, useFactory: () => new SkillsService() },
     AgentEventBus,
     ApprovalRegistry,
     ProcessRegistry,

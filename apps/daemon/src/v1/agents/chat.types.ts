@@ -37,6 +37,22 @@ export interface ItemWire {
   createdAt: string;
 }
 
+/**
+ * One skill / slash command a CLI agent can be invoked with (`/name …` in the
+ * message), discovered on disk for a given working directory — the rows of the
+ * composer's `/` autocomplete. `kind` separates a skill directory
+ * (`.claude/skills/<dir>/SKILL.md`) from a command file
+ * (`.claude/commands/**.md`, `.cursor/commands/*.md`); `source` says whether
+ * it came from the project folder or the user's home dir. The UI mirrors this
+ * in `shared/contracts.ts`.
+ */
+export interface AgentSkillWire {
+  name: string;
+  description: string | null;
+  kind: 'skill' | 'command';
+  source: 'project' | 'user';
+}
+
 /** One persisted item, ready to fan out to its run's WS room (persist-then-emit). */
 export interface RunItemEvent {
   runId: string;

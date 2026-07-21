@@ -26,7 +26,7 @@ const geniro = {
 
 let container: HTMLDivElement;
 let root: Root | null;
-let onDone: ReturnType<typeof vi.fn>;
+let onDone: ReturnType<typeof vi.fn<() => void>>;
 
 async function mount(): Promise<void> {
   container = document.createElement('div');
@@ -85,7 +85,7 @@ function pathInput(kind: CliKind): HTMLInputElement | null {
 }
 
 beforeEach(() => {
-  onDone = vi.fn();
+  onDone = vi.fn<() => void>();
   geniro.detectClis
     .mockReset()
     .mockResolvedValue([det('claude'), det('cursor-agent')]);

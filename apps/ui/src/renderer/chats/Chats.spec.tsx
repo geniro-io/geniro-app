@@ -545,21 +545,24 @@ describe('Chats reconnect seam', () => {
     expect(composerButton(container, 'Stop')).toBeNull();
   });
 
-  it('activates a run via Enter keyboard activation of the list row', async () => {
+  it('activates a run via its real activation button (keyboard-activatable by native button semantics)', async () => {
     api.getHistory.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client } = makeClient();
     const container = await mount(client);
     const li = [...container.querySelectorAll('li')].find((el) =>
       el.textContent?.includes('My chat'),
     );
+    // The activation surface is a REAL <button> — Enter/Space fire click as
+    // native button behavior (which jsdom does not synthesize), so pin the
+    // element identity plus its click-driven activation.
+    const activate = li?.querySelector<HTMLButtonElement>('button');
+    expect(activate?.tagName).toBe('BUTTON');
     await act(async () => {
-      li?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-      );
+      activate?.click();
     });
 
-    const active = [...container.querySelectorAll('li')].find(
-      (el) => el.getAttribute('aria-current') === 'true',
+    const active = [...container.querySelectorAll('li')].find((el) =>
+      el.querySelector('[aria-current="true"]'),
     );
     expect(active?.textContent).toContain('My chat');
     expect(container.textContent).toContain('hi');

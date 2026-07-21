@@ -86,13 +86,16 @@ describe('ChatListItem', () => {
   });
 
   it('shows the workflow glyph only for workflow runs', async () => {
+    // The label row is the content stack's first span (the li's first child
+    // is the activation overlay button): only the truncated label + the
+    // rename pencil for a 1:1 chat; a workflow run gets one leading glyph.
     const chat = await mount(<ChatListItem {...props()} />);
-    // The label row holds only the truncated label + the rename pencil for a
-    // 1:1 chat; a workflow run gets one leading glyph.
-    const chatIcons = chat.querySelectorAll('li > span:first-child > svg');
+    const chatIcons = chat.querySelectorAll('li > div > span:first-child > svg');
     expect(chatIcons.length).toBe(0);
     const wf = await mount(<ChatListItem {...props({ isWorkflow: true })} />);
-    expect(wf.querySelectorAll('li > span:first-child > svg').length).toBe(1);
+    expect(
+      wf.querySelectorAll('li > div > span:first-child > svg').length,
+    ).toBe(1);
   });
 
   it('rename button fires onRename WITHOUT activating the row', async () => {

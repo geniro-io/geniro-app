@@ -90,18 +90,27 @@ class FakeItemDao {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
   }
-  // Mirrors the real DAO: text of the highest-seq `message` item per run.
+  // Mirrors the real DAO (pinned by item.dao.spec.ts): per run, ONLY the
+  // highest-seq `message` item is consulted — a text-less or malformed head
+  // yields no preview (no fallback to earlier messages, no throw).
   async latestMessageTextPerRun(
     runIds: string[],
   ): Promise<Map<string, string>> {
     const previews = new Map<string, string>();
-    for (const item of [...this.items].sort((a, b) => a.seq - b.seq)) {
-      if (item.kind !== 'message' || !runIds.includes(item.runId)) {
+    for (const runId of runIds) {
+      const head = this.items
+        .filter((i) => i.runId === runId && i.kind === 'message')
+        .sort((a, b) => b.seq - a.seq)[0];
+      if (!head) {
         continue;
       }
-      const text = (JSON.parse(item.payload) as { text?: string }).text;
-      if (typeof text === 'string') {
-        previews.set(item.runId, text);
+      try {
+        const text = (JSON.parse(head.payload) as { text?: string }).text;
+        if (typeof text === 'string') {
+          previews.set(runId, text);
+        }
+      } catch {
+        // Malformed head payload — run stays absent, like the real query.
       }
     }
     return previews;

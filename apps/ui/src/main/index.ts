@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, shell } from 'electron';
 
-import { IPC } from '../shared/contracts';
+import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
@@ -155,17 +155,7 @@ function main(): void {
 
     void supervisor
       .start()
-      .then((handle) => {
-        // The window can be destroyed before its 'closed' handler nulls the
-        // ref — a send() into that gap must not mislog as a start failure.
-        try {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send(IPC.onDaemonRestarted, handle);
-          }
-        } catch (err) {
-          console.error('[ui] daemon-ready notify failed:', err);
-        }
-      })
+      .then((handle) => notifyDaemonReady(mainWindow, handle))
       .catch((err: unknown) => {
         // Surface the failure but keep the window — the renderer renders a
         // disconnected state rather than the app failing to launch.

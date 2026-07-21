@@ -13,8 +13,8 @@
     "check-types": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-    "test": "vitest run --passWithNoTests",
-    "test:unit": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@geniro/daemon": "workspace:*",

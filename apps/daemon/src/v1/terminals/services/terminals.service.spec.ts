@@ -4,7 +4,7 @@ import { TerminalsService } from './terminals.service';
 
 function build(overrides: {
   run?: Record<string, unknown> | null;
-  nodeState?: { agentSessionId: string | null } | null;
+  nodeState?: { agentSessionId: string | null; agentKind?: string } | null;
   workflow?: {
     nodes: { id: string; kind?: string; agent?: string }[];
   };
@@ -123,7 +123,7 @@ describe('TerminalsService', () => {
     expect(pty.create).not.toHaveBeenCalled();
   });
 
-  it('resolves a workflow node agent from the YAML definition', async () => {
+  it('resolves a LEGACY (unstamped) workflow node agent from the YAML definition', async () => {
     const { service, pty } = build({
       run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
       nodeState: { agentSessionId: 'sess-n' },
@@ -138,6 +138,30 @@ describe('TerminalsService', () => {
         args: ['--resume', 'sess-n'],
       }),
     );
+  });
+
+  it('resolves a stamped node from run history even after the node left the workflow YAML', async () => {
+    // F39: run history must not depend on the live library definition —
+    // deleting (or re-agenting) a node after runs exist previously broke its
+    // past runs' terminals. The stamped agent_kind row is the record.
+    const { service, pty, workflowStore } = build({
+      run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
+      nodeState: { agentSessionId: 'sess-n', agentKind: 'claude' },
+      workflow: { nodes: [] },
+    });
+
+    await service.createForRun({ runId: 'run-2', nodeId: 'agent-1' });
+
+    expect(pty.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: 'agent-1',
+        command: 'claude',
+        args: ['--resume', 'sess-n'],
+      }),
+    );
+    // The stamp fully replaces the YAML lookup — the current definition is
+    // never consulted for a stamped historical node.
+    expect(workflowStore.get).not.toHaveBeenCalled();
   });
 
   it('requires nodeId for a workflow run', async () => {
@@ -214,7 +238,7 @@ describe('TerminalsService', () => {
   });
 
   it('an explicit sessionId mirrors THAT thread instead of node_state', async () => {
-    const { service, pty, nodeStateDao } = build({
+    const { service, pty } = build({
       run: { id: 'run-1', workflowId: 'wf', cwd: '/tmp' },
       nodeState: { agentSessionId: 'sess-latest' },
       workflow: { nodes: [{ id: 'n1', kind: 'agent', agent: 'claude' }] },
@@ -226,14 +250,14 @@ describe('TerminalsService', () => {
       sessionId: 'sess-call-7',
     });
 
+    // The node_state row is still read (its agent_kind stamp resolves the
+    // CLI), but its LATEST session id must never displace the named thread.
     expect(pty.create).toHaveBeenCalledWith(
       expect.objectContaining({
         args: ['--resume', 'sess-call-7'],
         resumeSessionId: 'sess-call-7',
       }),
     );
-    // node_state (the node's LATEST session) must not even be consulted.
-    expect(nodeStateDao.getByRunNode).not.toHaveBeenCalled();
     expect(pty.findRunning).toHaveBeenCalledWith('run-1', 'n1', 'sess-call-7');
   });
 

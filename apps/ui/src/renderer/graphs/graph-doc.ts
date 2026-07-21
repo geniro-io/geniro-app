@@ -103,6 +103,32 @@ export function fromFlow(
   };
 }
 
+/**
+ * The canvas serialized exactly as Save would write it — the builder's
+ * dirty-check baseline (compare the snapshot taken at load/save against the
+ * live canvas). Serialize-and-compare beats per-change tracking: selection
+ * and other no-op canvas events cannot false-flag, and an edit undone by
+ * hand reads clean again.
+ */
+export function canvasSnapshot(
+  name: string,
+  description: string,
+  nodes: readonly GraphFlowNode[],
+  edges: readonly Edge[],
+): string {
+  const trimmed = description.trim();
+  return JSON.stringify(
+    fromFlow(
+      {
+        name: name.trim() || 'workflow',
+        ...(trimmed ? { description: trimmed } : {}),
+      },
+      nodes,
+      edges,
+    ),
+  );
+}
+
 /** A fresh node id not colliding with the existing set — prefixed by kind
  *  (`agent-1`, `trigger-1`, …). */
 export function nextNodeId(

@@ -75,6 +75,20 @@ describe('Settings updates section', () => {
     expect(toggle?.getAttribute('aria-checked')).toBe('false');
   });
 
+  it('names the toggle through a real associated label, not a duplicate button', async () => {
+    await mount();
+
+    const toggle = container.querySelector('[role="switch"]')!;
+    const label = container.querySelector<HTMLLabelElement>(
+      `label[for="${toggle.id}"]`,
+    );
+    expect(toggle.id).not.toBe('');
+    expect(label?.textContent).toBe('Check for app updates on launch');
+    // Exactly one switch: the old raw-button label doubled the toggle surface
+    // with no state semantics for assistive tech.
+    expect(container.querySelectorAll('[role="switch"]')).toHaveLength(1);
+  });
+
   it('does not overwrite a user toggle when the initial settings read resolves late', async () => {
     let resolveSettings!: (value: SettingsShape) => void;
     geniro.getSettings.mockReturnValueOnce(

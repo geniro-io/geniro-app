@@ -433,6 +433,27 @@ describe('DaemonSupervisor.restart', () => {
     }
   });
 
+  it('restart() overlapping a mid-boot start() waits for the boot instead of disowning the child', async () => {
+    const h = harness({ pidfile: null, healthy: true });
+
+    const started = h.supervisor.start();
+    // The spawn already fired; the health poll is in flight.
+    expect(h.spawned).toHaveLength(1);
+    const restarted = h.supervisor.restart();
+
+    await started;
+    const handle = await restarted;
+
+    // The freshly booted child is properly terminated as part of the restart
+    // — never silently nulled out mid-boot (which orphaned it: no signal, no
+    // ownership, invisible to stop()).
+    expect(
+      h.kills.some((k) => k.pid === h.child.pid && k.signal === 'SIGTERM'),
+    ).toBe(true);
+    expect(h.spawned).toHaveLength(2);
+    expect(handle).not.toBeNull();
+  });
+
   it('supersedes a mid-flight restart: the overlapping restart() joins the same promise and the surviving daemon is spawned from the later settings', async () => {
     vi.useFakeTimers();
     try {

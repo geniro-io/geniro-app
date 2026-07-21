@@ -71,6 +71,7 @@ export class TerminalsService {
     const { agentKind, stateNodeId, wireNodeId } = await this.resolveNode(
       run,
       nodeId,
+      em,
     );
     const resumeSessionId =
       input.sessionId ??
@@ -140,12 +141,15 @@ export class TerminalsService {
 
   /**
    * A chat run carries its agent kind on the row and keys `node_state` under
-   * the single-agent constant; a workflow run carries agent kinds per node in
-   * its YAML definition, so the caller must name the node.
+   * the single-agent constant; a workflow run's node kind comes from the
+   * `agent_kind` stamped on its `node_state` row at turn start — run history,
+   * immune to later workflow-YAML edits. Only legacy rows (stamped before the
+   * column existed) fall back to the CURRENT YAML definition.
    */
   private async resolveNode(
     run: Run,
     nodeId: string | null,
+    em: EntityManager,
   ): Promise<{
     agentKind: AgentKind;
     stateNodeId: string;
@@ -169,6 +173,11 @@ export class TerminalsService {
         'TERMINAL_NODE_REQUIRED',
         `run ${run.id} is a workflow run — pass the nodeId to mirror`,
       );
+    }
+    const stamped = (await this.nodeStateDao.getByRunNode(run.id, nodeId, em))
+      ?.agentKind;
+    if (stamped) {
+      return { agentKind: stamped, stateNodeId: nodeId, wireNodeId: nodeId };
     }
     const { workflow } = await this.workflowStore.get(run.workflowId);
     const node = workflow.nodes.find((n) => n.id === nodeId);

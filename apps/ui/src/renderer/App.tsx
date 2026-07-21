@@ -41,6 +41,13 @@ function helloVersion(data: unknown): string | null {
 export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>('loading');
   const [view, setView] = useState<AppView>('chats');
+  // Graphs mounts lazily on first visit, then stays mounted (hidden) like
+  // Chats — unmounting on nav used to silently discard every unsaved builder
+  // edit when the user glanced at Chats/Settings mid-composition.
+  const [graphsMounted, setGraphsMounted] = useState(false);
+  if (view === 'graphs' && !graphsMounted) {
+    setGraphsMounted(true);
+  }
   const [connected, setConnected] = useState(false);
   const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
   const [handle, setHandle] = useState<DaemonHandle | null>(null);
@@ -136,7 +143,9 @@ export function App(): React.JSX.Element {
           )}
         </div>
         <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
-          {view === 'graphs' ? <Graphs handle={handle} /> : null}
+          <div className={cn('h-full', view !== 'graphs' && 'hidden')}>
+            {graphsMounted ? <Graphs handle={handle} /> : null}
+          </div>
           {view === 'settings' ? <Settings /> : null}
         </Suspense>
       </main>

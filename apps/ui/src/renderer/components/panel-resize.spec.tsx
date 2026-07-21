@@ -118,6 +118,25 @@ describe('usePanelWidth (left-edge handle)', () => {
     });
     expect(width()).toBe(420);
   });
+
+  it('clamps a persisted width from outside the current bounds on restore', () => {
+    // Bounds can tighten between versions (or the stored value be hand-edited)
+    // — restoring it raw would mount the panel outside what the handle can
+    // ever drag back to.
+    localStorage.setItem('test.rightPanelWidth', '9000');
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    expect(width()).toBe(480);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    localStorage.setItem('test.rightPanelWidth', '50');
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    expect(width()).toBe(240);
+  });
 });
 
 describe('PanelResizeHandle keyboard (window-splitter pattern)', () => {

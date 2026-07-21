@@ -29,7 +29,8 @@ const SCROLLBACK_CAP = 512 * 1024;
  */
 const KILL_ESCALATION_MS = 3000;
 /** How long an exited session's final screen stays re-attachable before eviction. */
-const EXITED_SESSION_TTL_MS = 30 * 60 * 1000;
+// Exported so the spec pins eviction against the live constant.
+export const EXITED_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
@@ -96,6 +97,12 @@ interface PtySession {
   createdAt: number;
   killTimer?: NodeJS.Timeout;
   evictTimer?: NodeJS.Timeout;
+  /**
+   * Set by {@link PtyService.dispose} on a running session: the user closed
+   * this mirror on purpose, so on exit it is forgotten immediately instead of
+   * held (scrollback and all) for the abandoned-session replay TTL.
+   */
+  disposedExplicitly?: boolean;
 }
 
 /**
@@ -228,13 +235,19 @@ export class PtyService {
       session.exitCode = exitCode;
       session.events.next({ kind: 'exit', exitCode });
       session.events.complete();
-      // Keep the exited session around briefly so a re-attach can replay the
-      // final screen, then evict — without a TTL every abandoned session pins
-      // up to SCROLLBACK_CAP of memory for the daemon's lifetime.
-      session.evictTimer = setTimeout(() => {
+      if (session.disposedExplicitly) {
+        // The user closed this mirror; nobody re-attaches to replay it.
         this.sessions.delete(id);
-      }, EXITED_SESSION_TTL_MS);
-      session.evictTimer.unref?.();
+      } else {
+        // Keep the exited session around briefly so a re-attach can replay
+        // the final screen, then evict — without a TTL every abandoned
+        // session pins up to SCROLLBACK_CAP of memory for the daemon's
+        // lifetime.
+        session.evictTimer = setTimeout(() => {
+          this.sessions.delete(id);
+        }, EXITED_SESSION_TTL_MS);
+        session.evictTimer.unref?.();
+      }
       settle();
     });
 
@@ -351,6 +364,7 @@ export class PtyService {
     if (session.status === 'running') {
       this.kill(id);
       session.status = 'closing';
+      session.disposedExplicitly = true;
       return;
     }
     if (session.status === 'closing') {

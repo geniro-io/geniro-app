@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { TerminalEvent } from '../terminals.types';
-import { type PtyLike, PtyService } from './pty.service';
+import {
+  EXITED_SESSION_TTL_MS,
+  type PtyLike,
+  PtyService,
+} from './pty.service';
 
 class FakePty implements PtyLike {
   pid = 4242;
@@ -334,9 +338,31 @@ describe('PtyService', () => {
     service.dispose(id);
     expect(ptys[0]?.killed.length).toBe(killsAfterFirst);
 
+    // Explicitly closed: once the PTY dies the session is forgotten outright
+    // — no 30-min exited retention pinning its scrollback for a re-attach
+    // nobody will make.
     ptys[0]?.emitExit(1);
-    expect(service.get(id).status).toBe('exited');
+    expect(() => service.get(id)).toThrowError(
+      /TERMINAL_NOT_FOUND|no terminal/,
+    );
     expect(service.findRunning(INPUT.runId, INPUT.nodeId)).toBeNull();
+  });
+
+  it('a session that exits on its own is kept for the replay TTL, then evicted', () => {
+    vi.useFakeTimers();
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+
+    ptys[0]?.emitExit(0);
+
+    // Not explicitly closed — a re-attach can still replay the final screen.
+    expect(service.get(id).status).toBe('exited');
+    vi.advanceTimersByTime(EXITED_SESSION_TTL_MS - 1);
+    expect(service.get(id).status).toBe('exited');
+    vi.advanceTimersByTime(1);
+    expect(() => service.get(id)).toThrowError(
+      /TERMINAL_NOT_FOUND|no terminal/,
+    );
   });
 
   it('dispose forgets an exited session immediately', () => {

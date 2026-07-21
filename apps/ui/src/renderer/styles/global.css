@@ -21,10 +21,16 @@
   --card-foreground: #3d2e1f;
   --popover: #fdfcfa;
   --popover-foreground: #3d2e1f;
-  --primary: #d4915e;
+  /* Primary/secondary diverge from the web values (#d4915e / #e8a676 with
+     white text — ~2.5:1 and ~2.1:1, far under WCAG AA) the same way the
+     status colours below do: --primary is the lightest hue-matched caramel
+     whose white text AND text-primary links clear ≥4.5:1 on card/background
+     (5.24 / 5.11 / 4.66); --secondary keeps the light caramel fill and flips
+     its foreground dark (6.31:1), matching the --accent pattern. */
+  --primary: #985f2c;
   --primary-foreground: #ffffff;
   --secondary: #e8a676;
-  --secondary-foreground: #ffffff;
+  --secondary-foreground: #3d2e1f;
   --muted: #ebe5dc;
   --muted-foreground: #7a6b5a;
   --accent: #f4e5d3;

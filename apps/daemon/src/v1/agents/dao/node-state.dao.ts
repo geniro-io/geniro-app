@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { NodeState } from '../../runs/entity/node-state.entity';
-import type { NodeStatus } from '../../runs/runs.types';
+import type { AgentKind, NodeStatus } from '../../runs/runs.types';
 
 @Injectable()
 export class NodeStateDao extends BaseDao<NodeState> {
@@ -50,6 +50,8 @@ export class NodeStateDao extends BaseDao<NodeState> {
       startedAt?: number;
       endedAt?: number;
       error?: string | null;
+      /** Stamped at turn start so run history survives workflow YAML edits. */
+      agentKind?: AgentKind;
     },
     txEm?: EntityManager,
   ): Promise<void> {
@@ -67,6 +69,9 @@ export class NodeStateDao extends BaseDao<NodeState> {
       if (patch.error !== undefined) {
         existing.error = patch.error;
       }
+      if (patch.agentKind !== undefined) {
+        existing.agentKind = patch.agentKind;
+      }
     } else {
       repo.create(
         {
@@ -76,6 +81,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
           startedAt: patch.startedAt ?? null,
           endedAt: patch.endedAt ?? null,
           error: patch.error ?? null,
+          agentKind: patch.agentKind ?? null,
         },
         { partial: true },
       );

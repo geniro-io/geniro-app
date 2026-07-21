@@ -1,9 +1,12 @@
 /**
  * Contracts shared INSIDE the Electron UI app (main ⇄ preload ⇄ renderer).
  *
- * These never cross to the daemon: the UI reaches the daemon only by reading
- * its pidfile (see `main/daemon-pidfile.ts`) and over loopback HTTP/WS. Daemon
- * wire shapes (M2) come from the daemon's generated OpenAPI client, not here.
+ * These never cross to the daemon as code: the UI reaches the daemon only by
+ * reading its pidfile (see `main/daemon-pidfile.ts`) and over loopback
+ * HTTP/WS. The daemon wire shapes below are HAND-MIRRORED from the daemon's
+ * types (no generated OpenAPI client exists) — a shape change on either side
+ * must be mirrored on the other; the per-section banners name their daemon
+ * counterpart files.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,8 +32,8 @@ export interface DaemonStatus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Chat (daemon wire shapes — hand-mirrored from the daemon's chat.types until
-// an OpenAPI client is generated; keep in sync with apps/daemon v1/agents)
+// Chat (daemon wire shapes — hand-mirrored from the daemon's chat.types;
+// keep in sync with apps/daemon src/v1/agents/chat.types.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Run lifecycle status (mirrors the daemon `RunStatus`). */

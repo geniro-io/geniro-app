@@ -224,17 +224,23 @@ export class CursorAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
+    // The prompt travels on STDIN (buildStdinPayload), never argv: argv is
+    // `ps`-visible to every local account, and the composed prompt carries the
+    // user's task text plus upstream nodes' outputs — the same threat model
+    // that keeps call tokens off argv (0600 file there, stdin here).
+    return args;
+  }
+
+  protected override buildStdinPayload(input: AgentTurnInput): string {
     // cursor-agent has no system-prompt flag and no approval callback: a
     // graph node's role is prepended to the prompt text, and `ask` approval
     // degrades to auto-approve (`--force` — the executor surfaces the degrade
-    // to the user as a system item).
-    const prompt = input.systemPrompt
+    // to the user as a system item). In `-p` mode with no positional prompt
+    // the CLI reads the prompt from stdin until EOF (spawn-cli ends stdin
+    // right after the payload).
+    return input.systemPrompt
       ? `${input.systemPrompt}\n\n${input.prompt}`
       : input.prompt;
-    // End-of-options separator before the positional prompt, so a prompt that
-    // starts with `-`/`--` is taken as prompt text rather than parsed as a flag.
-    args.push('--', prompt);
-    return args;
   }
 
   protected override buildEnv(input: AgentTurnInput): Record<string, string> {

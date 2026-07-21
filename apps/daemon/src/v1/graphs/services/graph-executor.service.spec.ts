@@ -1267,7 +1267,7 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
-  it('only cursor-caller workflows wait on the probe verdict at run start', async () => {
+  it('only cursor-caller workflows consult the probe, and never on the run-start POST', async () => {
     const claudeOnly = setup();
     await claudeOnly.service.startRun({
       slug: 'c',
@@ -1280,13 +1280,29 @@ describe('GraphExecutorService — agent calls', () => {
     completeTurn(claudeOnly.claude.starts[0]!, 'done');
     await drain();
 
+    // F43: the first cursor-caller run on a machine used to block the HTTP
+    // POST on the ~90-180s probe turn. startRun must answer while the probe
+    // is still in flight; only the run's EXECUTION waits on the verdict.
     const withCursor = setup(4870, { cursorCalls: PASS_VERDICT });
-    await withCursor.service.startRun({
+    let resolveProbe!: (verdict: CursorCallsCapability) => void;
+    withCursor.ensureVerdict.mockImplementation(
+      () =>
+        new Promise<CursorCallsCapability>((resolve) => {
+          resolveProbe = resolve;
+        }),
+    );
+    const run = await withCursor.service.startRun({
       slug: 'c',
       workflow: triggered(CURSOR_CALLER_WF),
       cwd: dir,
       prompt: 'go',
     });
+    await drain();
+    expect(run.status).toBe('running');
+    // Execution is parked on the probe — no turn spawned yet.
+    expect(withCursor.cursor.starts).toHaveLength(0);
+
+    resolveProbe(PASS_VERDICT);
     await drain();
     expect(withCursor.ensureVerdict).toHaveBeenCalledTimes(1);
     completeTurn(withCursor.cursor.starts[0]!, 'done');

@@ -513,6 +513,41 @@ describe('ChatService', () => {
     expect(items.at(-1)?.kind).toBe('error');
   });
 
+  it('reconcile SKIPS a running run whose turn is legitimately in flight', async () => {
+    const { service, runDao, itemDao, registry } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+    // A live registry claim marks the turn as owned by THIS process — boot
+    // reconcile must not declare it orphaned and kill its transcript.
+    registry.tryClaim(run.id);
+
+    await service.reconcileOrphanedRuns();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    expect(await itemDao.getByRun(run.id)).toHaveLength(0);
+    registry.release(run.id);
+  });
+
+  it('rejects with RUN_STOPPING when shutdown starts inside the claim→spawn window', async () => {
+    const { service, runDao, itemDao, registry, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    // Trip shutdown DURING sendMessage's awaited maxSeq — after the claim,
+    // before the pre-spawn canStart check — the exact window the guard exists
+    // for. A CLI spawned past it would orphan on the imminent process exit.
+    const realMaxSeq = itemDao.maxSeq.bind(itemDao);
+    vi.spyOn(itemDao, 'maxSeq').mockImplementationOnce(async (...args) => {
+      void registry.onApplicationShutdown();
+      return realMaxSeq(...(args as Parameters<typeof realMaxSeq>));
+    });
+
+    await expect(service.sendMessage(run.id, 'too late')).rejects.toThrow(
+      /RUN_STOPPING|shutdown/,
+    );
+
+    expect(claude.start).not.toHaveBeenCalled();
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+  });
+
   it('listChats enriches each run with its latest message text and updatedAt', async () => {
     const { service, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });

@@ -17,9 +17,20 @@ export interface PanelWidthOptions {
   handleEdge: 'left' | 'right';
 }
 
-function readWidth(key: string, fallback: number): number {
+function readWidth(
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const value = Number(localStorage.getItem(key));
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  // A width persisted under older (or hand-edited) bounds must re-enter the
+  // current min/max — otherwise the panel restores narrower/wider than the
+  // drag handle can ever reach again.
+  return Math.min(max, Math.max(min, value));
 }
 
 export function usePanelWidth({
@@ -35,7 +46,9 @@ export function usePanelWidth({
   startResize: (event: React.MouseEvent) => void;
   resizeTo: (next: number) => void;
 } {
-  const [width, setWidth] = useState(() => readWidth(storageKey, defaultWidth));
+  const [width, setWidth] = useState(() =>
+    readWidth(storageKey, defaultWidth, minWidth, maxWidth),
+  );
 
   // The keyboard path (arrow keys on the handle): clamp and persist per step —
   // discrete key presses, unlike the per-frame mousemove stream.

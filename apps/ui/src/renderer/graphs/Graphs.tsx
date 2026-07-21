@@ -11,6 +11,7 @@ import {
   type ReactFlowInstance,
   useEdgesState,
   useNodesState,
+  type Viewport,
 } from '@xyflow/react';
 import {
   ArrowLeft,
@@ -51,6 +52,7 @@ import { AgentNode } from './agent-node';
 import { CallEdge } from './call-edge';
 import {
   autoLayout,
+  canvasSnapshot,
   edgeId,
   fromFlow,
   type GraphFlowNode,
@@ -80,6 +82,10 @@ import { WorkflowMetaDialog } from './workflow-meta-dialog';
 const NODE_TYPES = { agent: AgentNode, trigger: TriggerNode };
 // Data edges keep React Flow's default; call edges render dashed amber.
 const EDGE_TYPES = { call: CallEdge };
+// Hoisted so ReactFlow sees stable identities — a fresh array/object per
+// render (and drags render per frame) defeats its internal memoization.
+const DELETE_KEY_CODES = ['Delete', 'Backspace'];
+const PRO_OPTIONS = { hideAttribution: true };
 
 /**
  * The Workflows page: compose a DAG of agents on a React Flow canvas, backed
@@ -114,6 +120,9 @@ export function Graphs({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  // The workflow as last loaded/saved (see canvasSnapshot) — compared against
+  // the live canvas to decide whether leaving the builder discards work.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
   // Captured from ReactFlow's onInit so the canvas drop handler can map screen
   // coordinates to flow coordinates (screenToFlowPosition).
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance<
@@ -199,6 +208,14 @@ export function Graphs({
         setNodes(flow.nodes);
         setEdges(flow.edges);
         setSelectedNodeId(null);
+        setSavedSnapshot(
+          canvasSnapshot(
+            workflow.name,
+            workflow.description ?? '',
+            flow.nodes,
+            flow.edges,
+          ),
+        );
         setStarted(true);
       } catch (err) {
         setError(String(err));
@@ -251,8 +268,22 @@ export function Graphs({
     setEdges([]);
     setError(null);
     setNotice(null);
+    setSavedSnapshot(null);
     void refreshList();
   }, [refreshList, setNodes, setEdges]);
+
+  /**
+   * Unsaved work on the canvas? Drives the Library back button's armed
+   * confirm — leaving the builder clears the canvas, previously silently
+   * discarding every unsaved node/edge/inspector edit in one click.
+   */
+  const dirty = useMemo(
+    () =>
+      started &&
+      savedSnapshot !== null &&
+      canvasSnapshot(name, description, nodes, edges) !== savedSnapshot,
+    [started, savedSnapshot, name, description, nodes, edges],
+  );
 
   /** Persist the canvas under the given meta; true on success. */
   const persist = useCallback(
@@ -267,6 +298,9 @@ export function Graphs({
           ? await api.save(activeSlug, workflow)
           : await api.create(workflow);
         setActiveSlug(saved.slug);
+        setSavedSnapshot(
+          canvasSnapshot(meta.name, meta.description ?? '', nodes, edges),
+        );
         setNotice(`Saved ${saved.slug}.geniro.yaml`);
         await refreshList();
         return true;
@@ -571,6 +605,22 @@ export function Graphs({
     [activeSlug],
   );
 
+  const onSelectionChange = useCallback(
+    ({ nodes: sel }: { nodes: GraphFlowNode[] }): void =>
+      setSelectedNodeId(sel[0]?.id ?? null),
+    [],
+  );
+
+  // Every finished pan/zoom gesture persists (per workflow).
+  const onMoveEnd = useCallback(
+    (_event: unknown, viewport: Viewport): void => {
+      if (activeSlug) {
+        saveViewport(activeSlug, viewport);
+      }
+    },
+    [activeSlug],
+  );
+
   if (!handle) {
     return <EmptyState>Connecting to the daemon…</EmptyState>;
   }
@@ -661,14 +711,27 @@ export function Graphs({
     <CursorCallsContext.Provider value={cursorCalls}>
       <section className="flex h-full min-h-0 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-          <Button
-            type="button"
-            variant="ghost"
-            className="gap-1.5"
-            aria-label="Back to library"
-            onClick={backToLibrary}>
-            <ArrowLeft className="shrink-0" /> Library
-          </Button>
+          {dirty ? (
+            // Unsaved edits on the canvas: leaving clears them, so the back
+            // button takes the shared armed-confirm (click, then confirm).
+            <ConfirmButton
+              variant="ghost"
+              className="gap-1.5"
+              aria-label="Back to library"
+              confirmLabel="Discard unsaved edits?"
+              onConfirm={backToLibrary}>
+              <ArrowLeft className="shrink-0" /> Library
+            </ConfirmButton>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              className="gap-1.5"
+              aria-label="Back to library"
+              onClick={backToLibrary}>
+              <ArrowLeft className="shrink-0" /> Library
+            </Button>
+          )}
           <h2 className="min-w-0 truncate font-medium">{name}</h2>
           <div className="ml-auto flex items-center gap-2">
             <Button
@@ -736,31 +799,25 @@ export function Graphs({
               edges={edges}
               nodeTypes={NODE_TYPES}
               edgeTypes={EDGE_TYPES}
-              onInit={(instance) => setRfInstance(instance)}
+              onInit={setRfInstance}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               isValidConnection={isValidConnection}
-              onSelectionChange={({ nodes: sel }) =>
-                setSelectedNodeId(sel[0]?.id ?? null)
-              }
+              onSelectionChange={onSelectionChange}
               // Reopen where the user left off; only a never-seen workflow gets
               // the automatic fit. Every finished pan/zoom gesture persists.
               {...(savedViewport
                 ? { defaultViewport: savedViewport }
                 : { fitView: true })}
-              onMoveEnd={(_event, viewport) => {
-                if (activeSlug) {
-                  saveViewport(activeSlug, viewport);
-                }
-              }}
-              deleteKeyCode={['Delete', 'Backspace']}
+              onMoveEnd={onMoveEnd}
+              deleteKeyCode={DELETE_KEY_CODES}
               minZoom={0.1}
               maxZoom={4}
               panOnScroll
               panOnScrollMode={PanOnScrollMode.Free}
               zoomOnScroll={false}
-              proOptions={{ hideAttribution: true }}>
+              proOptions={PRO_OPTIONS}>
               <Background />
               <Controls />
             </ReactFlow>

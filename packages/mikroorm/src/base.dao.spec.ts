@@ -1,12 +1,39 @@
+import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import type { EntityManager, SqlEntityRepository } from '@mikro-orm/postgresql';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { defineConfig, MikroORM } from '@mikro-orm/sqlite';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { BaseDao } from './base.dao';
+import { TimestampsEntity } from './base.entity';
 
 class TestEntity {
   id!: string;
   name!: string;
   deletedAt: Date | null = null;
+}
+
+/** Real-driver fixture for the sqlite describe below. */
+@Entity({ tableName: 'things' })
+class Thing extends TimestampsEntity {
+  @PrimaryKey({ type: 'string' })
+  id!: string;
+
+  @Property({ type: 'string' })
+  name!: string;
+}
+
+class ThingDao extends BaseDao<Thing> {
+  constructor(em: import('@mikro-orm/sqlite').EntityManager) {
+    super(em, Thing);
+  }
 }
 
 class TestDao extends BaseDao<TestEntity> {
@@ -297,5 +324,78 @@ describe('BaseDao', () => {
     expect(txEm.remove).toHaveBeenCalledWith(entities[0]);
     expect(txEm.flush).toHaveBeenCalledOnce();
     expect(em.remove).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The mock describe above pins delegation wiring only — it stays green under
+ * any behavior change the repository would actually make. This describe runs
+ * the SAME DAO against the real sqlite driver, where the load-bearing
+ * behaviors (persistence, and the `softDelete` default filter TimestampsEntity
+ * declares) are observable.
+ */
+describe('BaseDao (real in-memory sqlite driver)', () => {
+  let orm: MikroORM;
+  let dao: ThingDao;
+
+  beforeAll(async () => {
+    orm = await MikroORM.init(
+      defineConfig({
+        dbName: ':memory:',
+        entities: [Thing],
+        ignoreUndefinedInQuery: true,
+        allowGlobalContext: true,
+        discovery: { checkDuplicateFieldNames: false },
+      }),
+    );
+    await orm.schema.create();
+  });
+
+  afterAll(async () => {
+    await orm.close(true);
+  });
+
+  beforeEach(async () => {
+    await orm.schema.clear();
+    dao = new ThingDao(orm.em.fork());
+  });
+
+  it('create persists a row that round-trips through getById with timestamps', async () => {
+    await dao.create({ id: 't1', name: 'first' });
+
+    const found = await dao.getById('t1');
+    expect(found?.name).toBe('first');
+    expect(found?.createdAt).toBeInstanceOf(Date);
+    expect(found?.deletedAt).toBeNull();
+  });
+
+  it('updateById persists the change and reports the affected count', async () => {
+    await dao.create({ id: 't1', name: 'old' });
+
+    expect(await dao.updateById('t1', { name: 'new' })).toBe(1);
+    expect((await dao.getById('t1'))?.name).toBe('new');
+    expect(await dao.updateById('missing', { name: 'x' })).toBe(0);
+  });
+
+  it('deleteById SOFT-deletes: the row vanishes from reads via the default softDelete filter', async () => {
+    await dao.create({ id: 't1', name: 'a' });
+    await dao.create({ id: 't2', name: 'b' });
+
+    await dao.deleteById('t1');
+
+    // The row still exists physically but every default read must exclude it
+    // — this is the invariant the mock spec could never observe.
+    expect(await dao.getById('t1')).toBeNull();
+    expect(await dao.getAll({})).toHaveLength(1);
+    expect(await dao.count({})).toBe(1);
+  });
+
+  it('hardDeleteById removes the row outright', async () => {
+    await dao.create({ id: 't1', name: 'a' });
+
+    await dao.hardDeleteById('t1');
+
+    expect(await dao.getById('t1')).toBeNull();
+    expect(await dao.count({})).toBe(0);
   });
 });

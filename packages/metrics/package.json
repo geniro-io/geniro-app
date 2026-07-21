@@ -39,8 +39,8 @@
     "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
     "prebuild": "rm -rf ./dist || true",
     "check-types": "tsc --noEmit -p tsconfig.build.json",
-    "test": "vitest run --passWithNoTests",
-    "test:unit": "vitest run --passWithNoTests --fileParallelism",
+    "test": "vitest run",
+    "test:unit": "vitest run --fileParallelism",
     "test:cov": "vitest run --coverage --passWithNoTests"
   },
   "types": "src/index.ts"

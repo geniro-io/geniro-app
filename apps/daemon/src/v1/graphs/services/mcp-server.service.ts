@@ -10,6 +10,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
+import { closeQuietly } from '../utils/close-quietly';
 import { flattenRole } from '../utils/role-text';
 import { CallBroker } from './call-broker.service';
 import { CursorProbeService } from './cursor-probe.service';
@@ -62,10 +63,8 @@ export class McpServerService {
         enableJsonResponse: true,
       });
       res.on('close', () => {
-        // Fire-and-forget teardown: a rejected close must not surface as an
-        // unhandled rejection on every dropped request.
-        transport.close().catch(() => {});
-        server.close().catch(() => {});
+        closeQuietly(transport);
+        closeQuietly(server);
       });
       await server.connect(transport);
       await transport.handleRequest(req.raw, res, req.body);

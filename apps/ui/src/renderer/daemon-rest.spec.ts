@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../shared/contracts';
-import { DaemonRestApi } from './daemon-rest';
+import { DaemonRestApi, REQUEST_TIMEOUT_MS } from './daemon-rest';
 
 const handle: DaemonHandle = {
   host: '127.0.0.1',
@@ -92,6 +92,20 @@ describe('DaemonRestApi', () => {
     await expect(api.call('POST', '/v1/terminals')).rejects.toThrow(
       'daemon POST /v1/terminals failed (400): TERMINAL_UNSUPPORTED',
     );
+  });
+
+  it('bounds every request with an abort timeout — a wedged daemon route must not hang its renderer action forever', async () => {
+    const fetchMock = stubFetch({ ok: true });
+    const api = new ProbeApi(handle);
+
+    await api.call('GET', '/v1/things');
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    // Pin the ceiling is sane for the local daemon: generous enough for a
+    // slow cold route, far below the old forever.
+    expect(REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+    expect(REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
   });
 
   it('omits the detail suffix when the error body is unreadable', async () => {

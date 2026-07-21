@@ -100,29 +100,38 @@ export class WorkflowStoreService {
   async list(): Promise<WorkflowSummary[]> {
     await mkdir(this.dir, { recursive: true });
     const entries = await readdir(this.dir);
-    const summaries: WorkflowSummary[] = [];
-    for (const entry of entries.filter((e) => e.endsWith(WORKFLOW_SUFFIX))) {
-      const path = join(this.dir, entry);
-      try {
-        const workflow = parseWorkflowYaml(await readFile(path, 'utf8'));
-        const stats = await stat(path);
-        summaries.push({
-          slug: entry.slice(0, -WORKFLOW_SUFFIX.length),
-          name: workflow.name,
-          description: workflow.description ?? null,
-          nodeCount: workflow.nodes.length,
-          edgeCount: workflow.edges.length,
-          agentCounts: agentCountsOf(workflow),
-          updatedAt: stats.mtime.toISOString(),
-        });
-      } catch (err) {
-        // A corrupt file must not hide the rest of the library; it stays on
-        // disk for the user to repair and is only skipped from the listing.
-        this.logger.warn(
-          `skipping unreadable workflow ${entry}: ${String(err)}`,
-        );
-      }
-    }
+    // Read + stat every file concurrently — a large library listed
+    // sequentially pays one disk round-trip pair per workflow.
+    const summaries = (
+      await Promise.all(
+        entries
+          .filter((e) => e.endsWith(WORKFLOW_SUFFIX))
+          .map(async (entry): Promise<WorkflowSummary | null> => {
+            const path = join(this.dir, entry);
+            try {
+              const workflow = parseWorkflowYaml(await readFile(path, 'utf8'));
+              const stats = await stat(path);
+              return {
+                slug: entry.slice(0, -WORKFLOW_SUFFIX.length),
+                name: workflow.name,
+                description: workflow.description ?? null,
+                nodeCount: workflow.nodes.length,
+                edgeCount: workflow.edges.length,
+                agentCounts: agentCountsOf(workflow),
+                updatedAt: stats.mtime.toISOString(),
+              };
+            } catch (err) {
+              // A corrupt file must not hide the rest of the library; it stays
+              // on disk for the user to repair and is only skipped from the
+              // listing.
+              this.logger.warn(
+                `skipping unreadable workflow ${entry}: ${String(err)}`,
+              );
+              return null;
+            }
+          }),
+      )
+    ).filter((s): s is WorkflowSummary => s !== null);
     // Newest-updated first (ISO strings compare chronologically); slug breaks
     // ties so same-mtime files keep a stable order between listings.
     return summaries.sort(

@@ -240,11 +240,11 @@ describe('CursorAdapter graph-node extras', () => {
       },
       () => {},
     );
-    expect(child.stdin.written).toBe('You are the reviewer.\n\nreview the diff');
+    expect(child.stdin.written).toBe(
+      'You are the reviewer.\n\nreview the diff',
+    );
     // The role text is part of the prompt payload — it stays off argv too.
-    expect(
-      captured.args!.some((a) => a.includes('reviewer')),
-    ).toBe(false);
+    expect(captured.args!.some((a) => a.includes('reviewer'))).toBe(false);
     // ask degrades to --force (auto-approve) — cursor-agent has no callback.
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });

@@ -2,11 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { TerminalEvent } from '../terminals.types';
-import {
-  EXITED_SESSION_TTL_MS,
-  type PtyLike,
-  PtyService,
-} from './pty.service';
+import { EXITED_SESSION_TTL_MS, type PtyLike, PtyService } from './pty.service';
 
 class FakePty implements PtyLike {
   pid = 4242;

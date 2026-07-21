@@ -94,9 +94,7 @@ describe(MetricsService, () => {
   describe('histogram metrics', () => {
     beforeAll(() => {
       service.clearAll();
-      service.registerHistogram('requests_time', 'all requests time', [
-        'path',
-      ]);
+      service.registerHistogram('requests_time', 'all requests time', ['path']);
     });
 
     it('observeHistogram buckets the observation', async () => {

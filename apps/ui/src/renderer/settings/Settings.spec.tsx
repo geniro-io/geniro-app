@@ -225,6 +225,23 @@ describe('Settings updates section', () => {
 });
 
 describe('Settings key removal', () => {
+  /** The cursor row is collapsed at rest — its key field (and the Remove
+   *  button) render only once the row is expanded. */
+  async function expandCursorRow(): Promise<void> {
+    const toggle = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('cursor-agent'),
+    )!;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  function removeButton(): HTMLButtonElement | undefined {
+    return Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent?.includes('Remove saved key'));
+  }
+
   it('a failed key removal surfaces the error instead of silently claiming success', async () => {
     // The IPC call also restarts the daemon, which has real failure paths —
     // before the error branch, a rejection was unhandled with zero feedback
@@ -234,10 +251,9 @@ describe('Settings key removal', () => {
       .mockReset()
       .mockRejectedValue(new Error('keychain locked'));
     await mount();
+    await expandCursorRow();
 
-    const remove = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('button'),
-    ).find((b) => b.textContent?.includes('Remove saved key'));
+    const remove = removeButton();
     expect(remove).toBeDefined();
     await act(async () => {
       remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -245,30 +261,22 @@ describe('Settings key removal', () => {
 
     expect(container.textContent).toContain('keychain locked');
     // The UI must not claim the key is gone when it is not.
-    expect(
-      Array.from(container.querySelectorAll('button')).some((b) =>
-        b.textContent?.includes('Remove saved key'),
-      ),
-    ).toBe(true);
+    expect(removeButton()).toBeDefined();
   });
 
-  it('a successful removal clears the stored-key state and flashes Saved', async () => {
+  it('a successful removal clears the stored-key state', async () => {
     geniro.hasSecret.mockResolvedValue(true);
     geniro.deleteSecret.mockReset().mockResolvedValue(undefined);
     await mount();
+    await expandCursorRow();
 
-    const remove = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('button'),
-    ).find((b) => b.textContent?.includes('Remove saved key'));
+    const remove = removeButton();
+    expect(remove).toBeDefined();
     await act(async () => {
       remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(geniro.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
-    expect(
-      Array.from(container.querySelectorAll('button')).some((b) =>
-        b.textContent?.includes('Remove saved key'),
-      ),
-    ).toBe(false);
+    expect(removeButton()).toBeUndefined();
   });
 });

@@ -9,7 +9,7 @@ import { cn } from '../components/ui/utils';
  */
 // Deliberately NOT memoized: every call site passes fresh inline `children`
 // JSX, so a memo's shallow compare could never bail out here — the render win
-// comes from the memoized TranscriptEntryView/ChatListItem shells above.
+// comes from the memoized TranscriptEntryView shell above its main call sites.
 export function SenderRow({
   name,
   avatarName,

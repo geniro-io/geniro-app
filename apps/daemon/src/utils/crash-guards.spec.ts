@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { SHUTDOWN_DRAIN_MS } from '../v1/agents/services/process-registry';
 import { installCrashGuards, UNCAUGHT_FAILSAFE_EXIT_MS } from './crash-guards';
 
 /**
@@ -59,10 +60,12 @@ describe('installCrashGuards', () => {
   });
 
   it('the failsafe sits past the registry drain but inside the UI kill grace', () => {
-    // Cross-module invariant: SHUTDOWN_DRAIN_MS (5s, process-registry.ts) <
-    // failsafe < SHUTDOWN_GRACE_MS (7s, daemon-supervisor.ts). A drive-by
-    // constant change that leaves this window orphans children mid-drain.
-    expect(UNCAUGHT_FAILSAFE_EXIT_MS).toBeGreaterThan(5000);
+    // Cross-module invariant: a drive-by bump of either constant that closes
+    // this window orphans children mid-drain. The daemon-side half pins the
+    // LIVE constant; the UI-side SHUTDOWN_GRACE_MS (7s, apps/ui
+    // daemon-supervisor.ts) is a separate app with no shared package, so the
+    // literal stays — the pointer comment is its discoverability.
+    expect(UNCAUGHT_FAILSAFE_EXIT_MS).toBeGreaterThan(SHUTDOWN_DRAIN_MS);
     expect(UNCAUGHT_FAILSAFE_EXIT_MS).toBeLessThan(7000);
   });
 });

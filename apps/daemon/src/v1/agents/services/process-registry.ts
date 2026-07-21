@@ -9,7 +9,9 @@ import type { AgentTurnHandle } from '../adapters/adapter.types';
  * and < the UI's kill grace (SHUTDOWN_GRACE_MS = 7s, apps/ui …/daemon-supervisor.ts),
  * or the UI guillotines the daemon mid-drain.
  */
-const SHUTDOWN_DRAIN_MS = 5000;
+// Exported so the crash-guards spec can pin the failsafe > drain invariant
+// against the LIVE constant rather than a literal mirror.
+export const SHUTDOWN_DRAIN_MS = 5000;
 const SHUTDOWN_POLL_MS = 25;
 
 function delay(ms: number): Promise<void> {

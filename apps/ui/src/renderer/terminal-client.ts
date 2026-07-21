@@ -25,6 +25,12 @@ export interface TerminalClientEvents {
  * {@link DaemonClient} (per-launch token in the handshake `auth` payload).
  * Rooms are per-socket, so every (re)connect re-emits `attach` — the reply's
  * scrollback snapshot covers whatever bytes were missed while offline.
+ *
+ * TWIN PARSER: the `attach`/`attached`, `terminal_data`, and `terminal_exit`
+ * envelope shapes parsed below are produced by the daemon's `TerminalsGateway`
+ * (apps/daemon/src/v1/terminals/gateways/terminals.gateway.ts) — no
+ * daemon↔renderer shared package exists, so a shape change there must be
+ * mirrored here, and vice versa.
  */
 export class TerminalClient {
   private socket: Socket | null = null;

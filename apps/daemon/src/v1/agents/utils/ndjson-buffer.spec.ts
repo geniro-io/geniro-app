@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { NdjsonBuffer } from './ndjson-buffer';
+import { MAX_BUFFERED_LINE_CHARS, NdjsonBuffer } from './ndjson-buffer';
 
 describe('NdjsonBuffer', () => {
   it('parses multiple complete lines from a single chunk', () => {
@@ -103,5 +103,56 @@ describe('NdjsonBuffer', () => {
     buf.push('{"type":"rate_limit_event","tier":"x"}\n');
 
     expect(objs).toEqual([{ type: 'rate_limit_event', tier: 'x' }]);
+  });
+});
+
+describe('NdjsonBuffer bounded reassembly buffer', () => {
+  it('drops an over-cap un-terminated line exactly once and recovers on the next line', () => {
+    // A misbehaving user-configured binary can stream bytes with no newline —
+    // the reassembly buffer must stay bounded like the stderr tail and PTY
+    // scrollback, not grow for the turn's whole lifetime.
+    const objs: unknown[] = [];
+    const onParseError = vi.fn();
+    const buf = new NdjsonBuffer({
+      onObject: (o) => objs.push(o),
+      onParseError,
+    });
+
+    // Exactly at the cap: still buffered, not dropped (the cap is exclusive).
+    buf.push('x'.repeat(MAX_BUFFERED_LINE_CHARS));
+    expect(onParseError).not.toHaveBeenCalled();
+
+    // One char past the cap tips the drop: reported once, with a bounded
+    // 256-char preview instead of the multi-MB payload.
+    buf.push('x');
+    expect(onParseError).toHaveBeenCalledTimes(1);
+    const [preview, error] = onParseError.mock.calls[0] as [string, Error];
+    expect(preview).toBe('x'.repeat(256));
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain('oversized un-terminated line dropped');
+    expect(objs).toEqual([]); // the dropped prefix never reaches onObject
+
+    // The buffer was reset — a following well-formed line parses cleanly
+    // instead of being glued to the dropped prefix (which would parse-error).
+    buf.push('{"a":1}\n');
+    expect(objs).toEqual([{ a: 1 }]);
+    expect(onParseError).toHaveBeenCalledTimes(1);
+  });
+
+  it('never falsely drops a large-but-under-cap line once its newline arrives', () => {
+    const objs: unknown[] = [];
+    const onParseError = vi.fn();
+    const buf = new NdjsonBuffer({
+      onObject: (o) => objs.push(o),
+      onParseError,
+    });
+
+    const big = 'y'.repeat(2 * 1024 * 1024); // multi-MB but under the cap
+    buf.push('{"big":"');
+    buf.push(big);
+    buf.push('"}\n');
+
+    expect(onParseError).not.toHaveBeenCalled();
+    expect(objs).toEqual([{ big }]);
   });
 });

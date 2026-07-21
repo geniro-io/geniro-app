@@ -75,6 +75,10 @@ export function TerminalPanel({
     term.loadAddon(fit);
     term.open(container);
     fit.fit();
+    // xterm's open() does not focus. Without this, keystrokes stay on the
+    // background trigger button under the modal (Space would re-fire it) and
+    // typing does nothing until the user clicks inside the terminal.
+    term.focus();
 
     const client = new TerminalClient(handle, session.id, {
       onSnapshot: (snapshot, snapshotStatus, code) => {
@@ -89,6 +93,8 @@ export function TerminalPanel({
         setStatus(snapshotStatus);
         setExitCode(snapshotStatus === 'exited' ? code : null);
         client.resize(term.cols, term.rows);
+        // (Re)attach lands the mirror live — keys must route to the PTY.
+        term.focus();
       },
       onData: (data) => {
         setConnected(true);

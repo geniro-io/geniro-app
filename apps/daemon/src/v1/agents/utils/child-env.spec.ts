@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildChildEnv } from './child-env';
+import { buildChildEnv, claudeCredentialEnv } from './child-env';
 
 const TOUCHED = [
   'GENIRO_TEST_SECRET',
   'GENIRO_CURSOR_API_KEY',
   'CURSOR_API_KEY',
   'CLAUDE_CODE_SESSION_ID',
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
   'CHILD_ENV_SPEC_PLAIN',
 ] as const;
 
@@ -52,5 +54,37 @@ describe('buildChildEnv', () => {
     const env = buildChildEnv({ CHILD_ENV_SPEC_PLAIN: 'overridden' });
 
     expect(env.CHILD_ENV_SPEC_PLAIN).toBe('overridden');
+  });
+
+  it('strips inherited Anthropic credentials from every child', () => {
+    // Symmetry with the cursor direction: a cursor child (or its tool
+    // grandchildren) must never inherit another agent's credential.
+    process.env.ANTHROPIC_API_KEY = 'sk-ant';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-tok';
+
+    const env = buildChildEnv();
+
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  describe('claudeCredentialEnv', () => {
+    it('returns exactly the inherited Anthropic credentials that are set', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant';
+
+      expect(claudeCredentialEnv()).toEqual({ ANTHROPIC_API_KEY: 'sk-ant' });
+    });
+
+    it('returns an empty record when the daemon inherited none', () => {
+      expect(claudeCredentialEnv()).toEqual({});
+    });
+
+    it('round-trips through buildChildEnv extra (claude-child re-injection)', () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-tok';
+
+      const env = buildChildEnv(claudeCredentialEnv());
+
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-tok');
+    });
   });
 });

@@ -33,8 +33,14 @@ export class FastifyMetricsMiddleware implements NestMiddleware {
       return next();
     }
 
+    // Label with the query-stripped path only: query strings carry
+    // caller-supplied values (cwd folder paths, cursors) that must not be
+    // republished on the metrics surface, and per-unique-URL labels grow the
+    // registry unboundedly.
+    const path = (originalUrl || '').split('?')[0] ?? '';
+
     this.metricsService.incGauge(RequestMetric, 1, {
-      path: originalUrl || '',
+      path,
       method,
       status: String(statusCode),
     });
@@ -45,7 +51,7 @@ export class FastifyMetricsMiddleware implements NestMiddleware {
         RequestTimeMetric,
         (Date.now() - now) / 1000,
         {
-          path: originalUrl || '',
+          path,
           method,
         },
       );

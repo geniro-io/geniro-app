@@ -10,8 +10,22 @@
  *   that session, so the daemon must not advertise it to children — an agent
  *   or its tools binding to it would cross-wire thread resume, session
  *   capture, and per-thread terminal mirrors onto one session file.
+ * - {@link CLAUDE_CREDENTIAL_KEYS} — Anthropic credentials inherited when the
+ *   app/daemon was launched from a shell that exports them. Stripping them
+ *   keeps the cursor→claude and claude→cursor directions symmetric: only the
+ *   definitionally-claude spawn paths (the Claude adapter's turns, the
+ *   claude-only PTY mirror) re-inject them via {@link claudeCredentialEnv}.
  */
-const STRIPPED_KEYS = new Set(['CURSOR_API_KEY', 'CLAUDE_CODE_SESSION_ID']);
+const CLAUDE_CREDENTIAL_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const;
+
+const STRIPPED_KEYS = new Set([
+  'CURSOR_API_KEY',
+  'CLAUDE_CODE_SESSION_ID',
+  ...CLAUDE_CREDENTIAL_KEYS,
+]);
 
 /**
  * Build a spawned child's environment from the daemon's, stripping every
@@ -32,4 +46,22 @@ export function buildChildEnv(
     }
   }
   return { ...env, ...extra };
+}
+
+/**
+ * The claude-child re-injection of the Anthropic credentials
+ * {@link buildChildEnv} strips: whichever of them the daemon itself inherited,
+ * for spawn paths that are definitionally claude (the Claude adapter's turns,
+ * the claude-only PTY terminal mirror). One shared source for both paths —
+ * extracted, never mirrored.
+ */
+export function claudeCredentialEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of CLAUDE_CREDENTIAL_KEYS) {
+    const value = process.env[key];
+    if (value) {
+      env[key] = value;
+    }
+  }
+  return env;
 }

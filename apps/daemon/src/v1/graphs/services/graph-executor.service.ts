@@ -57,6 +57,7 @@ import { flattenRole } from '../utils/role-text';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
 import { CursorProbeService } from './cursor-probe.service';
+import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
 type NodeOutcome = 'completed' | 'failed' | 'cancelled' | 'skipped';
@@ -130,8 +131,27 @@ export class GraphExecutorService {
     private readonly cursorProbe: CursorProbeService,
     private readonly cursorMerge: CursorMcpMergeService,
     private readonly skillHarvest: SkillHarvestStore,
+    private readonly store: WorkflowStoreService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
+
+  /**
+   * The run-start composition (library lookup → DAG launch) lives in the
+   * service layer so the controller stays one-call and a future run-start
+   * guard cannot be bypassed from the route.
+   */
+  async startRunBySlug(
+    slug: string,
+    input: Pick<StartWorkflowRunInput, 'cwd' | 'prompt'>,
+  ): Promise<RunWire> {
+    const { workflow } = await this.store.get(slug);
+    return this.startRun({
+      slug,
+      workflow,
+      cwd: input.cwd,
+      prompt: input.prompt,
+    });
+  }
 
   /**
    * Create the run + pending node states, persist the seed message, kick off
@@ -1125,6 +1145,15 @@ export class GraphExecutorService {
                   em,
                 )
                 .catch(() => {});
+              // Mirror the DAG-launch catch: persistTurnStart already emitted
+              // the 'running' status item, and the renderer only balances it
+              // against a terminal one — without this the agents panel counts
+              // the callee as live for the rest of the run.
+              await persistItem(callee.id, 'status', null, {
+                nodeId: callee.id,
+                status: 'failed',
+                ...(callId ? { callId } : {}),
+              }).catch(() => {});
             });
             return {
               status: 'failed',

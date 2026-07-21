@@ -29,15 +29,31 @@ export function readSettings(): Settings {
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    const parsed = settingsPatchSchema.safeParse(
-      JSON.parse(readFileSync(path, 'utf8')),
-    );
-    if (!parsed.success) {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       return { ...DEFAULT_SETTINGS };
     }
-    // Merge over defaults so a settings file written by an older version still
-    // yields a complete object as the schema grows.
-    return { ...DEFAULT_SETTINGS, ...parsed.data };
+    // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
+    // validates every patch), but the on-disk file can be newer than this
+    // build — the notify-only brew flow makes version skew normal — so one
+    // unknown or invalid key must cost only that key. A wholesale reset would
+    // re-onboard the user, and the next updateSettings() write would make the
+    // loss permanent. Merging over defaults also completes a file written by
+    // an older version as the schema grows.
+    const record = raw as Record<string, unknown>;
+    const settings: Settings = { ...DEFAULT_SETTINGS };
+    for (const key of Object.keys(settingsPatchSchema.shape)) {
+      if (!(key in record)) {
+        continue;
+      }
+      const field = settingsPatchSchema.shape[
+        key as keyof typeof settingsPatchSchema.shape
+      ].safeParse(record[key]);
+      if (field.success && field.data !== undefined) {
+        (settings as unknown as Record<string, unknown>)[key] = field.data;
+      }
+    }
+    return settings;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

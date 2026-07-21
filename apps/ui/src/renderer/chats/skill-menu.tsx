@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 import type { AgentSkill } from '../../shared/contracts';
 import { cn } from '../components/ui/utils';
 
@@ -18,6 +20,12 @@ export function SkillMenu({
   onSelect: (skill: AgentSkill) => void;
   onHighlight: (index: number) => void;
 }): React.JSX.Element {
+  // Keyboard movement (incl. wrap-around) can land the highlight outside the
+  // 256px viewport — keep it visible. `nearest` makes hover moves a no-op.
+  const highlightedRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    highlightedRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [highlightIndex]);
   return (
     <div
       role="listbox"
@@ -26,6 +34,7 @@ export function SkillMenu({
       {skills.map((skill, index) => (
         <button
           key={`${skill.source}:${skill.kind}:${skill.name}`}
+          ref={index === highlightIndex ? highlightedRef : null}
           type="button"
           role="option"
           aria-selected={index === highlightIndex}

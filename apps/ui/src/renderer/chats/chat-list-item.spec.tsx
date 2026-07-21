@@ -29,8 +29,11 @@ afterEach(() => {
   }
 });
 
-function props(overrides: Partial<Parameters<typeof ChatListItem>[0]> = {}) {
+function props(
+  overrides: Partial<React.ComponentProps<typeof ChatListItem>> = {},
+) {
   return {
+    runId: 'run-1',
     label: 'Review team',
     isWorkflow: false,
     status: 'completed' as const,
@@ -103,18 +106,25 @@ describe('ChatListItem', () => {
       rename?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(p.onRename).toHaveBeenCalledOnce();
+    expect(p.onRename).toHaveBeenCalledWith('run-1');
     expect(p.onActivate).not.toHaveBeenCalled();
   });
 
-  it('clicking the row activates it', async () => {
+  it('clicking the row activates it via a REAL button that keeps li semantics', async () => {
     const p = props();
     const container = await mount(<ChatListItem {...p} />);
+    // The li keeps its listitem role (no role="button") — ARIA forbids the
+    // nested rename control inside a button role.
+    expect(container.querySelector('li')?.getAttribute('role')).toBeNull();
+    const activate = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Review team"]',
+    );
+    expect(activate).not.toBeNull();
     await act(async () => {
-      container
-        .querySelector('li')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      activate!.click();
     });
     expect(p.onActivate).toHaveBeenCalledOnce();
+    expect(p.onActivate).toHaveBeenCalledWith('run-1');
   });
 
   it('omits the preview line when the run has no messages yet', async () => {

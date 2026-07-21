@@ -49,6 +49,34 @@ describe('ProcessRegistry', () => {
     expect(reg.has('run-1')).toBe(false);
   });
 
+  it('bounded drain: a wedged child that never settles cannot hang shutdown past the deadline', async () => {
+    // The drain's promise must resolve on the SHUTDOWN_DRAIN_MS deadline even
+    // when a handle's done never settles — an unbounded await here overruns
+    // the UI supervisor's 7s kill grace and gets the daemon SIGKILLed
+    // mid-drain, skipping pidfile cleanup.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const reg = new ProcessRegistry();
+      const wedged = fakeHandle(); // its done is never resolved
+      reg.register('run-wedged', wedged.handle);
+
+      let settled = false;
+      const shutdown = reg.onApplicationShutdown().then(() => {
+        settled = true;
+      });
+      expect(wedged.cancel).toHaveBeenCalledOnce();
+
+      // Nothing but the deadline can end the drain; walk time past it.
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(settled).toBe(true);
+      await shutdown;
+      // The registry is cleared despite the wedged handle.
+      expect(reg.has('run-wedged')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cancels every active turn on application shutdown and awaits child exit', async () => {
     const reg = new ProcessRegistry();
     const a = fakeHandle();

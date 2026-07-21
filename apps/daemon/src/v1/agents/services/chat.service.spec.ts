@@ -249,6 +249,62 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.status).toBe('completed');
   });
 
+  it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {
+    // A typical turn is a tool-using turn: the persisted kind/role/payload for
+    // these rows is what history replay renders, so the exact shape is pinned
+    // through the real service path, not just the mapper in isolation.
+    const { service, itemDao, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'edit the file');
+    claude.emit({ type: 'reasoning', text: 'planning the edit' });
+    claude.emit({
+      type: 'tool_call',
+      id: 't1',
+      name: 'Read',
+      input: { path: '/x' },
+    });
+    claude.emit({
+      type: 'tool_result',
+      id: 't1',
+      name: null,
+      result: 'file body',
+      isError: false,
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const rows = await itemDao.getByRun(run.id);
+    expect(
+      rows.map((row) => `${row.seq}:${row.kind}/${row.role ?? ''}`),
+    ).toEqual([
+      '0:message/user',
+      '1:reasoning/assistant',
+      '2:tool_call/assistant',
+      '3:tool_result/tool',
+      '4:turn_complete/',
+    ]);
+    expect(JSON.parse(rows[1]!.payload)).toEqual({ text: 'planning the edit' });
+    expect(JSON.parse(rows[2]!.payload)).toEqual({
+      id: 't1',
+      name: 'Read',
+      input: { path: '/x' },
+    });
+    // isError must survive persistence — a dropped field breaks replay silently.
+    expect(JSON.parse(rows[3]!.payload)).toEqual({
+      id: 't1',
+      name: null,
+      result: 'file body',
+      isError: false,
+    });
+  });
+
   it('rejects a concurrent turn on the same run with RUN_BUSY', async () => {
     const { service, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });

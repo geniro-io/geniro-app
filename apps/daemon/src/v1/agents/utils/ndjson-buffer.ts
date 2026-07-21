@@ -19,6 +19,16 @@ export interface NdjsonBufferOptions {
   onParseError?: (line: string, error: unknown) => void;
 }
 
+/**
+ * Cap on the un-newlined reassembly buffer — the same bounded-buffer
+ * discipline as spawn-cli's stderr tail and the PTY scrollback cap. The
+ * spawned binary is user-configurable, and one that streams bytes without a
+ * newline would otherwise grow `buf` for the turn's whole lifetime. A real
+ * stream-json line never approaches this; an overflowing prefix is dropped
+ * and reported through `onParseError`.
+ */
+export const MAX_BUFFERED_LINE_CHARS = 8 * 1024 * 1024;
+
 export class NdjsonBuffer {
   private buf = '';
 
@@ -33,6 +43,17 @@ export class NdjsonBuffer {
       this.buf = this.buf.slice(nl + 1);
       this.consume(line);
       nl = this.buf.indexOf('\n');
+    }
+    if (this.buf.length > MAX_BUFFERED_LINE_CHARS) {
+      const droppedLength = this.buf.length;
+      const preview = this.buf.slice(0, 256);
+      this.buf = '';
+      this.opts.onParseError?.(
+        preview,
+        new Error(
+          `oversized un-terminated line dropped (${droppedLength} chars buffered)`,
+        ),
+      );
     }
   }
 

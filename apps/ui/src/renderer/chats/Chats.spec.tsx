@@ -191,8 +191,10 @@ async function clickRun(container: HTMLElement, title: string): Promise<void> {
   const li = [...container.querySelectorAll('li')].find((el) =>
     el.textContent?.includes(title),
   );
+  // The row's activation surface is its overlay button (the li's first child).
+  const activate = li?.querySelector<HTMLButtonElement>('button');
   await act(async () => {
-    li?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    activate?.click();
   });
 }
 
@@ -851,6 +853,53 @@ describe('Chats workflow runs', () => {
       prompt: 'build it',
     });
     expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('a failed run start restores the typed task into the composer (no data loss)', async () => {
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    // The daemon is briefly down (e.g. a Settings save just restarted it).
+    workflowApi.run.mockRejectedValue(new Error('daemon POST failed'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'precious task text');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Start run"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The error surfaces AND the typed task stays editable (mirror of the
+    // queued path's restoreHead) — a failed send must never eat the prompt.
+    expect(container.textContent).toContain('daemon POST failed');
+    expect(container.querySelector('textarea')!.value).toBe(
+      'precious task text',
+    );
   });
 
   it('does not arm Stop when the new workflow run already ended during activation', async () => {
@@ -1685,12 +1734,13 @@ describe('Chats queued messages', () => {
 });
 
 describe('Chats run composer chips', () => {
-  function chips(container: HTMLElement): HTMLButtonElement[] {
-    // The inactive info chips are the DISABLED buttons inside the composer
-    // card's controls row.
-    return [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (b) => b.disabled && b.className.includes('rounded-lg'),
-    );
+  function chips(container: HTMLElement): HTMLElement[] {
+    // The info chips are non-interactive Badges — NEVER disabled buttons: a
+    // disabled button's pointer-events-none would block the cwd tooltip and
+    // its 50% opacity fails AA contrast.
+    return [
+      ...container.querySelectorAll<HTMLElement>('[data-slot="badge"]'),
+    ].filter((el) => el.className.includes('rounded-lg'));
   }
 
   it("a chat run shows its agent + folder as INACTIVE chips with the create screen's card", async () => {
@@ -1702,6 +1752,17 @@ describe('Chats run composer chips', () => {
     const labels = chips(container).map((b) => b.textContent);
     expect(labels).toContain('claude');
     expect(labels.some((l) => l?.includes('proj'))).toBe(true);
+    // No chip is rendered as a disabled button (the tooltip-blocking shape).
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+        (b) => b.disabled && b.className.includes('rounded-lg'),
+      ),
+    ).toEqual([]);
+    // The folder chip's full-path tooltip is reachable again (native title).
+    const folderChip = chips(container).find((el) =>
+      el.textContent?.includes('proj'),
+    );
+    expect(folderChip?.getAttribute('title')).toBe('/proj');
     // The send action is the same round icon button as the create screen.
     expect(composerButton(container, 'Send')).not.toBeNull();
   });
@@ -1751,6 +1812,11 @@ describe('Chats run composer chips', () => {
     expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
       true,
     );
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+        (b) => b.disabled && b.className.includes('rounded-lg'),
+      ),
+    ).toEqual([]);
     // Workflow runs take one task — the round send stays disabled.
     expect(composerButton(container, 'Send')?.disabled).toBe(true);
   });

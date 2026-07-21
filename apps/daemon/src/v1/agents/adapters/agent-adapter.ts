@@ -126,8 +126,17 @@ export abstract class AgentAdapter {
     }
     if (dispose) {
       // `done` never rejects (handle contract), so one settle callback covers
-      // every exit path.
-      void handle.done.then(dispose);
+      // every exit path. The disposer itself may throw (an rmSync EACCES) —
+      // that's cleanup failure to log, not an unhandled rejection.
+      void handle.done.then(() => {
+        try {
+          dispose();
+        } catch (err) {
+          this.options.logger?.warn(
+            `turn resource disposer failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      });
     }
     return handle;
   }

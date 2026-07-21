@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 
@@ -7,7 +9,7 @@ import { cn } from '../components/ui/utils';
  * mirrored to the right for the user's own messages. (No name line above;
  * identity lives in the metadata, exactly like the reference.)
  */
-export function SenderRow({
+export const SenderRow = memo(function SenderRow({
   name,
   avatarName,
   colorKey,
@@ -61,4 +63,4 @@ export function SenderRow({
       </div>
     </div>
   );
-}
+});

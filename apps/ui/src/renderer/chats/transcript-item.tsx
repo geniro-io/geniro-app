@@ -288,11 +288,17 @@ export function expiredApprovalIds(
     if (!requestId || verdicts.has(requestId)) {
       continue;
     }
+    // Match TURNS, not nodes: a callable DAG node can hold a DAG turn and
+    // callee turns at once, and each turn's items carry its callId (none for
+    // the DAG turn). A callee settling must not expire the DAG turn's still
+    // pending approval — only a terminal status of the SAME turn ends it.
+    const requestCallId = payloadString(item.payload, 'callId');
     const ended = items.some(
       (later) =>
         later.seq > item.seq &&
         ((later.nodeId === item.nodeId &&
           later.kind === 'status' &&
+          payloadString(later.payload, 'callId') === requestCallId &&
           ['completed', 'failed', 'cancelled', 'skipped'].includes(
             payloadString(later.payload, 'status') ?? '',
           )) ||

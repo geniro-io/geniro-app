@@ -1,5 +1,5 @@
 import { ChevronRight, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 
 import { cn } from '../components/ui/utils';
 import { DiffView, editDiffOf } from './diff-view';
@@ -98,7 +98,7 @@ function ToolRow({ pair }: { pair: ToolPair }): React.JSX.Element {
  * it; each row expands again to the full input (a red/green diff for
  * Edit/Write) and the tool's result.
  */
-export function ToolGroup({
+export const ToolGroup = memo(function ToolGroup({
   group,
 }: {
   group: ToolGroupEntry;
@@ -138,4 +138,4 @@ export function ToolGroup({
       ) : null}
     </div>
   );
-}
+});

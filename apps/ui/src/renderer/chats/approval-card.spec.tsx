@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe('ApprovalCard', () => {
-  it('renders the tool + input and fires the verdict callbacks while pending', () => {
+  it('renders the tool + input and fires the verdict callback while pending', () => {
     const onRespond = vi.fn();
     const el = render(
       <ApprovalCard
@@ -52,10 +52,47 @@ describe('ApprovalCard', () => {
       approve.click();
     });
     expect(onRespond).toHaveBeenLastCalledWith(true);
+    // The verdict channel is ONE-SHOT: after the first answer the card
+    // freezes ("Sending…") until the persisted verdict item round-trips —
+    // a follow-up Deny (or a double-click) must send nothing.
     act(() => {
       deny.click();
     });
-    expect(onRespond).toHaveBeenLastCalledWith(false);
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(el.textContent).toContain('Sending…');
+    expect(
+      [...el.querySelectorAll('button')].find(
+        (b) => b.textContent === 'Approve',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('a question card freezes after picking an option — no double-submit window', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            { question: 'Which color?', options: [{ label: 'Red' }] },
+          ],
+        }}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    const red = [...el.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Red',
+    )!;
+    act(() => {
+      red.click();
+    });
+    act(() => {
+      red.click();
+    });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(onRespond).toHaveBeenLastCalledWith(true, 'Red');
+    expect(el.textContent).toContain('Sending…');
   });
 
   it('renders an Edit permission as a red/green diff instead of raw JSON', () => {
@@ -124,7 +161,7 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenLastCalledWith(true, 'Blue');
   });
 
-  it('question card: free text answers ride the verdict; Decline denies', () => {
+  it('question card: free text answers ride the verdict, then the card freezes', () => {
     const onRespond = vi.fn();
     const el = render(
       <ApprovalCard
@@ -159,6 +196,27 @@ describe('ApprovalCard', () => {
     });
     expect(onRespond).toHaveBeenLastCalledWith(true, 'Teal, to match the logo');
 
+    // One-shot: the action row (incl. Decline) is gone until the persisted
+    // verdict round-trips — no conflicting second verdict can be sent.
+    expect(
+      [...el.querySelectorAll('button')].find(
+        (b) => b.textContent === 'Decline',
+      ),
+    ).toBeUndefined();
+    expect(el.textContent).toContain('Sending…');
+    expect(onRespond).toHaveBeenCalledTimes(1);
+  });
+
+  it('question card: Decline denies while the card is still pending', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={QUESTION_INPUT}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
     act(() => {
       [...el.querySelectorAll('button')]
         .find((b) => b.textContent === 'Decline')!

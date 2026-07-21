@@ -199,10 +199,19 @@ export function Settings(): React.JSX.Element {
   }, [cursorKey, flashSaved]);
 
   const removeKey = useCallback(async (): Promise<void> => {
-    await window.geniro.deleteSecret('cursor.apiKey');
-    setHasStoredKey(false);
-    setCursorKey('');
-  }, []);
+    setError(null);
+    // Mirror saveCursorKey: the IPC call also restarts the daemon, which has
+    // real failure paths — a silent unhandled rejection would leave the UI
+    // claiming the key is gone with zero feedback.
+    try {
+      await window.geniro.deleteSecret('cursor.apiKey');
+      setHasStoredKey(false);
+      setCursorKey('');
+      flashSaved();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [flashSaved]);
 
   const onToggleUpdates = useCallback(
     (next: boolean): void => {

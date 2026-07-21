@@ -5,7 +5,7 @@ import {
   ChevronUp,
   Loader2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 
 import { avatarTone, initialsOf } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
@@ -156,7 +156,7 @@ function AvatarPair({
  * the callee's streamed work (each entry in its own sender frame), the
  * clamped "Result from X" (or error) section, and an "N tools" footer.
  */
-export function CallBlock({
+export const CallBlock = memo(function CallBlock({
   block,
   nodes,
   chatAgentName,
@@ -246,4 +246,4 @@ export function CallBlock({
       </div>
     </div>
   );
-}
+});

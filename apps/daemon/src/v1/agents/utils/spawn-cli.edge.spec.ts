@@ -190,28 +190,33 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
     ]);
   });
 
-  it('does not throw out of the call when writing the stdin payload fails', () => {
+  it('surfaces a synchronous stdin-write throw as a failed-to-write error event and settles', async () => {
     // A child whose stdin is already closed/destroyed (e.g. an unauthenticated
     // CLI that exited before we wrote) makes stdin.write throw synchronously.
     // The module promises a single settle point and that 'done' never rejects,
-    // so a stdin failure must surface as a handle (ideally an error event), not
-    // as an exception that escapes the call and never returns a handle.
+    // so the failure must surface as an error EVENT on a returned handle whose
+    // done resolves — a regression that merely swallows the throw without
+    // settling would wedge the turn forever.
     const { spawn, child } = fakeSpawn();
     child.stdin.write = (): boolean => {
       throw new Error('write EPIPE');
     };
+    const events: AgentEvent[] = [];
 
-    expect(() =>
-      runHeadlessCli({
-        command: 'claude',
-        args: [],
-        cwd: '/proj',
-        stdinPayload: '{"type":"user"}\n',
-        mapper: noopMapper,
-        onEvent: () => {},
-        spawn,
-      }),
-    ).not.toThrow();
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinPayload: '{"type":"user"}\n',
+      mapper: noopMapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    expect(events).toEqual([
+      { type: 'error', message: 'failed to write claude stdin: write EPIPE' },
+    ]);
+    await handle.done; // settled — a wedged turn would time the test out
   });
 });
 
@@ -303,6 +308,95 @@ describe('runHeadlessCli stream edge cases', () => {
     expect(events).toEqual([
       { type: 'error', message: 'claude stdin error: write EPIPE' },
     ]);
+  });
+
+  it('ignores a stdin error after the terminal event and still waits for close', async () => {
+    // After the terminal event the turn is already decided — the late EPIPE
+    // from closing a kept-open stdin as the child exits must neither add a
+    // second terminal event nor settle `done` early: settling before `close`
+    // would skip the final buffer flush and resolve before stdout drains.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const mapper = (obj: unknown): AgentEvent[] =>
+      obj &&
+      typeof obj === 'object' &&
+      (obj as { type?: string }).type === 'result'
+        ? [
+            {
+              type: 'turn_complete',
+              usage: null,
+              stopReason: 'end_turn',
+              finalText: null,
+            },
+          ]
+        : [];
+
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinPayload: '{"type":"user"}\n',
+      keepStdinOpen: true,
+      mapper,
+      onEvent: (e) => events.push(e),
+      spawn,
+    });
+
+    child.stdout.emitData('{"type":"result"}\n'); // terminal decided
+    child.stdin.emit('error', new Error('write EPIPE')); // late EPIPE
+
+    let settled = false;
+    void handle.done.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false); // done still waits for close
+
+    child.emit('close', 0, null);
+    await handle.done;
+
+    // Exactly one terminal event — the late stdin error emitted nothing.
+    expect(events).toEqual([
+      {
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      },
+    ]);
+  });
+});
+
+describe('runHeadlessCli spawn failure', () => {
+  it('a throwing spawn yields a failed-to-spawn error event, a resolved done, and an inert cancel', async () => {
+    // The spawn call itself can throw synchronously (EACCES, a bad binary
+    // path). The settle contract still holds: the failure is an error EVENT,
+    // `done` resolves, and the returned handle's cancel is a safe no-op —
+    // there is no child to kill.
+    const events: AgentEvent[] = [];
+
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper: noopMapper,
+      onEvent: (e) => events.push(e),
+      spawn: () => {
+        throw new Error('EACCES');
+      },
+    });
+
+    expect(events).toEqual([
+      { type: 'error', message: 'failed to spawn claude: EACCES' },
+    ]);
+    await handle.done; // resolves — done never rejects
+
+    expect(() => handle.cancel()).not.toThrow();
+    // The no-op cancel emitted nothing further — still exactly one terminal.
+    expect(events).toEqual([
+      { type: 'error', message: 'failed to spawn claude: EACCES' },
+    ]);
+    expect(handle.respondApproval('req-1', true)).toBe(false);
   });
 });
 

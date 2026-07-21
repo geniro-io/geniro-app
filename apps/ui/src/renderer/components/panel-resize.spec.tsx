@@ -26,7 +26,7 @@ afterEach(() => {
 
 /** A right-side panel like the inspector: the handle sits on its LEFT edge. */
 function RightPanel(): React.JSX.Element {
-  const { width, startResize } = usePanelWidth({
+  const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: 'test.rightPanelWidth',
     defaultWidth: 300,
     minWidth: 240,
@@ -39,6 +39,10 @@ function RightPanel(): React.JSX.Element {
         edge="left"
         label="Resize panel"
         onMouseDown={startResize}
+        value={width}
+        min={minWidth}
+        max={maxWidth}
+        onResize={resizeTo}
       />
     </aside>
   );
@@ -113,5 +117,53 @@ describe('usePanelWidth (left-edge handle)', () => {
       root.render(<RightPanel />);
     });
     expect(width()).toBe(420);
+  });
+});
+
+describe('PanelResizeHandle keyboard (window-splitter pattern)', () => {
+  function key(name: string): void {
+    const handle = container.querySelector('[role="separator"]')!;
+    act(() => {
+      handle.dispatchEvent(
+        new KeyboardEvent('keydown', { key: name, bubbles: true }),
+      );
+    });
+  }
+
+  it('is focusable and reports its value semantics', () => {
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    const handle = container.querySelector('[role="separator"]')!;
+    expect(handle.getAttribute('tabindex')).toBe('0');
+    expect(handle.getAttribute('aria-valuenow')).toBe('300');
+    expect(handle.getAttribute('aria-valuemin')).toBe('240');
+    expect(handle.getAttribute('aria-valuemax')).toBe('480');
+  });
+
+  it('arrow keys move the separator (left widens a right-side panel), clamped and persisted', () => {
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    key('ArrowLeft'); // separator left → panel widens
+    expect(width()).toBe(316);
+    expect(localStorage.getItem('test.rightPanelWidth')).toBe('316');
+    key('ArrowRight'); // separator right → back down
+    expect(width()).toBe(300);
+    expect(
+      container
+        .querySelector('[role="separator"]')!
+        .getAttribute('aria-valuenow'),
+    ).toBe('300');
+  });
+
+  it('Home/End jump to the bounds', () => {
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    key('Home');
+    expect(width()).toBe(240);
+    key('End');
+    expect(width()).toBe(480);
   });
 });

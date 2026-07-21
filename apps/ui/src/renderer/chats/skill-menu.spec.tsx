@@ -10,6 +10,9 @@ import { SkillMenu } from './skill-menu';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+// jsdom has no scrollIntoView; the highlight-visibility effect calls it.
+Element.prototype.scrollIntoView = vi.fn();
+
 const mounted: { root: Root; container: HTMLElement }[] = [];
 
 async function mount(ui: React.ReactElement): Promise<HTMLElement> {
@@ -70,6 +73,41 @@ describe('SkillMenu', () => {
     );
     const options = container.querySelectorAll('[role="option"]');
     expect(options[0]!.getAttribute('aria-selected')).toBe('false');
+    expect(options[1]!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('keeps the highlighted option visible — scrollIntoView fires on highlight movement', async () => {
+    const scrolls = Element.prototype.scrollIntoView as ReturnType<
+      typeof vi.fn
+    >;
+    scrolls.mockClear();
+    const container = await mount(
+      <SkillMenu
+        skills={SKILLS}
+        highlightIndex={0}
+        onSelect={vi.fn()}
+        onHighlight={vi.fn()}
+      />,
+    );
+    // Mount scrolls the initial highlight into view once.
+    expect(scrolls).toHaveBeenCalledWith({ block: 'nearest' });
+    scrolls.mockClear();
+
+    const root = mounted.at(-1)!.root;
+    await act(async () => {
+      root.render(
+        <SkillMenu
+          skills={SKILLS}
+          highlightIndex={1}
+          onSelect={vi.fn()}
+          onHighlight={vi.fn()}
+        />,
+      );
+    });
+    // The moved highlight (keyboard wrap-around included) is scrolled to
+    // `nearest` — offscreen options can no longer hold aria-selected.
+    expect(scrolls).toHaveBeenCalledWith({ block: 'nearest' });
+    const options = container.querySelectorAll('[role="option"]');
     expect(options[1]!.getAttribute('aria-selected')).toBe('true');
   });
 

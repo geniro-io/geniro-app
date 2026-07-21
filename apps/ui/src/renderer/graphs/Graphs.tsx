@@ -97,7 +97,9 @@ export function Graphs({
     [handle],
   );
 
-  const [summaries, setSummaries] = useState<WorkflowSummary[]>([]);
+  // null = not yet loaded (the Settings `clis` pattern) — the empty state is
+  // an authoritative claim reserved for a resolved-but-empty library.
+  const [summaries, setSummaries] = useState<WorkflowSummary[] | null>(null);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
   const [name, setName] = useState('');
   // Set in the create dialog / loaded with the workflow; carried through every
@@ -606,7 +608,11 @@ export function Graphs({
           </ErrorText>
         ) : null}
 
-        {summaries.length === 0 ? (
+        {summaries === null ? (
+          <p className="flex-1 p-4 text-sm text-muted-foreground">
+            Loading workflows…
+          </p>
+        ) : summaries.length === 0 ? (
           <EmptyState className="flex-1">
             <div className="flex flex-col items-center gap-4">
               <WorkflowIcon
@@ -716,7 +722,7 @@ export function Graphs({
         ) : null}
 
         <div className="flex min-h-0 flex-1">
-          <NodePalette />
+          <NodePalette onAdd={addNode} />
 
           <div
             className="relative min-w-0 flex-1 [overscroll-behavior:none]"
@@ -768,6 +774,10 @@ export function Graphs({
                 edge="left"
                 label="Resize inspector"
                 onMouseDown={inspector.startResize}
+                value={inspector.width}
+                min={inspector.minWidth}
+                max={inspector.maxWidth}
+                onResize={inspector.resizeTo}
               />
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
                 <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">

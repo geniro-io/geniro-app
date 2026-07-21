@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
   const term = {
     loadAddon: vi.fn(),
     open: vi.fn(),
+    focus: vi.fn(),
     reset: vi.fn(),
     write: vi.fn(),
     dispose: vi.fn(),
@@ -116,6 +117,7 @@ beforeEach(() => {
   mocks.term.write.mockClear();
   mocks.term.reset.mockClear();
   mocks.term.dispose.mockClear();
+  mocks.term.focus.mockClear();
 });
 
 afterEach(() => {
@@ -135,6 +137,18 @@ describe('TerminalPanel', () => {
     expect(mocks.term.reset).toHaveBeenCalled();
     expect(mocks.term.write).toHaveBeenCalledWith('history');
     expect(client?.resize).toHaveBeenCalledWith(80, 24);
+  });
+
+  it('focuses the terminal on open and again on attach — keys route to the PTY, not the trigger button', () => {
+    render();
+    // xterm's open() does not focus; without the explicit call, keystrokes
+    // stay on the background button under the modal (Space re-fires it).
+    expect(mocks.term.focus).toHaveBeenCalled();
+
+    mocks.term.focus.mockClear();
+    const client = mocks.clients[0];
+    act(() => client?.events.onSnapshot?.('history', 'running', null));
+    expect(mocks.term.focus).toHaveBeenCalled();
   });
 
   it('shows a connecting state, then NO badge once the mirror is healthy', () => {

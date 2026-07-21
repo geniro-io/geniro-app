@@ -154,6 +154,34 @@ describe('PtyService', () => {
     expect(() => service.kill('gone')).not.toThrow();
   });
 
+  it('create during daemon shutdown reports RUN_STOPPING, not a false "already claimed"', () => {
+    const { service, registry, spawns } = build();
+    // tryClaim refuses once shutdown begins — the one reachable cause of a
+    // refused claim, since each create keys a fresh UUID.
+    void registry.onApplicationShutdown();
+
+    expect(() => service.create(INPUT)).toThrowError(
+      /daemon shutdown started before the terminal could open/,
+    );
+    expect(spawns).toHaveLength(0);
+  });
+
+  it('a genuinely live duplicate claim still reports TERMINAL_BUSY', () => {
+    // The double-spawn defense: a registry that reports the key as actively
+    // claimed (not shutting down) must surface the conflict, not RUN_STOPPING.
+    const registry = {
+      tryClaim: () => false,
+      has: () => true,
+    } as unknown as ProcessRegistry;
+    const service = new PtyService(registry, {
+      spawnPty: () => {
+        throw new Error('spawn must not be reached');
+      },
+    });
+
+    expect(() => service.create(INPUT)).toThrowError(/already claimed/);
+  });
+
   it('dispose-then-shutdown does not abort the registry cancel loop', async () => {
     const { service, registry, ptys } = build();
     const first = service.create(INPUT);

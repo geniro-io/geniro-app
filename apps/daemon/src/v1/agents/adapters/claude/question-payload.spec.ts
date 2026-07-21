@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAX_ANSWER_LENGTH } from '../../chat.types';
 import {
   optionLabelsOf,
   questionTextOf,
@@ -55,6 +56,25 @@ describe('question-payload projections', () => {
         questions: [{ question: 'ok', options: [{ label: 'A' }, { bad: 1 }] }],
       }),
     ).toEqual(['A']);
+  });
+
+  it('drops empty and oversized option labels (TWIN PARSER rule mirrored from the renderer card)', () => {
+    // An empty label is unanswerable, and an oversized one offers an answer
+    // the daemon's own answer channel (MAX_ANSWER_LENGTH gate) would reject.
+    const labels = optionLabelsOf({
+      questions: [
+        {
+          question: 'pick',
+          options: [
+            { label: '' },
+            { label: 'ok' },
+            { label: 'x'.repeat(MAX_ANSWER_LENGTH) },
+            { label: 'x'.repeat(MAX_ANSWER_LENGTH + 1) },
+          ],
+        },
+      ],
+    });
+    expect(labels).toEqual(['ok', 'x'.repeat(MAX_ANSWER_LENGTH)]);
   });
 
   it('withResponse folds the answer into the tool input as `response`', () => {

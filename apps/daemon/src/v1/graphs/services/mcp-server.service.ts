@@ -62,8 +62,10 @@ export class McpServerService {
         enableJsonResponse: true,
       });
       res.on('close', () => {
-        void transport.close();
-        void server.close();
+        // Fire-and-forget teardown: a rejected close must not surface as an
+        // unhandled rejection on every dropped request.
+        transport.close().catch(() => {});
+        server.close().catch(() => {});
       });
       await server.connect(transport);
       await transport.handleRequest(req.raw, res, req.body);

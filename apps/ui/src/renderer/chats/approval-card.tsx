@@ -1,5 +1,5 @@
 import { MessageCircleQuestion, ShieldQuestion } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -16,6 +16,9 @@ interface ParsedQuestion {
 
 /** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
 const MAX_ANSWER_LENGTH = 32_768;
+
+/** How long "Sending…" holds before the one-shot freeze re-arms for a retry. */
+const RESPONDED_RETRY_MS = 10_000;
 
 function combinedAnswer(
   questions: ParsedQuestion[],
@@ -109,6 +112,16 @@ export function ApprovalCard({
   // double-click or Approve-then-Deny would emit a conflicting verdict the
   // daemon silently drops.
   const [responded, setResponded] = useState(false);
+  // The freeze must not be forever: if the verdict item never arrives (the
+  // enqueued write failed, or the ack was 'invalid'), re-arm the buttons —
+  // the daemon settles a request exactly once, so a retry is safe.
+  useEffect(() => {
+    if (!responded || verdict !== null || expired) {
+      return;
+    }
+    const timer = setTimeout(() => setResponded(false), RESPONDED_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [responded, verdict, expired]);
   const respond = (allow: boolean, answer?: string): void => {
     if (responded) {
       return;

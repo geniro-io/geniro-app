@@ -33,11 +33,15 @@ export class FastifyMetricsMiddleware implements NestMiddleware {
       return next();
     }
 
-    // Label with the query-stripped path only: query strings carry
-    // caller-supplied values (cwd folder paths, cursors) that must not be
+    // Label with the ROUTE TEMPLATE (e.g. `/v1/chats/:runId/items`), never the
+    // concrete URL: query strings and path parameters carry caller-supplied
+    // values (cwd folder paths, run ids, user-named slugs) that must not be
     // republished on the metrics surface, and per-unique-URL labels grow the
-    // registry unboundedly.
-    const path = (originalUrl || '').split('?')[0] ?? '';
+    // registry unboundedly. Fastify has routed by the time middleware runs;
+    // the query-stripped path remains only as the unrouted (404) fallback.
+    const route = (req as { routeOptions?: { url?: string } }).routeOptions
+      ?.url;
+    const path = route ?? (originalUrl || '').split('?')[0] ?? '';
 
     this.metricsService.incGauge(RequestMetric, 1, {
       path,

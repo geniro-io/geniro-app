@@ -85,4 +85,24 @@ describe('FastifyMetricsMiddleware', () => {
       status: '200',
     });
   });
+
+  it('labels with the route TEMPLATE, never the concrete path parameters', () => {
+    // Run UUIDs and user-named slugs are caller-supplied values: labeling the
+    // concrete URL republishes them on the public /metrics surface and mints
+    // a fresh label per run for the daemon's lifetime.
+    const { middleware, incGauge } = build();
+    const req = {
+      originalUrl: '/v1/chats/0f8b3c1d-run-uuid/items?afterSeq=41',
+      method: 'GET',
+      routeOptions: { url: '/v1/chats/:runId/items' },
+    } as unknown as FastifyRequest;
+
+    middleware.use(req, fakeReply(), vi.fn());
+
+    expect(incGauge).toHaveBeenCalledWith(expect.anything(), 1, {
+      path: '/v1/chats/:runId/items',
+      method: 'GET',
+      status: '200',
+    });
+  });
 });

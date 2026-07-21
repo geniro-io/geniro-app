@@ -82,6 +82,39 @@ describe('NodePalette', () => {
     expect(dialog()?.textContent).toContain('Drag this agent onto the canvas');
   });
 
+  it('the info dialog offers a click/keyboard add path — "Add to canvas" fires onAdd and closes', () => {
+    // Drag is not the only way in: keyboard users (and failed trackpad drags)
+    // add through the dialog's button, which hands the item to the canvas's
+    // position-less add (stack-to-the-right placement).
+    const onAdd = vi.fn();
+    act(() => {
+      root.render(<NodePalette onAdd={onAdd} />);
+    });
+    click(tileByLabel('Claude'));
+
+    const add = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent === 'Add to canvas');
+    expect(add).toBeDefined();
+    click(add);
+
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'agent', agent: 'claude' }),
+    );
+    expect(dialog()).toBeNull();
+  });
+
+  it('without onAdd the info dialog stays drag-only (no Add button)', () => {
+    render();
+    click(tileByLabel('Claude'));
+
+    expect(
+      Array.from(container.querySelectorAll('button')).some(
+        (b) => b.textContent === 'Add to canvas',
+      ),
+    ).toBe(false);
+  });
+
   it("renders each kind's own schema in the info dialog", () => {
     render();
     const schemaKeys = (): string[] =>

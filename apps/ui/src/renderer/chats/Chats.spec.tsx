@@ -1740,10 +1740,9 @@ describe('Chats run composer chips', () => {
   function chips(container: HTMLElement): HTMLElement[] {
     // The info chips are non-interactive Badges — NEVER disabled buttons: a
     // disabled button's pointer-events-none would block the cwd tooltip and
-    // its 50% opacity fails AA contrast.
-    return [
-      ...container.querySelectorAll<HTMLElement>('[data-slot="badge"]'),
-    ].filter((el) => el.className.includes('rounded-lg'));
+    // its 50% opacity fails AA contrast. Selected by slot only (class names
+    // are restyle-prone); the composer view renders no other badges.
+    return [...container.querySelectorAll<HTMLElement>('[data-slot="badge"]')];
   }
 
   it("a chat run shows its agent + folder as INACTIVE chips with the create screen's card", async () => {
@@ -2221,5 +2220,58 @@ describe('Chats skill autocomplete', () => {
     // The skills fetched are the TRIGGER's downstream agent's, not the
     // composer's bare-agent default.
     expect(api.listSkills).toHaveBeenCalledWith('cursor-agent', '/proj');
+  });
+});
+
+describe('Chats sidebar loading state', () => {
+  it('shows Loading (never "No chats yet") while the first list fetch is in flight', async () => {
+    // "No chats yet" is an authoritative claim reserved for a resolved-but-
+    // empty list — flashing it during the fetch reads as data loss.
+    api.listChats.mockReturnValue(new Promise(() => {}));
+    workflowApi.listRuns.mockReturnValue(new Promise(() => {}));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.textContent).toContain('Loading chats…');
+    expect(container.textContent).not.toContain('No chats yet');
+  });
+
+  it('reserves "No chats yet" for a resolved-but-empty list', async () => {
+    api.listChats.mockResolvedValue([]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.textContent).toContain('No chats yet');
+    expect(container.textContent).not.toContain('Loading chats…');
+  });
+});
+
+describe('Chats follow-up send failure', () => {
+  it('a failed follow-up send restores the typed text into the composer', async () => {
+    // Distinct cause path from the run-start composer's catch: the open
+    // transcript's sendFollowUp has its own restore (mirror of restoreHead).
+    api.getHistory.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    api.sendMessage.mockRejectedValue(new Error('daemon down'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'precious follow-up');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')?.click();
+    });
+
+    expect(container.textContent).toContain('daemon down');
+    expect(container.querySelector('textarea')!.value).toBe(
+      'precious follow-up',
+    );
   });
 });

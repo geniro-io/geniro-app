@@ -120,8 +120,15 @@ export abstract class AgentAdapter {
     } catch (err) {
       // A synchronous throw between prepareTurn and a settling handle (a spawn
       // failure, a bad argv) would otherwise leak the turn-scoped resource —
-      // the disposer only rides `handle.done`, which never arrives here.
-      dispose?.();
+      // the disposer only rides `handle.done`, which never arrives here. Its
+      // own failure must not mask the original error.
+      try {
+        dispose?.();
+      } catch (disposeErr) {
+        this.options.logger?.warn(
+          `turn resource disposer failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
+        );
+      }
       throw err;
     }
     if (dispose) {

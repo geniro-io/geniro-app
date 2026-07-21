@@ -629,6 +629,64 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     expect(adapter.disposeCalls).toBe(1);
   });
 
+  /** A disposer that itself throws AFTER real cleanup — the rmSync-EACCES shape. */
+  class ThrowingDisposerAdapter extends ClaudeAdapter {
+    protected override prepareTurn(
+      input: AgentTurnInput,
+    ): (() => void) | undefined {
+      const dispose = super.prepareTurn(input);
+      return () => {
+        dispose?.();
+        throw new Error('EACCES: rm failed');
+      };
+    }
+  }
+
+  it('a throwing disposer on settle is logged as a warning, never an unhandled rejection', async () => {
+    const warn = vi.fn();
+    const { spawn, child } = fakeSpawn();
+    const handle = new ThrowingDisposerAdapter({
+      spawn,
+      mcpConfigDir: mcpDir(),
+      logger: { warn },
+    }).start({ prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT }, () => {});
+
+    child.emit('close', 0, null);
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // The guard exists so cleanup failure cannot reject the settle chain —
+    // deleting the catch would make this an unhandled rejection instead.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('disposer failed'),
+    );
+  });
+
+  it('a throwing disposer in the sync-throw catch never masks the original error', () => {
+    class ThrowingBothAdapter extends ThrowingDisposerAdapter {
+      protected override buildArgs(): string[] {
+        throw new Error('bad argv');
+      }
+    }
+    const warn = vi.fn();
+    const adapter = new ThrowingBothAdapter({
+      spawn: fakeSpawn().spawn,
+      mcpConfigDir: mcpDir(),
+      logger: { warn },
+    });
+
+    // The ORIGINAL error propagates; the cleanup failure is only logged.
+    expect(() =>
+      adapter.start(
+        { prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT },
+        () => {},
+      ),
+    ).toThrow('bad argv');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('disposer failed'),
+    );
+  });
+
   it('honors a toolTimeoutMs override', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(

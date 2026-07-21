@@ -159,6 +159,9 @@ export function Chats({
   // active run's current status without being re-created on every list change.
   const runsRef = useRef<ChatRun[]>([]);
   // First list fetch settled (either way) — gates the "No chats yet" claim.
+  // A boolean rather than Graphs' `| null` sentinel deliberately: `runs` has
+  // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
+  // null union would force to re-guard.
   const [runsLoaded, setRunsLoaded] = useState(false);
   useEffect(() => {
     runsRef.current = runs;

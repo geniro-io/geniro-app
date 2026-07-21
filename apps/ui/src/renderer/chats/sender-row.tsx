@@ -1,5 +1,3 @@
-import { memo } from 'react';
-
 import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 
@@ -9,7 +7,10 @@ import { cn } from '../components/ui/utils';
  * mirrored to the right for the user's own messages. (No name line above;
  * identity lives in the metadata, exactly like the reference.)
  */
-export const SenderRow = memo(function SenderRow({
+// Deliberately NOT memoized: every call site passes fresh inline `children`
+// JSX, so a memo's shallow compare could never bail out here — the render win
+// comes from the memoized TranscriptEntryView/ChatListItem shells above.
+export function SenderRow({
   name,
   avatarName,
   colorKey,
@@ -63,4 +64,4 @@ export const SenderRow = memo(function SenderRow({
       </div>
     </div>
   );
-});
+}

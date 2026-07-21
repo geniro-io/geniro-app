@@ -166,4 +166,39 @@ describe('PanelResizeHandle keyboard (window-splitter pattern)', () => {
     key('End');
     expect(width()).toBe(480);
   });
+
+  it('right-edge handle (a left-side panel): ArrowRight widens — the sign flips with the edge', () => {
+    // The palette's handle sits on its RIGHT edge, so moving the separator
+    // right widens the panel — the inverse of the RightPanel fixture above.
+    function LeftPanel(): React.JSX.Element {
+      const { width, minWidth, maxWidth, startResize, resizeTo } =
+        usePanelWidth({
+          storageKey: 'test.leftPanelWidth',
+          defaultWidth: 240,
+          minWidth: 180,
+          maxWidth: 400,
+          handleEdge: 'right',
+        });
+      return (
+        <aside style={{ width }} className="relative">
+          <PanelResizeHandle
+            edge="right"
+            label="Resize panel"
+            onMouseDown={startResize}
+            value={width}
+            min={minWidth}
+            max={maxWidth}
+            onResize={resizeTo}
+          />
+        </aside>
+      );
+    }
+    act(() => {
+      root.render(<LeftPanel />);
+    });
+    key('ArrowRight');
+    expect(width()).toBe(256);
+    key('ArrowLeft');
+    expect(width()).toBe(240);
+  });
 });

@@ -93,6 +93,18 @@ describe('PtyService', () => {
     expect(registry.has('run-1')).toBe(false);
   });
 
+  it('merges caller-provided env over the stripped child env (re-injection seam)', () => {
+    const { service, spawns } = build();
+
+    service.create({ ...INPUT, env: { ANTHROPIC_API_KEY: 'sk-reinjected' } });
+
+    // The extra env rides the spawn AND the strip still applies around it —
+    // a reorder letting `input.env` bypass buildChildEnv would leak GENIRO_*.
+    expect(spawns[0]?.options.env.ANTHROPIC_API_KEY).toBe('sk-reinjected');
+    expect(spawns[0]?.options.env.GENIRO_PTY_SPEC_SECRET).toBeUndefined();
+    expect(spawns[0]?.options.env.TERM).toBe('xterm-256color');
+  });
+
   it('buffers scrollback and streams live data after the snapshot', () => {
     const { service, ptys } = build();
     const { id } = service.create(INPUT);

@@ -82,6 +82,37 @@ describe('TerminalsService', () => {
     expect(wire.status).toBe('running');
   });
 
+  it('re-injects the inherited Anthropic credential for the claude-only mirror', async () => {
+    // buildChildEnv strips the credential from every child; the terminal
+    // mirror is definitionally claude (terminalCommand rejects cursor), so
+    // the create input must carry the re-injection or every `claude --resume`
+    // mirror silently de-authenticates.
+    const saved = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-terminal';
+    try {
+      const { service, pty } = build({
+        run: CHAT_RUN,
+        nodeState: { agentSessionId: 'sess-9' },
+      });
+
+      await service.createForRun({ runId: 'run-1' });
+
+      expect(pty.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            ANTHROPIC_API_KEY: 'sk-ant-terminal',
+          }),
+        }),
+      );
+    } finally {
+      if (saved === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = saved;
+      }
+    }
+  });
+
   it('rejects until the run has a resumable CLI session id', async () => {
     const { service, pty } = build({ run: CHAT_RUN, nodeState: null });
 

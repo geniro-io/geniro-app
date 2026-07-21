@@ -223,3 +223,52 @@ describe('Settings updates section', () => {
     });
   });
 });
+
+describe('Settings key removal', () => {
+  it('a failed key removal surfaces the error instead of silently claiming success', async () => {
+    // The IPC call also restarts the daemon, which has real failure paths —
+    // before the error branch, a rejection was unhandled with zero feedback
+    // while the sibling save path showed its error.
+    geniro.hasSecret.mockResolvedValue(true);
+    geniro.deleteSecret
+      .mockReset()
+      .mockRejectedValue(new Error('keychain locked'));
+    await mount();
+
+    const remove = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent?.includes('Remove saved key'));
+    expect(remove).toBeDefined();
+    await act(async () => {
+      remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('keychain locked');
+    // The UI must not claim the key is gone when it is not.
+    expect(
+      Array.from(container.querySelectorAll('button')).some((b) =>
+        b.textContent?.includes('Remove saved key'),
+      ),
+    ).toBe(true);
+  });
+
+  it('a successful removal clears the stored-key state and flashes Saved', async () => {
+    geniro.hasSecret.mockResolvedValue(true);
+    geniro.deleteSecret.mockReset().mockResolvedValue(undefined);
+    await mount();
+
+    const remove = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent?.includes('Remove saved key'));
+    await act(async () => {
+      remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(geniro.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
+    expect(
+      Array.from(container.querySelectorAll('button')).some((b) =>
+        b.textContent?.includes('Remove saved key'),
+      ),
+    ).toBe(false);
+  });
+});

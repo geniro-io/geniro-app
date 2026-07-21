@@ -67,6 +67,46 @@ describe('ApprovalCard', () => {
     ).toBeUndefined();
   });
 
+  it('the freeze re-arms after the retry window when no verdict ever arrives', () => {
+    // The verdict item can fail to persist (or the ack can be 'invalid');
+    // the daemon settles a request exactly once, so re-offering the buttons
+    // is safe — "Sending…" must not be forever.
+    vi.useFakeTimers();
+    try {
+      const onRespond = vi.fn();
+      const el = render(
+        <ApprovalCard
+          toolName="Write"
+          input={{ file_path: 'a.txt' }}
+          verdict={null}
+          onRespond={onRespond}
+        />,
+      );
+      const approve = [...el.querySelectorAll('button')].find(
+        (b) => b.textContent === 'Approve',
+      )!;
+      act(() => {
+        approve.click();
+      });
+      expect(el.textContent).toContain('Sending…');
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      // Buttons are back; a retry goes through.
+      const retry = [...el.querySelectorAll('button')].find(
+        (b) => b.textContent === 'Approve',
+      );
+      expect(retry).toBeDefined();
+      act(() => {
+        retry!.click();
+      });
+      expect(onRespond).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a question card freezes after picking an option — no double-submit window', () => {
     const onRespond = vi.fn();
     const el = render(

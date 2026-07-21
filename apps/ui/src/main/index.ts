@@ -156,7 +156,15 @@ function main(): void {
     void supervisor
       .start()
       .then((handle) => {
-        mainWindow?.webContents.send(IPC.onDaemonRestarted, handle);
+        // The window can be destroyed before its 'closed' handler nulls the
+        // ref — a send() into that gap must not mislog as a start failure.
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(IPC.onDaemonRestarted, handle);
+          }
+        } catch (err) {
+          console.error('[ui] daemon-ready notify failed:', err);
+        }
       })
       .catch((err: unknown) => {
         // Surface the failure but keep the window — the renderer renders a

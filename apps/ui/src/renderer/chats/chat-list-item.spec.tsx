@@ -90,7 +90,9 @@ describe('ChatListItem', () => {
     // is the activation overlay button): only the truncated label + the
     // rename pencil for a 1:1 chat; a workflow run gets one leading glyph.
     const chat = await mount(<ChatListItem {...props()} />);
-    const chatIcons = chat.querySelectorAll('li > div > span:first-child > svg');
+    const chatIcons = chat.querySelectorAll(
+      'li > div > span:first-child > svg',
+    );
     expect(chatIcons.length).toBe(0);
     const wf = await mount(<ChatListItem {...props({ isWorkflow: true })} />);
     expect(

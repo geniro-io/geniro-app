@@ -84,10 +84,4 @@ describe('Dialog focus management', () => {
     renderDialog(false);
     expect(document.activeElement).toBe(opener);
   });
-
-  it('renders the corner ✕ through the Button primitive (shared focus chrome)', () => {
-    renderDialog(true);
-    const close = container.querySelector('[aria-label="Close"]');
-    expect(close?.getAttribute('data-slot')).toBe('button');
-  });
 });

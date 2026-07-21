@@ -14,6 +14,7 @@ import { mintToken } from './auth/mint-token';
 import type { RuntimeInfo } from './auth/runtime';
 import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
+import { installCrashGuards } from './utils/crash-guards';
 import type { DaemonInfo } from './utils/handshake';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
@@ -21,23 +22,7 @@ import { ChatService } from './v1/agents/services/chat.service';
 import { CursorMcpMergeService } from './v1/agents/services/cursor-mcp-merge.service';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
-// Node terminates on an unhandled rejection by default, and that crash
-// bypasses Nest's shutdown hooks — the ProcessRegistry drain and pidfile
-// cleanup never run, orphaning spawned CLI process groups mid-turn. A stray
-// rejection is a bug to log loudly, never a reason to orphan children.
-process.on('unhandledRejection', (reason) => {
-  console.error('unhandled promise rejection', { err: String(reason) });
-});
-
-// An uncaught exception leaves unknown state — exit, but through the graceful
-// SIGTERM path so the shutdown hooks (child reaping, pidfile removal) still
-// run. The failsafe hard-exit sits past the registry's 5s drain but inside
-// the UI supervisor's 7s kill grace.
-process.on('uncaughtException', (err) => {
-  console.error('uncaught exception - shutting down', { err: String(err) });
-  process.kill(process.pid, 'SIGTERM');
-  setTimeout(() => process.exit(1), 6500).unref();
-});
+installCrashGuards();
 
 const startedAt = Date.now();
 const token = mintToken();

@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 import { InitialsAvatar } from '../components/ui/avatar';
 import { CallBlock } from './call-block';
 import { MarkdownContent } from './markdown-content';
@@ -16,7 +18,7 @@ import {
  * communication cards, and its closing result all live in a single card,
  * with the `sender · time` metadata line under it.
  */
-export function TurnBlock({
+export const TurnBlock = memo(function TurnBlock({
   block,
   nodes,
   chatAgentName,
@@ -89,4 +91,4 @@ export function TurnBlock({
       </div>
     </div>
   );
-}
+});

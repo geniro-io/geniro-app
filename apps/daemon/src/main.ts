@@ -14,12 +14,15 @@ import { mintToken } from './auth/mint-token';
 import type { RuntimeInfo } from './auth/runtime';
 import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
+import { installCrashGuards } from './utils/crash-guards';
 import type { DaemonInfo } from './utils/handshake';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { ChatService } from './v1/agents/services/chat.service';
 import { CursorMcpMergeService } from './v1/agents/services/cursor-mcp-merge.service';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
+
+installCrashGuards();
 
 const startedAt = Date.now();
 const token = mintToken();

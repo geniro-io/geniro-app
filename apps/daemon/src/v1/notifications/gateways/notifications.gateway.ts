@@ -23,6 +23,11 @@ import { extractStringField } from '../../agents/utils/ws-payload';
  * `answer` is the user's picked option / typed text for a question card
  * (AskUserQuestion, M4) — optional and only honored as a non-empty string, so
  * the plain approve/deny wire stays byte-compatible.
+ *
+ * TWIN PARSER: the renderer produces this envelope in
+ * `DaemonClient.sendVerdict` (apps/ui/src/renderer/daemon-client.ts) — no
+ * daemon↔renderer shared package exists, so a shape change here must be
+ * mirrored there, and vice versa.
  */
 function extractVerdict(data: unknown): {
   runId: string;
@@ -155,6 +160,10 @@ export class NotificationsGateway
    * paused `ask`-node turn via the {@link ApprovalRegistry}. The acknowledgment
    * distinguishes applied, expired, and retryable-invalid payloads. The socket
    * is already token-authenticated at `handleConnection`.
+   *
+   * TWIN PARSER: the `verdict_ack` reply shape is re-declared by the renderer
+   * as `VerdictAck` (apps/ui/src/renderer/daemon-client.ts) — a shape change
+   * here must be mirrored there, and vice versa.
    */
   @SubscribeMessage('verdict')
   verdict(@MessageBody() data: unknown): WsResponse<{

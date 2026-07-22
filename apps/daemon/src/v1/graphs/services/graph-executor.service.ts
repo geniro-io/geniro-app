@@ -57,6 +57,7 @@ import { flattenRole } from '../utils/role-text';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
 import { CursorProbeService } from './cursor-probe.service';
+import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
 type NodeOutcome = 'completed' | 'failed' | 'cancelled' | 'skipped';
@@ -130,8 +131,27 @@ export class GraphExecutorService {
     private readonly cursorProbe: CursorProbeService,
     private readonly cursorMerge: CursorMcpMergeService,
     private readonly skillHarvest: SkillHarvestStore,
+    private readonly store: WorkflowStoreService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
+
+  /**
+   * The run-start composition (library lookup → DAG launch) lives in the
+   * service layer so the controller stays one-call and a future run-start
+   * guard cannot be bypassed from the route.
+   */
+  async startRunBySlug(
+    slug: string,
+    input: Pick<StartWorkflowRunInput, 'cwd' | 'prompt'>,
+  ): Promise<RunWire> {
+    const { workflow } = await this.store.get(slug);
+    return this.startRun({
+      slug,
+      workflow,
+      cwd: input.cwd,
+      prompt: input.prompt,
+    });
+  }
 
   /**
    * Create the run + pending node states, persist the seed message, kick off
@@ -162,17 +182,10 @@ export class GraphExecutorService {
     // Call tokens are minted per caller node inside drive() (once the call
     // edges are known); nothing to revoke here yet — the catch keeps the
     // revokeRun call for symmetry with the settle path.
-    let cursorCalls: CursorCallsCapability;
     try {
       for (const node of input.workflow.nodes) {
         await this.nodeStateDao.createPending(run.id, node.id, em);
       }
-      // Cursor callers are admitted only on a probed MCP-trust pass. The
-      // verdict is cached per installed binary, so only the very first
-      // cursor-caller run on a machine actually waits on the probe turn.
-      cursorCalls = hasCursorCaller(input.workflow)
-        ? await this.cursorProbe.ensureVerdict()
-        : this.cursorProbe.capability();
     } catch (err) {
       // Failed before drive() registered the aggregate handle — drop the claim
       // and any call tokens, and close the run so it is not wedged as
@@ -194,7 +207,7 @@ export class GraphExecutorService {
         'daemon shutdown started before the workflow could launch',
       );
     }
-    this.drive(em, run.id, input.workflow, cwd, input.prompt, cursorCalls);
+    this.drive(em, run.id, input.workflow, cwd, input.prompt);
 
     return runToWire(run);
   }
@@ -287,7 +300,39 @@ export class GraphExecutorService {
   }
 
   /** The DAG walk. Never throws — every failure becomes transcript + status. */
+  /**
+   * Resolve the cursor call capability, then walk the DAG. The probe await
+   * lives HERE — off the run-start POST — so the first cursor-caller run on a
+   * machine returns its run row instantly and only its execution waits out
+   * the probe turn (~90s worst case). Cancel/shutdown during the await is
+   * covered by the registry's claim→register intent window.
+   */
   private drive(
+    em: EntityManager,
+    runId: string,
+    workflow: Workflow,
+    cwd: string,
+    seedPrompt: string,
+  ): void {
+    void (async () => {
+      let cursorCalls: CursorCallsCapability;
+      try {
+        // Cursor callers are admitted only on a probed MCP-trust pass. The
+        // verdict is cached per installed binary, so only the very first
+        // cursor-caller run on a machine actually waits on the probe turn.
+        cursorCalls = hasCursorCaller(workflow)
+          ? await this.cursorProbe.ensureVerdict()
+          : this.cursorProbe.capability();
+      } catch {
+        // A probe infrastructure failure degrades to the visible no-verdict
+        // path (system item per shut-out caller) — never a wedged run.
+        cursorCalls = this.cursorProbe.capability();
+      }
+      this.driveResolved(em, runId, workflow, cwd, seedPrompt, cursorCalls);
+    })();
+  }
+
+  private driveResolved(
     em: EntityManager,
     runId: string,
     workflow: Workflow,
@@ -517,7 +562,9 @@ export class GraphExecutorService {
         await this.nodeStateDao.setStatus(
           runId,
           node.id,
-          { status: 'running', startedAt: Date.now() },
+          // agentKind stamps which CLI runs this turn — the terminal mirror
+          // must resume against it even after the workflow YAML is edited.
+          { status: 'running', startedAt: Date.now(), agentKind: node.agent },
           em,
         );
         await persistItem(node.id, 'status', null, {
@@ -1125,6 +1172,15 @@ export class GraphExecutorService {
                   em,
                 )
                 .catch(() => {});
+              // Mirror the DAG-launch catch: persistTurnStart already emitted
+              // the 'running' status item, and the renderer only balances it
+              // against a terminal one — without this the agents panel counts
+              // the callee as live for the rest of the run.
+              await persistItem(callee.id, 'status', null, {
+                nodeId: callee.id,
+                status: 'failed',
+                ...(callId ? { callId } : {}),
+              }).catch(() => {});
             });
             return {
               status: 'failed',

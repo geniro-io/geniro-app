@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
+import { GENIRO_MCP_CALL_TOOLS } from '../../agents/utils/cursor-mcp-entry';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import type { CursorProbeService } from './cursor-probe.service';
@@ -149,11 +150,10 @@ describe('McpServerService', () => {
     const tools = (
       json().result as { tools: { name: string; description: string }[] }
     ).tools;
-    expect(tools.map((t) => t.name)).toEqual([
-      'call_agent',
-      'await_agent',
-      'answer_agent',
-    ]);
+    // Lockstep with the cursor autoApprove mirror: the endpoint's served tool
+    // names ARE the list cursor-mcp-entry auto-approves — a tool added here
+    // without updating GENIRO_MCP_CALL_TOOLS fails this assertion.
+    expect(tools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
     expect(tools[0]!.description).toContain('Helper');
     expect(tools[0]!.description).toContain('You help with research.');
     // The question-envelope guidance rides the descriptions: confident-answer
@@ -309,11 +309,7 @@ describe('McpServerService', () => {
     );
     const normalTools = (normal.json().result as { tools: { name: string }[] })
       .tools;
-    expect(normalTools.map((t) => t.name)).toEqual([
-      'call_agent',
-      'await_agent',
-      'answer_agent',
-    ]);
+    expect(normalTools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
   });
 
   it('a parked question is a NON-error question envelope; answer_agent settles it over the endpoint (M4)', async () => {

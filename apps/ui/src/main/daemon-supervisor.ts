@@ -285,6 +285,12 @@ export class DaemonSupervisor {
     let handle: DaemonHandle;
     do {
       const generation = this.restartGeneration;
+      // Mirror stop(): let an in-flight start() settle before acting. A
+      // restart overlapping startup would otherwise miss the mid-boot child
+      // (no pid recorded yet), null it out, and orphan the booting daemon.
+      if (this.startPromise) {
+        await this.startPromise.catch(() => undefined);
+      }
       handle = await this.restartNow();
       if (generation === this.restartGeneration) {
         return handle;

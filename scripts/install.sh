@@ -35,9 +35,14 @@ else
 fi
 
 echo "Resolving the latest Geniro release…"
+release_json="$(curl -fsSL "$api")"
 # Pick the macOS zip asset (electron-updater/Squirrel names it *-mac.zip).
-url="$(curl -fsSL "$api" \
+url="$(printf '%s' "$release_json" \
   | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*-mac\.zip"' \
+  | head -n1 \
+  | sed -E 's/.*"(https:[^"]+)"/\1/')"
+sums_url="$(printf '%s' "$release_json" \
+  | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*SHA256SUMS\.txt"' \
   | head -n1 \
   | sed -E 's/.*"(https:[^"]+)"/\1/')"
 
@@ -49,11 +54,27 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+asset="${url##*/}"
 echo "Downloading $url"
-curl -fSL "$url" -o "$tmp/geniro.zip"
+curl -fSL "$url" -o "$tmp/$asset"
+
+# The app is ad-hoc signed (no notarization), so Gatekeeper verifies nothing —
+# the published checksum is the only integrity check between the release and
+# an executing app. Verify BEFORE unpacking/stripping quarantine; a release
+# without the asset (pre-checksum versions) degrades to TLS-only with a
+# warning, but a mismatch is always fatal.
+if [[ -n "$sums_url" ]]; then
+  curl -fsSL "$sums_url" -o "$tmp/SHA256SUMS.txt"
+  if ! (cd "$tmp" && grep -F "  $asset" SHA256SUMS.txt | shasum -a 256 -c -); then
+    echo "error: checksum verification FAILED for $asset — refusing to install a tampered or corrupted download." >&2
+    exit 1
+  fi
+else
+  echo "warning: this release publishes no SHA256SUMS.txt; proceeding on TLS integrity alone." >&2
+fi
 
 echo "Unpacking…"
-ditto -x -k "$tmp/geniro.zip" "$tmp/extracted"
+ditto -x -k "$tmp/$asset" "$tmp/extracted"
 if [[ ! -d "$tmp/extracted/$APP_NAME" ]]; then
   echo "error: $APP_NAME not found inside the downloaded archive." >&2
   exit 1

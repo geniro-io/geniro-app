@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -193,6 +194,26 @@ describe('SkillsService', () => {
       {
         name: 'component',
         description: 'Make one.',
+        kind: 'command',
+        source: 'project',
+      },
+    ]);
+  });
+
+  it('recurses into a SYMLINKED command subdirectory (parity with symlinked skill dirs)', async () => {
+    const { service, cwd } = build();
+    // A shared command dir symlinked into the project — Dirent reports it as
+    // a symlink, not a directory, which used to silently drop its commands.
+    const shared = tempDir('skills-shared-');
+    writeFileSync(join(shared, 'deploy.md'), 'Ship it.');
+    mkdirSync(join(cwd, '.claude', 'commands'), { recursive: true });
+    symlinkSync(shared, join(cwd, '.claude', 'commands', 'ops'));
+
+    const skills = await service.list('claude', cwd);
+    expect(skills).toEqual([
+      {
+        name: 'deploy',
+        description: 'Ship it.',
         kind: 'command',
         source: 'project',
       },

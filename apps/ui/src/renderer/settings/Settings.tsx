@@ -10,6 +10,7 @@ import {
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
+import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 
 function normalizedCliPaths(
@@ -199,10 +200,19 @@ export function Settings(): React.JSX.Element {
   }, [cursorKey, flashSaved]);
 
   const removeKey = useCallback(async (): Promise<void> => {
-    await window.geniro.deleteSecret('cursor.apiKey');
-    setHasStoredKey(false);
-    setCursorKey('');
-  }, []);
+    setError(null);
+    // Mirror saveCursorKey: the IPC call also restarts the daemon, which has
+    // real failure paths — a silent unhandled rejection would leave the UI
+    // claiming the key is gone with zero feedback.
+    try {
+      await window.geniro.deleteSecret('cursor.apiKey');
+      setHasStoredKey(false);
+      setCursorKey('');
+      flashSaved();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [flashSaved]);
 
   const onToggleUpdates = useCallback(
     (next: boolean): void => {
@@ -286,16 +296,13 @@ export function Settings(): React.JSX.Element {
         <h2 className="text-lg font-medium">Updates</h2>
         <div className="flex items-center gap-3">
           <Switch
+            id="settings-check-updates"
             checked={checkForUpdates}
             onCheckedChange={onToggleUpdates}
-            aria-label="Check for app updates on launch"
           />
-          <button
-            type="button"
-            className="cursor-pointer text-sm font-medium"
-            onClick={() => onToggleUpdates(!checkForUpdates)}>
+          <Label htmlFor="settings-check-updates" className="cursor-pointer">
             Check for app updates on launch
-          </button>
+          </Label>
           <Button
             type="button"
             variant="ghost"

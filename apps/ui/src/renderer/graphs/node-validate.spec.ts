@@ -81,6 +81,26 @@ describe('validateNode', () => {
     ]);
   });
 
+  it("flags a call-only node feeding a data edge (mirror of the daemon's GRAPH_CALL_ONLY_PRODUCER)", () => {
+    // a2 --call--> a1 --data--> a3: a1 runs on demand, so its output has no
+    // place in the DAG order — this stayed green in the builder and only
+    // failed at POST /:slug/runs before the mirror landed.
+    const edges = [call('a2', 'a1'), edge('a1', 'a3')];
+    expect(validateNode(agentA, KINDS, edges).map((e) => e.message)).toEqual([
+      'This node is call-only (runs on demand) — its output cannot feed a data edge. Wire a data input into it or remove that edge.',
+    ]);
+  });
+
+  it('a callee with a data input may feed data (it also runs as a DAG node)', () => {
+    const edges = [edge('t1', 'a1'), call('a2', 'a1'), edge('a1', 'a3')];
+    expect(validateNode(agentA, KINDS, edges)).toEqual([]);
+  });
+
+  it('a call-only node with an outgoing CALL edge stays clean (calls are not data flow)', () => {
+    const edges = [call('a2', 'a1'), call('a1', 'a3')];
+    expect(validateNode(agentA, KINDS, edges)).toEqual([]);
+  });
+
   it('flags call edges touching a trigger on both endpoints', () => {
     expect(
       validateNode(trigger, KINDS, [call('a1', 't1')]).map((e) => e.message),

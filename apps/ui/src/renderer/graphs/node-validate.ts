@@ -158,6 +158,29 @@ export function validateNode(
       message: 'This trigger fires nothing — connect it to an agent.',
     });
   }
+  // Mirror of the daemon's run gate `GRAPH_CALL_ONLY_PRODUCER`: a call-only
+  // node (call target, no data/trigger input) runs on demand, so its output
+  // has no place in the DAG order and may not feed a data edge.
+  const hasIncomingCall = [...incoming.keys()].some((key) =>
+    key.startsWith('call '),
+  );
+  const hasIncomingData = [...incoming.keys()].some((key) =>
+    key.startsWith('data '),
+  );
+  const feedsData = [...outgoing.keys()].some((key) => key.startsWith('data '));
+  if (
+    node.kind === 'agent' &&
+    hasIncomingCall &&
+    !hasIncomingData &&
+    feedsData
+  ) {
+    errors.push({
+      type: 'connection',
+      side: 'output',
+      message:
+        'This node is call-only (runs on demand) — its output cannot feed a data edge. Wire a data input into it or remove that edge.',
+    });
+  }
   return errors;
 }
 

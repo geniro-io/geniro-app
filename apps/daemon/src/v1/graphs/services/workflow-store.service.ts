@@ -100,29 +100,38 @@ export class WorkflowStoreService {
   async list(): Promise<WorkflowSummary[]> {
     await mkdir(this.dir, { recursive: true });
     const entries = await readdir(this.dir);
-    const summaries: WorkflowSummary[] = [];
-    for (const entry of entries.filter((e) => e.endsWith(WORKFLOW_SUFFIX))) {
-      const path = join(this.dir, entry);
-      try {
-        const workflow = parseWorkflowYaml(await readFile(path, 'utf8'));
-        const stats = await stat(path);
-        summaries.push({
-          slug: entry.slice(0, -WORKFLOW_SUFFIX.length),
-          name: workflow.name,
-          description: workflow.description ?? null,
-          nodeCount: workflow.nodes.length,
-          edgeCount: workflow.edges.length,
-          agentCounts: agentCountsOf(workflow),
-          updatedAt: stats.mtime.toISOString(),
-        });
-      } catch (err) {
-        // A corrupt file must not hide the rest of the library; it stays on
-        // disk for the user to repair and is only skipped from the listing.
-        this.logger.warn(
-          `skipping unreadable workflow ${entry}: ${String(err)}`,
-        );
-      }
-    }
+    // Read + stat every file concurrently — a large library listed
+    // sequentially pays one disk round-trip pair per workflow.
+    const summaries = (
+      await Promise.all(
+        entries
+          .filter((e) => e.endsWith(WORKFLOW_SUFFIX))
+          .map(async (entry): Promise<WorkflowSummary | null> => {
+            const path = join(this.dir, entry);
+            try {
+              const workflow = parseWorkflowYaml(await readFile(path, 'utf8'));
+              const stats = await stat(path);
+              return {
+                slug: entry.slice(0, -WORKFLOW_SUFFIX.length),
+                name: workflow.name,
+                description: workflow.description ?? null,
+                nodeCount: workflow.nodes.length,
+                edgeCount: workflow.edges.length,
+                agentCounts: agentCountsOf(workflow),
+                updatedAt: stats.mtime.toISOString(),
+              };
+            } catch (err) {
+              // A corrupt file must not hide the rest of the library; it stays
+              // on disk for the user to repair and is only skipped from the
+              // listing.
+              this.logger.warn(
+                `skipping unreadable workflow ${entry}: ${String(err)}`,
+              );
+              return null;
+            }
+          }),
+      )
+    ).filter((s): s is WorkflowSummary => s !== null);
     // Newest-updated first (ISO strings compare chronologically); slug breaks
     // ties so same-mtime files keep a stable order between listings.
     return summaries.sort(
@@ -150,26 +159,25 @@ export class WorkflowStoreService {
     this.validateGraph(workflow);
     await mkdir(this.dir, { recursive: true });
     const content = serializeWorkflowYaml(workflow);
-    const base = slug ?? this.slugify(workflow.name);
-    let candidate = base;
-    for (let attempt = 2; ; attempt++) {
+    if (slug) {
       try {
-        await this.atomicCreate(this.fileFor(candidate), content);
-        return { slug: candidate, workflow };
+        await this.atomicCreate(this.fileFor(slug), content);
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code !== 'EEXIST') {
-          throw err;
-        }
-        if (slug) {
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
           throw new ConflictException(
             'WORKFLOW_EXISTS',
             `Workflow '${slug}' already exists`,
           );
         }
-        candidate = `${base}-${attempt}`;
+        throw err;
       }
+      return { slug, workflow };
     }
+    const landed = await this.createDerivedSlug(
+      this.slugify(workflow.name),
+      content,
+    );
+    return { slug: landed, workflow };
   }
 
   /** Save (upsert) a workflow, preserving hand-written YAML comments. */
@@ -215,9 +223,13 @@ export class WorkflowStoreService {
     const importedName = basename(sourcePath).endsWith(WORKFLOW_SUFFIX)
       ? basename(sourcePath).slice(0, -WORKFLOW_SUFFIX.length)
       : workflow.name;
-    const slug = await this.uniqueSlug(importedName);
-    // Strict files land verbatim — the user's comments come along.
-    await this.atomicWrite(this.fileFor(slug), source);
+    // Strict files land verbatim — the user's comments come along. The slug
+    // commits through the same exclusive loop as create(): a stat-then-write
+    // here was a TOCTOU that let a racing writer on the same slug be clobbered.
+    const slug = await this.createDerivedSlug(
+      this.slugify(importedName),
+      source,
+    );
     return { slug, workflow };
   }
 
@@ -265,8 +277,16 @@ export class WorkflowStoreService {
     // Unique staging name: two concurrent writers sharing `${path}.tmp` would
     // interleave content and race the rename.
     const tmp = `${path}.${process.pid}.${WorkflowStoreService.tmpSeq++}.tmp`;
-    await writeFile(tmp, content, 'utf8');
-    await rename(tmp, path);
+    // writeFile inside the try so a failed stage (disk full, EACCES) still
+    // cleans up any partial tmp — the unique name means nothing else ever
+    // reclaims a stray. After a successful rename the unlink is an ENOENT
+    // no-op.
+    try {
+      await writeFile(tmp, content, 'utf8');
+      await rename(tmp, path);
+    } finally {
+      await unlink(tmp).catch(() => {});
+    }
   }
 
   /**
@@ -289,6 +309,30 @@ export class WorkflowStoreService {
 
   private static tmpSeq = 0;
 
+  /**
+   * Land `content` at the first free suffixed candidate of `base` through the
+   * exclusive {@link atomicCreate} commit — the one slug-allocation path shared
+   * by create() and importFrom(), so no sibling reintroduces the
+   * check-then-rename TOCTOU a stat loop + rename-over had.
+   */
+  private async createDerivedSlug(
+    base: string,
+    content: string,
+  ): Promise<string> {
+    let candidate = base;
+    for (let attempt = 2; ; attempt++) {
+      try {
+        await this.atomicCreate(this.fileFor(candidate), content);
+        return candidate;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw err;
+        }
+        candidate = `${base}-${attempt}`;
+      }
+    }
+  }
+
   private slugify(name: string): string {
     return (
       name
@@ -297,17 +341,5 @@ export class WorkflowStoreService {
         .replace(/^-+|-+$/g, '')
         .slice(0, 64) || 'workflow'
     );
-  }
-
-  private async uniqueSlug(name: string): Promise<string> {
-    const base = this.slugify(name);
-    let candidate = base;
-    let n = 2;
-    while (
-      await this.exists(join(this.dir, `${candidate}${WORKFLOW_SUFFIX}`))
-    ) {
-      candidate = `${base}-${n++}`;
-    }
-    return candidate;
   }
 }

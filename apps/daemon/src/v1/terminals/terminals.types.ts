@@ -24,3 +24,10 @@ export interface TerminalSessionWire {
 /** One streamed terminal event: raw PTY output bytes, or the final exit. */
 export type TerminalEvent =
   { kind: 'data'; data: string } | { kind: 'exit'; exitCode: number | null };
+
+/**
+ * Terminal-size bounds shared by the HTTP DTO's validation and the PTY
+ * service's runtime clamp, so the two can never diverge.
+ */
+export const MAX_COLS = 500;
+export const MAX_ROWS = 300;

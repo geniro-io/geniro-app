@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, shell } from 'electron';
 
+import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
@@ -145,15 +146,21 @@ function main(): void {
     registerIpc(supervisor);
     checkOnLaunch(readSettings().checkForUpdates);
 
-    try {
-      await supervisor.start();
-    } catch (err) {
-      // Surface the failure but still open the window — the renderer renders a
-      // disconnected state rather than the app failing to launch.
-      console.error('[ui] daemon failed to start:', err);
-    }
-
+    // Open the window FIRST and let the daemon boot in parallel: first paint
+    // and the renderer bundle load overlap the spawn + health poll instead of
+    // trailing them (the renderer shows "Connecting to the daemon…" and
+    // subscribes to onDaemonRestarted before its initial status fetch, so
+    // both ready-vs-mount orderings deliver the handle).
     createWindow();
+
+    void supervisor
+      .start()
+      .then((handle) => notifyDaemonReady(mainWindow, handle))
+      .catch((err: unknown) => {
+        // Surface the failure but keep the window — the renderer renders a
+        // disconnected state rather than the app failing to launch.
+        console.error('[ui] daemon failed to start:', err);
+      });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

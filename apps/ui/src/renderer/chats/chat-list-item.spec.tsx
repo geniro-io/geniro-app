@@ -29,8 +29,11 @@ afterEach(() => {
   }
 });
 
-function props(overrides: Partial<Parameters<typeof ChatListItem>[0]> = {}) {
+function props(
+  overrides: Partial<React.ComponentProps<typeof ChatListItem>> = {},
+) {
   return {
+    runId: 'run-1',
     label: 'Review team',
     isWorkflow: false,
     status: 'completed' as const,
@@ -83,13 +86,18 @@ describe('ChatListItem', () => {
   });
 
   it('shows the workflow glyph only for workflow runs', async () => {
+    // The label row is the content stack's first span (the li's first child
+    // is the activation overlay button): only the truncated label + the
+    // rename pencil for a 1:1 chat; a workflow run gets one leading glyph.
     const chat = await mount(<ChatListItem {...props()} />);
-    // The label row holds only the truncated label + the rename pencil for a
-    // 1:1 chat; a workflow run gets one leading glyph.
-    const chatIcons = chat.querySelectorAll('li > span:first-child > svg');
+    const chatIcons = chat.querySelectorAll(
+      'li > div > span:first-child > svg',
+    );
     expect(chatIcons.length).toBe(0);
     const wf = await mount(<ChatListItem {...props({ isWorkflow: true })} />);
-    expect(wf.querySelectorAll('li > span:first-child > svg').length).toBe(1);
+    expect(
+      wf.querySelectorAll('li > div > span:first-child > svg').length,
+    ).toBe(1);
   });
 
   it('rename button fires onRename WITHOUT activating the row', async () => {
@@ -103,18 +111,25 @@ describe('ChatListItem', () => {
       rename?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(p.onRename).toHaveBeenCalledOnce();
+    expect(p.onRename).toHaveBeenCalledWith('run-1');
     expect(p.onActivate).not.toHaveBeenCalled();
   });
 
-  it('clicking the row activates it', async () => {
+  it('clicking the row activates it via a REAL button that keeps li semantics', async () => {
     const p = props();
     const container = await mount(<ChatListItem {...p} />);
+    // The li keeps its listitem role (no role="button") — ARIA forbids the
+    // nested rename control inside a button role.
+    expect(container.querySelector('li')?.getAttribute('role')).toBeNull();
+    const activate = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Review team"]',
+    );
+    expect(activate).not.toBeNull();
     await act(async () => {
-      container
-        .querySelector('li')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      activate!.click();
     });
     expect(p.onActivate).toHaveBeenCalledOnce();
+    expect(p.onActivate).toHaveBeenCalledWith('run-1');
   });
 
   it('omits the preview line when the run has no messages yet', async () => {

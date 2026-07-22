@@ -38,6 +38,12 @@ function extractTerminalId(data: unknown): string | null {
  * client joins the session room in the same synchronous tick, so no byte can
  * fall between the snapshot and the live stream. Detach only leaves the room —
  * the PTY keeps running for a later re-attach; kill is the REST DELETE.
+ *
+ * TWIN PARSER: the `attached`, `terminal_data`, and `terminal_exit` envelope
+ * shapes this gateway produces are re-parsed by the renderer's
+ * `TerminalClient` (apps/ui/src/renderer/terminal-client.ts) — no
+ * daemon↔renderer shared package exists, so a shape change here must be
+ * mirrored there, and vice versa.
  */
 @WebSocketGateway({
   path: '/ws',

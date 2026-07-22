@@ -26,7 +26,7 @@ afterEach(() => {
 
 /** A right-side panel like the inspector: the handle sits on its LEFT edge. */
 function RightPanel(): React.JSX.Element {
-  const { width, startResize } = usePanelWidth({
+  const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: 'test.rightPanelWidth',
     defaultWidth: 300,
     minWidth: 240,
@@ -39,6 +39,10 @@ function RightPanel(): React.JSX.Element {
         edge="left"
         label="Resize panel"
         onMouseDown={startResize}
+        value={width}
+        min={minWidth}
+        max={maxWidth}
+        onResize={resizeTo}
       />
     </aside>
   );
@@ -113,5 +117,107 @@ describe('usePanelWidth (left-edge handle)', () => {
       root.render(<RightPanel />);
     });
     expect(width()).toBe(420);
+  });
+
+  it('clamps a persisted width from outside the current bounds on restore', () => {
+    // Bounds can tighten between versions (or the stored value be hand-edited)
+    // — restoring it raw would mount the panel outside what the handle can
+    // ever drag back to.
+    localStorage.setItem('test.rightPanelWidth', '9000');
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    expect(width()).toBe(480);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    localStorage.setItem('test.rightPanelWidth', '50');
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    expect(width()).toBe(240);
+  });
+});
+
+describe('PanelResizeHandle keyboard (window-splitter pattern)', () => {
+  function key(name: string): void {
+    const handle = container.querySelector('[role="separator"]')!;
+    act(() => {
+      handle.dispatchEvent(
+        new KeyboardEvent('keydown', { key: name, bubbles: true }),
+      );
+    });
+  }
+
+  it('is focusable and reports its value semantics', () => {
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    const handle = container.querySelector('[role="separator"]')!;
+    expect(handle.getAttribute('tabindex')).toBe('0');
+    expect(handle.getAttribute('aria-valuenow')).toBe('300');
+    expect(handle.getAttribute('aria-valuemin')).toBe('240');
+    expect(handle.getAttribute('aria-valuemax')).toBe('480');
+  });
+
+  it('arrow keys move the separator (left widens a right-side panel), clamped and persisted', () => {
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    key('ArrowLeft'); // separator left → panel widens
+    expect(width()).toBe(316);
+    expect(localStorage.getItem('test.rightPanelWidth')).toBe('316');
+    key('ArrowRight'); // separator right → back down
+    expect(width()).toBe(300);
+    expect(
+      container
+        .querySelector('[role="separator"]')!
+        .getAttribute('aria-valuenow'),
+    ).toBe('300');
+  });
+
+  it('Home/End jump to the bounds', () => {
+    act(() => {
+      root.render(<RightPanel />);
+    });
+    key('Home');
+    expect(width()).toBe(240);
+    key('End');
+    expect(width()).toBe(480);
+  });
+
+  it('right-edge handle (a left-side panel): ArrowRight widens — the sign flips with the edge', () => {
+    // The palette's handle sits on its RIGHT edge, so moving the separator
+    // right widens the panel — the inverse of the RightPanel fixture above.
+    function LeftPanel(): React.JSX.Element {
+      const { width, minWidth, maxWidth, startResize, resizeTo } =
+        usePanelWidth({
+          storageKey: 'test.leftPanelWidth',
+          defaultWidth: 240,
+          minWidth: 180,
+          maxWidth: 400,
+          handleEdge: 'right',
+        });
+      return (
+        <aside style={{ width }} className="relative">
+          <PanelResizeHandle
+            edge="right"
+            label="Resize panel"
+            onMouseDown={startResize}
+            value={width}
+            min={minWidth}
+            max={maxWidth}
+            onResize={resizeTo}
+          />
+        </aside>
+      );
+    }
+    act(() => {
+      root.render(<LeftPanel />);
+    });
+    key('ArrowRight');
+    expect(width()).toBe(256);
+    key('ArrowLeft');
+    expect(width()).toBe(240);
   });
 });

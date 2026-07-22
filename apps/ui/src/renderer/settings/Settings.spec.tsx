@@ -75,6 +75,20 @@ describe('Settings updates section', () => {
     expect(toggle?.getAttribute('aria-checked')).toBe('false');
   });
 
+  it('names the toggle through a real associated label, not a duplicate button', async () => {
+    await mount();
+
+    const toggle = container.querySelector('[role="switch"]')!;
+    const label = container.querySelector<HTMLLabelElement>(
+      `label[for="${toggle.id}"]`,
+    );
+    expect(toggle.id).not.toBe('');
+    expect(label?.textContent).toBe('Check for app updates on launch');
+    // Exactly one switch: the old raw-button label doubled the toggle surface
+    // with no state semantics for assistive tech.
+    expect(container.querySelectorAll('[role="switch"]')).toHaveLength(1);
+  });
+
   it('does not overwrite a user toggle when the initial settings read resolves late', async () => {
     let resolveSettings!: (value: SettingsShape) => void;
     geniro.getSettings.mockReturnValueOnce(
@@ -221,5 +235,62 @@ describe('Settings updates section', () => {
     expect(geniro.updateSettings).toHaveBeenCalledWith({
       cliPaths: { claude: '/opt/new-claude' },
     });
+  });
+});
+
+describe('Settings key removal', () => {
+  /** The cursor row is collapsed at rest — its key field (and the Remove
+   *  button) render only once the row is expanded. */
+  async function expandCursorRow(): Promise<void> {
+    const toggle = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('cursor-agent'),
+    )!;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  function removeButton(): HTMLButtonElement | undefined {
+    return Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent?.includes('Remove saved key'));
+  }
+
+  it('a failed key removal surfaces the error instead of silently claiming success', async () => {
+    // The IPC call also restarts the daemon, which has real failure paths —
+    // before the error branch, a rejection was unhandled with zero feedback
+    // while the sibling save path showed its error.
+    geniro.hasSecret.mockResolvedValue(true);
+    geniro.deleteSecret
+      .mockReset()
+      .mockRejectedValue(new Error('keychain locked'));
+    await mount();
+    await expandCursorRow();
+
+    const remove = removeButton();
+    expect(remove).toBeDefined();
+    await act(async () => {
+      remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('keychain locked');
+    // The UI must not claim the key is gone when it is not.
+    expect(removeButton()).toBeDefined();
+  });
+
+  it('a successful removal clears the stored-key state', async () => {
+    geniro.hasSecret.mockResolvedValue(true);
+    geniro.deleteSecret.mockReset().mockResolvedValue(undefined);
+    await mount();
+    await expandCursorRow();
+
+    const remove = removeButton();
+    expect(remove).toBeDefined();
+    await act(async () => {
+      remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(geniro.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
+    expect(removeButton()).toBeUndefined();
   });
 });

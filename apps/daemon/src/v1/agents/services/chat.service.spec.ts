@@ -90,18 +90,27 @@ class FakeItemDao {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
   }
-  // Mirrors the real DAO: text of the highest-seq `message` item per run.
+  // Mirrors the real DAO (pinned by item.dao.spec.ts): per run, ONLY the
+  // highest-seq `message` item is consulted — a text-less or malformed head
+  // yields no preview (no fallback to earlier messages, no throw).
   async latestMessageTextPerRun(
     runIds: string[],
   ): Promise<Map<string, string>> {
     const previews = new Map<string, string>();
-    for (const item of [...this.items].sort((a, b) => a.seq - b.seq)) {
-      if (item.kind !== 'message' || !runIds.includes(item.runId)) {
+    for (const runId of runIds) {
+      const head = this.items
+        .filter((i) => i.runId === runId && i.kind === 'message')
+        .sort((a, b) => b.seq - a.seq)[0];
+      if (!head) {
         continue;
       }
-      const text = (JSON.parse(item.payload) as { text?: string }).text;
-      if (typeof text === 'string') {
-        previews.set(item.runId, text);
+      try {
+        const text = (JSON.parse(head.payload) as { text?: string }).text;
+        if (typeof text === 'string') {
+          previews.set(runId, text);
+        }
+      } catch {
+        // Malformed head payload — run stays absent, like the real query.
       }
     }
     return previews;
@@ -247,6 +256,62 @@ describe('ChatService', () => {
       published.map((e) => `${e.item.seq}:${e.item.kind}/${e.item.role ?? ''}`),
     ).toEqual(['0:message/user', '1:message/assistant', '2:turn_complete/']);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {
+    // A typical turn is a tool-using turn: the persisted kind/role/payload for
+    // these rows is what history replay renders, so the exact shape is pinned
+    // through the real service path, not just the mapper in isolation.
+    const { service, itemDao, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'edit the file');
+    claude.emit({ type: 'reasoning', text: 'planning the edit' });
+    claude.emit({
+      type: 'tool_call',
+      id: 't1',
+      name: 'Read',
+      input: { path: '/x' },
+    });
+    claude.emit({
+      type: 'tool_result',
+      id: 't1',
+      name: null,
+      result: 'file body',
+      isError: false,
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const rows = await itemDao.getByRun(run.id);
+    expect(
+      rows.map((row) => `${row.seq}:${row.kind}/${row.role ?? ''}`),
+    ).toEqual([
+      '0:message/user',
+      '1:reasoning/assistant',
+      '2:tool_call/assistant',
+      '3:tool_result/tool',
+      '4:turn_complete/',
+    ]);
+    expect(JSON.parse(rows[1]!.payload)).toEqual({ text: 'planning the edit' });
+    expect(JSON.parse(rows[2]!.payload)).toEqual({
+      id: 't1',
+      name: 'Read',
+      input: { path: '/x' },
+    });
+    // isError must survive persistence — a dropped field breaks replay silently.
+    expect(JSON.parse(rows[3]!.payload)).toEqual({
+      id: 't1',
+      name: null,
+      result: 'file body',
+      isError: false,
+    });
   });
 
   it('rejects a concurrent turn on the same run with RUN_BUSY', async () => {
@@ -446,6 +511,41 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.status).toBe('failed');
     const items = await itemDao.getByRun(run.id);
     expect(items.at(-1)?.kind).toBe('error');
+  });
+
+  it('reconcile SKIPS a running run whose turn is legitimately in flight', async () => {
+    const { service, runDao, itemDao, registry } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+    // A live registry claim marks the turn as owned by THIS process — boot
+    // reconcile must not declare it orphaned and kill its transcript.
+    registry.tryClaim(run.id);
+
+    await service.reconcileOrphanedRuns();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    expect(await itemDao.getByRun(run.id)).toHaveLength(0);
+    registry.release(run.id);
+  });
+
+  it('rejects with RUN_STOPPING when shutdown starts inside the claim→spawn window', async () => {
+    const { service, runDao, itemDao, registry, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    // Trip shutdown DURING sendMessage's awaited maxSeq — after the claim,
+    // before the pre-spawn canStart check — the exact window the guard exists
+    // for. A CLI spawned past it would orphan on the imminent process exit.
+    const realMaxSeq = itemDao.maxSeq.bind(itemDao);
+    vi.spyOn(itemDao, 'maxSeq').mockImplementationOnce(async (...args) => {
+      void registry.onApplicationShutdown();
+      return realMaxSeq(...(args as Parameters<typeof realMaxSeq>));
+    });
+
+    await expect(service.sendMessage(run.id, 'too late')).rejects.toThrow(
+      /RUN_STOPPING|shutdown/,
+    );
+
+    expect(claude.start).not.toHaveBeenCalled();
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
   });
 
   it('listChats enriches each run with its latest message text and updatedAt', async () => {

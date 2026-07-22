@@ -73,7 +73,9 @@ interface Harness {
 function harness(opts: {
   pidfile: DaemonInfo | null;
   alive?: (pid: number) => boolean;
-  healthy?: boolean | ((current: DaemonInfo | null) => boolean);
+  /** May return a Promise so a test can park the supervisor mid-health-poll. */
+  healthy?:
+    boolean | ((current: DaemonInfo | null) => boolean | Promise<boolean>);
   identified?: boolean;
   bundled?: string | null;
   killPid?: (pid: number, signal: NodeJS.Signals) => void;
@@ -376,6 +378,22 @@ describe('DaemonSupervisor.start', () => {
       vi.useRealTimers();
     }
   });
+
+  it('coalesces concurrent start() calls into one spawn and one shared handle', async () => {
+    const h = harness({ pidfile: null });
+
+    const first = h.supervisor.start();
+    const second = h.supervisor.start();
+
+    // The second caller joins the in-flight promise — it must never re-run the
+    // pidfile check while the first spawn is mid-flight (two daemons would
+    // otherwise both pass it and both spawn).
+    expect(second).toBe(first);
+    const [a, b] = await Promise.all([first, second]);
+    expect(b).toBe(a);
+    expect(a.port).toBe(4823);
+    expect(h.spawned).toHaveLength(1);
+  });
 });
 
 describe('DaemonSupervisor.restart', () => {
@@ -410,6 +428,101 @@ describe('DaemonSupervisor.restart', () => {
       expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBe(
         '/opt/tools/cursor-agent',
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restart() overlapping a mid-boot start() waits for the boot instead of disowning the child', async () => {
+    const h = harness({ pidfile: null, healthy: true });
+
+    const started = h.supervisor.start();
+    // The spawn already fired; the health poll is in flight.
+    expect(h.spawned).toHaveLength(1);
+    const restarted = h.supervisor.restart();
+
+    await started;
+    const handle = await restarted;
+
+    // The freshly booted child is properly terminated as part of the restart
+    // — never silently nulled out mid-boot (which orphaned it: no signal, no
+    // ownership, invisible to stop()).
+    expect(
+      h.kills.some((k) => k.pid === h.child.pid && k.signal === 'SIGTERM'),
+    ).toBe(true);
+    expect(h.spawned).toHaveLength(2);
+    expect(handle).not.toBeNull();
+  });
+
+  it('supersedes a mid-flight restart: the overlapping restart() joins the same promise and the surviving daemon is spawned from the later settings', async () => {
+    vi.useFakeTimers();
+    try {
+      const dead = new Set<number>();
+      // One-shot gate on the first replacement daemon's health poll — the
+      // deterministic interposition point "restart #1 has already spawned,
+      // but its restartNow has not yet returned to the generation check".
+      let releaseFirstHealth!: (healthy: boolean) => void;
+      let firstHealthGate: Promise<boolean> | null = new Promise((resolve) => {
+        releaseFirstHealth = resolve;
+      });
+      const h = harness({
+        pidfile: info({ pid: 1111, version: '0.2.0' }),
+        alive: (pid) => !dead.has(pid),
+        healthy: (current) => {
+          if (current?.pid === 4242 && firstHealthGate) {
+            const gate = firstHealthGate;
+            firstHealthGate = null;
+            return gate;
+          }
+          return true;
+        },
+        // Every daemon in this scenario exits promptly on SIGTERM.
+        onKill: (pid, signal) => {
+          if (signal === 'SIGTERM') {
+            dead.add(pid);
+          }
+        },
+        graceMs: 500,
+        pollMs: 5,
+      });
+      await h.supervisor.start(); // adopt the running same-version daemon
+      expect(h.spawned).toHaveLength(0);
+
+      const first = h.supervisor.restart();
+      await vi.advanceTimersByTimeAsync(0);
+      // Restart #1 terminated the adopted daemon and spawned a replacement
+      // from the settings AS THEY WERE, and is now parked on the gate.
+      expect(h.spawned).toHaveLength(1);
+      expect(h.spawned[0]?.env?.GENIRO_CLAUDE_BIN).toBe('/opt/tools/claude');
+
+      mocks.readSettings.mockReturnValue({
+        onboardingComplete: true,
+        projectFolder: null,
+        recentFolders: [],
+        lastChatTarget: null,
+        cliPaths: { claude: '/opt/tools/claude-superseding' },
+        checkForUpdates: true,
+      });
+      const second = h.supervisor.restart();
+      // Coalesced: the overlapping restart shares the in-flight promise.
+      expect(second).toBe(first);
+
+      releaseFirstHealth(true);
+      const finalHandle = await first;
+
+      // The generation bumped mid-flight, so the loop went around once more:
+      // the first replacement was itself terminated and the SURVIVING daemon
+      // was spawned from the settings as of AFTER the second restart() call.
+      expect(h.spawned).toHaveLength(2);
+      expect(h.spawned[1]?.env?.GENIRO_CLAUDE_BIN).toBe(
+        '/opt/tools/claude-superseding',
+      );
+      expect(h.kills).toEqual([
+        { pid: 1111, signal: 'SIGTERM' },
+        { pid: 4242, signal: 'SIGTERM' },
+      ]);
+      expect(h.supervisor.getHandle()).toBe(finalHandle);
+      await expect(second).resolves.toBe(finalHandle);
     } finally {
       vi.useRealTimers();
     }
@@ -450,5 +563,40 @@ describe('DaemonSupervisor.stop', () => {
     }
 
     expect(h.child.signals).toEqual(['SIGTERM']);
+  });
+
+  it('interrupting a pending start(): the start rejects, stop() resolves, and the half-started child is killed', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        pidfile: null,
+        healthy: false,
+        graceMs: 50,
+        pollMs: 5,
+      });
+
+      const started = h.supervisor.start();
+      const rejected = expect(started).rejects.toThrow(
+        /stopped during daemon startup/,
+      );
+      // The spawn already happened; the health poll is now in flight.
+      expect(h.spawned).toHaveLength(1);
+
+      const stopped = h.supervisor.stop();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await rejected;
+      await stopped;
+
+      expect(h.child.signals[0]).toBe('SIGTERM');
+      // The FakeChild never exits, so the grace escalates to SIGKILL.
+      expect(h.child.signals).toContain('SIGKILL');
+      expect(h.supervisor.getHandle()).toBeNull();
+      expect(h.supervisor.isConnected()).toBe(false);
+
+      // Once stopping, new start() calls fail fast instead of respawning.
+      await expect(h.supervisor.start()).rejects.toThrow(/is stopping/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

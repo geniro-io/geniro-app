@@ -114,11 +114,14 @@ describe('CursorMcpMergeService', () => {
     expect(merged.mcpServers.mine).toEqual({ command: 'x' });
     // The token-bearing file is owner-only while the turn runs.
     expect(statSync(configPath(cwd)).mode & 0o777).toBe(0o600);
-    // Targeted approval surface: auto-approval bounded to OUR two tools,
-    // `mcp enable` scoped to OUR key — and never a blanket --approve-mcps.
+    // Targeted approval surface: auto-approval bounded to OUR call tools
+    // (incl. answer_agent — a cursor caller must be able to answer a parked
+    // question), `mcp enable` scoped to OUR key — never a blanket
+    // --approve-mcps.
     expect(merged.mcpServers.geniro!.autoApprove).toEqual([
       'call_agent',
       'await_agent',
+      'answer_agent',
     ]);
     expect(calls.map((c) => c.args)).toContainEqual([
       'mcp',

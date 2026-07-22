@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -12,7 +13,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
-import type { AgentEvent } from '../adapter.types';
+import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import { ClaudeAdapter, mapClaudeMessage } from './claude.adapter';
 
 // ── Minimal synchronous child-process fake (no real I/O timing) ──────────────
@@ -498,6 +499,29 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     }
   });
 
+  /** Wraps the real prepareTurn disposer so a spec can observe it ran exactly once. */
+  class DisposerCountingAdapter extends ClaudeAdapter {
+    disposeCalls = 0;
+    protected override prepareTurn(
+      input: AgentTurnInput,
+    ): (() => void) | undefined {
+      const dispose = super.prepareTurn(input);
+      return dispose
+        ? () => {
+            this.disposeCalls += 1;
+            dispose();
+          }
+        : undefined;
+    }
+  }
+
+  /** Throws between prepareTurn and the spawn — the base start()'s "bad argv" catch path. */
+  class ThrowingArgsAdapter extends DisposerCountingAdapter {
+    protected override buildArgs(): string[] {
+      throw new Error('bad argv');
+    }
+  }
+
   it('writes a per-turn 0600 config file, points argv at it, and injects MCP_TOOL_TIMEOUT', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const dir = mcpDir();
@@ -546,6 +570,121 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     await handle.done;
     await new Promise((resolve) => setImmediate(resolve));
     expect(existsSync(configPath)).toBe(false);
+  });
+
+  it('disposes the config exactly once when the spawn throws (settled-handle path)', async () => {
+    // runHeadlessCli absorbs a throwing SpawnFn into the handle contract: the
+    // failure surfaces as an error event and `done` is already resolved — the
+    // disposer must still ride that settled handle, or a spawn failure (bad
+    // binary path, EACCES) leaks the live-token 0600 file to tmp.
+    const dir = mcpDir();
+    const events: AgentEvent[] = [];
+    let spawnArgs: string[] | undefined;
+    const spawn: SpawnFn = (_command, args) => {
+      spawnArgs = args;
+      throw new Error('EACCES');
+    };
+    const adapter = new DisposerCountingAdapter({ spawn, mcpConfigDir: dir });
+
+    const handle = adapter.start(
+      { prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT },
+      (e) => events.push(e),
+    );
+
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('failed to spawn') },
+    ]);
+    const idx = spawnArgs!.indexOf('--mcp-config');
+    expect(idx).toBeGreaterThan(-1);
+    const configPath = spawnArgs![idx + 1]!;
+    // The disposer rides `done` as a microtask — still present synchronously,
+    // gone once the settled handle's callback has run.
+    expect(existsSync(configPath)).toBe(true);
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(existsSync(configPath)).toBe(false);
+    expect(adapter.disposeCalls).toBe(1);
+  });
+
+  it('a synchronous throw between prepareTurn and the handle disposes then rethrows', () => {
+    // The base start()'s catch branch (agent-adapter.ts): no handle ever
+    // exists, so without the catch's dispose the written config file would
+    // leak with a green suite. buildArgs throwing is the documented "bad
+    // argv" entry into that branch.
+    const dir = mcpDir();
+    const adapter = new ThrowingArgsAdapter({
+      spawn: fakeSpawn().spawn,
+      mcpConfigDir: dir,
+    });
+
+    expect(() =>
+      adapter.start(
+        { prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT },
+        () => {},
+      ),
+    ).toThrow('bad argv');
+
+    // prepareTurn wrote the file before the throw; the catch removed it.
+    expect(readdirSync(dir)).toEqual([]);
+    expect(adapter.disposeCalls).toBe(1);
+  });
+
+  /** A disposer that itself throws AFTER real cleanup — the rmSync-EACCES shape. */
+  class ThrowingDisposerAdapter extends ClaudeAdapter {
+    protected override prepareTurn(
+      input: AgentTurnInput,
+    ): (() => void) | undefined {
+      const dispose = super.prepareTurn(input);
+      return () => {
+        dispose?.();
+        throw new Error('EACCES: rm failed');
+      };
+    }
+  }
+
+  it('a throwing disposer on settle is logged as a warning, never an unhandled rejection', async () => {
+    const warn = vi.fn();
+    const { spawn, child } = fakeSpawn();
+    const handle = new ThrowingDisposerAdapter({
+      spawn,
+      mcpConfigDir: mcpDir(),
+      logger: { warn },
+    }).start({ prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT }, () => {});
+
+    child.emit('close', 0, null);
+    await handle.done;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // The guard exists so cleanup failure cannot reject the settle chain —
+    // deleting the catch would make this an unhandled rejection instead.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('disposer failed'),
+    );
+  });
+
+  it('a throwing disposer in the sync-throw catch never masks the original error', () => {
+    class ThrowingBothAdapter extends ThrowingDisposerAdapter {
+      protected override buildArgs(): string[] {
+        throw new Error('bad argv');
+      }
+    }
+    const warn = vi.fn();
+    const adapter = new ThrowingBothAdapter({
+      spawn: fakeSpawn().spawn,
+      mcpConfigDir: mcpDir(),
+      logger: { warn },
+    });
+
+    // The ORIGINAL error propagates; the cleanup failure is only logged.
+    expect(() =>
+      adapter.start(
+        { prompt: 'p', cwd: '/proj', mcpEndpoint: ENDPOINT },
+        () => {},
+      ),
+    ).toThrow('bad argv');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('disposer failed'),
+    );
   });
 
   it('honors a toolTimeoutMs override', () => {

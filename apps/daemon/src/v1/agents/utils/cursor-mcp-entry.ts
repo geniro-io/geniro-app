@@ -10,7 +10,11 @@
 export const GENIRO_MCP_SERVER_KEY = 'geniro';
 
 /** Tool names the run endpoint serves — the entry auto-approves exactly these. */
-export const GENIRO_MCP_CALL_TOOLS = ['call_agent', 'await_agent'] as const;
+export const GENIRO_MCP_CALL_TOOLS = [
+  'call_agent',
+  'await_agent',
+  'answer_agent',
+] as const;
 
 export interface CursorMcpServerEntry {
   url: string;

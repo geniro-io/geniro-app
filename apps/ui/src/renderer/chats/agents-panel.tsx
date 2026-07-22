@@ -33,7 +33,7 @@ export function AgentsPanel({
   onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
   onClose: () => void;
 }): React.JSX.Element {
-  const { width, startResize } = usePanelWidth({
+  const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: 'chats.agentsPanelWidth',
     defaultWidth: 280,
     minWidth: 220,
@@ -59,6 +59,10 @@ export function AgentsPanel({
         edge="left"
         label="Resize agents panel"
         onMouseDown={startResize}
+        value={width}
+        min={minWidth}
+        max={maxWidth}
+        onResize={resizeTo}
       />
       <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
         <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">

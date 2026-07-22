@@ -153,7 +153,13 @@ export class SkillsService {
     }
     const out: AgentSkillWire[] = [];
     for (const entry of await readDirSafe(dir)) {
-      if (entry.isDirectory()) {
+      // A symlinked subdirectory reports isDirectory() false — accept it like
+      // scanSkills does (users symlink shared command dirs into a project).
+      // A symlink to a non-directory is harmless: readDirSafe returns [].
+      if (
+        entry.isDirectory() ||
+        (entry.isSymbolicLink() && !entry.name.endsWith('.md'))
+      ) {
         out.push(
           ...(await this.scanCommands(
             join(dir, entry.name),

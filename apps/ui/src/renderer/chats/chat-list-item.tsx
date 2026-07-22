@@ -1,4 +1,5 @@
 import { Pencil, Workflow as WorkflowIcon } from 'lucide-react';
+import { memo } from 'react';
 
 import type { ChatRunStatus } from '../../shared/contracts';
 import { NavListItem } from '../components/nav-list-item';
@@ -12,8 +13,12 @@ import { RUN_STATUS_META, RunStatusIcon } from './run-status';
  * one-line preview, and a status line — icon + tone per state, spinning while
  * running — with the last-activity time on the right (hidden while running:
  * the spinner IS the live signal).
+ *
+ * Memoized (the sidebar renders one per run on every composer keystroke) —
+ * callbacks take the row's `runId` so the parent can pass stable functions.
  */
-export function ChatListItem({
+export const ChatListItem = memo(function ChatListItem({
+  runId,
   label,
   isWorkflow,
   status,
@@ -23,6 +28,7 @@ export function ChatListItem({
   onActivate,
   onRename,
 }: {
+  runId: string;
   label: string;
   /** Show the workflow glyph before the label (a team run, not a 1:1 chat). */
   isWorkflow: boolean;
@@ -31,12 +37,16 @@ export function ChatListItem({
   /** ISO time of the run's last activity (its `updatedAt`). */
   lastActivityAt: string;
   active: boolean;
-  onActivate: () => void;
-  onRename: () => void;
+  onActivate: (runId: string) => void;
+  onRename: (runId: string) => void;
 }): React.JSX.Element {
   const meta = RUN_STATUS_META[status];
   return (
-    <NavListItem active={active} className="group" onActivate={onActivate}>
+    <NavListItem
+      active={active}
+      className="group"
+      activateLabel={label}
+      onActivate={() => onActivate(runId)}>
       <span className="flex items-center gap-1.5">
         {isWorkflow ? (
           <WorkflowIcon
@@ -56,7 +66,7 @@ export function ChatListItem({
           title="Rename"
           onClick={(event) => {
             event.stopPropagation();
-            onRename();
+            onRename(runId);
           }}>
           <Pencil className="size-3 shrink-0" />
         </Button>
@@ -77,4 +87,4 @@ export function ChatListItem({
       </span>
     </NavListItem>
   );
-}
+});

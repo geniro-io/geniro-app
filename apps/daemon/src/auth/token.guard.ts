@@ -11,10 +11,13 @@ import { RUNTIME_TOKEN, type RuntimeInfo } from './runtime';
 import { safeEqual } from './safe-equal';
 
 /**
- * Path prefixes reachable without the loopback bearer token: the readiness
- * probe the UI polls, Prometheus metrics, and the local Swagger/Scalar docs.
+ * Path prefixes reachable without the loopback bearer token: only the
+ * readiness probe the UI polls. `/metrics` and `/swagger-api` are token-gated
+ * — with a deterministic default port, any web page could otherwise read the
+ * daemon's Prometheus internals and full API schema cross-origin (the
+ * supervisor and any local tooling already hold the pidfile token).
  */
-const PUBLIC_PREFIXES = ['/health', '/metrics', '/swagger-api'];
+const PUBLIC_PREFIXES = ['/health'];
 
 /** The per-run MCP endpoint namespace (see McpController). */
 const MCP_PREFIX = '/v1/mcp/';
@@ -59,8 +62,9 @@ function mcpTarget(path: string): { runId: string; nodeId: string } | null {
 /**
  * Global guard enforcing the loopback bearer token on every HTTP route outside
  * the public allowlist — so any data route added in M2 is gated by default
- * (the WS upgrade is gated separately in ws.ts). OIDC auth from @packages/
- * http-server stays dormant; this is the local single-user gate.
+ * (the WS handshake is gated in auth/ws-auth.ts — enforceWsHandshakeAuth,
+ * shared by every Socket.IO gateway). OIDC auth from @packages/http-server
+ * stays dormant; this is the local single-user gate.
  *
  * The `/v1/mcp/<runId>/<nodeId>` namespace additionally accepts that caller
  * node's own call token (minted when the run starts, revoked when it settles)

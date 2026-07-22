@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../../utils/agent-binary';
+import { claudeCredentialEnv } from '../../utils/child-env';
 import {
   asArray,
   asBoolean,
@@ -322,11 +323,15 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override buildEnv(
     input: AgentTurnInput,
   ): Record<string, string> | undefined {
+    // buildChildEnv strips the daemon's inherited Anthropic credentials from
+    // every child; re-inject them for THIS child only (a cursor agent and its
+    // tool grandchildren never see them). An explicit input.env wins.
+    const env = { ...claudeCredentialEnv(), ...input.env };
     if (!input.mcpEndpoint) {
-      return input.env;
+      return env;
     }
     return {
-      ...input.env,
+      ...env,
       MCP_TOOL_TIMEOUT: String(
         input.mcpEndpoint.toolTimeoutMs ?? DEFAULT_MCP_TOOL_TIMEOUT_MS,
       ),

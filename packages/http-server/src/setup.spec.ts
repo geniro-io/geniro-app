@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import type { INestApplication } from '@nestjs/common';
+import { describe, expect, it, vi } from 'vitest';
 
-import { validateOperationIdUniqueness } from './setup';
+import { runHttpApp, validateOperationIdUniqueness } from './setup';
 
 describe('validateOperationIdUniqueness', () => {
   it('passes for an empty paths object', () => {
@@ -139,5 +140,107 @@ describe('validateOperationIdUniqueness', () => {
         },
       }),
     ).not.toThrow();
+  });
+});
+
+// The port-fallback options (portFallback / onListening / host) are this
+// repo's own additions to the vendored package and the daemon-boot mainline
+// when the preferred port is taken: the pidfile rendezvous depends on the
+// BOUND port being reported, never the preferred one.
+describe('runHttpApp', () => {
+  function stubApp(behavior: {
+    failListens?: NodeJS.ErrnoException[];
+    boundPort: number;
+  }): { app: INestApplication; listens: [number, string][] } {
+    const failures = [...(behavior.failListens ?? [])];
+    const listens: [number, string][] = [];
+    const app = {
+      listen: vi.fn(async (port: number, host: string) => {
+        listens.push([port, host]);
+        const failure = failures.shift();
+        if (failure) {
+          throw failure;
+        }
+      }),
+      getHttpAdapter: () => ({
+        getInstance: () => ({
+          server: { address: () => ({ port: behavior.boundPort }) },
+        }),
+      }),
+      get: () => ({ log: vi.fn() }),
+    } as unknown as INestApplication;
+    return { app, listens };
+  }
+
+  function errnoError(code: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(code), { code });
+  }
+
+  it('falls back to listen(0) on EADDRINUSE and reports the BOUND port to onListening', async () => {
+    const { app, listens } = stubApp({
+      failListens: [errnoError('EADDRINUSE')],
+      boundPort: 51_234,
+    });
+    const onListening = vi.fn();
+
+    await runHttpApp(app, {
+      port: 47_615,
+      host: '127.0.0.1',
+      portFallback: true,
+      onListening,
+    });
+
+    expect(listens).toEqual([
+      [47_615, '127.0.0.1'],
+      [0, '127.0.0.1'],
+    ]);
+    expect(onListening).toHaveBeenCalledWith({
+      host: '127.0.0.1',
+      port: 51_234,
+    });
+  });
+
+  it('without portFallback an EADDRINUSE propagates and onListening never fires', async () => {
+    const { app, listens } = stubApp({
+      failListens: [errnoError('EADDRINUSE')],
+      boundPort: 47_615,
+    });
+    const onListening = vi.fn();
+
+    await expect(
+      runHttpApp(app, { port: 47_615, host: '127.0.0.1', onListening }),
+    ).rejects.toThrow('EADDRINUSE');
+    expect(listens).toHaveLength(1);
+    expect(onListening).not.toHaveBeenCalled();
+  });
+
+  it('a non-EADDRINUSE listen error propagates even with portFallback', async () => {
+    const { app, listens } = stubApp({
+      failListens: [errnoError('EACCES')],
+      boundPort: 47_615,
+    });
+
+    await expect(
+      runHttpApp(app, { port: 47_615, host: '127.0.0.1', portFallback: true }),
+    ).rejects.toThrow('EACCES');
+    expect(listens).toHaveLength(1);
+  });
+
+  it('a clean listen reports the bound port without a fallback attempt', async () => {
+    const { app, listens } = stubApp({ boundPort: 47_615 });
+    const onListening = vi.fn();
+
+    await runHttpApp(app, {
+      port: 47_615,
+      host: '127.0.0.1',
+      portFallback: true,
+      onListening,
+    });
+
+    expect(listens).toEqual([[47_615, '127.0.0.1']]);
+    expect(onListening).toHaveBeenCalledWith({
+      host: '127.0.0.1',
+      port: 47_615,
+    });
   });
 });

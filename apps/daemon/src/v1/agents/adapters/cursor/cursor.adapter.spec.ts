@@ -143,7 +143,7 @@ describe('mapCursorMessage', () => {
 });
 
 describe('CursorAdapter', () => {
-  it('passes the prompt as a positional arg and streams a turn', async () => {
+  it('delivers the prompt on stdin — never on ps-visible argv — and streams a turn', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];
     const handle = new CursorAdapter({ spawn }).start(
@@ -166,9 +166,10 @@ describe('CursorAdapter', () => {
         '--force',
       ]),
     );
-    expect(captured.args?.at(-1)).toBe('list files');
-    // Cursor reads the prompt from argv — stdin carries no payload.
-    expect(child.stdin.written).toBe('');
+    // argv is readable by any local account via ps; the prompt (user task
+    // text + upstream node outputs) must ride stdin instead.
+    expect(captured.args).not.toContain('list files');
+    expect(child.stdin.written).toBe('list files');
     expect(events).toEqual([
       { type: 'session', sessionId: 'c-1' },
       { type: 'text', text: 'done' },
@@ -197,16 +198,14 @@ describe('CursorAdapter', () => {
     );
   });
 
-  it('puts the end-of-options separator before a dash-leading prompt', () => {
-    const { spawn, captured } = fakeSpawn();
+  it('a dash-leading prompt can never be parsed as a CLI flag — it rides stdin', () => {
+    const { spawn, child, captured } = fakeSpawn();
     new CursorAdapter({ spawn }).start(
       { prompt: '--help', cwd: '/proj' },
       () => {},
     );
-    // `--` immediately precedes the prompt so the CLI treats `--help` as prompt
-    // text, not as one of its own flags.
-    expect(captured.args?.at(-2)).toBe('--');
-    expect(captured.args?.at(-1)).toBe('--help');
+    expect(captured.args).not.toContain('--help');
+    expect(child.stdin.written).toBe('--help');
   });
 
   it('fails fast with an error event on a non-zero exit', async () => {
@@ -230,8 +229,8 @@ describe('CursorAdapter', () => {
 });
 
 describe('CursorAdapter graph-node extras', () => {
-  it('prepends the system prompt to the positional prompt (no CLI flag exists)', () => {
-    const { spawn, captured } = fakeSpawn();
+  it('prepends the system prompt to the stdin prompt (no CLI flag exists)', () => {
+    const { spawn, child, captured } = fakeSpawn();
     new CursorAdapter({ spawn }).start(
       {
         prompt: 'review the diff',
@@ -241,11 +240,11 @@ describe('CursorAdapter graph-node extras', () => {
       },
       () => {},
     );
-    const sep = captured.args!.indexOf('--');
-    expect(captured.args!.slice(sep)).toEqual([
-      '--',
+    expect(child.stdin.written).toBe(
       'You are the reviewer.\n\nreview the diff',
-    ]);
+    );
+    // The role text is part of the prompt payload — it stays off argv too.
+    expect(captured.args!.some((a) => a.includes('reviewer'))).toBe(false);
     // ask degrades to --force (auto-approve) — cursor-agent has no callback.
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });

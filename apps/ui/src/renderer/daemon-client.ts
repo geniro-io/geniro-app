@@ -9,18 +9,11 @@ export interface DaemonClientEvents {
 }
 
 /**
- * Thin Socket.IO client to the loopback daemon. Authenticates with the
- * per-launch token via the handshake `auth` payload (browsers can't set WS
- * headers) and lets Socket.IO own reconnection. Forces the `websocket`
- * transport — no HTTP long-polling fallback is needed on loopback. M2 grows it
- * from the M1 hello/echo proof into the live run-event channel: `join`/`leave`
- * a run's room and receive its persisted `item` events.
- *
- * Socket.IO rooms are per-socket and server-side, so a transient
- * disconnect/reconnect lands a fresh socket id in NO rooms. The client tracks
- * the active run and re-emits `join` on every (re)connect, and fires
- * `onReconnect` so the renderer can fetch the items it missed while offline
- * (the room buffers nothing for an absent member).
+ * TWIN PARSER: mirrors the `verdict_ack` reply shape produced by the daemon's
+ * `NotificationsGateway.verdict`
+ * (apps/daemon/src/v1/notifications/gateways/notifications.gateway.ts) — no
+ * daemon↔renderer shared package exists, so a shape change there must be
+ * mirrored here, and vice versa.
  */
 export interface VerdictAck {
   runId: string | null;
@@ -36,6 +29,20 @@ interface JoinWaiter {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Thin Socket.IO client to the loopback daemon. Authenticates with the
+ * per-launch token via the handshake `auth` payload (browsers can't set WS
+ * headers) and lets Socket.IO own reconnection. Forces the `websocket`
+ * transport — no HTTP long-polling fallback is needed on loopback. M2 grows it
+ * from the M1 hello/echo proof into the live run-event channel: `join`/`leave`
+ * a run's room and receive its persisted `item` events.
+ *
+ * Socket.IO rooms are per-socket and server-side, so a transient
+ * disconnect/reconnect lands a fresh socket id in NO rooms. The client tracks
+ * the active run and re-emits `join` on every (re)connect, and fires
+ * `onReconnect` so the renderer can fetch the items it missed while offline
+ * (the room buffers nothing for an absent member).
+ */
 export class DaemonClient {
   private socket: Socket | null = null;
   private readonly itemListeners = new Set<(item: ChatItem) => void>();
@@ -176,6 +183,13 @@ export class DaemonClient {
    * already settled; `invalid` remains retryable).
    * `answer` carries the user's picked option / typed text for a question
    * card (AskUserQuestion) — omitted for plain tool approvals.
+   *
+   * TWIN PARSER: the daemon parses this `verdict` envelope in
+   * `extractVerdict`
+   * (apps/daemon/src/v1/notifications/gateways/notifications.gateway.ts) —
+   * `{runId, requestId, allow, answer?}`, `answer` honored only as a
+   * non-empty string ≤ MAX_ANSWER_LENGTH. A shape change here must be
+   * mirrored there, and vice versa.
    */
   sendVerdict(
     runId: string,

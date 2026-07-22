@@ -14,6 +14,7 @@
  * Output: release/dist/Geniro-<version>-arm64.dmg (+ .zip for the updater).
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -21,6 +22,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -149,6 +151,21 @@ try {
     `-c.mac.entitlementsInherit=${entitlements}`,
     '-c.mac.identity=-',
   ]);
+
+  // 7. Checksums. The app is ad-hoc signed (no notarization ticket), so
+  // Gatekeeper provides zero integrity between the GitHub release and an
+  // executing app — SHA256SUMS.txt, published as a release asset, is the one
+  // integrity check install.sh can verify before it strips quarantine.
+  const distDir = join(release, 'dist');
+  const sums = readdirSync(distDir)
+    .filter((f) => f.endsWith('.dmg') || f.endsWith('.zip'))
+    .sort()
+    .map(
+      (f) =>
+        `${createHash('sha256').update(readFileSync(join(distDir, f))).digest('hex')}  ${f}\n`,
+    )
+    .join('');
+  writeFileSync(join(distDir, 'SHA256SUMS.txt'), sums);
 
   console.log(`\nPackaged: ${join(release, 'dist')}`);
 } finally {

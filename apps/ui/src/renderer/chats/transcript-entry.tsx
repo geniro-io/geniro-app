@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 import { CallBlock } from './call-block';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
@@ -26,8 +28,12 @@ const SENDER_KINDS = new Set([
  * bookkeeping notes (statuses, receipts, verdicts) stay centered and
  * frameless. Shared by the main flow and the call block's nested flow so
  * both look identical.
+ *
+ * Memoized (with the other row shells): the transcript re-renders on every
+ * composer keystroke, and `entry`/`nodes` are referentially stable across
+ * those renders.
  */
-export function TranscriptEntryView({
+export const TranscriptEntryView = memo(function TranscriptEntryView({
   entry,
   nodes,
   chatAgentName,
@@ -93,4 +99,4 @@ export function TranscriptEntryView({
       {content}
     </SenderRow>
   );
-}
+});

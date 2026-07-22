@@ -34,6 +34,7 @@ import type {
 import { CLI_KINDS } from '../../shared/contracts';
 import { ChatApi } from '../chat-api';
 import { ErrorText } from '../components/error-text';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
@@ -157,6 +158,11 @@ export function Chats({
   // Mirror `runs` into a ref so the stable activateRun callback can read the
   // active run's current status without being re-created on every list change.
   const runsRef = useRef<ChatRun[]>([]);
+  // First list fetch settled (either way) — gates the "No chats yet" claim.
+  // A boolean rather than Graphs' `| null` sentinel deliberately: `runs` has
+  // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
+  // null union would force to re-guard.
+  const [runsLoaded, setRunsLoaded] = useState(false);
   useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
@@ -329,6 +335,18 @@ export function Chats({
     setRenameError(null);
     setRenaming(run);
   }, []);
+  // Stable id-keyed rename callback so the memoized ChatListItem rows do not
+  // re-render on every keystroke (fresh per-row closures would defeat the
+  // memo equality). Its activate sibling lives below activateRun.
+  const handleRenameRun = useCallback(
+    (runId: string): void => {
+      const run = runsRef.current.find((r) => r.id === runId);
+      if (run) {
+        openRename(run);
+      }
+    },
+    [openRename],
+  );
   const submitRename = useCallback(
     async (title: string): Promise<void> => {
       if (!renaming) {
@@ -429,7 +447,10 @@ export function Chats({
           ),
         ),
       )
-      .catch((err: unknown) => setError(String(err)));
+      .catch((err: unknown) => setError(String(err)))
+      // Either way the first fetch settled — "No chats yet" is reserved for a
+      // resolved-but-empty list, never shown while the fetch is in flight.
+      .finally(() => setRunsLoaded(true));
   }, [chatApi, workflowApi]);
 
   const activateRun = useCallback(
@@ -477,6 +498,13 @@ export function Chats({
       }
     },
     [client, chatApi, addItem],
+  );
+
+  // Stable id-keyed activation for the memoized ChatListItem rows (see
+  // handleRenameRun above).
+  const handleActivateRun = useCallback(
+    (runId: string): void => void activateRun(runId),
+    [activateRun],
   );
 
   useEffect(() => {
@@ -658,6 +686,9 @@ export function Chats({
     } catch (err) {
       setError(String(err));
       setStreaming(false);
+      // A failed send must leave the typed task editable (mirror drainQueue's
+      // restoreHead) — but never clobber anything typed since.
+      setInput((current) => (current.length === 0 ? text : current));
     }
   }, [
     input,
@@ -771,6 +802,8 @@ export function Chats({
     } catch (err) {
       setError(String(err));
       setStreaming(false);
+      // Mirror drainQueue's restoreHead: a failed follow-up keeps the text.
+      setInput((current) => (current.length === 0 ? text : current));
     }
   }, [input, streaming, startTurn, enqueueMessage]);
 
@@ -1141,7 +1174,11 @@ export function Chats({
           </Button>
         </div>
         <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
-          {runs.length === 0 ? (
+          {!runsLoaded && runs.length === 0 ? (
+            <li className="px-2 py-1.5 text-sm text-muted-foreground">
+              Loading chats…
+            </li>
+          ) : runs.length === 0 ? (
             <li className="px-2 py-1.5 text-sm text-muted-foreground">
               No chats yet
             </li>
@@ -1149,14 +1186,15 @@ export function Chats({
             runs.map((run) => (
               <ChatListItem
                 key={run.id}
+                runId={run.id}
                 active={run.id === activeRunId}
                 label={runLabel(run, workflowNames)}
                 isWorkflow={run.workflowId != null}
                 status={run.status}
                 lastMessage={run.lastMessage}
                 lastActivityAt={run.updatedAt}
-                onActivate={() => void activateRun(run.id)}
-                onRename={() => openRename(run)}
+                onActivate={handleActivateRun}
+                onRename={handleRenameRun}
               />
             ))
           )}
@@ -1473,15 +1511,16 @@ export function Chats({
                   }}
                 />
                 <div className="flex flex-wrap items-center gap-1.5 p-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled
-                    className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
+                  {/* Informational run-identity chips — non-interactive Badges,
+                      never disabled Buttons: disabled kills hover (so the cwd
+                      title tooltip could never fire) and 50% opacity drops the
+                      text below AA contrast. */}
+                  <Badge
+                    variant="muted"
+                    className="h-8 gap-1.5 rounded-lg px-2.5 font-medium [&>svg]:size-3.5">
                     {activeRun?.workflowId ? (
                       <>
-                        <WorkflowIcon className="size-3.5 shrink-0" />
+                        <WorkflowIcon className="shrink-0" />
                         <span className="max-w-52 truncate">
                           {activeRun
                             ? runLabel(
@@ -1494,33 +1533,27 @@ export function Chats({
                     ) : (
                       (activeRun?.agentKind ?? 'agent')
                     )}
-                  </Button>
+                  </Badge>
                   {activeRun?.cwd ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled
+                    <Badge
+                      variant="muted"
                       title={activeRun.cwd}
-                      className="h-8 max-w-52 justify-start gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
-                      <FolderOpen className="size-3.5 shrink-0" />
+                      className="h-8 max-w-52 justify-start gap-1.5 rounded-lg px-2.5 font-medium [&>svg]:size-3.5">
+                      <FolderOpen className="shrink-0" />
                       <span className="truncate">
                         {folderName(activeRun.cwd)}
                       </span>
-                    </Button>
+                    </Badge>
                   ) : null}
                   {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled
-                      className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted-foreground">
-                      <Zap className="size-3.5 shrink-0" />
+                    <Badge
+                      variant="muted"
+                      className="h-8 gap-1.5 rounded-lg px-2.5 font-medium [&>svg]:size-3.5">
+                      <Zap className="shrink-0" />
                       <span className="max-w-52 truncate">
                         {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
                       </span>
-                    </Button>
+                    </Badge>
                   ) : null}
                   <span className="ml-auto flex items-center gap-1.5">
                     {streaming ? (

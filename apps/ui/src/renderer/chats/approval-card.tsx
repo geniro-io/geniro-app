@@ -1,5 +1,5 @@
 import { MessageCircleQuestion, ShieldQuestion } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -16,6 +16,9 @@ interface ParsedQuestion {
 
 /** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
 const MAX_ANSWER_LENGTH = 32_768;
+
+/** How long "Sending…" holds before the one-shot freeze re-arms for a retry. */
+const RESPONDED_RETRY_MS = 10_000;
 
 function combinedAnswer(
   questions: ParsedQuestion[],
@@ -34,7 +37,8 @@ function combinedAnswer(
  * TWIN PARSER: the daemon parses the same wire shape in
  * apps/daemon/src/v1/agents/adapters/claude/question-payload.ts (no
  * daemon↔renderer shared package exists) — a shape drift fixed there must be
- * mirrored here, and vice versa.
+ * mirrored here, and vice versa. Mirrored rules: option labels are kept only
+ * when non-empty and ≤ MAX_ANSWER_LENGTH.
  */
 function readQuestions(input: unknown): ParsedQuestion[] {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -103,6 +107,35 @@ export function ApprovalCard({
   const [selectedAnswers, setSelectedAnswers] = useState<
     Record<number, string>
   >({});
+  // The verdict channel is one-shot: freeze the card the moment an answer is
+  // sent, until the persisted verdict item (or expiry) round-trips — a
+  // double-click or Approve-then-Deny would emit a conflicting verdict the
+  // daemon silently drops.
+  const [responded, setResponded] = useState(false);
+  // The freeze must not be forever: if the verdict item never arrives (the
+  // enqueued write failed, or the ack was 'invalid'), re-arm the buttons —
+  // the daemon settles a request exactly once, so a retry is safe.
+  useEffect(() => {
+    if (!responded || verdict !== null || expired) {
+      return;
+    }
+    const timer = setTimeout(() => setResponded(false), RESPONDED_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [responded, verdict, expired]);
+  const respond = (allow: boolean, answer?: string): void => {
+    if (responded) {
+      return;
+    }
+    setResponded(true);
+    // Preserve the caller-visible arity: a plain approve/deny stays a
+    // one-argument call.
+    if (answer === undefined) {
+      onRespond(allow);
+    } else {
+      onRespond(allow, answer);
+    }
+  };
+  const sending = responded && verdict === null && !expired;
   // Name-only, matching the daemon's fold gate exactly: a card must never
   // collect an answer the daemon would refuse to deliver (a flag-only
   // interactive tool renders the plain approve/deny body instead).
@@ -139,6 +172,7 @@ export function ApprovalCard({
                         : 'outline'
                     }
                     size="sm"
+                    disabled={responded}
                     aria-pressed={
                       isMultiQuestion
                         ? selectedAnswers[qi] === label
@@ -151,7 +185,7 @@ export function ApprovalCard({
                           [qi]: label,
                         }));
                       } else {
-                        onRespond(true, label);
+                        respond(true, label);
                       }
                     }}>
                     {label}
@@ -165,6 +199,8 @@ export function ApprovalCard({
           <p className="text-xs text-muted-foreground">
             ⏱ expired — the turn ended before an answer
           </p>
+        ) : sending ? (
+          <p className="text-xs text-muted-foreground">Sending…</p>
         ) : verdict === null ? (
           <div className="flex items-center gap-2">
             {questions.length === 1 ? (
@@ -182,14 +218,14 @@ export function ApprovalCard({
                       return;
                     }
                     if (e.key === 'Enter' && freeText.trim().length > 0) {
-                      onRespond(true, freeText.trim());
+                      respond(true, freeText.trim());
                     }
                   }}
                 />
                 <Button
                   type="button"
                   disabled={freeText.trim().length === 0}
-                  onClick={() => onRespond(true, freeText.trim())}>
+                  onClick={() => respond(true, freeText.trim())}>
                   Answer
                 </Button>
               </>
@@ -200,14 +236,14 @@ export function ApprovalCard({
                   !allQuestionsAnswered ||
                   multiAnswer.length > MAX_ANSWER_LENGTH
                 }
-                onClick={() => onRespond(true, multiAnswer)}>
+                onClick={() => respond(true, multiAnswer)}>
                 Submit answers
               </Button>
             )}
             <Button
               type="button"
               variant="outline"
-              onClick={() => onRespond(false)}>
+              onClick={() => respond(false)}>
               Decline
             </Button>
           </div>
@@ -267,15 +303,17 @@ export function ApprovalCard({
         <p className="text-xs text-muted-foreground">
           ⏱ expired — the turn ended before an answer
         </p>
+      ) : sending ? (
+        <p className="text-xs text-muted-foreground">Sending…</p>
       ) : verdict === null ? (
         <div className="flex gap-2">
-          <Button type="button" onClick={() => onRespond(true)}>
+          <Button type="button" onClick={() => respond(true)}>
             Approve
           </Button>
           <Button
             type="button"
             variant="outline"
-            onClick={() => onRespond(false)}>
+            onClick={() => respond(false)}>
             Deny
           </Button>
         </div>

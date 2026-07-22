@@ -9,8 +9,12 @@
  * TWIN PARSER: the renderer's question card re-implements this parse over the
  * same wire shape (apps/ui/src/renderer/chats/approval-card.tsx
  * `readQuestions`) because no daemon↔renderer shared package exists — a shape
- * drift fixed here must be mirrored there, and vice versa.
+ * drift fixed here must be mirrored there, and vice versa. Mirrored rules:
+ * option labels are kept only when non-empty and ≤ MAX_ANSWER_LENGTH (an
+ * oversized label would offer an answer the answer channel itself rejects).
  */
+
+import { MAX_ANSWER_LENGTH } from '../../chat.types';
 
 interface QuestionShape {
   question: string;
@@ -38,7 +42,12 @@ function readQuestions(input: unknown): QuestionShape[] {
     const options = Array.isArray(q.options)
       ? q.options
           .map((o) => asRecord(o)?.label)
-          .filter((label): label is string => typeof label === 'string')
+          .filter(
+            (label): label is string =>
+              typeof label === 'string' &&
+              label.length > 0 &&
+              label.length <= MAX_ANSWER_LENGTH,
+          )
       : [];
     shapes.push({ question: text, options });
   }

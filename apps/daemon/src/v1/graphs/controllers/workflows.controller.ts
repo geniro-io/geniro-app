@@ -99,16 +99,10 @@ export class WorkflowsController {
   }
 
   @Post(':slug/runs')
-  async run(
+  run(
     @Param('slug') slug: string,
     @Body() dto: RunWorkflowDto,
   ): Promise<RunWire> {
-    const { workflow } = await this.store.get(slug);
-    return this.executor.startRun({
-      slug,
-      workflow,
-      cwd: dto.cwd,
-      prompt: dto.prompt,
-    });
+    return this.executor.startRunBySlug(slug, dto);
   }
 }

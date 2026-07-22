@@ -191,8 +191,10 @@ async function clickRun(container: HTMLElement, title: string): Promise<void> {
   const li = [...container.querySelectorAll('li')].find((el) =>
     el.textContent?.includes(title),
   );
+  // The row's activation surface is its overlay button (the li's first child).
+  const activate = li?.querySelector<HTMLButtonElement>('button');
   await act(async () => {
-    li?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    activate?.click();
   });
 }
 
@@ -543,21 +545,24 @@ describe('Chats reconnect seam', () => {
     expect(composerButton(container, 'Stop')).toBeNull();
   });
 
-  it('activates a run via Enter keyboard activation of the list row', async () => {
+  it('activates a run via its real activation button (keyboard-activatable by native button semantics)', async () => {
     api.getHistory.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client } = makeClient();
     const container = await mount(client);
     const li = [...container.querySelectorAll('li')].find((el) =>
       el.textContent?.includes('My chat'),
     );
+    // The activation surface is a REAL <button> — Enter/Space fire click as
+    // native button behavior (which jsdom does not synthesize), so pin the
+    // element identity plus its click-driven activation.
+    const activate = li?.querySelector<HTMLButtonElement>('button');
+    expect(activate?.tagName).toBe('BUTTON');
     await act(async () => {
-      li?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-      );
+      activate?.click();
     });
 
-    const active = [...container.querySelectorAll('li')].find(
-      (el) => el.getAttribute('aria-current') === 'true',
+    const active = [...container.querySelectorAll('li')].find((el) =>
+      el.querySelector('[aria-current="true"]'),
     );
     expect(active?.textContent).toContain('My chat');
     expect(container.textContent).toContain('hi');
@@ -851,6 +856,53 @@ describe('Chats workflow runs', () => {
       prompt: 'build it',
     });
     expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('a failed run start restores the typed task into the composer (no data loss)', async () => {
+    workflowApi.list.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    // The daemon is briefly down (e.g. a Settings save just restarted it).
+    workflowApi.run.mockRejectedValue(new Error('daemon POST failed'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const select = container.querySelector('select')!;
+    await act(async () => {
+      const setSelect = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value',
+      )!.set!;
+      setSelect.call(select, 'wf:review-team');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'precious task text');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Start run"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The error surfaces AND the typed task stays editable (mirror of the
+    // queued path's restoreHead) — a failed send must never eat the prompt.
+    expect(container.textContent).toContain('daemon POST failed');
+    expect(container.querySelector('textarea')!.value).toBe(
+      'precious task text',
+    );
   });
 
   it('does not arm Stop when the new workflow run already ended during activation', async () => {
@@ -1685,12 +1737,12 @@ describe('Chats queued messages', () => {
 });
 
 describe('Chats run composer chips', () => {
-  function chips(container: HTMLElement): HTMLButtonElement[] {
-    // The inactive info chips are the DISABLED buttons inside the composer
-    // card's controls row.
-    return [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (b) => b.disabled && b.className.includes('rounded-lg'),
-    );
+  function chips(container: HTMLElement): HTMLElement[] {
+    // The info chips are non-interactive Badges — NEVER disabled buttons: a
+    // disabled button's pointer-events-none would block the cwd tooltip and
+    // its 50% opacity fails AA contrast. Selected by slot only (class names
+    // are restyle-prone); the composer view renders no other badges.
+    return [...container.querySelectorAll<HTMLElement>('[data-slot="badge"]')];
   }
 
   it("a chat run shows its agent + folder as INACTIVE chips with the create screen's card", async () => {
@@ -1702,6 +1754,17 @@ describe('Chats run composer chips', () => {
     const labels = chips(container).map((b) => b.textContent);
     expect(labels).toContain('claude');
     expect(labels.some((l) => l?.includes('proj'))).toBe(true);
+    // No chip is rendered as a disabled button (the tooltip-blocking shape).
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+        (b) => b.disabled && b.className.includes('rounded-lg'),
+      ),
+    ).toEqual([]);
+    // The folder chip's full-path tooltip is reachable again (native title).
+    const folderChip = chips(container).find((el) =>
+      el.textContent?.includes('proj'),
+    );
+    expect(folderChip?.getAttribute('title')).toBe('/proj');
     // The send action is the same round icon button as the create screen.
     expect(composerButton(container, 'Send')).not.toBeNull();
   });
@@ -1751,6 +1814,11 @@ describe('Chats run composer chips', () => {
     expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
       true,
     );
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+        (b) => b.disabled && b.className.includes('rounded-lg'),
+      ),
+    ).toEqual([]);
     // Workflow runs take one task — the round send stays disabled.
     expect(composerButton(container, 'Send')?.disabled).toBe(true);
   });
@@ -2152,5 +2220,58 @@ describe('Chats skill autocomplete', () => {
     // The skills fetched are the TRIGGER's downstream agent's, not the
     // composer's bare-agent default.
     expect(api.listSkills).toHaveBeenCalledWith('cursor-agent', '/proj');
+  });
+});
+
+describe('Chats sidebar loading state', () => {
+  it('shows Loading (never "No chats yet") while the first list fetch is in flight', async () => {
+    // "No chats yet" is an authoritative claim reserved for a resolved-but-
+    // empty list — flashing it during the fetch reads as data loss.
+    api.listChats.mockReturnValue(new Promise(() => {}));
+    workflowApi.listRuns.mockReturnValue(new Promise(() => {}));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.textContent).toContain('Loading chats…');
+    expect(container.textContent).not.toContain('No chats yet');
+  });
+
+  it('reserves "No chats yet" for a resolved-but-empty list', async () => {
+    api.listChats.mockResolvedValue([]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.textContent).toContain('No chats yet');
+    expect(container.textContent).not.toContain('Loading chats…');
+  });
+});
+
+describe('Chats follow-up send failure', () => {
+  it('a failed follow-up send restores the typed text into the composer', async () => {
+    // Distinct cause path from the run-start composer's catch: the open
+    // transcript's sendFollowUp has its own restore (mirror of restoreHead).
+    api.getHistory.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    api.sendMessage.mockRejectedValue(new Error('daemon down'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'precious follow-up');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')?.click();
+    });
+
+    expect(container.textContent).toContain('daemon down');
+    expect(container.querySelector('textarea')!.value).toBe(
+      'precious follow-up',
+    );
   });
 });

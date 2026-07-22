@@ -29,18 +29,64 @@ export function readSettings(): Settings {
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    const parsed = settingsPatchSchema.safeParse(
-      JSON.parse(readFileSync(path, 'utf8')),
-    );
-    if (!parsed.success) {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       return { ...DEFAULT_SETTINGS };
     }
-    // Merge over defaults so a settings file written by an older version still
-    // yields a complete object as the schema grows.
-    return { ...DEFAULT_SETTINGS, ...parsed.data };
+    // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
+    // validates every patch), but the on-disk file can be newer than this
+    // build — the notify-only brew flow makes version skew normal — so one
+    // unknown or invalid key must cost only that key. A wholesale reset would
+    // re-onboard the user, and the next updateSettings() write would make the
+    // loss permanent. Merging over defaults also completes a file written by
+    // an older version as the schema grows.
+    const record = raw as Record<string, unknown>;
+    const salvaged: Record<string, unknown> = {};
+    for (const key of Object.keys(settingsPatchSchema.shape)) {
+      if (!(key in record)) {
+        continue;
+      }
+      if (key === 'cliPaths') {
+        const paths = salvageCliPaths(record[key]);
+        if (paths !== undefined) {
+          salvaged[key] = paths;
+        }
+        continue;
+      }
+      const field = settingsPatchSchema.shape[
+        key as keyof typeof settingsPatchSchema.shape
+      ].safeParse(record[key]);
+      if (field.success && field.data !== undefined) {
+        salvaged[key] = field.data;
+      }
+    }
+    return { ...DEFAULT_SETTINGS, ...salvaged } as Settings;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+
+/**
+ * cliPaths is the schema's one nested record, and zod rejects a record
+ * WHOLESALE on a single unknown key or invalid value — exactly the blast
+ * radius the per-key salvage exists to avoid (a newer build's extra agent
+ * kind would wipe the user's still-valid binary paths). Salvage it entry by
+ * entry through the same schema, so each bad entry costs only itself.
+ */
+function salvageCliPaths(value: unknown): Settings['cliPaths'] | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const salvaged: Settings['cliPaths'] = {};
+  for (const [kind, path] of Object.entries(value as Record<string, unknown>)) {
+    const single = settingsPatchSchema.shape.cliPaths.safeParse({
+      [kind]: path,
+    });
+    if (single.success && single.data) {
+      Object.assign(salvaged, single.data);
+    }
+  }
+  return salvaged;
 }
 
 export function writeSettings(next: Settings): Settings {

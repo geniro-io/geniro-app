@@ -4,7 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ChatItem, ChatItemKind } from '../../shared/contracts';
-import { TranscriptItem, type TranscriptNodeMeta } from './transcript-item';
+import {
+  expiredApprovalIds,
+  TranscriptItem,
+  type TranscriptNodeMeta,
+} from './transcript-item';
 
 const NODES: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
   ['start', { name: 'Start', kind: 'trigger' }],
@@ -343,5 +347,55 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     expect(container.textContent).toContain('✓ answered — Blue');
+  });
+});
+
+describe('expiredApprovalIds — turn-scoped expiry (multi-turn nodes)', () => {
+  function seqItem(
+    seq: number,
+    kind: ChatItemKind,
+    payload: unknown,
+    nodeId: string | null = 'orch',
+  ): ChatItem {
+    return { ...item(kind, payload, nodeId), id: `${kind}-${seq}`, seq };
+  }
+
+  it("a callee turn settling does NOT expire the DAG turn's pending approval on the same node", () => {
+    // A callable DAG node holds a DAG turn and callee turns at once; the
+    // callee's terminal status item carries its callId — the DAG turn's
+    // approval (no callId) is still live daemon-side.
+    const items = [
+      seqItem(0, 'approval_request', { id: 'req-1', toolName: 'Write' }),
+      seqItem(1, 'status', { status: 'completed', callId: 'call-9' }),
+    ];
+    expect(expiredApprovalIds(items, new Map())).toEqual(new Set());
+  });
+
+  it("a terminal status of the SAME turn (matching callId) expires that turn's approval", () => {
+    const items = [
+      seqItem(0, 'approval_request', {
+        id: 'req-2',
+        toolName: 'Write',
+        callId: 'call-9',
+      }),
+      seqItem(1, 'status', { status: 'failed', callId: 'call-9' }),
+    ];
+    expect(expiredApprovalIds(items, new Map())).toEqual(new Set(['req-2']));
+  });
+
+  it('a DAG-turn terminal status (no callId) still expires the DAG-turn approval', () => {
+    const items = [
+      seqItem(0, 'approval_request', { id: 'req-3', toolName: 'Write' }),
+      seqItem(1, 'status', { status: 'cancelled' }),
+    ];
+    expect(expiredApprovalIds(items, new Map())).toEqual(new Set(['req-3']));
+  });
+
+  it('a run-level terminal item still expires everything', () => {
+    const items = [
+      seqItem(0, 'approval_request', { id: 'req-4', toolName: 'Write' }),
+      seqItem(1, 'turn_complete', {}, null),
+    ];
+    expect(expiredApprovalIds(items, new Map())).toEqual(new Set(['req-4']));
   });
 });

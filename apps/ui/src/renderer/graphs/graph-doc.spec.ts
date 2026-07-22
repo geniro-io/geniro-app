@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Workflow } from '../../shared/contracts';
-import { autoLayout, edgeId, fromFlow, nextNodeId, toFlow } from './graph-doc';
+import {
+  autoLayout,
+  canvasSnapshot,
+  edgeId,
+  fromFlow,
+  nextNodeId,
+  toFlow,
+} from './graph-doc';
 
 const WF: Workflow = {
   name: 'team',
@@ -134,6 +141,41 @@ describe('toFlow / fromFlow', () => {
       kind: 'data',
       label: 'diff',
     });
+  });
+});
+
+describe('canvasSnapshot (the builder dirty-check baseline)', () => {
+  it('is stable across a load round-trip and selection, and flips on a real edit', () => {
+    const flow = toFlow(WF);
+    const baseline = canvasSnapshot('team', '', flow.nodes, flow.edges);
+
+    // Re-serializing the untouched canvas reads clean.
+    expect(canvasSnapshot('team', '', flow.nodes, flow.edges)).toBe(baseline);
+
+    // Selecting a node is not an edit — it must never arm the discard guard.
+    const selected = flow.nodes.map((n) =>
+      n.id === 'coder' ? { ...n, selected: true } : n,
+    );
+    expect(canvasSnapshot('team', '', selected, flow.edges)).toBe(baseline);
+
+    // Moving a node IS an edit (layout persists to the YAML).
+    const moved = flow.nodes.map((n) =>
+      n.id === 'coder' ? { ...n, position: { x: 99, y: 20 } } : n,
+    );
+    expect(canvasSnapshot('team', '', moved, flow.edges)).not.toBe(baseline);
+
+    // Removing an edge IS an edit.
+    expect(canvasSnapshot('team', '', flow.nodes, [])).not.toBe(baseline);
+  });
+
+  it('normalizes meta like Save does — whitespace and the empty-name fallback', () => {
+    const flow = toFlow(WF);
+    expect(canvasSnapshot(' team ', '  ', flow.nodes, flow.edges)).toBe(
+      canvasSnapshot('team', '', flow.nodes, flow.edges),
+    );
+    expect(canvasSnapshot('', '', flow.nodes, flow.edges)).toBe(
+      canvasSnapshot('workflow', '', flow.nodes, flow.edges),
+    );
   });
 });
 

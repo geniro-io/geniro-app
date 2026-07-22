@@ -28,6 +28,7 @@ import type { CursorCallsCapability, Workflow } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import type { CursorProbeService } from './cursor-probe.service';
 import { GraphExecutorService } from './graph-executor.service';
+import type { WorkflowStoreService } from './workflow-store.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
@@ -330,6 +331,8 @@ function setup(
     record: vi.fn(),
     get: () => null,
   } as unknown as SkillHarvestStore;
+  const storeGet = vi.fn();
+  const workflowStore = { get: storeGet } as unknown as WorkflowStoreService;
   const service = new GraphExecutorService(
     em,
     runDao as unknown as RunDao,
@@ -345,6 +348,7 @@ function setup(
     cursorProbe,
     cursorMerge,
     skillHarvest,
+    workflowStore,
     {
       token: 'launch-token',
       version: '0.0.0-test',
@@ -367,6 +371,7 @@ function setup(
     mergeAcquire,
     mergeReleases,
     skillHarvest,
+    storeGet,
   };
 }
 
@@ -1262,7 +1267,7 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
-  it('only cursor-caller workflows wait on the probe verdict at run start', async () => {
+  it('only cursor-caller workflows consult the probe, and never on the run-start POST', async () => {
     const claudeOnly = setup();
     await claudeOnly.service.startRun({
       slug: 'c',
@@ -1275,13 +1280,29 @@ describe('GraphExecutorService — agent calls', () => {
     completeTurn(claudeOnly.claude.starts[0]!, 'done');
     await drain();
 
+    // F43: the first cursor-caller run on a machine used to block the HTTP
+    // POST on the ~90-180s probe turn. startRun must answer while the probe
+    // is still in flight; only the run's EXECUTION waits on the verdict.
     const withCursor = setup(4870, { cursorCalls: PASS_VERDICT });
-    await withCursor.service.startRun({
+    let resolveProbe!: (verdict: CursorCallsCapability) => void;
+    withCursor.ensureVerdict.mockImplementation(
+      () =>
+        new Promise<CursorCallsCapability>((resolve) => {
+          resolveProbe = resolve;
+        }),
+    );
+    const run = await withCursor.service.startRun({
       slug: 'c',
       workflow: triggered(CURSOR_CALLER_WF),
       cwd: dir,
       prompt: 'go',
     });
+    await drain();
+    expect(run.status).toBe('running');
+    // Execution is parked on the probe — no turn spawned yet.
+    expect(withCursor.cursor.starts).toHaveLength(0);
+
+    resolveProbe(PASS_VERDICT);
     await drain();
     expect(withCursor.ensureVerdict).toHaveBeenCalledTimes(1);
     completeTurn(withCursor.cursor.starts[0]!, 'done');
@@ -1573,6 +1594,28 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
   });
 
+  it('startRunBySlug looks the workflow up in the library and launches it (one-call controller seam)', async () => {
+    const { service, claude, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', { cwd: dir, prompt: 'go' });
+
+    expect(storeGet).toHaveBeenCalledWith('lin');
+    await drain();
+    expect(claude.starts.length).toBeGreaterThan(0);
+    expect(runDao.runs.get(run.id)?.workflowId).toBe('lin');
+  });
+
+  it('startRunBySlug propagates a library miss without creating a run', async () => {
+    const { service, runDao, storeGet } = setup();
+    storeGet.mockRejectedValue(new Error('WORKFLOW_NOT_FOUND'));
+
+    await expect(
+      service.startRunBySlug('ghost', { cwd: dir, prompt: 'go' }),
+    ).rejects.toThrow('WORKFLOW_NOT_FOUND');
+    expect(runDao.runs.size).toBe(0);
+  });
+
   it('settles a node failed (not a run-crashing throw) when adapter.start throws', async () => {
     // prepareTurn's config-file write can throw synchronously out of
     // adapter.start; drive()/startRun promise "never throws", so the node
@@ -1597,7 +1640,7 @@ describe('GraphExecutorService — agent calls', () => {
   });
 
   it('a callee whose start throws yields a CALL_FAILED envelope without wedging the run', async () => {
-    const { service, claude, callBroker, runDao } = setup();
+    const { service, claude, callBroker, runDao, itemDao } = setup();
     const run = await service.startRun({
       slug: 'c',
       workflow: triggered(CALL_WF),
@@ -1615,6 +1658,25 @@ describe('GraphExecutorService — agent calls', () => {
       expect(envelope.error).toContain('turn start failed');
     }
     await drain();
+    // persistTurnStart emitted a 'running' status item before the throw; the
+    // catch must balance it with a call-attributed terminal one, or the
+    // renderer's agents panel counts this callee as live for the whole run
+    // (the sibling DAG-launch catch already does this).
+    const helperStatuses = itemDao.items
+      .filter((i) => i.kind === 'status')
+      .map(
+        (i) =>
+          JSON.parse(i.payload) as {
+            nodeId?: string;
+            status?: string;
+            callId?: string;
+          },
+      )
+      .filter((p) => p.nodeId === 'helper');
+    const running = helperStatuses.find((p) => p.status === 'running');
+    const failed = helperStatuses.find((p) => p.status === 'failed');
+    expect(running?.callId).toBeTruthy();
+    expect(failed?.callId).toBe(running?.callId);
     // The caller turn still finishes and the run rolls up (not wedged).
     completeTurn(claude.starts[0]!, 'done');
     await drain();

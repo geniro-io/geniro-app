@@ -15,8 +15,8 @@
     "check-types": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-    "test": "vitest run --passWithNoTests",
-    "test:unit": "vitest run --passWithNoTests",
+    "test": "vitest run",
+    "test:unit": "vitest run",
     "test:graph": "vitest run src/v1/graphs"
   },
   "dependencies": {

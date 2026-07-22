@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { TerminalEvent } from '../terminals.types';
-import { type PtyLike, PtyService } from './pty.service';
+import { EXITED_SESSION_TTL_MS, type PtyLike, PtyService } from './pty.service';
 
 class FakePty implements PtyLike {
   pid = 4242;
@@ -93,6 +93,18 @@ describe('PtyService', () => {
     expect(registry.has('run-1')).toBe(false);
   });
 
+  it('merges caller-provided env over the stripped child env (re-injection seam)', () => {
+    const { service, spawns } = build();
+
+    service.create({ ...INPUT, env: { ANTHROPIC_API_KEY: 'sk-reinjected' } });
+
+    // The extra env rides the spawn AND the strip still applies around it —
+    // a reorder letting `input.env` bypass buildChildEnv would leak GENIRO_*.
+    expect(spawns[0]?.options.env.ANTHROPIC_API_KEY).toBe('sk-reinjected');
+    expect(spawns[0]?.options.env.GENIRO_PTY_SPEC_SECRET).toBeUndefined();
+    expect(spawns[0]?.options.env.TERM).toBe('xterm-256color');
+  });
+
   it('buffers scrollback and streams live data after the snapshot', () => {
     const { service, ptys } = build();
     const { id } = service.create(INPUT);
@@ -152,6 +164,34 @@ describe('PtyService', () => {
     const { service } = build();
 
     expect(() => service.kill('gone')).not.toThrow();
+  });
+
+  it('create during daemon shutdown reports RUN_STOPPING, not a false "already claimed"', () => {
+    const { service, registry, spawns } = build();
+    // tryClaim refuses once shutdown begins — the one reachable cause of a
+    // refused claim, since each create keys a fresh UUID.
+    void registry.onApplicationShutdown();
+
+    expect(() => service.create(INPUT)).toThrowError(
+      /daemon shutdown started before the terminal could open/,
+    );
+    expect(spawns).toHaveLength(0);
+  });
+
+  it('a genuinely live duplicate claim still reports TERMINAL_BUSY', () => {
+    // The double-spawn defense: a registry that reports the key as actively
+    // claimed (not shutting down) must surface the conflict, not RUN_STOPPING.
+    const registry = {
+      tryClaim: () => false,
+      has: () => true,
+    } as unknown as ProcessRegistry;
+    const service = new PtyService(registry, {
+      spawnPty: () => {
+        throw new Error('spawn must not be reached');
+      },
+    });
+
+    expect(() => service.create(INPUT)).toThrowError(/already claimed/);
   });
 
   it('dispose-then-shutdown does not abort the registry cancel loop', async () => {
@@ -294,9 +334,31 @@ describe('PtyService', () => {
     service.dispose(id);
     expect(ptys[0]?.killed.length).toBe(killsAfterFirst);
 
+    // Explicitly closed: once the PTY dies the session is forgotten outright
+    // — no 30-min exited retention pinning its scrollback for a re-attach
+    // nobody will make.
     ptys[0]?.emitExit(1);
-    expect(service.get(id).status).toBe('exited');
+    expect(() => service.get(id)).toThrowError(
+      /TERMINAL_NOT_FOUND|no terminal/,
+    );
     expect(service.findRunning(INPUT.runId, INPUT.nodeId)).toBeNull();
+  });
+
+  it('a session that exits on its own is kept for the replay TTL, then evicted', () => {
+    vi.useFakeTimers();
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+
+    ptys[0]?.emitExit(0);
+
+    // Not explicitly closed — a re-attach can still replay the final screen.
+    expect(service.get(id).status).toBe('exited');
+    vi.advanceTimersByTime(EXITED_SESSION_TTL_MS - 1);
+    expect(service.get(id).status).toBe('exited');
+    vi.advanceTimersByTime(1);
+    expect(() => service.get(id)).toThrowError(
+      /TERMINAL_NOT_FOUND|no terminal/,
+    );
   });
 
   it('dispose forgets an exited session immediately', () => {

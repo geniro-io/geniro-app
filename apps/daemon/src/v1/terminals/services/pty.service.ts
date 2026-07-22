@@ -11,10 +11,12 @@ import type { AgentTurnHandle } from '../../agents/adapters/adapter.types';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { buildChildEnv } from '../../agents/utils/child-env';
 import { killProcessGroup } from '../../agents/utils/kill-tree';
-import type {
-  TerminalEvent,
-  TerminalSessionWire,
-  TerminalStatus,
+import {
+  MAX_COLS,
+  MAX_ROWS,
+  type TerminalEvent,
+  type TerminalSessionWire,
+  type TerminalStatus,
 } from '../terminals.types';
 
 /** Max buffered scrollback per session (chars) replayed to a (re)attaching client. */
@@ -27,12 +29,10 @@ const SCROLLBACK_CAP = 512 * 1024;
  */
 const KILL_ESCALATION_MS = 3000;
 /** How long an exited session's final screen stays re-attachable before eviction. */
-const EXITED_SESSION_TTL_MS = 30 * 60 * 1000;
+// Exported so the spec pins eviction against the live constant.
+export const EXITED_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-/** Terminal-size bounds — shared with the HTTP DTO so the two never diverge. */
-export const MAX_COLS = 500;
-export const MAX_ROWS = 300;
 
 /**
  * The slice of node-pty's `IPty` this service depends on — narrower than the
@@ -78,6 +78,8 @@ export interface CreateTerminalInput {
   cwd: string;
   cols?: number;
   rows?: number;
+  /** Extra env merged over the stripped child env (single-secret re-injection). */
+  env?: Record<string, string>;
 }
 
 interface PtySession {
@@ -95,6 +97,12 @@ interface PtySession {
   createdAt: number;
   killTimer?: NodeJS.Timeout;
   evictTimer?: NodeJS.Timeout;
+  /**
+   * Set by {@link PtyService.dispose} on a running session: the user closed
+   * this mirror on purpose, so on exit it is forgotten immediately instead of
+   * held (scrollback and all) for the abandoned-session replay TTL.
+   */
+  disposedExplicitly?: boolean;
 }
 
 /**
@@ -155,10 +163,19 @@ export class PtyService {
     const id = randomUUID();
     const registryKey = `terminal:${id}`;
     if (!this.registry.tryClaim(registryKey)) {
-      // A fresh UUID cannot collide; defensive so a bug never double-spawns.
+      // tryClaim refuses for two reasons. A fresh UUID colliding with a live
+      // claim would be a double-spawn bug (defensive); the one reachable cause
+      // is daemon shutdown — report each accurately, mirroring the sibling
+      // claim sites' RUN_STOPPING semantics.
+      if (this.registry.has(registryKey)) {
+        throw new ConflictException(
+          'TERMINAL_BUSY',
+          `terminal ${id} is already claimed`,
+        );
+      }
       throw new ConflictException(
-        'TERMINAL_BUSY',
-        `terminal ${id} is already claimed`,
+        'RUN_STOPPING',
+        'daemon shutdown started before the terminal could open',
       );
     }
 
@@ -169,7 +186,7 @@ export class PtyService {
         cols: clamp(input.cols ?? DEFAULT_COLS, 1, MAX_COLS),
         rows: clamp(input.rows ?? DEFAULT_ROWS, 1, MAX_ROWS),
         cwd: input.cwd,
-        env: stringEnv(buildChildEnv({ TERM: 'xterm-256color' })),
+        env: stringEnv(buildChildEnv({ TERM: 'xterm-256color', ...input.env })),
       });
     } catch (err) {
       this.registry.release(registryKey);
@@ -218,13 +235,19 @@ export class PtyService {
       session.exitCode = exitCode;
       session.events.next({ kind: 'exit', exitCode });
       session.events.complete();
-      // Keep the exited session around briefly so a re-attach can replay the
-      // final screen, then evict — without a TTL every abandoned session pins
-      // up to SCROLLBACK_CAP of memory for the daemon's lifetime.
-      session.evictTimer = setTimeout(() => {
+      if (session.disposedExplicitly) {
+        // The user closed this mirror; nobody re-attaches to replay it.
         this.sessions.delete(id);
-      }, EXITED_SESSION_TTL_MS);
-      session.evictTimer.unref?.();
+      } else {
+        // Keep the exited session around briefly so a re-attach can replay
+        // the final screen, then evict — without a TTL every abandoned
+        // session pins up to SCROLLBACK_CAP of memory for the daemon's
+        // lifetime.
+        session.evictTimer = setTimeout(() => {
+          this.sessions.delete(id);
+        }, EXITED_SESSION_TTL_MS);
+        session.evictTimer.unref?.();
+      }
       settle();
     });
 
@@ -341,6 +364,7 @@ export class PtyService {
     if (session.status === 'running') {
       this.kill(id);
       session.status = 'closing';
+      session.disposedExplicitly = true;
       return;
     }
     if (session.status === 'closing') {

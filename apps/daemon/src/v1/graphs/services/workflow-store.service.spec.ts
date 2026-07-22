@@ -1,4 +1,13 @@
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -275,6 +284,59 @@ describe('WorkflowStoreService', () => {
     } finally {
       await rm(external, { force: true });
     }
+  });
+
+  it('a second import of the same name lands on the next suffix, never over the first', async () => {
+    const external = join(dir, '..', `twice-${Date.now()}.geniro.yaml`);
+    await writeFile(
+      external,
+      `name: twice\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
+      'utf8',
+    );
+    try {
+      const first = await store.importFrom(external);
+      const second = await store.importFrom(external);
+      expect(second.slug).not.toBe(first.slug);
+      expect(second.slug).toBe(`${first.slug}-2`);
+    } finally {
+      await rm(external, { force: true });
+    }
+  });
+
+  it('import commits exclusively — a taken path the stat check cannot see still yields a fresh slug', async () => {
+    // A dangling symlink occupies the slug's path but stat() (which follows
+    // symlinks) reports it absent. A check-then-rename import would "verify"
+    // the slug free and silently replace the entry; the exclusive link commit
+    // gets EEXIST and retries the next suffix instead.
+    const external = join(dir, '..', `occupied-${Date.now()}.geniro.yaml`);
+    await writeFile(
+      external,
+      `name: occupied\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
+      'utf8',
+    );
+    try {
+      const base = external.split('/').pop()!.replace('.geniro.yaml', '');
+      await symlink(
+        join(dir, 'nowhere-target'),
+        join(dir, `${base}.geniro.yaml`),
+      );
+      const imported = await store.importFrom(external);
+      expect(imported.slug).toBe(`${base}-2`);
+    } finally {
+      await rm(external, { force: true });
+    }
+  });
+
+  it('a failed save leaves no stranded .tmp staging file behind', async () => {
+    // Force the rename to fail: the target path is an existing directory. The
+    // staged tmp has a unique per-call name, so nothing else ever reclaims it —
+    // the write path itself must clean up on failure.
+    await mkdir(join(dir, 'blocked.geniro.yaml'));
+
+    await expect(store.save('blocked', WF)).rejects.toThrow();
+
+    const entries = await readdir(dir);
+    expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
   });
 
   it('exports a workflow byte-for-byte to a target path', async () => {

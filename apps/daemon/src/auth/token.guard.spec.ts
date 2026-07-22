@@ -27,7 +27,7 @@ function httpContext(url: string, authorization?: string): ExecutionContext {
 
 describe('LoopbackTokenGuard', () => {
   describe('public allowlist (segment-boundary match)', () => {
-    it.each(['/health', '/health/check', '/metrics', '/swagger-api/reference'])(
+    it.each(['/health', '/health/check'])(
       'lets %s through without a token',
       (url) => {
         expect(guard().canActivate(httpContext(url))).toBe(true);
@@ -39,6 +39,16 @@ describe('LoopbackTokenGuard', () => {
         true,
       );
     });
+
+    it.each(['/metrics', '/swagger-api/reference'])(
+      'gates %s behind the token — any web page could otherwise read it cross-origin',
+      (url) => {
+        expect(guard().canActivate(httpContext(url))).toBe(false);
+        expect(guard().canActivate(httpContext(url, `Bearer ${TOKEN}`))).toBe(
+          true,
+        );
+      },
+    );
 
     it.each(['/health-debug', '/metricsdump', '/swagger-apix/spec'])(
       'does NOT let the sibling route %s inherit the allowlist',

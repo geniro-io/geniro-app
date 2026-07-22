@@ -12,6 +12,7 @@ import type { CliKind, NodeKind, TriggerKind } from '../../shared/contracts';
 import { CLI_KINDS, TRIGGER_KINDS } from '../../shared/contracts';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
 import {
@@ -254,14 +255,19 @@ function CategoryBlock({
  * category blocks (Triggers + Agents), a fold control that shrinks the whole
  * panel to a slim rail, and a drag-to-resize right edge. Panel width, fold
  * state, and each block's open state persist in localStorage. Nodes are added
- * by dragging a tile onto the canvas; clicking a tile opens its read-only
- * info dialog (schema + connection rules).
+ * by dragging a tile onto the canvas OR from the tile's info dialog ("Add to
+ * canvas" — the keyboard path); clicking a tile opens that dialog.
  */
-export function NodePalette(): React.JSX.Element {
+export function NodePalette({
+  onAdd,
+}: {
+  /** Position-less add (the canvas stacks it to the right) — the keyboard path. */
+  onAdd?: (item: PaletteItem) => void;
+}): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(() =>
     readBool(LS_COLLAPSED, false),
   );
-  const { width, startResize } = usePanelWidth({
+  const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: LS_WIDTH,
     defaultWidth: 240,
     minWidth: 180,
@@ -405,9 +411,22 @@ export function NodePalette(): React.JSX.Element {
             </div>
           </section>
 
-          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-            Drag this {infoItem.kind} onto the canvas to add it as a node.
-          </p>
+          <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2">
+            <p className="m-0 text-xs text-muted-foreground">
+              Drag this {infoItem.kind} onto the canvas — or add it directly.
+            </p>
+            {onAdd ? (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  onAdd(infoItem);
+                  closeInfo();
+                }}>
+                Add to canvas
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </Dialog>
@@ -416,13 +435,15 @@ export function NodePalette(): React.JSX.Element {
   if (collapsed) {
     return (
       <aside className="flex w-9 shrink-0 flex-col items-center gap-2 border-r border-border bg-muted/40 py-3">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           aria-label="Expand palette"
           onClick={() => setCollapsed(false)}
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+          className="size-7 text-muted-foreground">
           <ChevronRight className="size-4" />
-        </button>
+        </Button>
         <span className="mt-1 rotate-180 text-xs font-medium text-muted-foreground [writing-mode:vertical-rl]">
           Palette
         </span>
@@ -437,13 +458,15 @@ export function NodePalette(): React.JSX.Element {
       <div className="flex-shrink-0 border-b border-border bg-card px-3 py-2.5">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold">Palette</span>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             aria-label="Collapse palette"
             onClick={() => setCollapsed(true)}
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+            className="size-6 text-muted-foreground">
             <ChevronLeft className="size-4" />
-          </button>
+          </Button>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           Drag onto the canvas; click for details.
@@ -484,6 +507,10 @@ export function NodePalette(): React.JSX.Element {
         edge="right"
         label="Resize palette"
         onMouseDown={startResize}
+        value={width}
+        min={minWidth}
+        max={maxWidth}
+        onResize={resizeTo}
       />
 
       {infoDialog}

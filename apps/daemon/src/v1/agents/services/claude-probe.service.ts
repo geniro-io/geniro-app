@@ -15,8 +15,7 @@ import { childProcessHandle } from '../utils/child-handle';
 import { ProcessRegistry } from './process-registry';
 
 /** The permission modes whose headless support is empirical, not assumed. */
-const PROBED_MODES = ['acceptEdits', 'plan'] as const;
-type ProbedMode = (typeof PROBED_MODES)[number];
+type ProbedMode = 'acceptEdits' | 'plan';
 
 const PROBE_PROMPT = 'Reply with exactly: ok';
 

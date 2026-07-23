@@ -799,6 +799,72 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
+  it("never both ACKs a flip to 'ask' and spawns the racing turn as 'auto' — a settings PATCH landing during sendMessage's run-row read must not be ignored", async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+
+    // Model the production read semantics: sendMessage hydrates the run row in
+    // its OWN EntityManager fork (BaseDao.updateById loads + flushes in the
+    // PATCH handler's separate fork), so a write that lands after the SELECT
+    // executed does NOT mutate the already-hydrated entity. The first getById
+    // (sendMessage's) therefore snapshots the row at query time and only then
+    // parks on the gate — exactly a slow read racing a fast concurrent PATCH.
+    const originalGetById = runDao.getById.bind(runDao);
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let gatePending = true;
+    runDao.getById = async (id: string): Promise<Run | null> => {
+      if (!gatePending) {
+        return originalGetById(id);
+      }
+      gatePending = false;
+      const row = await originalGetById(id);
+      const snapshot = row ? ({ ...row } as Run) : null;
+      await readGate;
+      return snapshot;
+    };
+
+    // The send hits the gated read first (synchronously, before any claim).
+    const send = service.sendMessage(run.id, 'lock this chat down');
+
+    // The flip completes — no claim exists yet, so nothing 409s it. Record
+    // whether the daemon ACKed it; a refusal would be an honest outcome too.
+    let ackedApproval: string | null = null;
+    await service
+      .updateSettings(run.id, 'ask')
+      .then((wire) => {
+        ackedApproval = wire.approval;
+      })
+      .catch(() => {
+        // Refused (e.g. RUN_BUSY) — acceptable: refusal is not a silent drop.
+      });
+
+    releaseRead();
+    await send;
+    expect(claude.start).toHaveBeenCalledTimes(1);
+    const spawnedApprovalMode = (
+      claude.start.mock.calls[0]![0] as AgentTurnInput
+    ).approvalMode;
+    // The invariant under attack: the daemon must never acknowledge 'ask' to
+    // the user AND still spawn the concurrent turn under the stale 'auto'
+    // (which maps to --dangerously-skip-permissions on the CLI). Either the
+    // PATCH is refused (ackedApproval stays null; the stale 'auto' spawn is
+    // then correct), or the spawned turn honors the acknowledged mode.
+    expect({ ackedApproval, spawnedApprovalMode }).toEqual(
+      ackedApproval === null
+        ? { ackedApproval: null, spawnedApprovalMode: 'auto' }
+        : { ackedApproval: 'ask', spawnedApprovalMode: 'ask' },
+    );
+    claude.finish();
+    await drain();
+  });
+
   it('sweeps pending chat approvals on settle — including the persistence-failure early-return path', async () => {
     const { service, claude, approvals, runDao, itemDao } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });

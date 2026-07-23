@@ -58,3 +58,11 @@ Thumbs.db
 !.geniro/workflow/**
 !.geniro/instructions/
 !.geniro/instructions/**
+# approved plan artifacts for native-parity-gaps are committed (user-approved
+# 2026-07-23); state.md and .research-* scratch stay local.
+!.geniro/planning/
+.geniro/planning/*
+!.geniro/planning/native-parity-gaps/
+.geniro/planning/native-parity-gaps/*
+!.geniro/planning/native-parity-gaps/spec.md
+!.geniro/planning/native-parity-gaps/milestone-*.md

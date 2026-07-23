@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
+import type { ChatApprovalMode } from '../../agents/chat.types';
 import type { AgentKind, RunStatus } from '../runs.types';
 
 /** One execution of a workflow (graph) or a single-agent chat. */
@@ -37,4 +38,14 @@ export class Run extends TimestampsEntity {
   /** Model alias for a single-agent run; null = adapter default. */
   @Property({ type: 'string', nullable: true })
   model: string | null = null;
+
+  /**
+   * Chat approval mode for a single-agent run; null for graph runs (their
+   * modes live in the workflow YAML) and for legacy chat rows created before
+   * the selector existed — null keeps the exact pre-selector behavior (no
+   * permission flags on the CLI). Plain TEXT so the `safe: true` schema sync
+   * adds it additively, no migration.
+   */
+  @Property({ type: 'string', nullable: true })
+  approval: ChatApprovalMode | null = null;
 }

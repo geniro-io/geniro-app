@@ -12,12 +12,14 @@ import type { AgentKind } from '../../runs/runs.types';
 import type { AgentEvent, AgentTurnInput } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
-import type { RunItemEvent } from '../chat.types';
+import type { ClaudeModesCapability, RunItemEvent } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
+import { ApprovalRegistry } from './approval-registry';
 import { ChatService } from './chat.service';
+import type { ClaudeProbeService } from './claude-probe.service';
 import { ProcessRegistry } from './process-registry';
 import type { SkillHarvestStore } from './skill-harvest.store';
 
@@ -145,9 +147,11 @@ function fakeAdapter(kind: AgentKind): {
   start: ReturnType<typeof vi.fn>;
   emit: (event: AgentEvent) => void;
   finish: () => void;
+  handles: { respondApproval: ReturnType<typeof vi.fn> }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   let resolveDone: (() => void) | null = null;
+  const handles: { respondApproval: ReturnType<typeof vi.fn> }[] = [];
   const start = vi.fn(
     (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
       void input;
@@ -155,7 +159,14 @@ function fakeAdapter(kind: AgentKind): {
       const done = new Promise<void>((resolve) => {
         resolveDone = resolve;
       });
-      return { done, cancel: vi.fn(), respondApproval: vi.fn() };
+      const handle = {
+        done,
+        cancel: vi.fn(),
+        // A live turn delivers verdicts — true is the realistic default.
+        respondApproval: vi.fn(() => true),
+      };
+      handles.push(handle);
+      return handle;
     },
   );
   return {
@@ -163,6 +174,7 @@ function fakeAdapter(kind: AgentKind): {
     start,
     emit: (event) => onEvent?.(event),
     finish: () => resolveDone?.(),
+    handles,
   };
 }
 
@@ -173,7 +185,7 @@ async function drain(): Promise<void> {
   }
 }
 
-function setup() {
+function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
   const nodeDao = new FakeNodeStateDao();
@@ -182,6 +194,7 @@ function setup() {
     publish: (event: RunItemEvent) => published.push(event),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
+  const approvals = new ApprovalRegistry();
   const claude = fakeAdapter('claude');
   const cursor = fakeAdapter('cursor-agent');
   const em = {
@@ -191,6 +204,18 @@ function setup() {
     record: vi.fn(),
     get: () => null,
   } as unknown as SkillHarvestStore;
+  const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
+    acceptEdits: 'pass',
+    plan: 'pass',
+    version: 'claude-test',
+    probedAt: 0,
+    reason: null,
+  };
+  const claudeProbe = {
+    capability: () => claudeModes,
+    ensureVerdict: vi.fn(async () => claudeModes),
+    wireCapability: () => claudeModes,
+  } as unknown as ClaudeProbeService;
   const service = new ChatService(
     em,
     runDao as unknown as RunDao,
@@ -198,8 +223,10 @@ function setup() {
     nodeDao as unknown as NodeStateDao,
     bus,
     registry,
+    approvals,
     claude.adapter,
     cursor.adapter as unknown as CursorAdapter,
+    claudeProbe,
     skillHarvest,
   );
   return {
@@ -209,7 +236,9 @@ function setup() {
     nodeDao,
     published,
     registry,
+    approvals,
     claude,
+    cursor,
     skillHarvest,
   };
 }
@@ -601,5 +630,195 @@ describe('ChatService', () => {
     await expect(service.rename('nope', 'x')).rejects.toThrow(
       /RUN_NOT_FOUND|not found/,
     );
+  });
+});
+
+describe('ChatService — approval modes (parity M1)', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-chat-appr-')));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Which color?',
+        options: [{ label: 'Red' }, { label: 'Blue' }],
+      },
+    ],
+  };
+
+  it("createChat defaults claude to 'ask', pins cursor to 'auto', and rejects a non-auto cursor mode", async () => {
+    const { service } = setup();
+    const claudeRun = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+    });
+    expect(claudeRun.approval).toBe('ask');
+    const planRun = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'plan',
+    });
+    expect(planRun.approval).toBe('plan');
+    const cursorRun = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+    expect(cursorRun.approval).toBe('auto');
+    await expect(
+      service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+        approval: 'ask',
+      }),
+    ).rejects.toThrow("cursor chats run 'auto' only");
+  });
+
+  it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a non-auto cursor mode', async () => {
+    const { service, registry } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const updated = await service.updateSettings(run.id, 'acceptEdits');
+    expect(updated.approval).toBe('acceptEdits');
+
+    // A claimed run is a turn in flight — settings are locked.
+    expect(registry.tryClaim(run.id)).toBe(true);
+    await expect(service.updateSettings(run.id, 'auto')).rejects.toThrow(
+      'a turn is in flight',
+    );
+
+    const cursorRun = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+    await expect(service.updateSettings(cursorRun.id, 'ask')).rejects.toThrow(
+      "cursor chats run 'auto' only",
+    );
+    const pinned = await service.updateSettings(cursorRun.id, 'auto');
+    expect(pinned.approval).toBe('auto');
+  });
+
+  it('sendMessage passes the run row mode to the adapter; a legacy null row passes none', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'acceptEdits',
+    });
+    await service.sendMessage(run.id, 'hi');
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
+    ).toBe('acceptEdits');
+    claude.finish();
+    await drain();
+
+    // A pre-selector row (approval null) keeps the exact legacy spawn.
+    const legacy = await runDao.create({
+      workflowId: null,
+      status: 'pending',
+      agentKind: 'claude',
+      cwd: dir,
+      approval: null,
+    });
+    await service.sendMessage(legacy.id, 'hi');
+    expect(
+      (claude.start.mock.calls[1]![0] as AgentTurnInput).approvalMode,
+    ).toBeUndefined();
+    claude.finish();
+    await drain();
+  });
+
+  it("degrades an unsupported acceptEdits turn to 'ask' with a visible system item — never silently", async () => {
+    const { service, claude, itemDao } = setup({
+      claudeModes: {
+        acceptEdits: 'fail',
+        plan: 'fail',
+        version: 'claude-old',
+        probedAt: 0,
+        reason:
+          'installed claude does not support --permission-mode acceptEdits',
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'acceptEdits',
+    });
+    await service.sendMessage(run.id, 'hi');
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
+    ).toBe('ask');
+    const system = itemDao.items.find(
+      (i) =>
+        i.kind === 'system' &&
+        i.payload.includes('does not support acceptEdits'),
+    );
+    expect(system).toBeDefined();
+    claude.finish();
+    await drain();
+  });
+
+  it('tracks a chat approval card, folds the answer into AskUserQuestion, and persists the verdict item', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+    const applied = approvals.resolve(run.id, 'q-1', true, 'Blue');
+    expect(applied).toBe(true);
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'q-1',
+      true,
+      {
+        ...QUESTION_INPUT,
+        response: 'Blue',
+      },
+    );
+    await drain();
+    const verdict = itemDao.items.find((i) => i.kind === 'approval_verdict');
+    expect(verdict).toBeDefined();
+    expect(JSON.parse(verdict!.payload)).toMatchObject({
+      id: 'q-1',
+      allow: true,
+      answer: 'Blue',
+    });
+    claude.finish();
+    await drain();
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('sweeps pending chat approvals on settle — including the persistence-failure early-return path', async () => {
+    const { service, claude, approvals, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-1',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+    // Trip the event-persistence failure so the finalizer takes its early
+    // return — the sweep must fire on that path too.
+    itemDao.failNextKind = 'turn_complete';
+    claude.emit({ type: 'turn_complete', usage: null, stopReason: 'end_turn' });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+    expect(approvals.listByRun(run.id)).toEqual([]);
   });
 });

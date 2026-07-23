@@ -233,9 +233,9 @@ export class CursorAdapter extends AgentAdapter {
 
   protected override buildStdinPayload(input: AgentTurnInput): string {
     // cursor-agent has no system-prompt flag and no approval callback: a
-    // graph node's role is prepended to the prompt text, and `ask` approval
-    // degrades to auto-approve (`--force` — the executor surfaces the degrade
-    // to the user as a system item). In `-p` mode with no positional prompt
+    // graph node's role is prepended to the prompt text, and every non-auto
+    // approval mode degrades to auto-approve (`--force` — the executor/chat
+    // surface the degrade to the user). In `-p` mode with no positional prompt
     // the CLI reads the prompt from stdin until EOF (spawn-cli ends stdin
     // right after the payload).
     return input.systemPrompt

@@ -32,13 +32,15 @@ vi.mock('../chat-api', () => ({
   }),
 }));
 
-// WorkflowApi is mocked the same way; the mount path lists workflows + runs.
+// WorkflowApi is mocked the same way; the mount path lists workflows + runs
+// and reads capabilities once (gates the plan option in the approval chip).
 const workflowApi = vi.hoisted(() => ({
   list: vi.fn(),
   get: vi.fn(),
   listRuns: vi.fn(),
   run: vi.fn(),
   cancelRun: vi.fn(),
+  capabilities: vi.fn(),
 }));
 vi.mock('../workflow-api', () => ({
   WorkflowApi: vi.fn(function WorkflowApiMock(this: Record<string, unknown>) {
@@ -116,6 +118,7 @@ const run1: ChatRun = {
   workflowId: null,
   cwd: '/proj',
   model: null,
+  approval: null,
   createdAt: 'now',
   updatedAt: 'now',
   lastMessage: null,
@@ -237,6 +240,17 @@ beforeEach(() => {
   workflowApi.listRuns.mockReset().mockResolvedValue([]);
   workflowApi.run.mockReset();
   workflowApi.cancelRun.mockReset().mockResolvedValue({ cancelled: true });
+  // Default: nothing probed — the approval chip hides plan; tests override.
+  workflowApi.capabilities.mockReset().mockResolvedValue({
+    cursorCalls: { status: 'unknown', version: null, probedAt: null, reason: null },
+    claudeModes: {
+      acceptEdits: 'unknown',
+      plan: 'unknown',
+      version: null,
+      probedAt: null,
+      reason: null,
+    },
+  });
   terminalApi.create.mockReset();
   terminalApi.list.mockReset().mockResolvedValue([]);
   terminalApi.dispose.mockReset().mockResolvedValue({ disposed: true });
@@ -659,6 +673,7 @@ describe('Chats workflow runs', () => {
     workflowId: 'review-team',
     cwd: '/proj',
     model: null,
+    approval: null,
     createdAt: 'later',
     updatedAt: 'later',
     lastMessage: null,
@@ -1120,6 +1135,7 @@ describe('Chats terminal mirror', () => {
       workflowId: 'review-team',
       cwd: '/proj',
       model: null,
+      approval: null,
       createdAt: 'later',
       updatedAt: 'later',
       lastMessage: null,
@@ -1193,6 +1209,7 @@ describe('Chats terminal mirror', () => {
       workflowId: 'mixed-team',
       cwd: '/proj',
       model: null,
+      approval: null,
       createdAt: 'later',
       updatedAt: 'later',
       lastMessage: null,

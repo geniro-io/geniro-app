@@ -62,9 +62,10 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
     },
     {
       key: 'approval',
-      type: 'auto | ask',
+      type: 'auto | ask | acceptEdits',
       required: false,
-      description: 'Tool-approval mode (defaults to auto).',
+      description:
+        'Tool-approval mode (defaults to auto). acceptEdits auto-approves file edits and asks for the rest.',
     },
   ],
   trigger: [

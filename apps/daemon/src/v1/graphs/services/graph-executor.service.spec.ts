@@ -13,11 +13,13 @@ import type {
 } from '../../agents/adapters/adapter.types';
 import type { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import type { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
+import type { ClaudeModesCapability } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import type { ClaudeProbeService } from '../../agents/services/claude-probe.service';
 import type { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
@@ -263,6 +265,7 @@ function setup(
   runtimePort: number | null = 4870,
   opts: {
     cursorCalls?: CursorCallsCapability;
+    claudeModes?: ClaudeModesCapability;
     mergeOk?: boolean;
     gitTracked?: boolean;
     mergeImpl?: () => Promise<unknown>;
@@ -306,6 +309,20 @@ function setup(
     isProbeRun: () => false,
     noteEchoCall: () => {},
   } as unknown as CursorProbeService;
+  // Claude mode probe defaults to all-pass — the widened modes run as
+  // requested unless a test opts into a probed FAIL explicitly.
+  const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
+    acceptEdits: 'pass',
+    plan: 'pass',
+    version: 'claude-test',
+    probedAt: 0,
+    reason: null,
+  };
+  const claudeProbe = {
+    capability: () => claudeModes,
+    ensureVerdict: vi.fn(async () => claudeModes),
+    wireCapability: () => claudeModes,
+  } as unknown as ClaudeProbeService;
   const mergeReleases: ReturnType<typeof vi.fn>[] = [];
   const mergeAcquire = vi.fn(async () => {
     if (opts.mergeImpl) {
@@ -346,6 +363,7 @@ function setup(
     callTokens,
     callBroker,
     cursorProbe,
+    claudeProbe,
     cursorMerge,
     skillHarvest,
     workflowStore,
@@ -2200,6 +2218,127 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
     );
     completeTurn(callee, 'done');
     completeTurn(caller, 'done');
+    await drain();
+  });
+});
+
+describe('GraphExecutorService — widened approval modes (parity M1)', () => {
+  const ACCEPT_EDITS_NODE: Workflow = {
+    name: 'accept-edits',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'acceptEdits' },
+    ],
+    edges: [],
+  };
+  const ACCEPT_EDITS_CALLER: Workflow = {
+    name: 'accept-edits-caller',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'acceptEdits' },
+      { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+  };
+
+  it("spawns a plain acceptEdits node with approvalMode 'acceptEdits' — not ask, not auto", async () => {
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'ae',
+      workflow: triggered(ACCEPT_EDITS_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(claude.starts[0]!.input.approvalMode).toBe('acceptEdits');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('an acceptEdits CALLER keeps its mode and its plain permissions stay on the human card — the daemon auto-approve is auto-only', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'ae-caller',
+      workflow: triggered(ACCEPT_EDITS_CALLER),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    // questionCapable does NOT force ask here: acceptEdits already carries
+    // the stdio dialogue the question channel needs.
+    expect(caller.input.approvalMode).toBe('acceptEdits');
+    // A plain permission on the acceptEdits caller must NOT be silently
+    // auto-approved (that path is reserved for approval 'auto' nodes) —
+    // this assertion fails if the :877 guard reverts to `!== 'ask'`.
+    caller.emit({
+      type: 'approval_request',
+      id: 'p-ae',
+      toolName: 'Bash',
+      input: { command: 'rm -rf /tmp/x' },
+    });
+    await drain();
+    expect(caller.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it("degrades a claude acceptEdits node to 'ask' with a visible system item when the probe verdict is FAIL", async () => {
+    const { service, claude, itemDao } = setup(4870, {
+      claudeModes: {
+        acceptEdits: 'fail',
+        plan: 'fail',
+        version: 'claude-old',
+        probedAt: 0,
+        reason:
+          'installed claude does not support --permission-mode acceptEdits',
+      },
+    });
+    await service.startRun({
+      slug: 'ae-degrade',
+      workflow: triggered(ACCEPT_EDITS_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(claude.starts[0]!.input.approvalMode).toBe('ask');
+    const system = itemDao.items.find(
+      (i) =>
+        i.kind === 'system' &&
+        i.payload.includes('does not support acceptEdits'),
+    );
+    expect(system).toBeDefined();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('warns for a cursor node under ANY non-auto approval — acceptEdits included, not just ask', async () => {
+    const { service, cursor, itemDao } = setup();
+    await service.startRun({
+      slug: 'cursor-ae',
+      workflow: triggered({
+        name: 'cursor-ae',
+        nodes: [
+          {
+            id: 'c',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'acceptEdits',
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const warn = itemDao.items.find(
+      (i) =>
+        i.kind === 'system' &&
+        i.payload.includes("approval 'acceptEdits' degrades to auto-approve"),
+    );
+    expect(warn).toBeDefined();
+    completeTurn(cursor.starts[0]!, 'done');
     await drain();
   });
 });

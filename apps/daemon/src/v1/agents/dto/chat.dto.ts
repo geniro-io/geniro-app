@@ -1,6 +1,8 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import { CHAT_APPROVAL_MODES } from '../chat.types';
+
 /**
  * HTTP input DTOs for the chat routes, validated by the global
  * `ZodValidationPipe` the http-server installs. `agentKind` mirrors the
@@ -12,8 +14,17 @@ export const createChatSchema = z.object({
   cwd: z.string().min(1),
   model: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
+  /** Omitted = the service default (claude 'ask', cursor 'auto'). */
+  approval: z.enum(CHAT_APPROVAL_MODES).optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
+
+export const updateChatSettingsSchema = z.object({
+  approval: z.enum(CHAT_APPROVAL_MODES),
+});
+export class UpdateChatSettingsDto extends createZodDto(
+  updateChatSettingsSchema,
+) {}
 
 export const sendMessageSchema = z.object({
   text: z.string().min(1),

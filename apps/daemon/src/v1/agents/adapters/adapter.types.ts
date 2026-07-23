@@ -101,12 +101,14 @@ export interface AgentTurnInput {
    */
   systemPrompt?: string | null;
   /**
-   * Tool-approval mode for graph nodes. `ask` blocks each permission-gated
-   * tool call on a user verdict (elicitation card); `auto` runs unattended
-   * with permission checks bypassed. Undefined (plain chat) keeps the CLI's
-   * own defaults — no extra permission flags.
+   * Tool-approval mode. `ask` blocks each permission-gated tool call on a
+   * user verdict (elicitation card); `acceptEdits` auto-approves file edits
+   * and asks for everything else; `plan` (chat-only) has the agent plan
+   * without executing; `auto` runs unattended with permission checks
+   * bypassed. Undefined (legacy chat rows) keeps the CLI's own defaults —
+   * no extra permission flags.
    */
-  approvalMode?: 'auto' | 'ask';
+  approvalMode?: 'auto' | 'ask' | 'acceptEdits' | 'plan';
   /**
    * Extra environment merged over `process.env` for the child process — e.g.
    * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).

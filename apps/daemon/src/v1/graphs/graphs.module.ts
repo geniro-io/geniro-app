@@ -9,6 +9,7 @@ import { CapabilitiesController } from './controllers/capabilities.controller';
 import { McpController } from './controllers/mcp.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { CallBroker } from './services/call-broker.service';
+import { CapabilitiesService } from './services/capabilities.service';
 import { CursorProbeService } from './services/cursor-probe.service';
 import { GraphExecutorService } from './services/graph-executor.service';
 import { McpServerService } from './services/mcp-server.service';
@@ -47,6 +48,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
         RUNTIME_TOKEN,
       ],
     },
+    CapabilitiesService,
     GraphExecutorService,
     CallBroker,
     McpServerService,

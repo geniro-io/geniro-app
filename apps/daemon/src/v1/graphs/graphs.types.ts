@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { ClaudeModesCapability } from '../agents/chat.types';
 import type { AgentKind, ItemKind, NodeStatus } from '../runs/runs.types';
 
 /**
@@ -91,9 +92,15 @@ export const NODE_CONNECTION_RULES: Record<
 /**
  * Per-node approval mode: `auto` lets the agent run its tools unattended;
  * `ask` routes tool-permission requests to the renderer as elicitation cards
- * and blocks the tool call until a verdict comes back.
+ * and blocks the tool call until a verdict comes back; `acceptEdits`
+ * auto-approves file edits on the CLI side and routes everything else to the
+ * `ask` card path. `plan` is deliberately absent — it is chat-only
+ * (CHAT_APPROVAL_MODES in v1/agents/chat.types.ts). NOTE: widening this enum
+ * is a one-way door — narrowing it back silently drops saved YAML workflows
+ * carrying the removed value from the library listing (workflow-store skips
+ * unparseable files).
  */
-export const ApprovalModeSchema = z.enum(['auto', 'ask']);
+export const ApprovalModeSchema = z.enum(['auto', 'ask', 'acceptEdits']);
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 
 /** Envelope fields every node kind shares. */
@@ -312,6 +319,8 @@ export interface CursorCallsCapability {
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export interface CapabilitiesWire {
   cursorCalls: CursorCallsCapability;
+  /** Claude permission-mode probe verdict (acceptEdits / plan support). */
+  claudeModes: ClaudeModesCapability;
 }
 
 /**

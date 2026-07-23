@@ -909,7 +909,7 @@ export function Graphs({
                       <Field
                         label="Tool approvals"
                         htmlFor="node-approval"
-                        hint="“Ask in chat” pauses each tool call on an approval card (cursor-agent runs auto regardless).">
+                        hint="“Ask in chat” pauses each tool call on an approval card; “accept edits” auto-approves file edits and asks for the rest (cursor-agent runs auto regardless).">
                         <Select
                           id="node-approval"
                           value={selected.approval}
@@ -920,6 +920,7 @@ export function Graphs({
                           }>
                           <option value="auto">auto-approve</option>
                           <option value="ask">ask in chat</option>
+                          <option value="acceptEdits">accept edits</option>
                         </Select>
                       </Field>
                       {callInfo ? (

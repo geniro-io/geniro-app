@@ -14,6 +14,7 @@ import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import {
   type ChatApprovalMode,
+  type ClaudeModesCapability,
   type ItemWire,
   type RunWire,
   SINGLE_AGENT_NODE,
@@ -152,6 +153,10 @@ export class ChatService {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
     this.assertApprovalSupported(run.agentKind, approval);
+    // Captured before the write: BaseDao.updateById mutates this same
+    // identity-mapped entity, so `run.approval` reflects the NEW value the
+    // moment updateById returns — the revert path below needs the old one.
+    const previous = run.approval;
     if (this.registry.has(runId)) {
       throw new ConflictException(
         'RUN_BUSY',
@@ -159,9 +164,35 @@ export class ChatService {
       );
     }
     await this.runDao.updateById(runId, { approval }, em);
+    // A turn may have claimed the run DURING the write above — after our
+    // pre-check but before the flush. sendMessage snapshots the run row in
+    // its own fork, so that turn may already be spawning under the pre-write
+    // mode. Refuse rather than ACK a mode the in-flight turn won't honor:
+    // revert and 409. (A PATCH that fully lands BEFORE the claim is still
+    // honored — sendMessage re-reads the committed mode after it claims.)
+    if (this.registry.has(runId)) {
+      await this.runDao.updateById(runId, { approval: previous }, em);
+      throw new ConflictException(
+        'RUN_BUSY',
+        'a turn started while the approval change was in flight — retry once it settles',
+      );
+    }
     run.approval = approval;
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
+  }
+
+  /**
+   * The claude permission-mode verdict, degrading a probe INFRASTRUCTURE
+   * failure to `unknown` instead of failing the turn — mirrors the graph
+   * executor's degrade-catch (an unknown verdict keeps the requested mode).
+   */
+  private async claudeModesSafe(): Promise<ClaudeModesCapability> {
+    try {
+      return await this.claudeProbe.ensureVerdict();
+    } catch {
+      return this.claudeProbe.capability();
+    }
   }
 
   /** Cursor has no approval callback — cursor chats are pinned to 'auto'. */
@@ -258,27 +289,33 @@ export class ChatService {
       const agentKind = run.agentKind;
       const model = run.model ?? undefined;
 
+      // Re-read the committed approval mode from a FRESH fork now that the
+      // claim is held: a settings PATCH that flushed to its own fork between
+      // the getById above and the claim never mutated `run`, so its ACKed
+      // mode would otherwise be ignored. The claim now 409s any later PATCH,
+      // and updateSettings reverts a PATCH that raced the claim, so this read
+      // reflects exactly the acknowledged mode.
+      const committed = await this.runDao.getById(runId, this.em.fork());
+      let approvalMode: ChatApprovalMode | undefined =
+        committed?.approval ?? run.approval ?? undefined;
+
       let seq = (await this.itemDao.maxSeq(runId, em)) + 1;
       const userWire = await this.persist(em, runId, seq++, 'message', 'user', {
         text,
       });
 
-      // The mode this turn actually runs under. A probed FAIL degrades
-      // acceptEdits/plan to 'ask' VISIBLY (persisted system item); an
-      // unprobed `unknown` keeps the requested mode so a genuine CLI
-      // rejection stays loud in the transcript. Null rows (legacy chats)
-      // pass no mode at all — the exact pre-selector behavior.
-      let approvalMode: ChatApprovalMode | undefined =
-        run.approval ?? undefined;
-      if (
-        agentKind === 'claude' &&
-        (approvalMode === 'acceptEdits' || approvalMode === 'plan')
-      ) {
-        const modes = await this.claudeProbe.ensureVerdict();
-        const status = approvalMode === 'plan' ? modes.plan : modes.acceptEdits;
-        if (status === 'fail') {
+      // acceptEdits degrades to 'ask' VISIBLY (persisted system item) when the
+      // installed claude can't accept the mode (a probed FAIL); an unprobed
+      // `unknown` keeps the requested mode so a genuine CLI rejection stays
+      // loud. `plan` is deliberately NOT degraded — converting a no-execute
+      // mode into an executing 'ask' would invert its whole promise, so an
+      // unsupported 'plan' rides through and the CLI rejects it loudly.
+      if (agentKind === 'claude' && approvalMode === 'acceptEdits') {
+        const modes = await this.claudeModesSafe();
+        if (modes.acceptEdits === 'fail') {
           await this.persist(em, runId, seq++, 'system', null, {
-            message: `installed claude does not support ${approvalMode} — this turn runs as 'ask'`,
+            message:
+              "installed claude does not support acceptEdits — this turn runs as 'ask'",
           });
           approvalMode = 'ask';
         }

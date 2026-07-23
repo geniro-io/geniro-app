@@ -444,14 +444,40 @@ export function Chats({
     };
   }, [workflowSlug, workflowApi]);
 
-  // One capabilities read on mount: gates the plan option in the approval
-  // selector and pre-warms the daemon-side probes. Fail-open — with no
-  // verdict the selector just hides plan.
+  // Capabilities gate the plan option in the approval selector; the FIRST read
+  // is also what pre-warms the daemon-side probe, so on a cold launch the
+  // claude-mode verdict comes back `unknown`. Re-poll (bounded) while it is
+  // unsettled so the pre-warmed pass actually reaches `planSupported` this
+  // session, not only after a remount. Fail-open — no verdict just hides plan.
   useEffect(() => {
-    void workflowApi
-      .capabilities()
-      .then(setCapabilities)
-      .catch(() => setCapabilities(null));
+    let cancelled = false;
+    let attempts = 0;
+    const poll = (): void => {
+      void workflowApi
+        .capabilities()
+        .then((caps) => {
+          if (cancelled) {
+            return;
+          }
+          setCapabilities(caps);
+          const unsettled =
+            caps.claudeModes.acceptEdits === 'unknown' ||
+            caps.claudeModes.plan === 'unknown';
+          if (unsettled && attempts < 5) {
+            attempts += 1;
+            window.setTimeout(poll, 2000);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setCapabilities(null);
+          }
+        });
+    };
+    poll();
+    return () => {
+      cancelled = true;
+    };
   }, [workflowApi]);
 
   /** Reload the sidebar's run list from the daemon (statuses included) —

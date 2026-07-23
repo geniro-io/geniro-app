@@ -211,7 +211,14 @@ export class ClaudeProbeService {
         genuine: false,
       };
     } finally {
-      rmSync(cwd, { recursive: true, force: true });
+      try {
+        rmSync(cwd, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup only: a straggler of the just-cancelled probe
+        // process group writing into `cwd` can make rmSync throw
+        // (EBUSY/ENOTEMPTY — `force` suppresses only ENOENT). That must never
+        // reject the verdict; the temp dir is reaped on the next probe/boot.
+      }
     }
     if (sawInit) {
       this.logger.log(`claude --permission-mode ${mode} probe passed`);

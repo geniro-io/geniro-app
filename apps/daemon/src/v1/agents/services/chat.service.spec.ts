@@ -239,6 +239,7 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     approvals,
     claude,
     cursor,
+    claudeProbe,
     skillHarvest,
   };
 }
@@ -699,6 +700,120 @@ describe('ChatService — approval modes (parity M1)', () => {
     );
     const pinned = await service.updateSettings(cursorRun.id, 'auto');
     expect(pinned.approval).toBe('auto');
+  });
+
+  it('reverts and 409s a settings flip when a turn claims the run during the write — never ACKs a mode the in-flight turn cannot honor', async () => {
+    const { service, runDao, registry } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    // Model a concurrent sendMessage claiming the run mid-write: the claim
+    // lands after updateSettings' pre-check but before its post-check.
+    const originalUpdate = runDao.updateById.bind(runDao);
+    let claimedDuringWrite = false;
+    runDao.updateById = async (id: string, data: Partial<Run>) => {
+      const n = await originalUpdate(id, data);
+      if (!claimedDuringWrite) {
+        claimedDuringWrite = true;
+        registry.tryClaim(id);
+      }
+      return n;
+    };
+    await expect(service.updateSettings(run.id, 'ask')).rejects.toThrow(
+      'in flight',
+    );
+    // Reverted: the stored mode is back to 'auto', never the un-honored 'ask'.
+    expect((await runDao.getById(run.id))?.approval).toBe('auto');
+  });
+
+  it('honors a settings flip that committed just before the claim — sendMessage re-reads the committed mode after claiming', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    // Gate sendMessage's FIRST run-row read so a full PATCH lands in the
+    // window, then release: the snapshotted entity still says 'auto', but the
+    // committed row says 'ask'. The post-claim re-read must win.
+    const originalGetById = runDao.getById.bind(runDao);
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let gatePending = true;
+    runDao.getById = async (id: string): Promise<Run | null> => {
+      if (!gatePending) {
+        return originalGetById(id);
+      }
+      gatePending = false;
+      const row = await originalGetById(id);
+      const snapshot = row ? ({ ...row } as Run) : null;
+      await readGate;
+      return snapshot;
+    };
+    const send = service.sendMessage(run.id, 'lock this down');
+    await service.updateSettings(run.id, 'ask');
+    releaseRead();
+    await send;
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
+    ).toBe('ask');
+    claude.finish();
+    await drain();
+  });
+
+  it('does not degrade an unsupported plan chat to an executing ask — a no-execute mode rides through, never silently converted', async () => {
+    const { service, claude, itemDao } = setup({
+      claudeModes: {
+        acceptEdits: 'fail',
+        plan: 'fail',
+        version: 'claude-old',
+        probedAt: 0,
+        reason: 'x',
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'plan',
+    });
+    await service.sendMessage(run.id, 'draft a plan');
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
+    ).toBe('plan');
+    expect(
+      itemDao.items.some(
+        (i) => i.kind === 'system' && i.payload.includes("runs as 'ask'"),
+      ),
+    ).toBe(false);
+    claude.finish();
+    await drain();
+  });
+
+  it('degrades a probe infrastructure failure to unknown and still spawns the turn — a probe error never fails the send', async () => {
+    const { service, claude, claudeProbe, runDao } = setup();
+    // ensureVerdict rejects (e.g. a probe temp-dir cleanup throw bubbling up).
+    (
+      claudeProbe as unknown as { ensureVerdict: () => Promise<unknown> }
+    ).ensureVerdict = vi.fn(async () => {
+      throw new Error('probe cleanup EBUSY');
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'acceptEdits',
+    });
+    await service.sendMessage(run.id, 'go');
+    // unknown keeps the requested mode; the turn spawns rather than failing.
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
+    ).toBe('acceptEdits');
+    expect((await runDao.getById(run.id))?.status).not.toBe('failed');
+    claude.finish();
+    await drain();
   });
 
   it('sendMessage passes the run row mode to the adapter; a legacy null row passes none', async () => {

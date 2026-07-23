@@ -376,19 +376,28 @@ export class ChatService {
             if (!mapped) {
               return;
             }
-            await this.persist(
-              em,
-              runId,
-              seq++,
-              mapped.kind,
-              mapped.role,
-              mapped.payload,
-            );
             if (event.type === 'approval_request') {
-              // Chat mirror of the graph executor's card path: the pending
-              // approval is tracked under the chat's one synthetic node so
-              // the WS verdict round-trip resolves it, and the verdict is
-              // persisted as an approval_verdict item once delivered.
+              // The CLI is now parked waiting for a verdict. Persist the card
+              // first (persist-then-emit, so the user sees it), then track it
+              // under the chat's one synthetic node so the WS verdict
+              // round-trip resolves it. If persisting the card FAILS the user
+              // will never see it — so deny to unblock the parked CLI, letting
+              // handle.done resolve and the finalizer record a clean failure
+              // rather than hang forever on a verdict that can never arrive
+              // (a parked ask-mode turn never exits on its own).
+              try {
+                await this.persist(
+                  em,
+                  runId,
+                  seq++,
+                  mapped.kind,
+                  mapped.role,
+                  mapped.payload,
+                );
+              } catch (err) {
+                handle.respondApproval(event.id, false, undefined);
+                throw err;
+              }
               this.approvals.track({
                 runId,
                 nodeId: SINGLE_AGENT_NODE,
@@ -430,7 +439,17 @@ export class ChatService {
                   return delivered;
                 },
               });
+              // An approval_request is never terminal — nothing else to do.
+              return;
             }
+            await this.persist(
+              em,
+              runId,
+              seq++,
+              mapped.kind,
+              mapped.role,
+              mapped.payload,
+            );
             const status = terminalStatus(event);
             if (status) {
               await this.runDao.updateById(runId, { status }, em);

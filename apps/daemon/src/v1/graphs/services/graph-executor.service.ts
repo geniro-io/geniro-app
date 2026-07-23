@@ -964,11 +964,22 @@ export class GraphExecutorService {
             // A callee sub-turn tags every streamed item with its callId so
             // the renderer can nest the whole sub-turn under its call block —
             // unambiguous even when parallel calls hit the SAME node.
-            await persistItem(node.id, mapped.kind, mapped.role, {
-              ...(mapped.payload as Record<string, unknown>),
-              nodeId: node.id,
-              ...(callContext ? { callId: callContext.callId } : {}),
-            });
+            try {
+              await persistItem(node.id, mapped.kind, mapped.role, {
+                ...(mapped.payload as Record<string, unknown>),
+                nodeId: node.id,
+                ...(callContext ? { callId: callContext.callId } : {}),
+              });
+            } catch (err) {
+              // The card can't be shown — deny to unblock the parked node CLI
+              // so the node settles instead of hanging forever on a verdict
+              // that can never arrive (mirrors the chat service's card path;
+              // the track below, which routes the verdict, would be skipped).
+              if (event.type === 'approval_request') {
+                handle.respondApproval(event.id, false);
+              }
+              throw err;
+            }
           }
           if (event.type === 'approval_request') {
             this.approvals.track({

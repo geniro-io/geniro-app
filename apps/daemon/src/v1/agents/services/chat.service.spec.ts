@@ -431,6 +431,41 @@ describe('ChatService', () => {
     expect(published.at(-1)?.item.kind).toBe('error');
   });
 
+  it('denies the parked CLI (never hangs) when an approval_request card fails to persist', async () => {
+    // persist-then-emit means a failed card write leaves NO card for the user
+    // to answer AND the ask-mode CLI parked on stdin waiting for a verdict.
+    // Without a deny-to-unblock the turn wedges forever — handle.done never
+    // resolves (a parked turn never exits), so the finalizer never runs. Pin
+    // that the CLI is auto-denied so the run settles instead of hanging.
+    const { service, runDao, itemDao, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'go');
+    itemDao.failNextKind = 'approval_request';
+    claude.emit({
+      type: 'approval_request',
+      id: 'req-1',
+      toolName: 'Write',
+      input: { file_path: 'a.txt' },
+    });
+    await drain();
+
+    // The parked CLI was unblocked with a denial — not left hanging.
+    expect(claude.handles[0]?.respondApproval).toHaveBeenCalledWith(
+      'req-1',
+      false,
+      undefined,
+    );
+
+    // Once the now-unblocked CLI exits, the run settles as failed (not stuck).
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+  });
+
   it('marks the run failed and releases its claim when adapter start throws', async () => {
     const { service, runDao, registry, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });

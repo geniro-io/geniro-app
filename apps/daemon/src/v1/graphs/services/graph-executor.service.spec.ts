@@ -79,7 +79,12 @@ class FakeRunDao {
 
 class FakeItemDao {
   readonly items: Item[] = [];
+  failNextKind: string | null = null;
   async create(data: Partial<Item>): Promise<Item> {
+    if (data.kind === this.failNextKind) {
+      this.failNextKind = null;
+      throw new Error('SQLITE_FULL');
+    }
     const item = {
       id: `item-${this.items.length}`,
       nodeId: null,
@@ -824,6 +829,43 @@ describe('GraphExecutorService', () => {
 
     // Unknown/settled requests report false.
     expect(approvals.resolve(run.id, 'req-9', true)).toBe(false);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('denies the parked node CLI (never hangs) when an approval_request card fails to persist', async () => {
+    const { service, claude, itemDao, approvals } = setup();
+    const askFlow: Workflow = {
+      name: 'ask',
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
+      edges: [],
+    };
+    const run = await service.startRun({
+      slug: 'ask',
+      workflow: triggered(askFlow),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+
+    // Persisting the card fails: without a deny-to-unblock the node CLI parks
+    // on stdin forever (its aggregate handle never settles, the run wedges).
+    itemDao.failNextKind = 'approval_request';
+    claude.starts[0]!.emit({
+      type: 'approval_request',
+      id: 'req-9',
+      toolName: 'Write',
+      input: { file_path: 'x' },
+    });
+    await drain();
+
+    // The parked node CLI was auto-denied (unblocked); nothing was tracked,
+    // since no verdict could ever have routed to a card that was never shown.
+    expect(claude.starts[0]!.respondApproval).toHaveBeenCalledWith(
+      'req-9',
+      false,
+    );
+    expect(approvals.listByRun('run-0')).toHaveLength(0);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

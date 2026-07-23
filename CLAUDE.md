@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The app is an **Electron UI** that also supervises a **bundled local daemon** over loopback. The daemon is an `apps/api`-style **NestJS** app built on packages **vendored from the Geniro monorepo** and adapted for local-first use (SQLite instead of Postgres, no Sentry/Redis/cloud, loopback-only).
 
-**Tech stack**: TypeScript 6.x, Node.js 24+, NestJS 11 (Fastify), MikroORM (`@mikro-orm/sqlite` / better-sqlite3), React 19 (electron-vite renderer), pnpm + Turbo monorepo, swc (daemon + packages) / electron-vite (UI).
+**Tech stack**: TypeScript 6.x, Node.js 24+, NestJS 11 (Fastify), MikroORM (`@mikro-orm/sqlite` / better-sqlite3), React 19 + Tailwind CSS v4 (electron-vite renderer), pnpm 11 + Turbo 2.10 monorepo, swc (daemon + packages) / electron-vite (UI), Vitest 4, ESLint 10 + Prettier 3.
 
 **Status**: **All four v1 milestones are built** — M1 (UI + infrastructure), M2 (single-agent chat via CLI adapters), M3 (workflow graphs + DAG fan-out execution), M4 (live PTY terminal mirror, Settings, update notifier, macOS packaging). The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing. (`.geniro/planning/` is local working state, gitignored — not committed.)
 
@@ -69,13 +69,18 @@ pnpm full-check         # must pass before finishing
 
 `full-check` chains build → check-types → build:tests → lint:fix → test:unit → test:integration. `build:tests` and `test:integration` are **no-op placeholders today** — declared in `turbo.json` (so turbo 2.10 doesn't error on them) but no package implements them yet and no `*.int.ts` exist — so it effectively gates build + types + lint + unit tests until integration tests land.
 
+### Packaging (macOS)
+```bash
+pnpm --filter @geniro/ui build:mac   # scripts/build-mac.mjs → DMG + zip into release/dist/
+```
+
 ### Dependency upgrades & commits
 ```bash
 pnpm upgrade            # bump every workspace dep to latest (ncu, peer-aware via .ncurc) + reinstall
 pnpm commit             # conventional commit via commitizen
 ```
 
-> Database: the daemon **syncs the SQLite schema additively on launch** (`orm.schema.update({ safe: true })` — never destructive). There is **no Migrator / migration files yet**; the full versioned migration workflow is deferred to M2. Do not hand-write migrations.
+> Database: the daemon **syncs the SQLite schema additively on launch** (`orm.schema.update({ safe: true })` in `main.ts` — never destructive). There is still **no Migrator / migration files**: `db/mikro-orm.config.ts` declares no `migrations` key, and the versioned migration workflow remains deferred past v1. Do not hand-write migrations.
 
 ---
 
@@ -96,7 +101,7 @@ packages/
 
 ### The daemon (`apps/daemon`)
 A standalone NestJS engine the UI spawns as a child process, laid out like Geniro's `apps/api/src`: `main.ts` (bootstrapper + extensions → `init()`) and `app.module.ts` at the root, then feature/infra dirs:
-- `auth/` — `runtime.ts` (per-launch `RuntimeInfo` + DI token, incl. the bound `port`) + global `runtime.module.ts` (also hosts `CallTokenRegistry`, so the guard and the graph executor share it without a module cycle); `mint-token.ts` (the one source of loopback credentials — the launch token AND the per-caller-node MCP call tokens); `token.guard.ts` + `safe-equal.ts` (loopback bearer-token gate); `call-token.registry.ts` (per-`(runId, nodeId)` MCP call tokens).
+- `auth/` — `runtime.ts` (per-launch `RuntimeInfo` + DI token, incl. the bound `port`) + global `runtime.module.ts` (also hosts `CallTokenRegistry`, so the guard and the graph executor share it without a module cycle); `mint-token.ts` (the one source of loopback credentials — the launch token AND the per-caller-node MCP call tokens); `token.guard.ts` + `safe-equal.ts` (loopback bearer-token gate); `ws-auth.ts` (`enforceWsHandshakeAuth` — the ONE Socket.IO handshake gate, shared by every gateway, since engine.io bypasses Nest guards); `call-token.registry.ts` (per-`(runId, nodeId)` MCP call tokens).
 - `environments/` — `environment.{prod,dev,test}.ts` + `index.ts` (picks by `NODE_ENV`, loads `.env` via dotenv).
 - `utils/` — `handshake.ts` (pidfile `DaemonInfo` shape + loopback bind defaults + `isValidPort`/`parsePort`); `pidfile.ts` (write/remove — `mintToken` moved to `auth/mint-token.ts`); `pidfile.lifecycle.ts` (Nest `OnApplicationShutdown` → removes the pidfile).
 - `db/mikro-orm.config.ts`.
@@ -108,14 +113,14 @@ A standalone NestJS engine the UI spawns as a child process, laid out like Genir
 
 - Binds **`127.0.0.1` only**. Assembled exactly like Geniro's `apps/api` (`buildBootstrapper(…)` → `addExtension(buildHttpServerExtension(…))` → `init()`); the loopback specifics ride on the extension's `host` / `portFallback` / `onListening` options — bind 127.0.0.1, negotiate a free port if the preferred one is taken, and write the pidfile from `onListening` after a healthy listen (the `http-server`'s own listen still defaults to `0.0.0.0`, preserving Geniro's behavior). Shutdown is Nest-owned (`enableShutdownHooks`); `utils/pidfile.lifecycle.ts` clears the pidfile on the way out, so `main.ts` needs no signal handling.
 - Writes the pidfile (`daemon.json`: `pid`, `host`, `port`, per-launch `token`, `version`, `startedAt`) **only after** the schema is synced and the server is listening, then prints `GENIRO_DAEMON_READY {port}` to stdout. The UI never assumes the host/port — it reads the bound values back from the pidfile (so it no longer passes `GENIRO_PORT`; the daemon owns that default).
-- Config env (set by the UI): `GENIRO_USER_DATA` (userData dir; fallback `~/.geniro`) and `GENIRO_PORT` (preferred port; falls back to a free port if taken). DB is `geniro.db`, pidfile `daemon.json`, both in the userData dir.
+- Config env (set by the UI): `GENIRO_USER_DATA` (userData dir; fallback `~/.geniro`) and `GENIRO_PORT` (preferred port; default `47615` per `DAEMON_PREFERRED_PORT` in `utils/handshake.ts`, falling back to a free port if taken). DB is `geniro.db`, pidfile `daemon.json`, both in the userData dir.
 
 ### Daemon endpoints (loopback)
 | Route | Purpose | Auth |
 |---|---|---|
 | `GET /health/check` | readiness probe (`{status, version}`) | public |
-| `GET /metrics` | Prometheus metrics | public |
-| `GET /swagger-api` · `/swagger-api/reference` | OpenAPI spec + Scalar UI | public |
+| `GET /metrics` | Prometheus metrics | bearer token (`LoopbackTokenGuard`) |
+| `GET /swagger-api` · `/swagger-api/reference` | OpenAPI spec + Scalar UI | bearer token (`LoopbackTokenGuard`) |
 | `/ws` (Socket.IO) | renderer ⇄ daemon channel: `join`/`leave` run rooms, streamed `item` events, approval `verdict` → `verdict_ack` | per-launch token (handshake `auth`) |
 | `POST/GET /v1/chats*` | single-agent chats: create/list, `:runId/items` history (`afterSeq` cursor, shared by workflow runs), `:runId/messages`, `:runId/cancel` | bearer token (`LoopbackTokenGuard`) |
 | `GET /v1/agents/skills` | skills + slash commands one agent kind accepts in a given cwd (on-disk scan, project + `~`, merged with the claude session's own harvested `slash_commands` report) — feeds the composer's `/` autocomplete | bearer token (`LoopbackTokenGuard`) |
@@ -125,7 +130,7 @@ A standalone NestJS engine the UI spawns as a child process, laid out like Genir
 | `GET /v1/capabilities` | machine capabilities for the builder: the cursor agent-calls probe verdict (`{cursorCalls}`); reading pre-warms the probe when unprobed | bearer token (`LoopbackTokenGuard`) |
 | `/terminals` (Socket.IO namespace on `/ws`) | PTY byte plane: `attach` (scrollback replay), `input`, `resize`, `detach`; emits `terminal_data` / `terminal_exit` to `terminal:<id>` rooms | per-launch token (handshake `auth`, same gate as `/ws`) |
 
-The public allowlist (`/health`, `/metrics`, `/swagger-api`) is matched at segment boundaries; every other route requires the `Bearer <token>` header — the launch token, or, **only** on `/v1/mcp/<runId>/<nodeId>`, that caller node's own per-node call token (minted when the run starts, revoked when it settles, keyed by `(runId, nodeId)` so one callee child can't open another node's route). The WS channel is a NestJS Socket.IO gateway (`@WebSocketGateway({ path: '/ws' })`) installed via the `IoAdapter` in `main.ts`; the renderer (`socket.io-client`) sends the per-launch token in the Socket.IO handshake `auth` payload (browsers can't set headers on a WS handshake), compared with `safeEqual` (constant-time) in `handleConnection` — a mismatch disconnects the socket. The HTTP `LoopbackTokenGuard` doesn't see Socket.IO traffic (engine.io intercepts `/ws` before Nest routing), so the gateway owns WS auth.
+The public allowlist is **`/health` alone** (`PUBLIC_PREFIXES` in `auth/token.guard.ts`), matched at segment boundaries so a sibling route like `/health-debug` doesn't inherit it. `/metrics` and `/swagger-api` are **token-gated**: with a deterministic default port, any web page could otherwise read the daemon's Prometheus internals and full API schema cross-origin. Every non-allowlisted route requires the `Bearer <token>` header — the launch token, or, **only** on `/v1/mcp/<runId>/<nodeId>`, that caller node's own per-node call token (minted when the run starts, revoked when it settles, keyed by `(runId, nodeId)` so one callee child can't open another node's route). The WS channel is a NestJS Socket.IO gateway (`@WebSocketGateway({ path: '/ws' })`) installed via the `IoAdapter` in `main.ts`; the renderer (`socket.io-client`) sends the per-launch token in the Socket.IO handshake `auth` payload (browsers can't set headers on a WS handshake). The HTTP `LoopbackTokenGuard` doesn't see Socket.IO traffic (engine.io intercepts `/ws` before Nest routing), so each gateway owns its own WS auth — via the one shared `auth/ws-auth.ts` → `enforceWsHandshakeAuth` (constant-time `safeEqual`, disconnects on mismatch), called from `handleConnection` in **both** the notifications and terminals gateways. It is extracted precisely so a hardening fix can't silently miss a mirrored copy.
 
 ### The UI (`apps/ui`)
 electron-vite project. `src/main/` — `index.ts` (app lifecycle), `daemon-supervisor.ts` (spawn/adopt/health-poll/orphan-sweep), `daemon-pidfile.ts` (reads + validates the daemon's pidfile), `settings.ts` (`settings.json`), `keychain.ts` (`@napi-rs/keyring`), `cli-detect.ts`, `ipc.ts`, `updater.ts` (notify-only update check: polls GitHub Releases and points at `brew upgrade`, never self-updates; dev no-op, launch check gated by settings), `login-shell-path.ts` (packaged Finder launches inherit launchd's minimal PATH — resolve the login-shell PATH for the daemon). `src/shared/contracts.ts` holds the IPC/Settings/CLI/Keychain/Terminal contracts + `DaemonHandle`, shared across main/preload/renderer. `src/preload/index.ts` exposes a typed `window.geniro` via `contextBridge`. `src/renderer/` — React app (`App.tsx`, `onboarding/`, `chats/` incl. `approval-card` + the composer's `/` skill autocomplete (`skill-menu`), `graphs/` React Flow canvas, `settings/`, `terminals/` xterm.js mirror panel, `daemon-rest.ts` shared REST transport + `chat-api.ts`/`workflow-api.ts`/`terminal-api.ts` clients, `daemon-client.ts` + `terminal-client.ts` WS clients).
@@ -194,6 +199,7 @@ apps/ui/src/renderer/
 - **React component tests** (UI renderer) must put `// @vitest-environment jsdom` on line 1 — the default project environment is `node`. When a `vi.mock(...)` factory closes over module-scope spies, wrap them in `vi.hoisted(() => ({ … }))`.
 - **Must-fail policy**: tests never conditionally skip on missing env/services — a missing prerequisite must fail loudly, not `it.skip`.
 - **No flaky tests**: nondeterminism is a bug to fix at the source, not retry around. When any pre-existing problem (failing test, broken local step, latent bug) surfaces mid-task, surface it and propose a fix — never silently skip it.
+- **No false pins** (mechanized in `.claude/rules/testing.md`): a test whose name or comment claims to pin a behavior must FAIL when that behavior is reverted; assert the real observable, never a proxy the test itself fabricated; and a defensive branch worth writing is worth a test that enters it.
 
 ---
 

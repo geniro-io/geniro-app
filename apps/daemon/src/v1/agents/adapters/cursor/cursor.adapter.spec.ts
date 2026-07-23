@@ -249,6 +249,20 @@ describe('CursorAdapter graph-node extras', () => {
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });
 
+  it('degrades every non-auto approval mode to --force (no approval callback)', () => {
+    for (const mode of ['ask', 'acceptEdits', 'plan'] as const) {
+      const { spawn, captured } = fakeSpawn();
+      new CursorAdapter({ spawn }).start(
+        { prompt: 'p', cwd: '/proj', approvalMode: mode },
+        () => {},
+      );
+      expect(captured.args).toEqual(expect.arrayContaining(['--force']));
+      expect(captured.args).not.toEqual(
+        expect.arrayContaining(['--permission-mode']),
+      );
+    }
+  });
+
   it('passes --trust only when the turn sets trustWorkspace', () => {
     const plain = fakeSpawn();
     new CursorAdapter({ spawn: plain.spawn }).start(

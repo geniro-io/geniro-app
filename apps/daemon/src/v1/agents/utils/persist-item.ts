@@ -65,6 +65,7 @@ export function runToWire(
     workflowId: run.workflowId,
     cwd: run.cwd,
     model: run.model,
+    approval: run.approval,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     lastMessage,

@@ -1,5 +1,6 @@
 import type {
   AgentSkill,
+  ChatApprovalMode,
   ChatItem,
   ChatRun,
   CliKind,
@@ -18,8 +19,18 @@ export class ChatApi extends DaemonRestApi {
     cwd: string;
     model?: string;
     title?: string;
+    approval?: ChatApprovalMode;
   }): Promise<ChatRun> {
     return this.request('POST', '/v1/chats', input);
+  }
+
+  /** Flip the chat's approval mode between turns (409 RUN_BUSY mid-turn). */
+  patchSettings(runId: string, approval: ChatApprovalMode): Promise<ChatRun> {
+    return this.request(
+      'PATCH',
+      `/v1/chats/${encodeURIComponent(runId)}/settings`,
+      { approval },
+    );
   }
 
   listChats(): Promise<ChatRun[]> {

@@ -298,23 +298,22 @@ describe('CursorProbeService', () => {
     expect(starts).toHaveLength(1);
   });
 
-  it('capabilitiesWire reports the current verdict and pre-warms the probe on unknown', async () => {
+  it('wireCapability reports the current verdict and pre-warms the probe on unknown', async () => {
     const { service, starts } = build({ callsEcho: true });
-    const wire = service.capabilitiesWire();
-    expect(wire.cursorCalls.status).toBe('unknown');
+    expect(service.wireCapability().status).toBe('unknown');
     // The pre-warm fired in the background — joining it (single-flight) must
     // not start a second turn.
     await service.ensureVerdict();
     expect(starts).toHaveLength(1);
-    expect(service.capabilitiesWire().cursorCalls.status).toBe('pass');
+    expect(service.wireCapability().status).toBe('pass');
   });
 
-  it('capabilitiesWire does NOT pre-warm while the daemon port is unbound', async () => {
+  it('wireCapability does NOT pre-warm while the daemon port is unbound', async () => {
     const { service, starts } = build(
       { callsEcho: true },
       { runtime: { ...RUNTIME, port: null } },
     );
-    expect(service.capabilitiesWire().cursorCalls.status).toBe('unknown');
+    expect(service.wireCapability().status).toBe('unknown');
     await new Promise((r) => setTimeout(r, 10));
     expect(starts).toHaveLength(0);
   });

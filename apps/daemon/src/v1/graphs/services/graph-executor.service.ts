@@ -18,15 +18,24 @@ import {
   withResponse,
 } from '../../agents/adapters/claude/question-payload';
 import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
-import type { ItemWire, RunWire } from '../../agents/chat.types';
+import type {
+  ClaudeModesCapability,
+  ItemWire,
+  RunWire,
+} from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { ClaudeProbeService } from '../../agents/services/claude-probe.service';
 import { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import {
+  answerFoldsInto,
+  foldApprovalAnswer,
+} from '../../agents/utils/approval-answer';
 import {
   mapEventToItem,
   terminalStatus,
@@ -100,6 +109,16 @@ function hasCursorCaller(workflow: Workflow): boolean {
   });
 }
 
+/** True when any claude node runs under acceptEdits (needs the mode probe). */
+function hasClaudeAcceptEdits(workflow: Workflow): boolean {
+  return workflow.nodes.some(
+    (node) =>
+      node.kind === 'agent' &&
+      node.agent === 'claude' &&
+      node.approval === 'acceptEdits',
+  );
+}
+
 /**
  * The DAG fan-out executor: runs a workflow's agent nodes in topological
  * order, independent nodes in parallel, each node's final text feeding its
@@ -129,6 +148,7 @@ export class GraphExecutorService {
     private readonly callTokens: CallTokenRegistry,
     private readonly callBroker: CallBroker,
     private readonly cursorProbe: CursorProbeService,
+    private readonly claudeProbe: ClaudeProbeService,
     private readonly cursorMerge: CursorMcpMergeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly store: WorkflowStoreService,
@@ -328,7 +348,28 @@ export class GraphExecutorService {
         // path (system item per shut-out caller) — never a wedged run.
         cursorCalls = this.cursorProbe.capability();
       }
-      this.driveResolved(em, runId, workflow, cwd, seedPrompt, cursorCalls);
+      let claudeModes: ClaudeModesCapability;
+      try {
+        // acceptEdits nodes wait on the claude mode probe the same way cursor
+        // callers wait on the MCP-trust probe: cached per installed binary,
+        // so only the first such run on a machine pays the probe turn.
+        claudeModes = hasClaudeAcceptEdits(workflow)
+          ? await this.claudeProbe.ensureVerdict()
+          : this.claudeProbe.capability();
+      } catch {
+        // Unknown is NOT a fail — the node runs with its requested mode and
+        // any real CLI rejection surfaces loudly in the transcript.
+        claudeModes = this.claudeProbe.capability();
+      }
+      this.driveResolved(
+        em,
+        runId,
+        workflow,
+        cwd,
+        seedPrompt,
+        cursorCalls,
+        claudeModes,
+      );
     })();
   }
 
@@ -339,6 +380,7 @@ export class GraphExecutorService {
     cwd: string,
     seedPrompt: string,
     cursorCalls: CursorCallsCapability,
+    claudeModes: ClaudeModesCapability,
   ): void {
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
@@ -572,14 +614,41 @@ export class GraphExecutorService {
           status: 'running',
           ...(callId ? { callId } : {}),
         });
-        if (node.agent === 'cursor-agent' && node.approval === 'ask') {
+        if (node.agent === 'cursor-agent' && node.approval !== 'auto') {
+          // ANY non-auto mode must warn, not just ask — a silent acceptEdits
+          // degrade would read as enforced permissions that never were.
+          await persistItem(node.id, 'system', null, {
+            message: `cursor-agent has no approval callback — node approval '${node.approval}' degrades to auto-approve for this node`,
+          });
+        }
+        if (
+          node.agent === 'claude' &&
+          node.approval === 'acceptEdits' &&
+          claudeModes.acceptEdits === 'fail'
+        ) {
           await persistItem(node.id, 'system', null, {
             message:
-              "cursor-agent has no approval callback — node approval 'ask' degrades to auto-approve for this node",
+              "installed claude does not support acceptEdits — node approval degrades to 'ask' for this node",
           });
         }
       });
     };
+
+    /**
+     * The approval mode a node actually runs under: acceptEdits falls back to
+     * `ask` when the installed claude rejects the mode (a probed FAIL — an
+     * unprobed `unknown` keeps the requested mode so a real rejection stays
+     * loud in the transcript). The degrade is surfaced by setRunning above,
+     * never silent.
+     */
+    const effectiveApproval = (
+      node: WorkflowAgentNode,
+    ): WorkflowAgentNode['approval'] =>
+      node.agent === 'claude' &&
+      node.approval === 'acceptEdits' &&
+      claudeModes.acceptEdits === 'fail'
+        ? 'ask'
+        : node.approval;
 
     /**
      * Whether this agent kind may hold the call tools in THIS run: claude
@@ -797,13 +866,18 @@ export class GraphExecutorService {
       const questionCapable =
         node.agent === 'claude' &&
         (callContext !== undefined || isCaller(node));
+      const approval = effectiveApproval(node);
       const input: AgentTurnInput = {
         prompt,
         cwd,
         model: node.model ?? null,
         resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: systemPromptFor(node),
-        approvalMode: questionCapable ? 'ask' : node.approval,
+        // A questionCapable AUTO node still spawns in ask mode (the question
+        // channel needs the stdio dialogue; the daemon auto-approves plain
+        // permissions below). ask/acceptEdits already carry the stdio
+        // dialogue, so they spawn as themselves.
+        approvalMode: questionCapable && approval === 'auto' ? 'ask' : approval,
         mcpEndpoint: mcpEndpointFor(node),
       };
       const onEvent = (event: AgentEvent): void => {
@@ -874,11 +948,13 @@ export class GraphExecutorService {
               }
               return;
             }
-            if (questionCapable && node.approval !== 'ask' && !isQuestion) {
+            if (questionCapable && approval === 'auto' && !isQuestion) {
               // The daemon-side stand-in for --dangerously-skip-permissions:
-              // an 'auto' node spawned in ask mode (for the question channel)
-              // must not block on plain permissions — approve with the input
+              // ONLY an 'auto' node spawned in ask mode (for the question
+              // channel) skips plain permissions — approve with the input
               // unchanged, no transcript item (matching auto-mode silence).
+              // ask/acceptEdits nodes keep the human card for every
+              // permission the CLI routes to the stdio dialogue.
               handle.respondApproval(event.id, true, event.input);
               return;
             }
@@ -905,15 +981,15 @@ export class GraphExecutorService {
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
-                  // A question card's answer rides the probe-verified
-                  // free-text channel; a plain approval echoes the input —
-                  // the answer folds ONLY into AskUserQuestion so the verdict
-                  // channel can never mutate an arbitrary tool's input.
-                  allow &&
-                    answer !== undefined &&
-                    event.toolName === 'AskUserQuestion'
-                    ? withResponse(event.input, answer)
-                    : event.input,
+                  // The answer folds ONLY into AskUserQuestion (shared
+                  // helper with the chat service) so the verdict channel
+                  // can never mutate an arbitrary tool's input.
+                  foldApprovalAnswer(
+                    event.toolName,
+                    event.input,
+                    allow,
+                    answer,
+                  ),
                 );
                 if (delivered) {
                   enqueue(async () => {
@@ -924,9 +1000,7 @@ export class GraphExecutorService {
                       // Recorded only when it was actually folded — the
                       // transcript must never claim an answer the agent
                       // did not receive.
-                      ...(answer !== undefined &&
-                      allow &&
-                      event.toolName === 'AskUserQuestion'
+                      ...(answerFoldsInto(event.toolName, allow, answer)
                         ? { answer }
                         : {}),
                     });

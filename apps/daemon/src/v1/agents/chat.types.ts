@@ -10,6 +10,41 @@ import type { AgentKind, ItemKind, RunStatus } from '../runs/runs.types';
 export const SINGLE_AGENT_NODE = 'agent';
 
 /**
+ * Chat-level tool-approval modes. `plan` is chat-only by design decision —
+ * the graph node schema stops at `acceptEdits` (graphs.types.ts
+ * ApprovalModeSchema). A run row whose `approval` is null predates the mode
+ * selector and keeps the legacy behavior: no permission flags on the CLI.
+ */
+export const CHAT_APPROVAL_MODES = [
+  'auto',
+  'ask',
+  'acceptEdits',
+  'plan',
+] as const;
+export type ChatApprovalMode = (typeof CHAT_APPROVAL_MODES)[number];
+
+/** One probed claude permission mode's headless support verdict. */
+export type ClaudeModeProbeStatus = 'pass' | 'fail' | 'unknown';
+
+/**
+ * The claude arm of GET /v1/capabilities — whether the installed claude CLI
+ * accepts the probed `--permission-mode` values headlessly. Keyed by
+ * `claude --version` like the cursor MCP-trust probe: a binary upgrade
+ * re-probes without a daemon restart, and only a genuine pass/fail verdict is
+ * disk-cached (`unknown` — timeout, spawn error — stays memory-only).
+ */
+export interface ClaudeModesCapability {
+  acceptEdits: ClaudeModeProbeStatus;
+  plan: ClaudeModeProbeStatus;
+  /** `claude --version` line the verdict is keyed by; null = unreadable. */
+  version: string | null;
+  /** Epoch ms of the probe that produced this verdict; null when unprobed. */
+  probedAt: number | null;
+  /** One-liner for the degrade system item / builder warning; null when clean. */
+  reason: string | null;
+}
+
+/**
  * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
  * MAX_ANSWER_LENGTH.
  *
@@ -72,6 +107,8 @@ export interface RunWire {
   workflowId: string | null;
   cwd: string | null;
   model: string | null;
+  /** Chat approval mode; null = legacy row (no permission flags, pre-selector). */
+  approval: ChatApprovalMode | null;
   createdAt: string;
   /**
    * Last write to the run row — every send flips status to `running` and every

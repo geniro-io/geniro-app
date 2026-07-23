@@ -305,11 +305,16 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.systemPrompt) {
       args.push('--append-system-prompt', input.systemPrompt);
     }
-    if (input.approvalMode === 'ask') {
-      args.push('--permission-mode', 'default');
-      args.push('--permission-prompt-tool', 'stdio');
-    } else if (input.approvalMode === 'auto') {
+    if (input.approvalMode === 'auto') {
       args.push('--dangerously-skip-permissions');
+    } else if (input.approvalMode) {
+      // ask/acceptEdits/plan all hold the stdio approval dialogue; `ask` is
+      // the CLI's `default` permission mode, the other modes map by name.
+      args.push(
+        '--permission-mode',
+        input.approvalMode === 'ask' ? 'default' : input.approvalMode,
+      );
+      args.push('--permission-prompt-tool', 'stdio');
     }
     const mcpConfigPath = this.mcpConfigPaths.get(input);
     if (mcpConfigPath) {
@@ -349,7 +354,10 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   protected override keepStdinOpen(input: AgentTurnInput): boolean {
-    return input.approvalMode === 'ask';
+    // Every stdio-dialogue mode (ask/acceptEdits/plan) can raise a mid-turn
+    // control_request; only auto (and plain chat) closes stdin after the
+    // prompt payload.
+    return input.approvalMode !== undefined && input.approvalMode !== 'auto';
   }
 
   protected override buildApprovalResponse(

@@ -14,6 +14,7 @@ import {
   HistoryQueryDto,
   RenameRunDto,
   SendMessageDto,
+  UpdateChatSettingsDto,
 } from '../dto/chat.dto';
 import { ChatService } from '../services/chat.service';
 
@@ -42,6 +43,14 @@ export class ChatController {
     @Body() dto: RenameRunDto,
   ): Promise<RunWire> {
     return this.chatService.rename(runId, dto.title);
+  }
+
+  @Patch(':runId/settings')
+  updateSettings(
+    @Param('runId') runId: string,
+    @Body() dto: UpdateChatSettingsDto,
+  ): Promise<RunWire> {
+    return this.chatService.updateSettings(runId, dto.approval);
   }
 
   @Get(':runId/items')

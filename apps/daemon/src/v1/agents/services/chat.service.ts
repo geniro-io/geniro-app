@@ -12,16 +12,25 @@ import type { AgentKind, ItemKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
-import { type ItemWire, type RunWire, SINGLE_AGENT_NODE } from '../chat.types';
+import {
+  type ChatApprovalMode,
+  type ClaudeModesCapability,
+  type ItemWire,
+  type RunWire,
+  SINGLE_AGENT_NODE,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { answerFoldsInto, foldApprovalAnswer } from '../utils/approval-answer';
 import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { AgentEventBus } from './agent-events.bus';
+import { ApprovalRegistry } from './approval-registry';
+import { ClaudeProbeService } from './claude-probe.service';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 
@@ -51,8 +60,10 @@ export class ChatService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
+    private readonly approvals: ApprovalRegistry,
     private readonly claude: ClaudeAdapter,
     private readonly cursor: CursorAdapter,
+    private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
   ) {}
 
@@ -105,8 +116,10 @@ export class ChatService {
     cwd: string;
     model?: string;
     title?: string;
+    approval?: ChatApprovalMode;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
+    this.assertApprovalSupported(input.agentKind, input.approval);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -116,10 +129,87 @@ export class ChatService {
         cwd,
         model: input.model ?? null,
         title: input.title ?? null,
+        // New chats always carry an explicit mode (claude defaults to 'ask',
+        // cursor is pinned 'auto'); only pre-selector rows stay null.
+        approval:
+          input.agentKind === 'cursor-agent'
+            ? 'auto'
+            : (input.approval ?? 'ask'),
       },
       em,
     );
     return this.toRunWire(run);
+  }
+
+  /**
+   * PATCH /v1/chats/:runId/settings — flip the approval mode between turns.
+   * 409 while a turn is in flight (the daemon-side contract matching the
+   * disabled selector), 400 for a non-auto mode on a cursor chat.
+   */
+  async updateSettings(
+    runId: string,
+    approval: ChatApprovalMode,
+  ): Promise<RunWire> {
+    const em = this.em.fork();
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    this.assertApprovalSupported(run.agentKind, approval);
+    // Captured before the write: BaseDao.updateById mutates this same
+    // identity-mapped entity, so `run.approval` reflects the NEW value the
+    // moment updateById returns — the revert path below needs the old one.
+    const previous = run.approval;
+    if (this.registry.has(runId)) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'a turn is in flight — the approval mode is locked until it settles',
+      );
+    }
+    await this.runDao.updateById(runId, { approval }, em);
+    // A turn may have claimed the run DURING the write above — after our
+    // pre-check but before the flush. sendMessage snapshots the run row in
+    // its own fork, so that turn may already be spawning under the pre-write
+    // mode. Refuse rather than ACK a mode the in-flight turn won't honor:
+    // revert and 409. (A PATCH that fully lands BEFORE the claim is still
+    // honored — sendMessage re-reads the committed mode after it claims.)
+    if (this.registry.has(runId)) {
+      await this.runDao.updateById(runId, { approval: previous }, em);
+      throw new ConflictException(
+        'RUN_BUSY',
+        'a turn started while the approval change was in flight — retry once it settles',
+      );
+    }
+    run.approval = approval;
+    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    return this.toRunWire(run, previews.get(runId) ?? null);
+  }
+
+  /**
+   * The claude permission-mode verdict, degrading a probe INFRASTRUCTURE
+   * failure to `unknown` instead of failing the turn — mirrors the graph
+   * executor's degrade-catch (an unknown verdict keeps the requested mode).
+   */
+  private async claudeModesSafe(): Promise<ClaudeModesCapability> {
+    try {
+      return await this.claudeProbe.ensureVerdict();
+    } catch {
+      return this.claudeProbe.capability();
+    }
+  }
+
+  /** Cursor has no approval callback — cursor chats are pinned to 'auto'. */
+  private assertApprovalSupported(
+    agentKind: AgentKind | null,
+    approval: ChatApprovalMode | undefined,
+  ): void {
+    if (
+      agentKind === 'cursor-agent' &&
+      approval !== undefined &&
+      approval !== 'auto'
+    ) {
+      throw new BadRequestException(
+        'CURSOR_APPROVAL_UNSUPPORTED',
+        "cursor-agent has no approval callback — cursor chats run 'auto' only",
+      );
+    }
   }
 
   async listChats(): Promise<RunWire[]> {
@@ -199,10 +289,37 @@ export class ChatService {
       const agentKind = run.agentKind;
       const model = run.model ?? undefined;
 
+      // Re-read the committed approval mode from a FRESH fork now that the
+      // claim is held: a settings PATCH that flushed to its own fork between
+      // the getById above and the claim never mutated `run`, so its ACKed
+      // mode would otherwise be ignored. The claim now 409s any later PATCH,
+      // and updateSettings reverts a PATCH that raced the claim, so this read
+      // reflects exactly the acknowledged mode.
+      const committed = await this.runDao.getById(runId, this.em.fork());
+      let approvalMode: ChatApprovalMode | undefined =
+        committed?.approval ?? run.approval ?? undefined;
+
       let seq = (await this.itemDao.maxSeq(runId, em)) + 1;
       const userWire = await this.persist(em, runId, seq++, 'message', 'user', {
         text,
       });
+
+      // acceptEdits degrades to 'ask' VISIBLY (persisted system item) when the
+      // installed claude can't accept the mode (a probed FAIL); an unprobed
+      // `unknown` keeps the requested mode so a genuine CLI rejection stays
+      // loud. `plan` is deliberately NOT degraded — converting a no-execute
+      // mode into an executing 'ask' would invert its whole promise, so an
+      // unsupported 'plan' rides through and the CLI rejects it loudly.
+      if (agentKind === 'claude' && approvalMode === 'acceptEdits') {
+        const modes = await this.claudeModesSafe();
+        if (modes.acceptEdits === 'fail') {
+          await this.persist(em, runId, seq++, 'system', null, {
+            message:
+              "installed claude does not support acceptEdits — this turn runs as 'ask'",
+          });
+          approvalMode = 'ask';
+        }
+      }
 
       const node = await this.nodeStateDao.getByRunNode(
         runId,
@@ -240,7 +357,7 @@ export class ChatService {
         );
       }
       const handle = adapter.start(
-        { prompt: text, cwd, model, resumeSessionId },
+        { prompt: text, cwd, model, resumeSessionId, approvalMode },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even
           // though onEvent is a sync callback firing as stdout arrives.
@@ -267,6 +384,53 @@ export class ChatService {
               mapped.role,
               mapped.payload,
             );
+            if (event.type === 'approval_request') {
+              // Chat mirror of the graph executor's card path: the pending
+              // approval is tracked under the chat's one synthetic node so
+              // the WS verdict round-trip resolves it, and the verdict is
+              // persisted as an approval_verdict item once delivered.
+              this.approvals.track({
+                runId,
+                nodeId: SINGLE_AGENT_NODE,
+                requestId: event.id,
+                toolName: event.toolName,
+                input: event.input,
+                respond: (allow, answer) => {
+                  const delivered = handle.respondApproval(
+                    event.id,
+                    allow,
+                    foldApprovalAnswer(
+                      event.toolName,
+                      event.input,
+                      allow,
+                      answer,
+                    ),
+                  );
+                  if (delivered) {
+                    enqueue(async () => {
+                      await this.persist(
+                        em,
+                        runId,
+                        seq++,
+                        'approval_verdict',
+                        null,
+                        {
+                          id: event.id,
+                          allow,
+                          // Recorded only when it was actually folded — the
+                          // transcript must never claim an answer the agent
+                          // did not receive.
+                          ...(answerFoldsInto(event.toolName, allow, answer)
+                            ? { answer }
+                            : {}),
+                        },
+                      );
+                    });
+                  }
+                  return delivered;
+                },
+              });
+            }
             const status = terminalStatus(event);
             if (status) {
               await this.runDao.updateById(runId, { status }, em);
@@ -282,6 +446,10 @@ export class ChatService {
       void handle.done
         .then(async () => {
           await chain; // drain pending persists before finalizing
+          // Sweep BEFORE the branches below — the failure path early-returns,
+          // and a settled turn must never leave a pending card that no
+          // verdict can ever reach.
+          this.approvals.sweepNode(runId, SINGLE_AGENT_NODE);
           if (eventHandlingFailed) {
             const message = 'run event persistence failed';
             await this.runDao

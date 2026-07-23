@@ -33,9 +33,13 @@ export function AgentNode({
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">
           {label}
         </span>
-        {node.approval === 'ask' ? (
+        {node.approval !== 'auto' ? (
           <ShieldQuestion
-            aria-label="Asks before tool calls"
+            aria-label={
+              node.approval === 'acceptEdits'
+                ? 'Auto-approves edits, asks for the rest'
+                : 'Asks before tool calls'
+            }
             className="size-3.5 shrink-0 text-muted-foreground"
           />
         ) : null}

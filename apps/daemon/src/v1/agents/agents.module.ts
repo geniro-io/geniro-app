@@ -13,6 +13,7 @@ import { RunDao } from './dao/run.dao';
 import { AgentEventBus } from './services/agent-events.bus';
 import { ApprovalRegistry } from './services/approval-registry';
 import { ChatService } from './services/chat.service';
+import { ClaudeProbeService } from './services/claude-probe.service';
 import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
 import { ProcessRegistry } from './services/process-registry';
 import { SkillHarvestStore } from './services/skill-harvest.store';
@@ -56,6 +57,13 @@ import { SkillsService } from './services/skills.service';
     { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
+      provide: ClaudeProbeService,
+      useFactory: (adapter: ClaudeAdapter, processes: ProcessRegistry) =>
+        new ClaudeProbeService(adapter, processes),
+      inject: [ClaudeAdapter, ProcessRegistry],
+    },
+    {
+      // Factory because the trailing options bag is a test seam, not a DI token.
       provide: CursorMcpMergeService,
       useFactory: (processes: ProcessRegistry) =>
         new CursorMcpMergeService(processes),
@@ -65,6 +73,7 @@ import { SkillsService } from './services/skills.service';
   exports: [
     AgentEventBus,
     ApprovalRegistry,
+    ClaudeProbeService,
     ProcessRegistry,
     SkillHarvestStore,
     ItemDao,

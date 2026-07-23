@@ -71,6 +71,8 @@ export interface ChatRun {
   workflowId: string | null;
   cwd: string | null;
   model: string | null;
+  /** Chat approval mode; null = graph run or a legacy pre-selector chat. */
+  approval: ChatApprovalMode | null;
   createdAt: string;
   /** Last write to the run row (sends/settles bump it) — its last activity. */
   updatedAt: string;
@@ -109,8 +111,15 @@ export interface AgentSkill {
 // Workflows (mirrors the daemon's v1/graphs wire shapes)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Tool-approval mode of one workflow node. */
-export type WorkflowApproval = 'auto' | 'ask';
+/** Tool-approval mode of one workflow node (plan is chat-only, not here). */
+export type WorkflowApproval = 'auto' | 'ask' | 'acceptEdits';
+
+/**
+ * Chat approval modes (mirrors the daemon `CHAT_APPROVAL_MODES`) — the chat
+ * selector's value set. `plan` is chat-only; a null on a run row means a
+ * legacy chat created before the selector existed (no permission flags).
+ */
+export type ChatApprovalMode = 'auto' | 'ask' | 'acceptEdits' | 'plan';
 
 /**
  * Node kinds a workflow may contain (mirrors the daemon's `NODE_KINDS`).
@@ -222,9 +231,24 @@ export interface CursorCallsCapability {
   reason: string | null;
 }
 
+/**
+ * Which claude permission modes the installed CLI accepts headlessly — the
+ * daemon's cached probe verdict (mirrors the daemon `ClaudeModesCapability`).
+ * The chat selector hides `plan` unless it is a probed pass; a failing
+ * `acceptEdits` degrades visibly to `ask` daemon-side.
+ */
+export interface ClaudeModesCapability {
+  acceptEdits: 'pass' | 'fail' | 'unknown';
+  plan: 'pass' | 'fail' | 'unknown';
+  version: string | null;
+  probedAt: number | null;
+  reason: string | null;
+}
+
 /** GET /v1/capabilities (mirrors the daemon `CapabilitiesWire`). */
 export interface CapabilitiesWire {
   cursorCalls: CursorCallsCapability;
+  claudeModes: ClaudeModesCapability;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

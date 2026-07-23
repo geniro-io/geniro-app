@@ -385,6 +385,40 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
+  it('maps acceptEdits and plan to their permission modes with the stdio prompt tool', () => {
+    for (const mode of ['acceptEdits', 'plan'] as const) {
+      const { spawn, captured } = fakeSpawn();
+      new ClaudeAdapter({ spawn }).start(
+        { prompt: 'p', cwd: '/proj', approvalMode: mode },
+        () => {},
+      );
+      expect(captured.args).toEqual(
+        expect.arrayContaining([
+          '--permission-mode',
+          mode,
+          '--permission-prompt-tool',
+          'stdio',
+        ]),
+      );
+      expect(captured.args).not.toEqual(
+        expect.arrayContaining(['--dangerously-skip-permissions']),
+      );
+    }
+  });
+
+  it('keeps stdin open for the acceptEdits and plan stdio-dialogue modes', () => {
+    for (const mode of ['acceptEdits', 'plan'] as const) {
+      const { spawn, child } = fakeSpawn();
+      const endSpy = vi.spyOn(child.stdin, 'end');
+      new ClaudeAdapter({ spawn }).start(
+        { prompt: 'p', cwd: '/proj', approvalMode: mode },
+        () => {},
+      );
+      expect(child.stdin.written).toContain('"type":"user"');
+      expect(endSpy).not.toHaveBeenCalled();
+    }
+  });
+
   it('bypasses permissions in auto mode and appends the system prompt', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn }).start(

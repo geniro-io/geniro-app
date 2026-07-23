@@ -16,7 +16,7 @@ import { childProcessHandle } from '../../agents/utils/child-handle';
 import { enableGeniroMcpServer } from '../../agents/utils/cursor-mcp-enable';
 import { buildCursorMcpServerEntry } from '../../agents/utils/cursor-mcp-entry';
 import { mergeGeniroEntry } from '../../agents/utils/cursor-mcp-file';
-import type { CapabilitiesWire, CursorCallsCapability } from '../graphs.types';
+import type { CursorCallsCapability } from '../graphs.types';
 
 /** The probe's synthetic node id on the `/v1/mcp/<probeId>/<nodeId>` route. */
 const PROBE_NODE_ID = 'probe';
@@ -108,17 +108,18 @@ export class CursorProbeService {
   }
 
   /**
-   * The read behind GET /v1/capabilities. An `unknown` verdict pre-warms the
-   * probe in the background (fire-and-forget), so the builder's next poll —
-   * and the eventual run start — find a settled verdict instead of waiting
-   * the whole probe turn out.
+   * The cursor arm of GET /v1/capabilities (CapabilitiesService composes the
+   * wire). An `unknown` verdict pre-warms the probe in the background
+   * (fire-and-forget), so the builder's next poll — and the eventual run
+   * start — find a settled verdict instead of waiting the whole probe turn
+   * out.
    */
-  capabilitiesWire(): CapabilitiesWire {
+  wireCapability(): CursorCallsCapability {
     const current = this.capability();
     if (current.status === 'unknown' && this.runtime.port !== null) {
       void this.ensureVerdict();
     }
-    return { cursorCalls: current };
+    return current;
   }
 
   /** True while `runId` is a live probe — the MCP host serves echo for it. */

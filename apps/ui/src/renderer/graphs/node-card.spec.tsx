@@ -101,11 +101,44 @@ describe('NodeCard', () => {
     canvas(AGENT);
     render(AGENT, true);
     expect(card().className).toContain('border-destructive');
-    // The invalid state wins over the selection ring.
+    // Validity owns the border tone — selection never repaints it primary.
     expect(card().className).not.toContain('border-primary');
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       'No input connected — wire a trigger, an upstream agent, or a call edge into this node.',
     );
+  });
+
+  it('looks different selected vs unselected even while INVALID', () => {
+    // Regression: `invalid` used to short-circuit the selection ring, so
+    // clicking a red card changed nothing on screen. Selection is now an
+    // offset ring layered over the (unchanged) destructive border.
+    canvas(AGENT);
+    render(AGENT, false);
+    const unselected = card().className;
+    render(AGENT, true);
+    const isSelected = card().className;
+
+    expect(isSelected).not.toEqual(unselected);
+    expect(isSelected).toContain('ring-offset-2');
+    expect(unselected).not.toContain('ring-offset-2');
+    // …while both keep saying "invalid".
+    expect(unselected).toContain('border-destructive');
+    expect(isSelected).toContain('border-destructive');
+    expect(isSelected).toContain('ring-destructive/70');
+  });
+
+  it('looks different selected vs unselected while valid', () => {
+    canvas(TRIGGER, AGENT);
+    mocks.edges = [{ source: 't1', target: 'a1' }];
+    render(AGENT, false);
+    const unselected = card().className;
+    render(AGENT, true);
+    const isSelected = card().className;
+
+    expect(isSelected).not.toEqual(unselected);
+    expect(unselected).toContain('border-border');
+    expect(unselected).not.toContain('ring-offset-2');
+    expect(isSelected).toContain('ring-primary/70');
   });
 
   it('renders clean (and the selection ring) once the graph is valid', () => {

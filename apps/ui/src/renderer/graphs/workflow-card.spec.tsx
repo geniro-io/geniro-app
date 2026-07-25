@@ -41,15 +41,35 @@ afterEach(() => {
 function render(
   summary: WorkflowSummary,
   onOpen: () => void = vi.fn(),
+  onDelete: () => void | Promise<void> = vi.fn(),
 ): HTMLElement {
   act(() => {
-    root.render(<WorkflowCard summary={summary} onOpen={onOpen} />);
+    root.render(
+      <WorkflowCard summary={summary} onOpen={onOpen} onDelete={onDelete} />,
+    );
   });
   const el = container.querySelector<HTMLElement>('[role="button"]');
   if (!el) {
     throw new Error('WorkflowCard did not render a clickable element');
   }
   return el;
+}
+
+function deleteButton(): HTMLButtonElement {
+  const el = container.querySelector<HTMLButtonElement>(
+    `[aria-label="Delete ${SUMMARY.name}"]`,
+  );
+  if (!el) {
+    throw new Error('WorkflowCard did not render a delete button');
+  }
+  return el;
+}
+
+/** One click on the card's delete control, as a user's would bubble. */
+function clickDelete(): void {
+  act(() => {
+    deleteButton().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
 }
 
 describe('WorkflowCard', () => {
@@ -95,5 +115,50 @@ describe('WorkflowCard', () => {
       );
     });
     expect(onOpen).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('WorkflowCard — delete', () => {
+  it('asks the page to delete — the card itself deletes nothing', () => {
+    // The card only REQUESTS deletion; the page confirms in a modal. So one
+    // click must reach onDelete (no in-card arming step swallowing it).
+    const onDelete = vi.fn();
+    render(SUMMARY, vi.fn(), onDelete);
+
+    clickDelete();
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('never opens the workflow while deleting it', () => {
+    // The whole card is a click target, so an unguarded delete click would
+    // bubble into onOpen and drop the user into the builder of the very
+    // workflow they are removing — behind the confirm dialog.
+    const onOpen = vi.fn();
+    render(SUMMARY, onOpen, vi.fn());
+
+    clickDelete();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('does not open the workflow on Enter/Space aimed at the delete button', () => {
+    const onOpen = vi.fn();
+    render(SUMMARY, onOpen, vi.fn());
+
+    act(() => {
+      deleteButton().dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+      deleteButton().dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', bubbles: true }),
+      );
+    });
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('names the workflow it deletes, so the grid stays unambiguous', () => {
+    render(SUMMARY);
+    expect(deleteButton().getAttribute('aria-label')).toBe(
+      'Delete Review Team',
+    );
   });
 });

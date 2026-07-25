@@ -37,6 +37,7 @@ import type {
   WorkflowTriggerNode,
 } from '../../shared/contracts';
 import { ConfirmButton } from '../components/confirm-button';
+import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { Field } from '../components/field';
@@ -49,6 +50,7 @@ import { Textarea } from '../components/ui/textarea';
 import { WorkflowApi } from '../workflow-api';
 import { AgentAvatar } from './agent-avatar';
 import { AgentNode } from './agent-node';
+import { BuilderStatusBar } from './builder-status-bar';
 import { CallEdge } from './call-edge';
 import {
   autoLayout,
@@ -75,6 +77,7 @@ import {
 } from './node-schema';
 import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
+import { useAutosave } from './use-autosave';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
@@ -86,6 +89,10 @@ const EDGE_TYPES = { call: CallEdge };
 // render (and drags render per frame) defeats its internal memoization.
 const DELETE_KEY_CODES = ['Delete', 'Backspace'];
 const PRO_OPTIONS = { hideAttribution: true };
+/** How long a one-off outcome (an export path) stays in the status bar. The
+ *  bar is now always on screen, so a message with no expiry would sit there
+ *  as stale news long after the action. */
+const NOTICE_TTL_MS = 6_000;
 
 /**
  * The Workflows page: compose a DAG of agents on a React Flow canvas, backed
@@ -116,6 +123,12 @@ export function Graphs({
   // The builder's "Change workflow" popup — the create meta form, prefilled.
   const [renameOpen, setRenameOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  // A delete in flight — suspends autosave (see `remove`).
+  const [deleting, setDeleting] = useState(false);
+  // The library card awaiting its delete confirmation (null = dialog closed).
+  const [pendingDelete, setPendingDelete] = useState<WorkflowSummary | null>(
+    null,
+  );
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -160,6 +173,15 @@ export function Graphs({
   useEffect(() => {
     void refreshList();
   }, [refreshList]);
+
+  // Status-bar messages expire on their own (see NOTICE_TTL_MS).
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_TTL_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   // Reading capabilities also pre-warms the daemon's probe; keep polling only
   // while the verdict is 'unknown' (a probe turn is capped at 90s, and the
@@ -256,8 +278,9 @@ export function Graphs({
     [api, openWorkflow],
   );
 
-  /** Close the builder and return to the library grid (refreshing the list so
-   *  a just-saved workflow's card reflects its new node count / mtime). */
+  /** Clear the builder and return to the library grid (refreshing the list so
+   *  a just-saved workflow's card reflects its new node count / mtime). Callers
+   *  flush pending autosave work first — see `leaveToLibrary`. */
   const backToLibrary = useCallback((): void => {
     setStarted(false);
     setActiveSlug(null);
@@ -272,17 +295,11 @@ export function Graphs({
     void refreshList();
   }, [refreshList, setNodes, setEdges]);
 
-  /**
-   * Unsaved work on the canvas? Drives the Library back button's armed
-   * confirm — leaving the builder clears the canvas, previously silently
-   * discarding every unsaved node/edge/inspector edit in one click.
-   */
-  const dirty = useMemo(
-    () =>
-      started &&
-      savedSnapshot !== null &&
-      canvasSnapshot(name, description, nodes, edges) !== savedSnapshot,
-    [started, savedSnapshot, name, description, nodes, edges],
+  /** The live canvas serialized as a write would store it — the autosave
+   *  trigger (compared against `savedSnapshot`). */
+  const liveSnapshot = useMemo(
+    () => canvasSnapshot(name, description, nodes, edges),
+    [name, description, nodes, edges],
   );
 
   /** Persist the canvas under the given meta; true on success. */
@@ -301,7 +318,6 @@ export function Graphs({
         setSavedSnapshot(
           canvasSnapshot(meta.name, meta.description ?? '', nodes, edges),
         );
-        setNotice(`Saved ${saved.slug}.geniro.yaml`);
         await refreshList();
         return true;
       } catch (err) {
@@ -312,13 +328,33 @@ export function Graphs({
     [api, nodes, edges, activeSlug, refreshList],
   );
 
-  const save = useCallback(async (): Promise<void> => {
+  /** One autosave write of the open workflow under its current meta. The
+   *  normalization matches `canvasSnapshot`'s exactly — a mismatch would leave
+   *  the canvas permanently "dirty" and autosave writing in a loop. */
+  const saveNow = useCallback((): Promise<boolean> => {
     const trimmedDescription = description.trim();
-    await persist({
+    return persist({
       name: name.trim() || 'workflow',
       ...(trimmedDescription ? { description: trimmedDescription } : {}),
     });
   }, [persist, name, description]);
+
+  // No Save button: edits persist on their own once the user pauses. Suspended
+  // while a delete is in flight so a queued write can't resurrect the file.
+  const autosave = useAutosave({
+    enabled: started && activeSlug !== null && !deleting,
+    snapshot: liveSnapshot,
+    savedSnapshot,
+    save: saveNow,
+  });
+
+  /** Leaving writes first — the debounce may still be pending, and clearing
+   *  the canvas without flushing is exactly the silent data loss the old
+   *  "Discard unsaved edits?" confirm existed to warn about. */
+  const leaveToLibrary = useCallback(async (): Promise<void> => {
+    await autosave.flush();
+    backToLibrary();
+  }, [autosave, backToLibrary]);
 
   /** Change-popup submit: adopt the new meta and persist it immediately —
    *  the popup only closes once the library file actually carries it. */
@@ -338,25 +374,65 @@ export function Graphs({
     [persist],
   );
 
-  const remove = useCallback(async (): Promise<void> => {
-    if (!api || !activeSlug) {
+  /** Delete one workflow from the library (its saved viewport goes with it);
+   *  true on success. The ONE delete path — the library grid's per-card
+   *  confirm and the builder's toolbar both go through it. */
+  const deleteWorkflow = useCallback(
+    async (slug: string): Promise<boolean> => {
+      if (!api) {
+        return false;
+      }
+      setError(null);
+      try {
+        await api.delete(slug);
+        clearViewport(slug);
+        await refreshList();
+        return true;
+      } catch (err) {
+        setError(String(err));
+        return false;
+      }
+    },
+    [api, refreshList],
+  );
+
+  /** The library grid's delete, once the modal is confirmed. A failure keeps
+   *  the dialog open carrying the error rather than closing on a no-op. */
+  const confirmDelete = useCallback(async (): Promise<void> => {
+    if (!pendingDelete) {
       return;
     }
-    setError(null);
+    setDeleting(true);
     try {
-      await api.delete(activeSlug);
-      clearViewport(activeSlug);
-      setActiveSlug(null);
-      setNodes([]);
-      setEdges([]);
-      setName('');
-      setDescription('');
-      setStarted(false);
-      await refreshList();
-    } catch (err) {
-      setError(String(err));
+      if (await deleteWorkflow(pendingDelete.slug)) {
+        setPendingDelete(null);
+      }
+    } finally {
+      setDeleting(false);
     }
-  }, [api, activeSlug, refreshList, setNodes, setEdges]);
+  }, [pendingDelete, deleteWorkflow]);
+
+  /** The builder's own delete: drop the open workflow, then clear the canvas. */
+  const remove = useCallback(async (): Promise<void> => {
+    if (!activeSlug) {
+      return;
+    }
+    // Suspends autosave for the duration: a debounced write firing after the
+    // DELETE would recreate the YAML the user just deleted.
+    setDeleting(true);
+    try {
+      if (await deleteWorkflow(activeSlug)) {
+        setActiveSlug(null);
+        setNodes([]);
+        setEdges([]);
+        setName('');
+        setDescription('');
+        setStarted(false);
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }, [activeSlug, deleteWorkflow, setNodes, setEdges]);
 
   const importWorkflow = useCallback(async (): Promise<void> => {
     if (!api) {
@@ -686,6 +762,7 @@ export function Graphs({
                   key={summary.slug}
                   summary={summary}
                   onOpen={() => void openWorkflow(summary.slug)}
+                  onDelete={() => setPendingDelete(summary)}
                 />
               ))}
             </div>
@@ -702,6 +779,25 @@ export function Graphs({
           onClose={() => setCreateOpen(false)}
           onSubmit={(meta) => void createWorkflow(meta)}
         />
+
+        <ConfirmDialog
+          open={pendingDelete !== null}
+          busy={deleting}
+          error={pendingDelete ? error : null}
+          title="Delete workflow"
+          confirmLabel="Delete"
+          busyLabel="Deleting…"
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void confirmDelete()}>
+          <p>
+            Delete{' '}
+            <span className="font-medium text-foreground">
+              {pendingDelete?.name}
+            </span>{' '}
+            permanently? Its <code>{pendingDelete?.slug}.geniro.yaml</code> file
+            is removed from the library. Past runs of it are kept.
+          </p>
+        </ConfirmDialog>
       </div>
     );
   }
@@ -711,27 +807,16 @@ export function Graphs({
     <CursorCallsContext.Provider value={cursorCalls}>
       <section className="flex h-full min-h-0 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-          {dirty ? (
-            // Unsaved edits on the canvas: leaving clears them, so the back
-            // button takes the shared armed-confirm (click, then confirm).
-            <ConfirmButton
-              variant="ghost"
-              className="gap-1.5"
-              aria-label="Back to library"
-              confirmLabel="Discard unsaved edits?"
-              onConfirm={backToLibrary}>
-              <ArrowLeft className="shrink-0" /> Library
-            </ConfirmButton>
-          ) : (
-            <Button
-              type="button"
-              variant="ghost"
-              className="gap-1.5"
-              aria-label="Back to library"
-              onClick={backToLibrary}>
-              <ArrowLeft className="shrink-0" /> Library
-            </Button>
-          )}
+          {/* No discard-confirm any more: leaving flushes pending edits
+              instead of throwing them away. */}
+          <Button
+            type="button"
+            variant="ghost"
+            className="gap-1.5"
+            aria-label="Back to library"
+            onClick={() => void leaveToLibrary()}>
+            <ArrowLeft className="shrink-0" /> Library
+          </Button>
           <h2 className="min-w-0 truncate font-medium">{name}</h2>
           <div className="ml-auto flex items-center gap-2">
             <Button
@@ -767,9 +852,6 @@ export function Graphs({
                 </ConfirmButton>
               </>
             ) : null}
-            <Button type="button" onClick={() => void save()}>
-              Save
-            </Button>
           </div>
         </div>
 
@@ -777,11 +859,6 @@ export function Graphs({
           <ErrorText className="border-b border-border px-3 py-1.5">
             {error}
           </ErrorText>
-        ) : null}
-        {notice && !error ? (
-          <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
-            {notice}
-          </p>
         ) : null}
 
         <div className="flex min-h-0 flex-1">
@@ -964,6 +1041,13 @@ export function Graphs({
             </aside>
           ) : null}
         </div>
+
+        <BuilderStatusBar
+          nodeCount={nodes.length}
+          edgeCount={edges.length}
+          message={error ? null : notice}
+          saveState={autosave.state}
+        />
 
         <WorkflowMetaDialog
           open={renameOpen}

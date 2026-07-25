@@ -20,7 +20,7 @@ import { type NodeValidationError, validateNode } from './node-validate';
 
 /**
  * Shared canvas-card shell for every node kind — geniro's GraphNodeCard: the
- * container (selected ring / destructive ring when invalid), the per-kind
+ * container (validity border + an orthogonal selection ring), the per-kind
  * header content as children, the collapsible ports block, and an inline
  * error strip listing what's wrong. Validation is live: it recomputes from
  * the canvas edges + node kinds on every graph change, mirroring the checks
@@ -116,12 +116,25 @@ export function NodeCard({
   return (
     <div
       className={cn(
-        'group relative rounded-xl border bg-card shadow-panel-sm transition-shadow hover:shadow-panel-md',
+        'group relative rounded-xl border bg-card transition-shadow',
+        // Validity owns the BORDER tone; selection owns the RING. The two are
+        // deliberately orthogonal: `invalid` used to short-circuit the ring, so
+        // selecting an invalid (red) card changed nothing on screen — every
+        // node kind must look different selected vs not, valid or not.
         invalid
-          ? 'border-destructive ring-2 ring-destructive/30'
+          ? 'border-destructive'
           : selected
-            ? 'border-primary ring-2 ring-primary/40'
+            ? 'border-primary'
             : 'border-border',
+        selected
+          ? 'shadow-panel-md ring-2 ring-offset-2 ring-offset-background'
+          : 'shadow-panel-sm hover:shadow-panel-md',
+        // The ring keeps the card's own tone so a selected invalid node still
+        // reads as invalid — it is the offset gap + weight that says "selected".
+        selected && (invalid ? 'ring-destructive/70' : 'ring-primary/70'),
+        // Unselected invalid keeps a soft halo so red reads at a glance, but
+        // flush and thin — unmistakably weaker than the selected ring.
+        !selected && invalid && 'ring-1 ring-destructive/25',
         className,
       )}>
       {/* Per-node delete, revealed on hover/selection. `nodrag` keeps the

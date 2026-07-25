@@ -1,7 +1,8 @@
-import { Clock, GitFork, Workflow as WorkflowIcon } from 'lucide-react';
+import { Clock, GitFork, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 
 import type { WorkflowSummary } from '../../shared/contracts';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import {
   Card,
   CardContent,
@@ -25,9 +26,12 @@ function plural(count: number, unit: string): string {
 export function WorkflowCard({
   summary,
   onOpen,
+  onDelete,
 }: {
   summary: WorkflowSummary;
   onOpen: () => void;
+  /** Asks to delete this workflow — the page confirms in a modal first. */
+  onDelete: () => void;
 }): React.JSX.Element {
   return (
     <Card
@@ -42,15 +46,35 @@ export function WorkflowCard({
         }
       }}
       className={cn(
-        'cursor-pointer gap-3 pb-4 transition-[border-color,box-shadow]',
+        'group relative cursor-pointer gap-3 pb-4 transition-[border-color,box-shadow]',
         'hover:border-ring/50 hover:shadow-panel-md',
         'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
       )}>
+      {/* Revealed on hover/keyboard focus so the grid stays calm. The wrapper
+          is an event dam: the whole card is a click target, so without it a
+          click (or Enter/Space) on delete would ALSO open the builder of the
+          very workflow being removed. */}
+      <span
+        className="absolute top-2 right-2 z-10 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={`Delete ${summary.name}`}
+          title="Delete workflow"
+          className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive [&_svg]:size-3.5"
+          onClick={onDelete}>
+          <Trash2 />
+        </Button>
+      </span>
       <CardHeader className="gap-1 pb-0">
         {/* leading-snug (not the CardTitle default leading-none): with
             `truncate`'s overflow-hidden a line-height of 1 shaves the glyph
-            tops/descenders. py-px adds a hair of vertical breathing room. */}
-        <CardTitle className="truncate py-px font-medium leading-snug">
+            tops/descenders. py-px adds a hair of vertical breathing room.
+            pr-8 keeps a long name from running under the delete button. */}
+        <CardTitle className="truncate py-px pr-8 font-medium leading-snug">
           {summary.name}
         </CardTitle>
         <p className="line-clamp-2 min-h-[2.5em] text-sm text-muted-foreground">

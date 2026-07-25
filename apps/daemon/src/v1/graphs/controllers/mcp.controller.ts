@@ -1,4 +1,5 @@
 import { Controller, Delete, Get, Param, Post, Req, Res } from '@nestjs/common';
+import { ApiExcludeController } from '@nestjs/swagger';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { McpServerService } from '../services/mcp-server.service';
@@ -7,7 +8,14 @@ import { McpServerService } from '../services/mcp-server.service';
  * Routes for the per-run MCP endpoint (`/v1/mcp/<runId>/<callerNodeId>`).
  * Route + delegation only — the whole MCP protocol (SDK server, transport,
  * tool dispatch, in-protocol error mapping) lives in McpServerService.
+ *
+ * Kept OUT of the OpenAPI document: this is a JSON-RPC channel spoken by
+ * caller agents over a per-node token, not a REST resource the renderer's
+ * generated client should ever see. Its payloads are the MCP wire protocol and
+ * its handlers write through `@Res()`, so there is no response shape for
+ * swagger to describe either.
  */
+@ApiExcludeController()
 @Controller('v1/mcp')
 export class McpController {
   constructor(private readonly mcpServer: McpServerService) {}

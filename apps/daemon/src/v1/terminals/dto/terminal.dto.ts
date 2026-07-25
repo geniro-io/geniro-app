@@ -1,7 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { MAX_COLS, MAX_ROWS } from '../terminals.types';
+import {
+  MAX_COLS,
+  MAX_ROWS,
+  TerminalSessionWireSchema,
+} from '../terminals.types';
 
 /**
  * HTTP input for opening a terminal mirror. `nodeId` is required for workflow
@@ -27,3 +31,15 @@ export const createTerminalSchema = z.object({
   rows: z.coerce.number().int().min(1).max(MAX_ROWS).optional(),
 });
 export class CreateTerminalDto extends createZodDto(createTerminalSchema) {}
+
+// ── Responses ───────────────────────────────────────────────────────────────
+
+/** A live PTY mirror session. */
+export class TerminalSessionDto extends createZodDto(
+  TerminalSessionWireSchema,
+) {}
+
+/** Acknowledgement of a terminal kill. */
+export class DisposedDto extends createZodDto(
+  z.object({ disposed: z.boolean() }),
+) {}

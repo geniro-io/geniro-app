@@ -1,4 +1,10 @@
-import type { AgentKind, ItemKind, RunStatus } from '../runs/runs.types';
+import { z } from 'zod';
+
+import {
+  AgentKindSchema,
+  ItemKindSchema,
+  RunStatusSchema,
+} from '../runs/runs.types';
 
 /**
  * The single-agent chat has exactly one node; its CLI session id is keyed
@@ -21,10 +27,16 @@ export const CHAT_APPROVAL_MODES = [
   'acceptEdits',
   'plan',
 ] as const;
-export type ChatApprovalMode = (typeof CHAT_APPROVAL_MODES)[number];
+export const ChatApprovalModeSchema = z
+  .enum(CHAT_APPROVAL_MODES)
+  .meta({ id: 'ChatApprovalMode' });
+export type ChatApprovalMode = z.infer<typeof ChatApprovalModeSchema>;
 
 /** One probed claude permission mode's headless support verdict. */
-export type ClaudeModeProbeStatus = 'pass' | 'fail' | 'unknown';
+export const ProbeStatusSchema = z
+  .enum(['pass', 'fail', 'unknown'])
+  .meta({ id: 'ProbeStatus' });
+export type ClaudeModeProbeStatus = z.infer<typeof ProbeStatusSchema>;
 
 /**
  * The claude arm of GET /v1/capabilities — whether the installed claude CLI
@@ -33,16 +45,25 @@ export type ClaudeModeProbeStatus = 'pass' | 'fail' | 'unknown';
  * re-probes without a daemon restart, and only a genuine pass/fail verdict is
  * disk-cached (`unknown` — timeout, spawn error — stays memory-only).
  */
-export interface ClaudeModesCapability {
-  acceptEdits: ClaudeModeProbeStatus;
-  plan: ClaudeModeProbeStatus;
-  /** `claude --version` line the verdict is keyed by; null = unreadable. */
-  version: string | null;
-  /** Epoch ms of the probe that produced this verdict; null when unprobed. */
-  probedAt: number | null;
-  /** One-liner for the degrade system item / builder warning; null when clean. */
-  reason: string | null;
-}
+export const ClaudeModesCapabilitySchema = z
+  .object({
+    acceptEdits: ProbeStatusSchema,
+    plan: ProbeStatusSchema,
+    version: z
+      .string()
+      .nullable()
+      .describe('`claude --version` line the verdict is keyed by'),
+    probedAt: z
+      .number()
+      .nullable()
+      .describe('Epoch ms of the probe that produced this verdict'),
+    reason: z
+      .string()
+      .nullable()
+      .describe('One-liner for the degrade system item / builder warning'),
+  })
+  .meta({ id: 'ClaudeModesCapability' });
+export type ClaudeModesCapability = z.infer<typeof ClaudeModesCapabilitySchema>;
 
 /**
  * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
@@ -61,16 +82,20 @@ export const MAX_ANSWER_LENGTH = 32_768;
  * doubly-encoded string. This is the shape the daemon emits over `/ws` and the
  * REST history read; the UI mirrors it in `shared/contracts.ts`.
  */
-export interface ItemWire {
-  id: string;
-  runId: string;
-  nodeId: string | null;
-  seq: number;
-  kind: ItemKind;
-  role: string | null;
-  payload: unknown;
-  createdAt: string;
-}
+export const ItemWireSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  nodeId: z.string().nullable().describe('Graph node id; null for a chat'),
+  seq: z
+    .number()
+    .int()
+    .describe('Monotonic per-run sequence — the replay cursor'),
+  kind: ItemKindSchema,
+  role: z.string().nullable(),
+  payload: z.unknown().describe('Kind-specific structured payload'),
+  createdAt: z.string(),
+});
+export type ItemWire = z.infer<typeof ItemWireSchema>;
 
 /**
  * One skill / slash command a CLI agent can be invoked with (`/name …` in the
@@ -84,12 +109,17 @@ export interface ItemWire {
  * `kind: 'command'`, no description). The UI mirrors this in
  * `shared/contracts.ts`.
  */
-export interface AgentSkillWire {
-  name: string;
-  description: string | null;
-  kind: 'skill' | 'command';
-  source: 'project' | 'user' | 'cli';
-}
+export const AgentSkillWireSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  kind: z
+    .enum(['skill', 'command'])
+    .describe('A skill directory (SKILL.md) vs a plain command file'),
+  source: z
+    .enum(['project', 'user', 'cli'])
+    .describe('Where it was discovered — disk scan, or the CLI session itself'),
+});
+export type AgentSkillWire = z.infer<typeof AgentSkillWireSchema>;
 
 /** One persisted item, ready to fan out to its run's WS room (persist-then-emit). */
 export interface RunItemEvent {
@@ -98,27 +128,34 @@ export interface RunItemEvent {
 }
 
 /** A run projected to the wire (chat and workflow runs share the shape). */
-export interface RunWire {
-  id: string;
-  status: RunStatus;
-  title: string | null;
-  agentKind: AgentKind | null;
-  /** Workflow slug for a graph run; null for a single-agent chat. */
-  workflowId: string | null;
-  cwd: string | null;
-  model: string | null;
-  /** Chat approval mode; null = legacy row (no permission flags, pre-selector). */
-  approval: ChatApprovalMode | null;
-  createdAt: string;
+export const RunWireSchema = z.object({
+  id: z.string(),
+  status: RunStatusSchema,
+  title: z.string().nullable(),
+  agentKind: AgentKindSchema.nullable(),
+  workflowId: z
+    .string()
+    .nullable()
+    .describe('Workflow slug for a graph run; null for a single-agent chat'),
+  cwd: z.string().nullable(),
+  model: z.string().nullable(),
+  approval: ChatApprovalModeSchema.nullable().describe(
+    'Chat approval mode; null = legacy row (no permission flags, pre-selector)',
+  ),
+  createdAt: z.string(),
   /**
    * Last write to the run row — every send flips status to `running` and every
    * settle writes the terminal status, so this is the run's last-activity time.
    */
-  updatedAt: string;
+  updatedAt: z.string().describe("The run's last-activity time"),
   /**
    * Text of the run's latest `message` item (the chat list's preview line).
    * Null when the run has no messages yet; list endpoints enrich it, while
    * create paths return null (a fresh run genuinely has none).
    */
-  lastMessage: string | null;
-}
+  lastMessage: z
+    .string()
+    .nullable()
+    .describe("Text of the run's latest message item — the list preview line"),
+});
+export type RunWire = z.infer<typeof RunWireSchema>;

@@ -39,6 +39,10 @@ import { ExceptionsFilter } from './exceptions.filter';
 import { HttpServerModule } from './http-server.module';
 import type { IHttpServerParams } from './http-server.types';
 import { ZodResponseInterceptor } from './interceptors/zod-response.interceptor';
+import {
+  canonicalizeOpenApiSchemas,
+  findDanglingSchemaRefs,
+} from './utils/openapi-schemas';
 
 const HTTP_VERBS = [
   'get',
@@ -161,14 +165,39 @@ export const setupSwagger = (
   validateOperationIdUniqueness(openapiDocument);
   openapiDocument.openapi = '3.1.0';
 
+  // One document for every consumer — the JSON endpoint, the Scalar reference,
+  // and `pnpm generate:api`. `cleanupOpenApiDoc` resolves the zod DTOs into
+  // real component schemas; `canonicalizeOpenApiSchemas` then collapses the
+  // per-direction duplicates nestjs-zod names `<Id>_Output` and
+  // `<DtoName><Property>` so a generated client gets ONE type per domain shape.
+  const publicDocument = canonicalizeOpenApiSchemas(
+    cleanupOpenApiDoc(openapiDocument),
+  );
+
+  // A ref that resolves to nothing degrades the corresponding client type to
+  // `any` without any other symptom, so it fails the boot instead. The one
+  // known producer is a DTO used as an ARRAY response whose schema carries a
+  // zod `.meta({ id })`: nestjs-zod registers the component under the id but
+  // leaves the response pointing at the DTO class name.
+  const dangling = findDanglingSchemaRefs(publicDocument);
+  if (dangling.length > 0) {
+    throw new Error(
+      `OpenAPI document references undefined schemas: ${dangling.join(', ')}.\n` +
+        `This happens when a DTO used as an array response (@ZodResponse({ ` +
+        `type: [SomeDto] })) was built from a zod schema carrying ` +
+        `.meta({ id: '…' }). Move the id onto the nested/shared schemas and ` +
+        `leave the DTO's ROOT schema without one.`,
+    );
+  }
+
   const swp = [path].join('/').replace(/\/{1,}/g, '/');
 
-  SwaggerModule.setup(swp, app, cleanupOpenApiDoc(openapiDocument), options);
+  SwaggerModule.setup(swp, app, publicDocument, options);
 
   app.use(
     `${swp}/reference`,
     apiReference({
-      content: openapiDocument,
+      content: publicDocument,
       layout: 'modern',
       withFastify: true,
       showSidebar: true,

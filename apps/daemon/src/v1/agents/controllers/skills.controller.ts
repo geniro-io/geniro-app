@@ -1,7 +1,9 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ZodResponse } from 'nestjs-zod';
 
 import type { AgentSkillWire } from '../chat.types';
-import { ListSkillsQueryDto } from '../dto/skills.dto';
+import { AgentSkillDto, ListSkillsQueryDto } from '../dto/skills.dto';
 import { SkillsService } from '../services/skills.service';
 
 /**
@@ -10,10 +12,14 @@ import { SkillsService } from '../services/skills.service';
  * today just the composer's `/` autocomplete listing.
  */
 @Controller('v1/agents')
+@ApiTags('agents')
+@ApiBearerAuth()
 export class SkillsController {
   constructor(private readonly skillsService: SkillsService) {}
 
   @Get('skills')
+  @ApiOperation({ operationId: 'listAgentSkills' })
+  @ZodResponse({ status: 200, type: [AgentSkillDto] })
   listSkills(@Query() query: ListSkillsQueryDto): Promise<AgentSkillWire[]> {
     return this.skillsService.list(query.agent, query.cwd);
   }

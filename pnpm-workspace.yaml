@@ -15,6 +15,7 @@ strictPeerDependencies: false
 # false. (pnpm 11 replaced the `onlyBuiltDependencies` allowlist array with this
 # per-package true/false map.)
 allowBuilds:
+  '@openapitools/openapi-generator-cli': false # fetches its Java jar on first `generate:api`, not at install
   '@scarf/scarf': false
   '@swc/core': true # postinstall links the platform-native swc binary
   better-sqlite3: true # native C++ addon (node-gyp / prebuild-install)

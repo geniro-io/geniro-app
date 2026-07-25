@@ -1,5 +1,8 @@
 import { Controller, Get } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ZodResponse } from 'nestjs-zod';
 
+import { CapabilitiesDto } from '../dto/capabilities.dto';
 import type { CapabilitiesWire } from '../graphs.types';
 import { CapabilitiesService } from '../services/capabilities.service';
 
@@ -10,10 +13,14 @@ import { CapabilitiesService } from '../services/capabilities.service';
  * permission modes the chat selector may offer.
  */
 @Controller('v1/capabilities')
+@ApiTags('capabilities')
+@ApiBearerAuth()
 export class CapabilitiesController {
   constructor(private readonly capabilities: CapabilitiesService) {}
 
   @Get()
+  @ApiOperation({ operationId: 'getCapabilities' })
+  @ZodResponse({ status: 200, type: CapabilitiesDto })
   getCapabilities(): CapabilitiesWire {
     return this.capabilities.capabilitiesWire();
   }

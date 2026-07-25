@@ -3,8 +3,8 @@ import { cva } from 'class-variance-authority';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { type CSSProperties, useEffect, useState } from 'react';
 
-import type { NodeKind } from '../../shared/contracts';
 import { cn } from '../components/ui/utils';
+import type { NodeKind } from './node-schema';
 import {
   type ConnectionRule,
   makeHandleId,

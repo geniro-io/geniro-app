@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
-import type { ClaudeModesCapability } from '../agents/chat.types';
-import type { AgentKind, ItemKind, NodeStatus } from '../runs/runs.types';
+import {
+  ClaudeModesCapabilitySchema,
+  ProbeStatusSchema,
+} from '../agents/chat.types';
+import {
+  AgentKindSchema,
+  type ItemKind,
+  NodeStatusSchema,
+} from '../runs/runs.types';
 
 /**
  * The workflow domain model — the zod half of the Geniro graph-core port
@@ -13,12 +20,11 @@ import type { AgentKind, ItemKind, NodeStatus } from '../runs/runs.types';
  * source of truth for these shapes; SQLite stores runtime/history only.
  */
 
-/** Agent kinds a node may run — kept in lockstep with `AgentKind`. */
-export const WORKFLOW_AGENT_KINDS = ['claude', 'cursor-agent'] as const;
-
-/** Compile-time check that the zod enum stays aligned with `AgentKind`. */
-const _agentKindLockstep: readonly AgentKind[] = WORKFLOW_AGENT_KINDS;
-void _agentKindLockstep;
+/**
+ * Agent kinds a node may run — the same enum the runs domain uses, re-exported
+ * under the graph vocabulary so a node schema and a run row can never drift.
+ */
+export const WORKFLOW_AGENT_KINDS = AgentKindSchema.options;
 
 /**
  * Node kinds a workflow may contain. A new kind is added here plus one entry
@@ -27,12 +33,14 @@ void _agentKindLockstep;
  * understand it.
  */
 export const NODE_KINDS = ['agent', 'trigger'] as const;
-export const NodeKindSchema = z.enum(NODE_KINDS);
+export const NodeKindSchema = z.enum(NODE_KINDS).meta({ id: 'NodeKind' });
 export type NodeKind = z.infer<typeof NodeKindSchema>;
 
 /** Trigger types a trigger node may carry — `manual` (fired by hand) today. */
 export const TRIGGER_KINDS = ['manual'] as const;
-export const TriggerKindSchema = z.enum(TRIGGER_KINDS);
+export const TriggerKindSchema = z
+  .enum(TRIGGER_KINDS)
+  .meta({ id: 'TriggerKind' });
 export type TriggerKind = z.infer<typeof TriggerKindSchema>;
 
 /**
@@ -41,7 +49,7 @@ export type TriggerKind = z.infer<typeof TriggerKindSchema>;
  * the call_agent tool (grants permission only; no data flows along it).
  */
 export const EDGE_KINDS = ['data', 'call'] as const;
-export const EdgeKindSchema = z.enum(EDGE_KINDS);
+export const EdgeKindSchema = z.enum(EDGE_KINDS).meta({ id: 'EdgeKind' });
 export type EdgeKind = z.infer<typeof EdgeKindSchema>;
 
 /**
@@ -100,7 +108,9 @@ export const NODE_CONNECTION_RULES: Record<
  * carrying the removed value from the library listing (workflow-store skips
  * unparseable files).
  */
-export const ApprovalModeSchema = z.enum(['auto', 'ask', 'acceptEdits']);
+export const ApprovalModeSchema = z
+  .enum(['auto', 'ask', 'acceptEdits'])
+  .meta({ id: 'ApprovalMode' });
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 
 /** Envelope fields every node kind shares. */
@@ -110,62 +120,64 @@ const workflowNodeBase = {
 };
 
 /** One agent node — a CLI coding agent running one turn per run. */
-export const WorkflowAgentNodeSchema = z.object({
-  ...workflowNodeBase,
-  kind: z.literal('agent'),
-  agent: z.enum(WORKFLOW_AGENT_KINDS).describe('CLI agent that runs this node'),
-  model: z
-    .string()
-    .min(1)
-    .optional()
-    .describe('Model alias; omitted = CLI default'),
-  /**
-   * The node's PUBLIC blurb: what this agent is for, written for the agents
-   * wired to call it. It is the only thing a caller is told about a callee
-   * (see `calleeSummary`) — it rides the call_agent tool description and the
-   * caller's "May call" block, so a caller discovers its team from the graph
-   * instead of restating it in its own role.
-   */
-  description: z
-    .string()
-    .optional()
-    .describe('What this agent does — shown to agents wired to call it'),
-  /**
-   * The node's PRIVATE instructions, prepended to its own turn and never
-   * shown to another node. Keeping role private is the point: a callee's
-   * internals (which skills it runs, how it works) are its own business.
-   */
-  role: z
-    .string()
-    .optional()
-    .describe('Role/system prompt prepended to the node turn'),
-  approval: ApprovalModeSchema.default('auto').describe(
-    'Tool-approval mode for this node',
-  ),
-});
+export const WorkflowAgentNodeSchema = z
+  .object({
+    ...workflowNodeBase,
+    kind: z.literal('agent'),
+    agent: AgentKindSchema.describe('CLI agent that runs this node'),
+    model: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Model alias; omitted = CLI default'),
+    /**
+     * The node's PUBLIC blurb: what this agent is for, written for the agents
+     * wired to call it. It is the only thing a caller is told about a callee
+     * (see `calleeSummary`) — it rides the call_agent tool description and the
+     * caller's "May call" block, so a caller discovers its team from the graph
+     * instead of restating it in its own role.
+     */
+    description: z
+      .string()
+      .optional()
+      .describe('What this agent does — shown to agents wired to call it'),
+    /**
+     * The node's PRIVATE instructions, prepended to its own turn and never
+     * shown to another node. Keeping role private is the point: a callee's
+     * internals (which skills it runs, how it works) are its own business.
+     */
+    role: z
+      .string()
+      .optional()
+      .describe('Role/system prompt prepended to the node turn'),
+    approval: ApprovalModeSchema.describe('Tool-approval mode for this node'),
+  })
+  .meta({ id: 'WorkflowAgentNode' });
 
 /**
  * One trigger node — the graph's entry point. It runs no CLI: firing it
  * (today only `manual` — submitting a run prompt) seeds its downstream
  * agents. A run refuses to start unless every root node is a trigger.
  */
-export const WorkflowTriggerNodeSchema = z.object({
-  ...workflowNodeBase,
-  kind: z.literal('trigger'),
-  trigger: TriggerKindSchema.default('manual').describe(
-    'How this trigger fires',
-  ),
-});
+export const WorkflowTriggerNodeSchema = z
+  .object({
+    ...workflowNodeBase,
+    kind: z.literal('trigger'),
+    trigger: TriggerKindSchema.describe('How this trigger fires'),
+  })
+  .meta({ id: 'WorkflowTriggerNode' });
 
 /**
  * One node of a workflow DAG, discriminated by `kind`. Strict: `kind` is
  * required on every node — legacy kind-less files are normalized once by the
  * store (no compatibility shim lives in the schema).
  */
-export const WorkflowNodeSchema = z.discriminatedUnion('kind', [
-  WorkflowAgentNodeSchema,
-  WorkflowTriggerNodeSchema,
-]);
+export const WorkflowNodeSchema = z
+  .discriminatedUnion('kind', [
+    WorkflowAgentNodeSchema,
+    WorkflowTriggerNodeSchema,
+  ])
+  .meta({ id: 'WorkflowNode' });
 
 /**
  * A directed edge `from → to`, discriminated by `kind`. For `data` edges,
@@ -176,30 +188,68 @@ export const WorkflowNodeSchema = z.discriminatedUnion('kind', [
  * this repo's producer→consumer direction. `call` edges order nothing and
  * feed nothing — they only grant the call_agent tool (see `EDGE_KINDS`).
  */
-export const WorkflowEdgeSchema = z.object({
-  from: z.string().min(1).describe('Source node id'),
-  to: z.string().min(1).describe('Target node id'),
-  kind: EdgeKindSchema.describe(
-    "Edge kind — 'data' feeds output text; 'call' grants the call_agent tool",
-  ),
-  label: z.string().optional().describe('Optional edge label'),
-});
+export const WorkflowEdgeSchema = z
+  .object({
+    from: z.string().min(1).describe('Source node id'),
+    to: z.string().min(1).describe('Target node id'),
+    kind: EdgeKindSchema.describe(
+      "Edge kind — 'data' feeds output text; 'call' grants the call_agent tool",
+    ),
+    label: z.string().optional().describe('Optional edge label'),
+  })
+  .meta({ id: 'WorkflowEdge' });
 
 /** Canvas position per node id — persisted so the canvas re-opens as drawn. */
 export const WorkflowLayoutSchema = z.record(
   z.string(),
-  z.object({ x: z.number(), y: z.number() }),
+  z.object({ x: z.number(), y: z.number() }).meta({ id: 'NodePosition' }),
 );
 
-/** A complete workflow definition as stored in a `*.geniro.yaml` file. */
-export const WorkflowSchema = z.object({
-  name: z.string().min(1).describe('Human-readable workflow name'),
-  description: z.string().optional(),
-  // An empty node list is a legal library draft (the builder starts from a
-  // blank canvas); running one is rejected at run start (GRAPH_EMPTY).
-  nodes: z.array(WorkflowNodeSchema).default([]),
+/**
+ * A complete workflow definition — the `*.geniro.yaml` shape and the HTTP wire
+ * shape alike.
+ *
+ * Deliberately DEFAULT-FREE: a zod `.default()` makes a field optional on the
+ * way in and required on the way out, so the schema would render as two
+ * different OpenAPI components (a request one and a response one) and the
+ * generated client would carry two incompatible `Workflow` types. Leniency for
+ * hand-written YAML lives in {@link WorkflowYamlSchema}, which layers the
+ * defaults back on for the file-parsing path only.
+ */
+export const WorkflowSchema = z
+  .object({
+    name: z.string().min(1).describe('Human-readable workflow name'),
+    description: z.string().optional(),
+    // An empty node list is a legal library draft (the builder starts from a
+    // blank canvas); running one is rejected at run start (GRAPH_EMPTY).
+    nodes: z.array(WorkflowNodeSchema),
+    edges: z.array(WorkflowEdgeSchema),
+    layout: WorkflowLayoutSchema.optional(),
+  })
+  .meta({ id: 'Workflow' });
+
+/**
+ * {@link WorkflowSchema} with the omissible-in-YAML fields defaulted — the ONE
+ * schema `parseWorkflowYaml` reads files through, so a hand-written workflow
+ * may still leave `nodes`/`edges` off a draft and `approval`/`trigger` off a
+ * node. Derived from the strict schemas (never a second copy of the shapes), so
+ * a field added above is automatically accepted here too; parsing yields the
+ * strict `Workflow` type because zod applies the defaults.
+ */
+export const WorkflowYamlSchema = WorkflowSchema.extend({
+  nodes: z
+    .array(
+      z.discriminatedUnion('kind', [
+        WorkflowAgentNodeSchema.extend({
+          approval: ApprovalModeSchema.default('auto'),
+        }),
+        WorkflowTriggerNodeSchema.extend({
+          trigger: TriggerKindSchema.default('manual'),
+        }),
+      ]),
+    )
+    .default([]),
   edges: z.array(WorkflowEdgeSchema).default([]),
-  layout: WorkflowLayoutSchema.optional(),
 });
 
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
@@ -216,35 +266,46 @@ export type Workflow = z.infer<typeof WorkflowSchema>;
  * breakdown) so the renderer never has to fetch every full definition to draw
  * the list.
  */
-export interface WorkflowSummary {
-  slug: string;
-  name: string;
-  description: string | null;
-  nodeCount: number;
-  edgeCount: number;
+export const WorkflowSummarySchema = z.object({
+  slug: z
+    .string()
+    .describe('Library file name without the .geniro.yaml suffix'),
+  name: z.string(),
+  description: z.string().nullable(),
+  nodeCount: z.number().int(),
+  edgeCount: z.number().int(),
   /**
    * Per-agent-kind node counts — only kinds actually present, ordered by
    * `WORKFLOW_AGENT_KINDS` so the card badges keep a stable order.
    */
-  agentCounts: { kind: AgentKind; count: number }[];
-  updatedAt: string;
-}
+  agentCounts: z
+    .array(
+      z
+        .object({ kind: AgentKindSchema, count: z.number().int() })
+        .meta({ id: 'AgentCount' }),
+    )
+    .describe('Per-agent-kind node counts, only kinds present, stable order'),
+  updatedAt: z.string(),
+});
+export type WorkflowSummary = z.infer<typeof WorkflowSummarySchema>;
 
 /** One workflow definition addressed by its library slug. */
-export interface WorkflowWire {
-  slug: string;
-  workflow: Workflow;
-}
+export const WorkflowWireSchema = z.object({
+  slug: z.string(),
+  workflow: WorkflowSchema,
+});
+export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 
 /** Per-node execution state projected to the wire (from `node_state` rows). */
-export interface NodeStateWire {
-  runId: string;
-  nodeId: string;
-  status: NodeStatus;
-  startedAt: number | null;
-  endedAt: number | null;
-  error: string | null;
-}
+export const NodeStateWireSchema = z.object({
+  runId: z.string(),
+  nodeId: z.string(),
+  status: NodeStatusSchema,
+  startedAt: z.number().nullable(),
+  endedAt: z.number().nullable(),
+  error: z.string().nullable(),
+});
+export type NodeStateWire = z.infer<typeof NodeStateWireSchema>;
 
 // ── Agent-to-agent call runtime ─────────────────────────────────────────────
 // The shared contract between the CallBroker (call semantics), the graph
@@ -322,22 +383,33 @@ export interface ParkQuestionInput {
  * `unknown` = not probed yet this launch (no cursor caller ran, or the
  * binary version could not be read so the verdict is not disk-cacheable).
  */
-export interface CursorCallsCapability {
-  status: 'pass' | 'fail' | 'unknown';
-  /** `cursor-agent --version` line the verdict is keyed by; null = unreadable. */
-  version: string | null;
-  /** Epoch ms of the probe that produced this verdict; null when `unknown`. */
-  probedAt: number | null;
-  /** One-liner for the builder warning / system item when status is not pass. */
-  reason: string | null;
-}
+export const CursorCallsCapabilitySchema = z
+  .object({
+    status: ProbeStatusSchema,
+    version: z
+      .string()
+      .nullable()
+      .describe('`cursor-agent --version` line the verdict is keyed by'),
+    probedAt: z
+      .number()
+      .nullable()
+      .describe('Epoch ms of the probe that produced this verdict'),
+    reason: z
+      .string()
+      .nullable()
+      .describe('One-liner for the builder warning when status is not pass'),
+  })
+  .meta({ id: 'CursorCallsCapability' });
+export type CursorCallsCapability = z.infer<typeof CursorCallsCapabilitySchema>;
 
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
-export interface CapabilitiesWire {
-  cursorCalls: CursorCallsCapability;
-  /** Claude permission-mode probe verdict (acceptEdits / plan support). */
-  claudeModes: ClaudeModesCapability;
-}
+export const CapabilitiesWireSchema = z.object({
+  cursorCalls: CursorCallsCapabilitySchema,
+  claudeModes: ClaudeModesCapabilitySchema.describe(
+    'Claude permission-mode probe verdict (acceptEdits / plan support)',
+  ),
+});
+export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 
 /**
  * What the graph executor exposes to the broker for one live run — the

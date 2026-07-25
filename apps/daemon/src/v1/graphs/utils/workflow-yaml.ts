@@ -5,7 +5,7 @@ import {
   type Workflow,
   type WorkflowEdge,
   type WorkflowNode,
-  WorkflowSchema,
+  WorkflowYamlSchema,
 } from '../graphs.types';
 
 /**
@@ -27,7 +27,7 @@ export function parseWorkflowYaml(source: string): Workflow {
       `YAML parse error: ${doc.errors[0]!.message}`,
     );
   }
-  const parsed = WorkflowSchema.safeParse(doc.toJS());
+  const parsed = WorkflowYamlSchema.safeParse(doc.toJS());
   if (!parsed.success) {
     const summary = parsed.error.issues
       .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)

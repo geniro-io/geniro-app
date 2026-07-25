@@ -15,9 +15,9 @@
     "check-types": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-    "test": "vitest run",
-    "test:unit": "vitest run",
-    "test:graph": "vitest run src/v1/graphs"
+    "test": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run",
+    "test:unit": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run",
+    "test:graph": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run src/v1/graphs"
   },
   "dependencies": {
     "@mikro-orm/core": "^7.1.5",

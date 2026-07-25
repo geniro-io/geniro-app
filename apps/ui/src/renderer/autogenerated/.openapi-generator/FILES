@@ -1,0 +1,10 @@
+.openapi-generator-ignore
+apis/AgentsApi.ts
+apis/CapabilitiesApi.ts
+apis/ChatsApi.ts
+apis/TerminalsApi.ts
+apis/WorkflowsApi.ts
+apis/index.ts
+index.ts
+models/index.ts
+runtime.ts

@@ -51,7 +51,13 @@ function setOrDelete(map: YAMLMap, key: string, value: unknown): void {
   }
 }
 
-const AGENT_ONLY_FIELDS = ['agent', 'model', 'role', 'approval'] as const;
+const AGENT_ONLY_FIELDS = [
+  'agent',
+  'model',
+  'description',
+  'role',
+  'approval',
+] as const;
 const TRIGGER_ONLY_FIELDS = ['trigger'] as const;
 
 function patchNodeItem(item: YAMLMap, node: WorkflowNode): void {

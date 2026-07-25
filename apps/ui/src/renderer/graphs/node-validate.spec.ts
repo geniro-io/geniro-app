@@ -218,7 +218,7 @@ describe('callCycleNodeIds', () => {
 describe('agentCallInfo', () => {
   const nodes = [
     { id: 'a1', name: 'Orchestrator' },
-    { id: 'a2' },
+    { id: 'a2', description: 'Runs the tests.' },
     { id: 'a3', name: 'Helper' },
   ];
 
@@ -238,12 +238,35 @@ describe('agentCallInfo', () => {
       callees: ['a2', 'Helper'],
       callers: ['Helper'],
       inCycle: true, // a1 → a3 → a1 closes a call loop
+      undescribedCallees: ['Helper'], // a2 has one; a3 does not
     });
     // a2 is a pure callee: callable, calls no one, on no loop.
     expect(agentCallInfo('a2', nodes, edges)).toEqual({
       callees: [],
       callers: ['Orchestrator'],
       inCycle: false,
+      undescribedCallees: [],
     });
+  });
+
+  it('flags callees with no description — the caller is told nothing else about them', () => {
+    // The daemon shows a caller ONLY a callee's description, so a blank one
+    // leaves the caller a bare name and nothing to route on. Advisory, not a
+    // validation error: the graph still runs.
+    const edges = [call('a1', 'a3')];
+    expect(agentCallInfo('a1', nodes, edges)?.undescribedCallees).toEqual([
+      'Helper',
+    ]);
+    const described = [{ id: 'a3', name: 'Helper', description: 'Helps.' }];
+    expect(agentCallInfo('a1', described, edges)?.undescribedCallees).toEqual(
+      [],
+    );
+  });
+
+  it('treats a whitespace-only description as absent', () => {
+    const blank = [{ id: 'a3', name: 'Helper', description: '   \n ' }];
+    expect(
+      agentCallInfo('a1', blank, [call('a1', 'a3')])?.undescribedCallees,
+    ).toEqual(['Helper']);
   });
 });

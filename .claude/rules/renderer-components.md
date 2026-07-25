@@ -11,10 +11,16 @@ globs:
 1. **Token** in `styles/global.css` (see `renderer-design-system.md`)
 2. **Primitive** in `components/ui/` — token-driven, shadcn-v4 flavour
    (`data-slot` attribute, `cva` variants, `cn()` composition):
-   `button`, `input`, `textarea`, `select`, `label`, `card`, `badge`, `utils.ts` (cn)
+   `button`, `input`, `textarea`, `select`, `label`, `card`, `badge`,
+   `md-editor` (markdown editor with live preview — the port of geniro web's
+   `components/ui/md-editor.tsx`; its GitHub-Primer chrome is retinted onto our
+   tokens by `.md-editor-surface` in `styles/global.css`), `utils.ts` (cn)
 3. **App-level shared component** in `components/` — composed from primitives:
    `logo`, `status-dot`, `field`, `note-box`, `error-text`, `empty-state`,
-   `collapsible-card`, `agent-config-list`, `nav-rail`
+   `collapsible-card`, `agent-config-list`, `nav-rail`, `confirm-dialog`,
+   `expandable-textarea` (a `Textarea` whose corner ⤢ opens the field in
+   `markdown-editor-dialog` — use it for any prompt-length field instead of a
+   bare `Textarea`), `markdown-editor-dialog`
 4. **Feature screen** in its own directory: `chats/` (+ its row component
    `message-bubble.tsx`), `onboarding/`, `settings/`, `graphs/`, `terminals/`
    (the xterm.js mirror panel); app shell (`App.tsx`, `main.tsx`) and daemon

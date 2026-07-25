@@ -10,16 +10,10 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
+import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import { closeQuietly } from '../utils/close-quietly';
-import { flattenRole } from '../utils/role-text';
 import { CallBroker } from './call-broker.service';
 import { CursorProbeService } from './cursor-probe.service';
-
-/** Role text is embedded in the tool description — keep it one-line short. */
-function shortRole(role: string | undefined): string {
-  const flat = flattenRole(role, 118);
-  return flat ? ` — ${flat}` : '';
-}
 
 /**
  * The MCP protocol host behind the per-run endpoint
@@ -154,11 +148,11 @@ export class McpServerService {
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
       const callees = this.broker.listCallees(runId, nodeId);
+      // Each callee's own description is the routing signal — pick the agent
+      // whose blurb matches the task, no hand-written roster in your role.
       const callable =
         callees
-          .map(
-            (callee) => `${callee.name ?? callee.id}${shortRole(callee.role)}`,
-          )
+          .map((callee) => calleeSummary(callee, CALLEE_DESCRIPTION_MAX))
           .join('; ') || 'none';
       return {
         tools: [
@@ -166,6 +160,7 @@ export class McpServerService {
             name: 'call_agent',
             description:
               `Invoke one of your call-wired agents and get its result envelope. Callable now: ${callable}. ` +
+              'Choose by what each agent says it does; when none of them fits the task, do it yourself or ask the user rather than forcing it on the closest one. ' +
               'A sync call can take minutes — for long tasks or parallel fan-out prefer mode "async" and collect with await_agent. ' +
               'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +

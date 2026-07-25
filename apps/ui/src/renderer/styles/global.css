@@ -211,3 +211,35 @@
     line-height: 1.5;
   }
 }
+
+/*
+ * `MdEditor` retint — @uiw/react-md-editor paints its chrome from GitHub
+ * Primer variables (--color-canvas-default & friends), so remapping just those
+ * onto our tokens makes the editor read as part of the cream theme instead of
+ * a white GitHub panel dropped into it. Token references only — no literals.
+ *
+ * Deliberately OUTSIDE @layer base, and the class is repeated to reach
+ * specificity (0,3,0): @uiw's own `[data-color-mode*='light'] .wmde-markdown-var`
+ * rule is unlayered (so it beats ANY layered rule regardless of specificity),
+ * (0,2,0), and ships in a later chunk (so it also wins a source-order tie). It
+ * re-declares these variables on the editor element itself, which is why
+ * setting them on the wrapper alone does not inherit down.
+ */
+.md-editor-surface.md-editor-surface,
+.md-editor-surface.md-editor-surface .wmde-markdown,
+.md-editor-surface.md-editor-surface .wmde-markdown-var {
+  --color-canvas-default: var(--input-background);
+  --color-canvas-subtle: var(--muted);
+  --color-border-default: var(--border);
+  --color-border-muted: var(--border);
+  --color-fg-default: var(--foreground);
+  --color-fg-muted: var(--muted-foreground);
+  --color-fg-subtle: var(--muted-foreground);
+  --color-accent-fg: var(--primary);
+  --color-neutral-muted: var(--accent);
+  --color-danger-fg: var(--destructive);
+}
+
+.md-editor-surface .w-md-editor {
+  border-radius: var(--radius-md);
+}

@@ -9,7 +9,7 @@ import { NodeCard } from './node-card';
 
 /**
  * Canvas card for one agent node — the kind-specific header (avatar chip,
- * label, agent/model badges, optional role preview) inside the shared
+ * label, agent/model badges, optional description/role blurb) inside the shared
  * `NodeCard` shell, which owns selection/validation styling and the
  * collapsible ports block.
  */
@@ -26,6 +26,10 @@ export function AgentNode({
 }: NodeProps<AgentFlowNode>): React.JSX.Element {
   const { node } = data;
   const label = node.name ?? node.id;
+  // The description is written to say what this agent is for in a line or
+  // two, so it is the better card blurb; a node with only a role still shows
+  // something rather than going blank.
+  const blurb = node.description ?? node.role;
   return (
     <NodeCard node={node} selected={selected} className="w-[240px]">
       <div className="mb-2 flex items-center gap-2">
@@ -51,9 +55,9 @@ export function AgentNode({
         </Badge>
         {node.model ? <Badge variant="outline">{node.model}</Badge> : null}
       </div>
-      {node.role ? (
+      {blurb ? (
         <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-          {node.role}
+          {blurb}
         </p>
       ) : null}
     </NodeCard>

@@ -26,12 +26,16 @@ import { AgentNode } from './agent-node';
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
-function renderNode(approval: WorkflowAgentNode['approval']): HTMLDivElement {
+function renderNode(
+  approval: WorkflowAgentNode['approval'],
+  patch: Partial<WorkflowAgentNode> = {},
+): HTMLDivElement {
   const node: WorkflowAgentNode = {
     id: 'a1',
     kind: 'agent',
     agent: 'claude',
     approval,
+    ...patch,
   };
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -80,5 +84,25 @@ describe('AgentNode approval chip', () => {
     expect(
       el.querySelector('[aria-label="Auto-approves edits, asks for the rest"]'),
     ).not.toBeNull();
+  });
+});
+
+describe('AgentNode blurb', () => {
+  it('prefers the description — it is written to say what the agent does', () => {
+    const el = renderNode('auto', {
+      description: 'Reviews a diff.',
+      role: 'You are the Reviewer. Run the review skill…',
+    });
+    expect(el.textContent).toContain('Reviews a diff.');
+    expect(el.textContent).not.toContain('You are the Reviewer.');
+  });
+
+  it('falls back to the role so a description-less node is not blank', () => {
+    const el = renderNode('auto', { role: 'You are the Reviewer.' });
+    expect(el.textContent).toContain('You are the Reviewer.');
+  });
+
+  it('shows no blurb when the node has neither', () => {
+    expect(renderNode('auto').querySelector('p')).toBeNull();
   });
 });

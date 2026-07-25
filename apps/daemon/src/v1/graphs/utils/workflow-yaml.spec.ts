@@ -215,6 +215,25 @@ edges:
     expect(back.nodes[0]!.role).toBeUndefined();
   });
 
+  it('writes an agent description back into an existing file', () => {
+    // The merge patches a fixed field list, so a field missing from it is
+    // silently dropped on every save of a pre-existing file — and description
+    // is what callers route on, so losing it breaks the graph quietly.
+    const wf = parseWorkflowYaml(VALID_SOURCE);
+    const coder = wf.nodes[0]!;
+    if (coder.kind !== 'agent') {
+      expect.unreachable('the coder fixture is an agent node');
+    }
+    coder.description = 'Writes the change.';
+    const out = serializeWorkflowYaml(wf, VALID_SOURCE);
+    const back = parseWorkflowYaml(out);
+    const saved = back.nodes[0]!;
+    expect(saved.kind).toBe('agent');
+    expect((saved as typeof coder).description).toBe('Writes the change.');
+    // ...and the hand-written comments still survive the round-trip.
+    expect(out).toContain('# the coder writes the change');
+  });
+
   it('does not emit a node twice when the existing file already holds its id twice', () => {
     // A hand-edited file where the user copy-pasted a node block and forgot to
     // change the id. The saved workflow itself is valid (each id once); the

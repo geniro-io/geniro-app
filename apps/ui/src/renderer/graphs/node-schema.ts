@@ -55,10 +55,18 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
       description: 'Model alias; empty = the CLI default.',
     },
     {
+      key: 'description',
+      type: 'string',
+      required: false,
+      description:
+        'What this agent does — the only thing agents wired to call it are told about it.',
+    },
+    {
       key: 'role',
       type: 'string',
       required: false,
-      description: 'Role / system prompt prepended to the node turn.',
+      description:
+        'Role / system prompt prepended to the node turn. Private to this node.',
     },
     {
       key: 'approval',

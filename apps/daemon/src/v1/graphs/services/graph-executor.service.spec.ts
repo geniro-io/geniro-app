@@ -1057,7 +1057,8 @@ describe('GraphExecutorService — agent calls', () => {
         name: 'Helper',
         agent: 'claude',
         approval: 'auto',
-        role: 'You help.',
+        description: 'Researches a topic and reports what it found.',
+        role: 'You help. Always start by reading SECRET_PLAYBOOK.md.',
       },
     ],
     edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
@@ -1083,10 +1084,17 @@ describe('GraphExecutorService — agent calls', () => {
     );
     // The token is per caller node: helper (a callee, not a caller) has none.
     expect(callTokens.get(run.id, 'helper')).toBeNull();
-    // Awareness: role first, then the May-call block naming id + role.
+    // Awareness: the caller's own role first, then the May-call block naming
+    // each callee and what that callee says it DOES...
     expect(caller.input.systemPrompt).toContain('You orchestrate.');
     expect(caller.input.systemPrompt).toContain('May call');
     expect(caller.input.systemPrompt).toContain('Helper (agent id: helper)');
+    expect(caller.input.systemPrompt).toContain(
+      'Researches a topic and reports what it found.',
+    );
+    // ...and never how it does it. A callee's role is private, so a caller
+    // routes by description alone instead of restating its team in its role.
+    expect(caller.input.systemPrompt).not.toContain('SECRET_PLAYBOOK');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
       agent: 'helper',
@@ -1094,9 +1102,12 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     const callee = claude.starts[1]!;
-    // The callee is NOT a caller: bare role, no endpoint, fresh prompt.
+    // The callee is NOT a caller: bare role, no endpoint, fresh prompt. It
+    // gets its own role in FULL — private only means "not shown to callers".
     expect(callee.input.prompt).toBe('help me');
-    expect(callee.input.systemPrompt).toBe('You help.');
+    expect(callee.input.systemPrompt).toBe(
+      'You help. Always start by reading SECRET_PLAYBOOK.md.',
+    );
     expect(callee.input.mcpEndpoint ?? null).toBeNull();
     completeTurn(callee, 'helped');
     expect(await envelope).toEqual({

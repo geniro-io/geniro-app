@@ -119,6 +119,22 @@ export const WorkflowAgentNodeSchema = z.object({
     .min(1)
     .optional()
     .describe('Model alias; omitted = CLI default'),
+  /**
+   * The node's PUBLIC blurb: what this agent is for, written for the agents
+   * wired to call it. It is the only thing a caller is told about a callee
+   * (see `calleeSummary`) — it rides the call_agent tool description and the
+   * caller's "May call" block, so a caller discovers its team from the graph
+   * instead of restating it in its own role.
+   */
+  description: z
+    .string()
+    .optional()
+    .describe('What this agent does — shown to agents wired to call it'),
+  /**
+   * The node's PRIVATE instructions, prepended to its own turn and never
+   * shown to another node. Keeping role private is the point: a callee's
+   * internals (which skills it runs, how it works) are its own business.
+   */
   role: z
     .string()
     .optional()

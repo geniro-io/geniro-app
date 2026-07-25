@@ -149,6 +149,15 @@ export interface WorkflowAgentNode {
   name?: string;
   agent: CliKind;
   model?: string;
+  /**
+   * PUBLIC blurb: what this agent is for, written for the agents wired to
+   * call it. The daemon injects it (and only it) into every caller's
+   * call_agent tool description and "May call" block, so a caller routes work
+   * from the graph instead of restating its team in its own role.
+   */
+  description?: string;
+  /** PRIVATE instructions prepended to this node's own turn — never shown to
+   *  another node. */
   role?: string;
   approval: WorkflowApproval;
 }

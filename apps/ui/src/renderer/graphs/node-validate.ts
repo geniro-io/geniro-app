@@ -230,6 +230,13 @@ export interface AgentCallInfo {
   callers: string[];
   /** Whether the node takes part in a call loop (see callCycleNodeIds). */
   inCycle: boolean;
+  /**
+   * Callees carrying no `description` — the daemon tells a caller only a
+   * callee's description, so these arrive as a bare name with nothing to
+   * route on. Advisory (the graph runs), which is why it lives here and not
+   * in `validateNode`.
+   */
+  undescribedCallees: string[];
 }
 
 /**
@@ -240,20 +247,31 @@ export interface AgentCallInfo {
  */
 export function agentCallInfo(
   nodeId: string,
-  nodes: readonly { id: string; name?: string }[],
+  nodes: readonly { id: string; name?: string; description?: string }[],
   edges: readonly CanvasEdge[],
 ): AgentCallInfo | null {
-  const nameOf = (id: string): string =>
-    nodes.find((n) => n.id === id)?.name ?? id;
+  const nodeOf = (
+    id: string,
+  ): { id: string; name?: string; description?: string } | undefined =>
+    nodes.find((n) => n.id === id);
+  const nameOf = (id: string): string => nodeOf(id)?.name ?? id;
   const callEdges = edges.filter((e) => flowEdgeKind(e) === 'call');
-  const callees = callEdges
+  const calleeIds = callEdges
     .filter((e) => e.source === nodeId)
-    .map((e) => nameOf(e.target));
+    .map((e) => e.target);
+  const callees = calleeIds.map(nameOf);
   const callers = callEdges
     .filter((e) => e.target === nodeId)
     .map((e) => nameOf(e.source));
   if (callees.length === 0 && callers.length === 0) {
     return null;
   }
-  return { callees, callers, inCycle: callCycleNodeIds(edges).has(nodeId) };
+  return {
+    callees,
+    callers,
+    inCycle: callCycleNodeIds(edges).has(nodeId),
+    undescribedCallees: calleeIds
+      .filter((id) => !nodeOf(id)?.description?.trim())
+      .map(nameOf),
+  };
 }

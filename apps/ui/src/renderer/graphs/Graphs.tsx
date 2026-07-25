@@ -40,13 +40,13 @@ import { ConfirmButton } from '../components/confirm-button';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
+import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Field } from '../components/field';
 import { NoteBox } from '../components/note-box';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
-import { Textarea } from '../components/ui/textarea';
 import { WorkflowApi } from '../workflow-api';
 import { AgentAvatar } from './agent-avatar';
 import { AgentNode } from './agent-node';
@@ -667,7 +667,15 @@ export function Graphs({
       selected?.kind === 'agent'
         ? agentCallInfo(
             selected.id,
-            nodes.map((n) => ({ id: n.id, name: n.data.node.name })),
+            nodes.map((n) => ({
+              id: n.id,
+              name: n.data.node.name,
+              // Only agent nodes carry one; a trigger is never a callee.
+              description:
+                n.data.node.kind === 'agent'
+                  ? n.data.node.description
+                  : undefined,
+            })),
             edges,
           )
         : null,
@@ -969,17 +977,31 @@ export function Graphs({
                         />
                       </Field>
                       <Field
+                        label="Description"
+                        htmlFor="node-description"
+                        hint="What this agent is for. Agents wired to call it see this — and nothing else about it — so they can route work here on their own.">
+                        <ExpandableTextarea
+                          id="node-description"
+                          title="Description"
+                          value={selected.description ?? ''}
+                          rows={3}
+                          placeholder="Reviews a diff or branch and reports findings by severity."
+                          onChange={(next) =>
+                            patchSelected({ description: next || undefined })
+                          }
+                        />
+                      </Field>
+                      <Field
                         label="Role / system prompt"
                         htmlFor="node-role"
-                        hint="Prepended to this node's turn.">
-                        <Textarea
+                        hint="Prepended to this node's turn. Private — no other agent ever reads it.">
+                        <ExpandableTextarea
                           id="node-role"
+                          title="Role / system prompt"
                           value={selected.role ?? ''}
                           rows={5}
-                          onChange={(event) =>
-                            patchSelected({
-                              role: event.target.value || undefined,
-                            })
+                          onChange={(next) =>
+                            patchSelected({ role: next || undefined })
                           }
                         />
                       </Field>
@@ -1023,8 +1045,18 @@ export function Graphs({
                           ) : null}
                           <span className="block">
                             Call edges let this agent invoke its callees at
-                            runtime via the call_agent tool.
+                            runtime via the call_agent tool. It is told each
+                            callee&apos;s Description — never their Role — so it
+                            routes by what they do.
                           </span>
+                          {callInfo.undescribedCallees.length > 0 ? (
+                            <span className="block text-warning">
+                              No description on{' '}
+                              {callInfo.undescribedCallees.join(', ')} — this
+                              agent sees only their names and has nothing to
+                              route on.
+                            </span>
+                          ) : null}
                           {callInfo.callees.length > 0 ? (
                             <span className="block">
                               {selected.agent === 'cursor-agent'

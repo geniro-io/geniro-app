@@ -17,7 +17,9 @@ const HELPER: WorkflowAgentNode = {
   name: 'Helper',
   agent: 'claude',
   approval: 'auto',
-  role: 'You help with research.',
+  description: 'Researches a topic and reports what it found.',
+  // Private instructions — a caller must never be shown this (see below).
+  role: 'You help with research. Always start by reading SECRET_PLAYBOOK.md.',
 };
 
 function broker(): CallBroker {
@@ -155,7 +157,14 @@ describe('McpServerService', () => {
     // without updating GENIRO_MCP_CALL_TOOLS fails this assertion.
     expect(tools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
     expect(tools[0]!.description).toContain('Helper');
-    expect(tools[0]!.description).toContain('You help with research.');
+    // Each callee's own description is the caller's routing signal — the
+    // caller picks by what an agent says it does.
+    expect(tools[0]!.description).toContain(
+      'Researches a topic and reports what it found.',
+    );
+    // ...and its ROLE stays private. Leaking it is what forced every caller's
+    // role to restate its team's internals.
+    expect(tools[0]!.description).not.toContain('SECRET_PLAYBOOK');
     // The question-envelope guidance rides the descriptions: confident-answer
     // vs escalate, and the await_agent follow-up.
     expect(tools[0]!.description).toContain('"question"');

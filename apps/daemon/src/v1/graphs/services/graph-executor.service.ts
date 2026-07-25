@@ -53,6 +53,7 @@ import type {
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
+import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
   computeRunOrder,
@@ -62,7 +63,6 @@ import {
   validateRunnableGraph,
   validateWorkflowGraph,
 } from '../utils/graph-validate';
-import { flattenRole } from '../utils/role-text';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
 import { CursorProbeService } from './cursor-probe.service';
@@ -690,19 +690,19 @@ export class GraphExecutorService {
 
     /**
      * The caller's system prompt: its role plus a "May call" block naming
-     * each callee (id + one-line role) so the agent knows who its call_agent
-     * tool reaches. Non-callers keep their bare role.
+     * each callee and what that callee says it does, so the agent can route
+     * work from the graph alone — its own role never has to name the team.
+     * Callee ROLES stay private (see `calleeSummary`). Non-callers keep their
+     * bare role.
      */
     const systemPromptFor = (node: WorkflowAgentNode): string | null => {
       const callees = calleesOf.get(node.id);
       if (!callees || !isCaller(node)) {
         return node.role ?? null;
       }
-      const lines = callees.map((callee) => {
-        const name = callee.name ?? callee.id;
-        const role = flattenRole(callee.role, 200);
-        return `- ${name} (agent id: ${callee.id})${role ? ` — ${role}` : ''}`;
-      });
+      const lines = callees.map(
+        (callee) => `- ${calleeSummary(callee, CALLEE_DESCRIPTION_MAX)}`,
+      );
       // The escalation half differs per CLI: claude callers can ask the user
       // (AskUserQuestion reaches the run's card); cursor-agent has no
       // question mechanism, so its only honest move is answer-or-timeout.

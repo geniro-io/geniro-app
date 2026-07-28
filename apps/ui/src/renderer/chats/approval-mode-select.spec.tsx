@@ -31,8 +31,17 @@ afterEach(() => {
   container = null;
 });
 
+const trigger = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector<HTMLButtonElement>('[data-menu-trigger]')!;
+
+/** The menu's rows — the picker is ours, so they are real DOM, not an OS menu. */
 function optionValues(el: HTMLElement): string[] {
-  return [...el.querySelectorAll('option')].map((o) => o.value);
+  act(() => {
+    trigger(el).click();
+  });
+  return [...el.querySelectorAll('[role="option"]')].map(
+    (o) => o.textContent ?? '',
+  );
 }
 
 describe('ApprovalModeSelect', () => {
@@ -45,7 +54,7 @@ describe('ApprovalModeSelect', () => {
         onChange={() => {}}
       />,
     );
-    expect(optionValues(el)).toEqual(['ask', 'acceptEdits', 'auto']);
+    expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
   });
 
   it('offers plan when the installed CLI probed pass, and fires onChange with the picked mode', () => {
@@ -58,11 +67,14 @@ describe('ApprovalModeSelect', () => {
         onChange={onChange}
       />,
     );
-    expect(optionValues(el)).toEqual(['ask', 'acceptEdits', 'plan', 'auto']);
-    const select = el.querySelector('select')!;
+    expect(optionValues(el)).toEqual([
+      'ask',
+      'accept edits',
+      'plan',
+      'auto-approve',
+    ]);
     act(() => {
-      select.value = 'acceptEdits';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
+      el.querySelectorAll<HTMLElement>('[role="option"]')[1]!.click();
     });
     expect(onChange).toHaveBeenCalledWith('acceptEdits');
   });
@@ -88,8 +100,7 @@ describe('ApprovalModeSelect', () => {
         onChange={() => {}}
       />,
     );
-    expect(el.textContent).toContain('cli default');
-    expect(el.querySelector('select')!.value).toBe('');
+    expect(trigger(el).textContent).toContain('cli default');
   });
 
   it('pins cursor chats to a hinted auto-approve badge — no select at all', () => {
@@ -101,7 +112,7 @@ describe('ApprovalModeSelect', () => {
         onChange={() => {}}
       />,
     );
-    expect(el.querySelector('select')).toBeNull();
+    expect(el.querySelector('[data-menu-trigger]')).toBeNull();
     expect(el.textContent).toContain('auto-approve');
     expect(el.firstElementChild?.getAttribute('title')).toContain(
       'no approval callback',
@@ -118,6 +129,6 @@ describe('ApprovalModeSelect', () => {
         onChange={() => {}}
       />,
     );
-    expect(el.querySelector('select')!.disabled).toBe(true);
+    expect(trigger(el).disabled).toBe(true);
   });
 });

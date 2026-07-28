@@ -100,6 +100,30 @@ export interface CliDetection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Git (the composer's branch chip — read from the folder a run will use)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Git state of a working directory; every field is safe on a non-repo. */
+export interface GitInfo {
+  /** False for a plain folder — the branch chip renders only when true. */
+  isRepo: boolean;
+  /** Current branch, or null on a detached HEAD (no branch to name). */
+  branch: string | null;
+  /** Local branches, for the picker. */
+  branches: string[];
+  /** Working tree has uncommitted changes — blocks a branch switch. */
+  dirty: boolean;
+}
+
+/** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
+export interface BranchSwitchResult {
+  ok: boolean;
+  branch: string | null;
+  /** Why the switch was refused or failed; null on success. */
+  error: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Secrets (macOS Keychain — never written to disk or SQLite)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -157,6 +181,10 @@ export interface GeniroApi {
   pickWorkflowExport(defaultName: string): Promise<string | null>;
   /** Check the GitHub Releases feed for an app update (no-op in dev). */
   checkForUpdates(): Promise<UpdateCheckResult>;
+  /** Read a folder's git state (repo? branch? branches? dirty?). */
+  getGitInfo(dir: string): Promise<GitInfo>;
+  /** Switch the folder to a branch — refused when the tree is dirty. */
+  switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -176,4 +204,6 @@ export const IPC = {
   pickWorkflowImport: 'geniro:pickWorkflowImport',
   pickWorkflowExport: 'geniro:pickWorkflowExport',
   checkForUpdates: 'geniro:checkForUpdates',
+  getGitInfo: 'geniro:getGitInfo',
+  switchBranch: 'geniro:switchBranch',
 } as const satisfies Record<keyof GeniroApi, string>;

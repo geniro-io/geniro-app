@@ -203,6 +203,51 @@ function composerButton(
   );
 }
 
+/** The composer's target picker. The menu is OURS, so its rows are real DOM. */
+function targetTrigger(container: HTMLElement): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>(
+    '[data-menu-trigger][aria-label="Agent or workflow for new runs"]',
+  )!;
+}
+
+/** Open a composer menu and click the row with this exact label. */
+async function pickMenuRow(
+  container: HTMLElement,
+  trigger: HTMLButtonElement,
+  rowText: string,
+): Promise<void> {
+  await act(async () => {
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  const row = [
+    ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((o) => o.textContent === rowText);
+  if (!row) {
+    throw new Error(`no menu row labelled "${rowText}"`);
+  }
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+/** Read a menu's rows without committing to one (open, read, close). */
+async function menuRows(
+  container: HTMLElement,
+  trigger: HTMLButtonElement,
+): Promise<string[]> {
+  const toggle = async (): Promise<void> => {
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  };
+  await toggle();
+  const rows = [...container.querySelectorAll('[role="option"]')].map(
+    (o) => o.textContent ?? '',
+  );
+  await toggle();
+  return rows;
+}
+
 beforeEach(() => {
   // jsdom has no scrollIntoView; the transcript auto-scroll effect calls it.
   Element.prototype.scrollIntoView = vi.fn();
@@ -216,6 +261,17 @@ beforeEach(() => {
       checkForUpdates: true,
     }),
     updateSettings: vi.fn().mockResolvedValue({}),
+    // Default to a plain (non-git) folder so the branch chip stays absent
+    // unless a test opts into a repo.
+    getGitInfo: vi.fn().mockResolvedValue({
+      isRepo: false,
+      branch: null,
+      branches: [],
+      dirty: false,
+    }),
+    switchBranch: vi
+      .fn()
+      .mockResolvedValue({ ok: true, branch: null, error: null }),
   };
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.listRunItems.mockReset().mockResolvedValue([]);
@@ -846,15 +902,7 @@ describe('Chats workflow runs', () => {
     await act(async () => {
       plus.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const select = container.querySelector('select')!;
-    await act(async () => {
-      const setSelect = Object.getOwnPropertyDescriptor(
-        HTMLSelectElement.prototype,
-        'value',
-      )!.set!;
-      setSelect.call(select, 'wf:review-team');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
     const textarea = container.querySelector('textarea')!;
     await act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
@@ -895,15 +943,7 @@ describe('Chats workflow runs', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    const select = container.querySelector('select')!;
-    await act(async () => {
-      const setSelect = Object.getOwnPropertyDescriptor(
-        HTMLSelectElement.prototype,
-        'value',
-      )!.set!;
-      setSelect.call(select, 'wf:review-team');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
     const textarea = container.querySelector('textarea')!;
     await act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
@@ -946,15 +986,7 @@ describe('Chats workflow runs', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    const select = container.querySelector('select')!;
-    await act(async () => {
-      const setSelect = Object.getOwnPropertyDescriptor(
-        HTMLSelectElement.prototype,
-        'value',
-      )!.set!;
-      setSelect.call(select, 'wf:review-team');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
     const textarea = container.querySelector('textarea')!;
     await act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
@@ -988,7 +1020,7 @@ describe('Chats workflow runs', () => {
       root.render(<Chats client={client} handle={handle} active />);
     });
     expect(workflowApi.listWorkflows).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('select')!.textContent).not.toContain(
+    expect(await menuRows(container, targetTrigger(container))).not.toContain(
       'demo-duo',
     );
 
@@ -1012,7 +1044,7 @@ describe('Chats workflow runs', () => {
       root.render(<Chats client={client} handle={handle} active />);
     });
     expect(workflowApi.listWorkflows).toHaveBeenCalledTimes(2);
-    expect(container.querySelector('select')!.textContent).toContain(
+    expect(await menuRows(container, targetTrigger(container))).toContain(
       'demo-duo',
     );
   });
@@ -1046,15 +1078,7 @@ describe('Chats workflow runs', () => {
       container.querySelector('[aria-label="Trigger the run starts from"]'),
     ).toBeNull();
 
-    const select = container.querySelector('select')!;
-    await act(async () => {
-      const setSelect = Object.getOwnPropertyDescriptor(
-        HTMLSelectElement.prototype,
-        'value',
-      )!.set!;
-      setSelect.call(select, 'wf:review-team');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
 
     const triggerSelect = container.querySelector(
       '[aria-label="Trigger the run starts from"]',
@@ -1405,7 +1429,7 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(container.querySelector('select')!.value).toBe('wf:review-team');
+    expect(targetTrigger(container).textContent).toContain('Review team');
   });
 
   it('falls back to claude when the remembered workflow no longer exists', async () => {
@@ -1414,7 +1438,7 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(container.querySelector('select')!.value).toBe('claude');
+    expect(targetTrigger(container).textContent).toContain('claude');
   });
 
   it('persists a target change as the next default', async () => {
@@ -1422,38 +1446,48 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    const select = container.querySelector('select')!;
-    await act(async () => {
-      const setSelect = Object.getOwnPropertyDescriptor(
-        HTMLSelectElement.prototype,
-        'value',
-      )!.set!;
-      setSelect.call(select, 'wf:review-team');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
 
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastChatTarget: 'wf:review-team',
     });
   });
 
-  it('a recent-folder chip adopts the folder and re-persists recency order', async () => {
+  it('the folder menu lists the recents INCLUDING the current one, and picking one re-persists recency order', async () => {
+    // The recents used to be suggestion chips under the composer, which could
+    // only ever show folders the user had already LEFT. In the menu the
+    // current folder is a row like any other — and the one that is checked.
     stubSettings({ recentFolders: ['/proj', '/alpha', '/beta'] });
     const { client } = makeClient();
     const container = await mount(client);
 
-    // The CURRENT folder (/proj) is not suggested — only the other two.
-    const chips = [...container.querySelectorAll('button')].filter((b) =>
-      /alpha|beta|proj/.test(b.textContent ?? ''),
-    );
-    expect(chips.map((b) => b.textContent?.trim())).toEqual([
-      'proj', // the folder control inside the card
-      'alpha',
-      'beta',
+    const folderTrigger = container.querySelector<HTMLButtonElement>(
+      '[data-menu-trigger][aria-label="Folder for new chats"]',
+    )!;
+    // The chip itself stays compact — the leaf, not the whole path.
+    expect(folderTrigger.textContent).toContain('proj');
+
+    await act(async () => {
+      folderTrigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ];
+    expect(rows.map((r) => r.textContent)).toEqual([
+      '/proj',
+      '/alpha',
+      '/beta',
+      'Choose folder…',
+    ]);
+    expect(rows.map((r) => r.getAttribute('aria-selected'))).toEqual([
+      'true',
+      'false',
+      'false',
+      'false',
     ]);
 
     await act(async () => {
-      chips[2]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      rows[2]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       projectFolder: '/beta',
@@ -1461,28 +1495,59 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
-  it('a workflow chip targets that workflow (and the chip disappears)', async () => {
+  it('the folder menu opens the native picker from its Choose folder… row', async () => {
+    stubSettings({ recentFolders: ['/proj'] });
+    (
+      window as unknown as {
+        geniro: { pickProjectFolder: ReturnType<typeof vi.fn> };
+      }
+    ).geniro.pickProjectFolder = vi.fn().mockResolvedValue('/picked');
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-menu-trigger][aria-label="Folder for new chats"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const browse = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((r) => r.textContent === 'Choose folder…')!;
+    await act(async () => {
+      browse.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.pickProjectFolder).toHaveBeenCalled();
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      projectFolder: '/picked',
+      recentFolders: ['/picked', '/proj'],
+    });
+  });
+
+  it('surfaces a library workflow ONLY through the target menu — no suggestion chips', async () => {
+    // The suggestion-chip row under the composer is gone: it restated choices
+    // the card already offered, capped at three. Re-adding it would regress
+    // the concept this pins as removed.
     workflowApi.listWorkflows.mockResolvedValue([reviewTeamSummary]);
     const { client } = makeClient();
     const container = await mount(client);
 
-    const chip = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Review team'),
-    )!;
-    await act(async () => {
-      chip.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    // Nothing outside the composer's own controls advertises the workflow…
+    expect(
+      [...container.querySelectorAll('button:not([data-menu-trigger])')].filter(
+        (b) => b.textContent?.includes('Review team'),
+      ),
+    ).toHaveLength(0);
 
-    expect(container.querySelector('select')!.value).toBe('wf:review-team');
+    // …but the target menu still offers it, and picking it still sticks.
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
+
+    expect(targetTrigger(container).textContent).toContain('Review team');
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastChatTarget: 'wf:review-team',
     });
-    // The chip for the now-selected workflow is gone.
-    expect(
-      [...container.querySelectorAll('button')].filter((b) =>
-        b.textContent?.includes('Review team'),
-      ),
-    ).toHaveLength(0);
   });
 });
 
@@ -1777,11 +1842,11 @@ describe('Chats queued messages', () => {
 
 describe('Chats run composer chips', () => {
   function chips(container: HTMLElement): HTMLElement[] {
-    // The info chips are non-interactive Badges — NEVER disabled buttons: a
+    // The info chips are non-interactive Chips — NEVER disabled buttons: a
     // disabled button's pointer-events-none would block the cwd tooltip and
     // its 50% opacity fails AA contrast. Selected by slot only (class names
-    // are restyle-prone); the composer view renders no other badges.
-    return [...container.querySelectorAll<HTMLElement>('[data-slot="badge"]')];
+    // are restyle-prone); only the composer footer renders chips.
+    return [...container.querySelectorAll<HTMLElement>('[data-slot="chip"]')];
   }
 
   it("a chat run shows its agent + folder as INACTIVE chips with the create screen's card", async () => {
@@ -2252,15 +2317,7 @@ describe('Chats skill autocomplete', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    const select = container.querySelector('select')!;
-    await act(async () => {
-      const setSelect = Object.getOwnPropertyDescriptor(
-        HTMLSelectElement.prototype,
-        'value',
-      )!.set!;
-      setSelect.call(select, 'wf:review-team');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
 
     // The skills fetched are the TRIGGER's downstream agent's, not the
     // composer's bare-agent default.

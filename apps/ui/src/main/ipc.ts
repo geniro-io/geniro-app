@@ -3,7 +3,10 @@ import { dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import { readGitInfo, switchBranch } from './git-info';
 import {
+  branchNameSchema,
+  gitDirSchema,
   onboardingInputSchema,
   secretNameSchema,
   secretValueSchema,
@@ -104,6 +107,14 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
   );
 
   ipcMain.handle(IPC.checkForUpdates, () => checkForUpdates());
+
+  ipcMain.handle(IPC.getGitInfo, (_event, dir: unknown) =>
+    readGitInfo(gitDirSchema.parse(dir)),
+  );
+
+  ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>
+    switchBranch(gitDirSchema.parse(dir), branchNameSchema.parse(branch)),
+  );
 
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {
     const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);

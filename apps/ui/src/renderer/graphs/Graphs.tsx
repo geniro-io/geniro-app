@@ -1024,15 +1024,25 @@ export function Graphs({
                         <Select
                           id="node-approval"
                           value={selected.approval}
-                          onChange={(event) =>
+                          side="bottom"
+                          groups={[
+                            {
+                              items: [
+                                { value: 'auto', label: 'auto-approve' },
+                                { value: 'ask', label: 'ask in chat' },
+                                {
+                                  value: 'acceptEdits',
+                                  label: 'accept edits',
+                                },
+                              ],
+                            },
+                          ]}
+                          onValueChange={(approval) =>
                             patchSelected({
-                              approval: event.target.value as WorkflowApproval,
+                              approval: approval as WorkflowApproval,
                             })
-                          }>
-                          <option value="auto">auto-approve</option>
-                          <option value="ask">ask in chat</option>
-                          <option value="acceptEdits">accept edits</option>
-                        </Select>
+                          }
+                        />
                       </Field>
                       {callInfo ? (
                         <NoteBox aria-label="Agent calls" className="text-xs">

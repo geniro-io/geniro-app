@@ -66,6 +66,14 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.checkForUpdates) as ReturnType<
       GeniroApi['checkForUpdates']
     >,
+  getGitInfo: (dir) =>
+    ipcRenderer.invoke(IPC.getGitInfo, dir) as ReturnType<
+      GeniroApi['getGitInfo']
+    >,
+  switchBranch: (dir, branch) =>
+    ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
+      GeniroApi['switchBranch']
+    >,
 };
 
 contextBridge.exposeInMainWorld('geniro', api);

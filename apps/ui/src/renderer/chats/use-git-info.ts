@@ -1,0 +1,79 @@
+import { useCallback, useEffect, useState } from 'react';
+
+import type { GitInfo } from '../../shared/contracts';
+
+const NOT_A_REPO: GitInfo = {
+  isRepo: false,
+  branch: null,
+  branches: [],
+  dirty: false,
+};
+
+/**
+ * Git state of `dir` for the composer's branch chip, plus the guarded switch.
+ *
+ * The chip is absent for a plain folder, so the hook reports `isRepo: false`
+ * for a null dir and while the first read is in flight — a chip that appeared
+ * and then vanished would be worse than one that arrives a beat late.
+ *
+ * A switch re-reads the state afterwards on EITHER outcome: on success the
+ * branch changed, and on refusal the dirty flag the chip shows is exactly what
+ * the user needs to see to understand the refusal.
+ */
+export function useGitInfo(dir: string | null): {
+  info: GitInfo;
+  error: string | null;
+  switching: boolean;
+  switchTo: (branch: string) => Promise<void>;
+  clearError: () => void;
+} {
+  const [info, setInfo] = useState<GitInfo>(NOT_A_REPO);
+  const [error, setError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+
+  useEffect(() => {
+    if (dir === null) {
+      setInfo(NOT_A_REPO);
+      return;
+    }
+    let cancelled = false;
+    void window.geniro.getGitInfo(dir).then((next) => {
+      // A folder switch while this read was in flight must not paint the OLD
+      // folder's branch onto the new one's chip.
+      if (!cancelled) {
+        setInfo(next);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dir]);
+
+  const switchTo = useCallback(
+    async (branch: string): Promise<void> => {
+      if (dir === null) {
+        return;
+      }
+      setSwitching(true);
+      setError(null);
+      try {
+        const result = await window.geniro.switchBranch(dir, branch);
+        if (!result.ok) {
+          setError(result.error);
+        }
+        setInfo(await window.geniro.getGitInfo(dir));
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [dir],
+  );
+
+  return {
+    info,
+    error,
+    switching,
+    switchTo,
+    clearError: useCallback(() => setError(null), []),
+  };
+}

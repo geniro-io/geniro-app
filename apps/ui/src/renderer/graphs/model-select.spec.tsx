@@ -49,28 +49,45 @@ function Harness({ initial }: { initial?: string }): React.JSX.Element {
   );
 }
 
-function select(): HTMLSelectElement {
-  return container.querySelector('select')!;
-}
+const trigger = (): HTMLButtonElement =>
+  container.querySelector<HTMLButtonElement>('[data-menu-trigger]')!;
 
 function customInput(): HTMLInputElement | null {
   return container.querySelector('input');
 }
 
-/** Change a controlled element through the prototype setter so React's value
- *  tracking sees it (the repo-wide idiom — see Chats.spec.tsx). */
-function change(
-  el: HTMLSelectElement | HTMLInputElement,
-  value: string,
-  event: 'change' | 'input',
-): void {
-  const proto =
-    el instanceof HTMLSelectElement
-      ? HTMLSelectElement.prototype
-      : HTMLInputElement.prototype;
-  Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+/** Open the menu, read its rows, close it again. */
+function modelOptions(): string[] {
+  act(() => trigger().click());
+  const labels = [...container.querySelectorAll('[role="option"]')].map(
+    (o) => o.textContent ?? '',
+  );
+  act(() => trigger().click());
+  return labels;
+}
+
+/** Open the menu and click the row with this label. */
+function pickModel(label: string): void {
+  act(() => trigger().click());
+  const row = [
+    ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((o) => o.textContent === label);
+  if (!row) {
+    throw new Error(`no menu row labelled ${label}`);
+  }
+  act(() => row.click());
+}
+
+/** Type into the custom-model input through the prototype setter, so React's
+ *  value tracking sees the change (the repo-wide idiom — see Chats.spec.tsx). */
+function typeCustom(value: string): void {
+  const el = customInput()!;
+  Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(el) as object,
+    'value',
+  )!.set!.call(el, value);
   act(() => {
-    el.dispatchEvent(new Event(event, { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
 
@@ -79,8 +96,13 @@ describe('ModelSelect', () => {
     render(
       <ModelSelect id="m" agent="claude" value="opus" onChange={() => {}} />,
     );
-    const labels = [...select().options].map((o) => o.textContent);
-    expect(labels).toEqual(['fable', 'opus', 'sonnet', 'haiku', 'Custom…']);
+    expect(modelOptions()).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+      'Custom…',
+    ]);
 
     render(
       <ModelSelect
@@ -90,8 +112,7 @@ describe('ModelSelect', () => {
         onChange={() => {}}
       />,
     );
-    const cursorLabels = [...select().options].map((o) => o.textContent);
-    expect(cursorLabels).toEqual([
+    expect(modelOptions()).toEqual([
       'gpt-5',
       'sonnet-4',
       'sonnet-4-thinking',
@@ -102,13 +123,13 @@ describe('ModelSelect', () => {
   it('a model-less node adopts the first alias on mount', () => {
     render(<Harness />);
     expect(spy).toHaveBeenCalledWith('fable');
-    expect(select().value).toBe('fable');
+    expect(trigger().textContent).toContain('fable');
     expect(customInput()).toBeNull();
   });
 
   it('picking an alias emits it', () => {
     render(<Harness initial="sonnet" />);
-    change(select(), 'opus', 'change');
+    pickModel('opus');
     expect(spy).toHaveBeenLastCalledWith('opus');
   });
 
@@ -121,35 +142,35 @@ describe('ModelSelect', () => {
         onChange={() => {}}
       />,
     );
-    expect(select().value).toBe('__custom__');
+    expect(trigger().textContent).toContain('Custom…');
     expect(customInput()?.value).toBe('claude-fable-5');
   });
 
   it('Custom… opens free-text entry without erasing the stored model', () => {
     render(<Harness initial="opus" />);
-    change(select(), '__custom__', 'change');
+    pickModel('Custom…');
     // Switching modes alone must not touch the node — only typing does.
     expect(spy).not.toHaveBeenCalled();
     expect(customInput()?.value).toBe('opus');
 
-    change(customInput()!, 'claude-fable-5', 'input');
+    typeCustom('claude-fable-5');
     expect(spy).toHaveBeenLastCalledWith('claude-fable-5');
   });
 
   it('clearing the custom input keeps custom mode — no snap-back to an alias', () => {
     render(<Harness initial="claude-fable-5" />);
-    expect(select().value).toBe('__custom__');
-    change(customInput()!, '', 'input');
+    expect(trigger().textContent).toContain('Custom…');
+    typeCustom('');
     // A transiently empty value mid-typing must NOT trigger alias adoption.
     expect(spy).toHaveBeenLastCalledWith(undefined);
     expect(spy).not.toHaveBeenCalledWith('fable');
-    expect(select().value).toBe('__custom__');
+    expect(trigger().textContent).toContain('Custom…');
     expect(customInput()).not.toBeNull();
   });
 
   it('leaving custom mode via an alias emits the alias and hides the input', () => {
     render(<Harness initial="my-custom-model" />);
-    change(select(), 'sonnet', 'change');
+    pickModel('sonnet');
     expect(spy).toHaveBeenLastCalledWith('sonnet');
     expect(customInput()).toBeNull();
   });

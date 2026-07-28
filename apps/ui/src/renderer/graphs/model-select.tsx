@@ -50,22 +50,23 @@ export function ModelSelect({
       <Select
         id={id}
         value={custom ? CUSTOM : value}
-        onChange={(event) => {
-          if (event.target.value === CUSTOM) {
+        side="bottom"
+        groups={[
+          { items: options.map((model) => ({ value: model, label: model })) },
+          // NOT an action row: custom is a MODE the field stays in, so it must
+          // be able to carry the checkmark and name itself on the trigger.
+          { items: [{ value: CUSTOM, label: 'Custom…' }] },
+        ]}
+        onValueChange={(next) => {
+          if (next === CUSTOM) {
             // Keep the stored model — the input below takes over editing it.
             setCustom(true);
             return;
           }
           setCustom(false);
-          onChange(event.target.value || undefined);
-        }}>
-        {options.map((model) => (
-          <option key={model} value={model}>
-            {model}
-          </option>
-        ))}
-        <option value={CUSTOM}>Custom…</option>
-      </Select>
+          onChange(next || undefined);
+        }}
+      />
       {custom ? (
         <Input
           aria-label="Custom model id"

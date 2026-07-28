@@ -11,7 +11,20 @@ globs:
 1. **Token** in `styles/global.css` (see `renderer-design-system.md`)
 2. **Primitive** in `components/ui/` — token-driven, shadcn-v4 flavour
    (`data-slot` attribute, `cva` variants, `cn()` composition):
-   `button`, `input`, `textarea`, `select`, `label`, `card`, `badge`,
+   `button`, `input`, `textarea`, `label`, `card`, `badge`,
+   `chip` (the flat Cursor-style control chip: muted text, tight leading icon,
+   fill only on hover — the SINGLE source of that look, which `select`'s
+   `ghost` variant is built from, so a picker chip and a static chip cannot
+   drift apart; a trailing `ChipChevron` is what marks a chip as a picker, so
+   never put one on a static chip),
+   `menu` (the dropdown panel: groups, leading icons, a checkmark on the
+   current value, an optional search field, action rows, keyboard nav) and
+   `select` (its trigger — `default` = bordered form field, `ghost` = composer
+   chip). **`select` is NOT a native `<select>`**: macOS draws that as an Aqua
+   popup whose menu is an OS surface — it ignores every token, cannot show
+   headers/icons/checkmarks/search, and is invisible to the DOM, so it can be
+   neither screenshotted nor asserted on. Pass `groups`, never `<option>`
+   children; a test opens `[data-menu-trigger]` and reads `[role="option"]`,
    `md-editor` (markdown editor with live preview — the port of geniro web's
    `components/ui/md-editor.tsx`; its GitHub-Primer chrome is retinted onto our
    tokens by `.md-editor-surface` in `styles/global.css`), `utils.ts` (cn)

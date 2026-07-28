@@ -43,6 +43,27 @@ export const settingsPatchSchema = z.strictObject({
   checkForUpdates: z.boolean().optional(),
 });
 
+/** A directory a git command may run in. */
+export const gitDirSchema = absolutePath;
+
+/**
+ * A git branch name. `git switch` takes this as an argv entry (no shell), so
+ * the real risk is not injection but ARGUMENT injection: a name beginning with
+ * `-` would be parsed as a flag. Git's own ref format forbids most of what is
+ * rejected here anyway — this is the boundary that makes it true regardless of
+ * what the renderer sends.
+ */
+export const branchNameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((b) => !b.startsWith('-'), 'must not start with a dash')
+  // The characters git itself forbids in a refname. A dash is NOT among them —
+  // `feat/some-branch` is the common case; only a LEADING dash is the hazard.
+  // eslint-disable-next-line no-control-regex -- control characters are precisely what a refname may not contain
+  .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
+  .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
+
 /** The only valid Keychain secret identifier. */
 export const secretNameSchema = z.enum(['cursor.apiKey']);
 

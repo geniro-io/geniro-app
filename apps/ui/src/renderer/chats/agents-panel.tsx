@@ -9,7 +9,7 @@ import { cn } from '../components/ui/utils';
 import {
   type AgentDisplay,
   type AgentThread,
-  CONTEXT_WINDOW_TOKENS,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
   formatTokens,
   formatUsd,
 } from './agent-activity';
@@ -86,9 +86,14 @@ export function AgentsPanel({
           </li>
         ) : (
           agents.map((agent) => {
+            // The model's OWN window when its CLI named one — the same figure
+            // must scale the ring and label the denominator, or a 1M-window
+            // model reads as full at a fifth of its context.
+            const window =
+              agent.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
             const fraction =
               agent.contextTokens !== null
-                ? agent.contextTokens / CONTEXT_WINDOW_TOKENS
+                ? agent.contextTokens / window
                 : null;
             const isExpanded = expanded.has(agent.id);
             // An agent whose only thread is its own conversation has nothing
@@ -175,7 +180,7 @@ export function AgentsPanel({
                       {agent.contextTokens !== null ? (
                         <span title="Context of the latest turn / the model's window">
                           ctx {formatTokens(agent.contextTokens)} /{' '}
-                          {formatTokens(CONTEXT_WINDOW_TOKENS)}
+                          {formatTokens(window)}
                         </span>
                       ) : null}
                       {agent.spentUsd !== null ? (

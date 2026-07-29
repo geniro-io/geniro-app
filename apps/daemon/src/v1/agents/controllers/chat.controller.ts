@@ -69,7 +69,7 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: UpdateChatSettingsDto,
   ): Promise<RunWire> {
-    return this.chatService.updateSettings(runId, dto.approval);
+    return this.chatService.updateSettings(runId, dto);
   }
 
   @Get(':runId/items')

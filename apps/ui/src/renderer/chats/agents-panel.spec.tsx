@@ -55,6 +55,8 @@ const agents: AgentDisplay[] = [
     status: 'running',
     activeTurns: 1,
     contextTokens: 45_200,
+    // A 1M-window model: same tokens, a fifth of the fill a 200k model shows.
+    contextWindowTokens: 1_000_000,
     spentUsd: 0.236,
     threads: [{ ...mainThread, status: 'running' }],
   },
@@ -65,6 +67,8 @@ const agents: AgentDisplay[] = [
     status: 'running',
     activeTurns: 3,
     contextTokens: 12_000,
+    // Reported nothing — measured against the 200k default.
+    contextWindowTokens: null,
     spentUsd: 0.004,
     threads: [
       {
@@ -90,6 +94,7 @@ const agents: AgentDisplay[] = [
     status: 'idle',
     activeTurns: 0,
     contextTokens: null,
+    contextWindowTokens: null,
     spentUsd: null,
     threads: [mainThread],
   },
@@ -121,7 +126,13 @@ describe('AgentsPanel', () => {
     // The live-turn count survives the collapse — only the thread COUNT goes.
     expect(orchestrator.textContent).toContain('1 active');
     expect(orchestrator.querySelector('button[aria-expanded]')).toBeNull();
-    expect(orchestrator.textContent).toContain('ctx 45.2k / 200k');
+    // The CLI's own window, not the 200k default the sibling card falls to.
+    expect(orchestrator.textContent).toContain('ctx 45.2k / 1M');
+    expect(orchestrator.textContent).not.toContain('/ 200k');
+    // …and the ring is scaled by it: 45.2k of 1M is 5% full, of 200k is 23%.
+    expect(
+      orchestrator.querySelector('svg[aria-label="Context 5% full"]'),
+    ).not.toBeNull();
     expect(orchestrator.textContent).toContain('$0.24');
 
     const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
@@ -199,6 +210,7 @@ describe('AgentsPanel', () => {
       status: 'completed',
       activeTurns: 0,
       contextTokens,
+      contextWindowTokens: null,
       spentUsd: null,
       threads: [],
     });

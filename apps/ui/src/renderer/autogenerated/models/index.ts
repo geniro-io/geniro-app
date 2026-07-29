@@ -899,7 +899,13 @@ export interface UpdateChatSettingsDto {
      * @type {ChatApprovalMode}
      * @memberof UpdateChatSettingsDto
      */
-    approval: ChatApprovalMode;
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateChatSettingsDto
+     */
+    model?: string | null;
 }
 
 

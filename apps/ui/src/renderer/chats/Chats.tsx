@@ -761,9 +761,16 @@ export function Chats({
     [agentKind, approvalMode, models, chatApi],
   );
 
-  /** Flip an open chat's approval mode between turns (daemon 409s mid-turn). */
-  const changeApproval = useCallback(
-    async (mode: ChatApprovalMode): Promise<void> => {
+  /**
+   * Change an open chat's settings between turns (the daemon 409s mid-turn).
+   * One path for both chips: the model and the approval mode are the same kind
+   * of choice — what the NEXT turn runs as.
+   */
+  const changeRunSettings = useCallback(
+    async (patch: {
+      approval?: ChatApprovalMode;
+      model?: string | null;
+    }): Promise<void> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
         return;
@@ -771,7 +778,7 @@ export function Chats({
       try {
         const updated = await chatApi.updateChatSettings({
           runId,
-          updateChatSettingsDto: { approval: mode },
+          updateChatSettingsDto: patch,
         });
         setRuns((prev) =>
           prev.map((run) => (run.id === updated.id ? updated : run)),
@@ -1121,10 +1128,18 @@ export function Chats({
   const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
   const skills = useAgentSkills(agentsApi, skillKinds, skillCwd);
   // The model rows come from the CLI itself — never a list baked into the app.
-  const agentModels = useAgentModels(
-    agentsApi,
-    workflowSlug ? null : agentKind,
-  );
+  // Which CLI to ask follows whichever composer is on screen: an open chat's
+  // own agent, or the agent the next run would start (none for a workflow,
+  // whose nodes each name their model in the YAML).
+  const modelKind = useMemo((): CliKind | null => {
+    if (activeRunId !== null) {
+      return activeRun && activeRun.workflowId === null
+        ? activeRun.agentKind
+        : null;
+    }
+    return workflowSlug ? null : agentKind;
+  }, [activeRunId, activeRun, workflowSlug, agentKind]);
+  const agentModels = useAgentModels(agentsApi, modelKind);
   // Two independent git reads, because the two composers watch two different
   // folders: the landing composer follows the folder picked for the NEXT run,
   // the transcript composer the cwd its run was created with.
@@ -1289,6 +1304,7 @@ export function Chats({
           status: running ? 'running' : activeRun.status,
           activeTurns: running ? 1 : 0,
           contextTokens: chatActivity?.contextTokens ?? null,
+          contextWindowTokens: chatActivity?.contextWindowTokens ?? null,
           spentUsd: chatActivity?.spentUsd ?? null,
           threads: [
             {
@@ -1311,6 +1327,7 @@ export function Chats({
         status: displayStatus(nodeActivity),
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens: nodeActivity?.contextTokens ?? null,
+        contextWindowTokens: nodeActivity?.contextWindowTokens ?? null,
         spentUsd: nodeActivity?.spentUsd ?? null,
         threads: threadsOf(nodeActivity),
       };
@@ -1328,6 +1345,7 @@ export function Chats({
         status: displayStatus(nodeActivity),
         activeTurns: nodeActivity.activeTurns,
         contextTokens: nodeActivity.contextTokens,
+        contextWindowTokens: nodeActivity.contextWindowTokens,
         spentUsd: nodeActivity.spentUsd,
         threads: threadsOf(nodeActivity),
       }));
@@ -1861,17 +1879,33 @@ export function Chats({
                       {activeRun &&
                       activeRun.workflowId === null &&
                       activeRun.agentKind ? (
-                        // Interactive between turns; the daemon 409s a mid-turn
-                        // flip, so the select locks while streaming.
-                        <ApprovalModeSelect
-                          agentKind={activeRun.agentKind}
-                          value={activeRun.approval}
-                          planSupported={
-                            capabilities?.claudeModes.plan === 'pass'
-                          }
-                          disabled={streaming}
-                          onChange={(mode) => void changeApproval(mode)}
-                        />
+                        // Both interactive between turns; the daemon 409s a
+                        // mid-turn change, so they lock while streaming.
+                        // Unlike the agent and folder above, neither is run
+                        // identity: a chat can switch model mid-conversation
+                        // exactly as the CLIs themselves allow.
+                        <>
+                          <ModelSelect
+                            agentKind={activeRun.agentKind}
+                            models={agentModels}
+                            value={activeRun.model}
+                            disabled={streaming}
+                            onChange={(model) =>
+                              void changeRunSettings({ model })
+                            }
+                          />
+                          <ApprovalModeSelect
+                            agentKind={activeRun.agentKind}
+                            value={activeRun.approval}
+                            planSupported={
+                              capabilities?.claudeModes.plan === 'pass'
+                            }
+                            disabled={streaming}
+                            onChange={(approval) =>
+                              void changeRunSettings({ approval })
+                            }
+                          />
+                        </>
                       ) : null}
                     </div>
                     <span className="flex shrink-0 items-center gap-1.5">

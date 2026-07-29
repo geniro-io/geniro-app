@@ -5,13 +5,7 @@ import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import { claudeCredentialEnv } from '../../utils/child-env';
-import {
-  asArray,
-  asBoolean,
-  asNumber,
-  asRecord,
-  asString,
-} from '../../utils/json-util';
+import { asArray, asBoolean, asRecord, asString } from '../../utils/json-util';
 import type {
   AgentCommandOptions,
   AgentEvent,
@@ -19,7 +13,6 @@ import type {
   AgentSkillEntry,
   AgentSkillsInput,
   AgentTurnInput,
-  AgentUsage,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import { probeClaudeCommands } from './claude-commands';
@@ -31,6 +24,7 @@ import {
 } from './claude-live-stream';
 import { claudeModels } from './claude-models';
 import { scanClaudeSkills } from './claude-skills';
+import { readClaudeUsage } from './claude-usage';
 import { buildImageBlocks } from './image-blocks';
 
 /**
@@ -200,29 +194,10 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           },
         ];
       }
-      const usageRec = asRecord(root.usage);
-      // Context = everything on the prompt side of the window. Claude splits
-      // it across three counters; a resumed session is almost all cache-read.
-      const contextParts = usageRec
-        ? [
-            asNumber(usageRec.input_tokens),
-            asNumber(usageRec.cache_creation_input_tokens),
-            asNumber(usageRec.cache_read_input_tokens),
-          ].filter((part): part is number => part !== null)
-        : [];
-      const usage: AgentUsage = {
-        inputTokens: usageRec ? asNumber(usageRec.input_tokens) : null,
-        outputTokens: usageRec ? asNumber(usageRec.output_tokens) : null,
-        contextTokens:
-          contextParts.length > 0
-            ? contextParts.reduce((sum, part) => sum + part, 0)
-            : null,
-        costUsd: asNumber(root.total_cost_usd),
-      };
       return [
         {
           type: 'turn_complete',
-          usage,
+          usage: readClaudeUsage(root),
           stopReason: asString(root.stop_reason),
           finalText: asString(root.result) ?? null,
         },

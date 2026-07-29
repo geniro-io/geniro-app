@@ -26,11 +26,15 @@ const DEFAULT_LABEL = 'default model';
  * A model the CLI no longer reports but the run still carries (a remembered
  * pick, an older CLI) is added back as its own row, so the chip names what
  * will actually be passed instead of silently showing the default.
+ *
+ * The same chip serves an OPEN chat, where it switches the model the next turn
+ * runs as — locked mid-turn, matching the daemon's 409.
  */
 export function ModelSelect({
   agentKind,
   models,
   value,
+  disabled = false,
   onChange,
   className,
 }: {
@@ -38,6 +42,8 @@ export function ModelSelect({
   models: AgentModel[];
   /** The chosen model id, or null for the CLI's default. */
   value: string | null;
+  /** Locked while a turn is running (matches the daemon's 409 RUN_BUSY). */
+  disabled?: boolean;
   onChange: (model: string | null) => void;
   className?: string;
 }): React.JSX.Element {
@@ -51,6 +57,7 @@ export function ModelSelect({
       variant="ghost"
       aria-label="Model"
       title={`Model for ${agentKind}`}
+      disabled={disabled}
       className={className}
       searchPlaceholder={rows.length > 8 ? 'Search models…' : undefined}
       leadingIcon={<Sparkles />}

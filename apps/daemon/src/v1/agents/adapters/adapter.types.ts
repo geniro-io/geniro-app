@@ -9,13 +9,23 @@ export interface AgentUsage {
   inputTokens: number | null;
   outputTokens: number | null;
   /**
-   * The turn's full prompt-side footprint — what the agent's context window
-   * actually held. For claude this is input + cache-creation + cache-read
-   * tokens (`input_tokens` alone excludes cache traffic and wildly
-   * understates a resumed conversation); CLIs that don't break out cache
-   * tokens report their plain input count here.
+   * How full the window is NOW — the prompt of the turn's LAST request, which
+   * is the whole conversation as the model last saw it.
+   *
+   * Per-request, never a turn total: a turn re-sends the conversation once per
+   * tool call, so adding those up measures work done, not context held (see
+   * `claude/claude-usage.ts`). Cache traffic counts — on a resumed session it
+   * IS the context — so a CLI that breaks it out reports input + cache-creation
+   * + cache-read, and one that doesn't reports its plain input count.
    */
   contextTokens: number | null;
+  /**
+   * The window that context is measured against, as the CLI reports it for the
+   * model it actually ran (claude: 1M for `claude-opus-5[1m]`, 200k for the
+   * rest). Null when the CLI says nothing — the consumer then falls back to a
+   * default rather than claiming a window nobody confirmed.
+   */
+  contextWindowTokens: number | null;
   costUsd: number | null;
 }
 

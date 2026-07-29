@@ -744,24 +744,80 @@ describe('ChatService — approval modes (parity M1)', () => {
   it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a non-auto cursor mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-    const updated = await service.updateSettings(run.id, 'acceptEdits');
+    const updated = await service.updateSettings(run.id, {
+      approval: 'acceptEdits',
+    });
     expect(updated.approval).toBe('acceptEdits');
 
     // A claimed run is a turn in flight — settings are locked.
     expect(registry.tryClaim(run.id)).toBe(true);
-    await expect(service.updateSettings(run.id, 'auto')).rejects.toThrow(
-      'a turn is in flight',
-    );
+    await expect(
+      service.updateSettings(run.id, { approval: 'auto' }),
+    ).rejects.toThrow('a turn is in flight');
 
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
     });
-    await expect(service.updateSettings(cursorRun.id, 'ask')).rejects.toThrow(
-      "cursor chats run 'auto' only",
-    );
-    const pinned = await service.updateSettings(cursorRun.id, 'auto');
+    await expect(
+      service.updateSettings(cursorRun.id, { approval: 'ask' }),
+    ).rejects.toThrow("cursor chats run 'auto' only");
+    const pinned = await service.updateSettings(cursorRun.id, {
+      approval: 'auto',
+    });
     expect(pinned.approval).toBe('auto');
+  });
+
+  it('updateSettings changes the model mid-chat — the NEXT turn spawns with it', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      model: 'sonnet',
+    });
+    await service.sendMessage(run.id, 'first');
+    expect((claude.start.mock.calls[0]![0] as AgentTurnInput).model).toBe(
+      'sonnet',
+    );
+    claude.finish();
+    await drain();
+
+    const updated = await service.updateSettings(run.id, { model: 'opus' });
+    expect(updated.model).toBe('opus');
+    await service.sendMessage(run.id, 'second');
+    expect((claude.start.mock.calls[1]![0] as AgentTurnInput).model).toBe(
+      'opus',
+    );
+    claude.finish();
+    await drain();
+  });
+
+  it('a null model clears the run back to the CLI default — no --model at all', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      model: 'opus',
+    });
+    const cleared = await service.updateSettings(run.id, { model: null });
+    expect(cleared.model).toBeNull();
+    await service.sendMessage(run.id, 'go');
+    // undefined, not 'opus': the adapter omits the flag entirely, which is a
+    // different run than pinning whatever the previous model was.
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).model,
+    ).toBeUndefined();
+    claude.finish();
+    await drain();
+  });
+
+  it('locks the model mid-turn like the approval mode — a claimed run 409s', async () => {
+    const { service, registry } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    expect(registry.tryClaim(run.id)).toBe(true);
+    await expect(
+      service.updateSettings(run.id, { model: 'opus' }),
+    ).rejects.toThrow('a turn is in flight');
   });
 
   it('reverts and 409s a settings flip when a turn claims the run during the write — never ACKs a mode the in-flight turn cannot honor', async () => {
@@ -770,6 +826,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       agentKind: 'claude',
       cwd: dir,
       approval: 'auto',
+      model: 'sonnet',
     });
     // Model a concurrent sendMessage claiming the run mid-write: the claim
     // lands after updateSettings' pre-check but before its post-check.
@@ -783,19 +840,24 @@ describe('ChatService — approval modes (parity M1)', () => {
       }
       return n;
     };
-    await expect(service.updateSettings(run.id, 'ask')).rejects.toThrow(
-      'in flight',
-    );
-    // Reverted: the stored mode is back to 'auto', never the un-honored 'ask'.
-    expect((await runDao.getById(run.id))?.approval).toBe('auto');
+    await expect(
+      service.updateSettings(run.id, { approval: 'ask', model: 'opus' }),
+    ).rejects.toThrow('in flight');
+    // Reverted WHOLE: mode back to 'auto' and model back to 'sonnet'. A revert
+    // that restored only the mode would leave the in-flight turn's own run row
+    // naming a model that turn never spawned with.
+    const reverted = await runDao.getById(run.id);
+    expect(reverted?.approval).toBe('auto');
+    expect(reverted?.model).toBe('sonnet');
   });
 
-  it('honors a settings flip that committed just before the claim — sendMessage re-reads the committed mode after claiming', async () => {
+  it('honors a settings flip that committed just before the claim — sendMessage re-reads the committed row after claiming', async () => {
     const { service, claude, runDao } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
       approval: 'auto',
+      model: 'sonnet',
     });
     // Gate sendMessage's FIRST run-row read so a full PATCH lands in the
     // window, then release: the snapshotted entity still says 'auto', but the
@@ -817,12 +879,14 @@ describe('ChatService — approval modes (parity M1)', () => {
       return snapshot;
     };
     const send = service.sendMessage(run.id, 'lock this down');
-    await service.updateSettings(run.id, 'ask');
+    await service.updateSettings(run.id, { approval: 'ask', model: 'opus' });
     releaseRead();
     await send;
-    expect(
-      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
-    ).toBe('ask');
+    const spawned = claude.start.mock.calls[0]![0] as AgentTurnInput;
+    expect(spawned.approvalMode).toBe('ask');
+    // Both fields come from the same post-claim read — a per-field fallback to
+    // the snapshot would spawn the acknowledged mode with the stale model.
+    expect(spawned.model).toBe('opus');
     claude.finish();
     await drain();
   });
@@ -1204,7 +1268,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     // whether the daemon ACKed it; a refusal would be an honest outcome too.
     let ackedApproval: string | null = null;
     await service
-      .updateSettings(run.id, 'ask')
+      .updateSettings(run.id, { approval: 'ask' })
       .then((wire) => {
         ackedApproval = wire.approval;
       })

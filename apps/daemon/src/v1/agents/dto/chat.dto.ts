@@ -34,9 +34,19 @@ export const createChatSchema = z.object({
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 
-export const updateChatSettingsSchema = z.object({
-  approval: ChatApprovalModeSchema,
-});
+export const updateChatSettingsSchema = z
+  .object({
+    approval: ChatApprovalModeSchema.optional(),
+    /**
+     * Explicit null clears the run back to the CLI's own default — the one
+     * thing an omitted key (= leave unchanged) cannot say.
+     */
+    model: z.string().min(1).nullable().optional(),
+  })
+  .refine(
+    (dto) => dto.approval !== undefined || dto.model !== undefined,
+    'a settings patch must change the approval mode or the model',
+  );
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
 ) {}

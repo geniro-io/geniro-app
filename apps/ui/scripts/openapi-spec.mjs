@@ -8,18 +8,22 @@
  *
  *   1. `GENIRO_SWAGGER_URL` (+ optional `GENIRO_SWAGGER_TOKEN`) — an explicit
  *      override, the closest analogue to the sibling's flow.
- *   2. The pidfile a running daemon wrote (`<userData>/daemon.json`), which
- *      carries host, port and the launch token. Zero setup while `pnpm dev` or
- *      the packaged app is up.
- *   3. A throwaway daemon booted from `apps/daemon/dist/main.js` against a
- *      temp userData dir, queried, then shut down — so codegen works with
- *      nothing running and touches none of the user's data.
+ *   2. A throwaway daemon booted from `apps/daemon/dist/main.js` against a
+ *      temp userData dir, queried, then shut down — so codegen touches none of
+ *      the user's data and needs nothing running.
+ *
+ * It deliberately does NOT read a daemon that happens to be running. The
+ * generated client is committed, so it must describe the daemon in the WORKING
+ * TREE; the packaged app on the user's machine can be any older build, and
+ * asking it produces a stale client that regenerates clean and hides the very
+ * route you just added. Point `GENIRO_SWAGGER_URL` at a live daemon when that
+ * is genuinely what you want.
  *
  * Usage: node scripts/openapi-spec.mjs <output-file>
  */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -28,13 +32,6 @@ const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = resolve(UI_DIR, '..', '..');
 const DAEMON_ENTRY = join(REPO_ROOT, 'apps', 'daemon', 'dist', 'main.js');
 const ELECTRON_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'electron');
-
-/** Where the packaged app and `pnpm dev` keep the daemon pidfile. */
-const USER_DATA_CANDIDATES = [
-  process.env.GENIRO_USER_DATA,
-  join(homedir(), 'Library', 'Application Support', 'Geniro'),
-  join(homedir(), '.geniro'),
-].filter(Boolean);
 
 /** Give a cold boot room for the schema sync; a warm one is ~1s. */
 const BOOT_TIMEOUT_MS = 60_000;
@@ -48,37 +45,6 @@ const fetchSpec = async (baseUrl, token) => {
     throw new Error(`GET ${baseUrl}/swagger-api-json → ${res.status}`);
   }
   return await res.json();
-};
-
-const readPidfile = () => {
-  for (const dir of USER_DATA_CANDIDATES) {
-    try {
-      const info = JSON.parse(readFileSync(join(dir, 'daemon.json'), 'utf8'));
-      if (info?.port && info?.token) {
-        return info;
-      }
-    } catch {
-      // No pidfile in this candidate — try the next.
-    }
-  }
-  return null;
-};
-
-/** Ask a daemon we did not start; a stale pidfile just falls through. */
-const fromRunningDaemon = async () => {
-  const info = readPidfile();
-  if (!info) {
-    return null;
-  }
-  const baseUrl = `http://${info.host ?? '127.0.0.1'}:${info.port}`;
-  try {
-    const spec = await fetchSpec(baseUrl, info.token);
-    console.log(`openapi: read from the running daemon on ${baseUrl}`);
-    return spec;
-  } catch (err) {
-    console.warn(`openapi: running daemon unusable (${String(err)}) — booting one`);
-    return null;
-  }
 };
 
 /**
@@ -146,7 +112,7 @@ const resolveSpec = async () => {
     console.log(`openapi: read from GENIRO_SWAGGER_URL (${base})`);
     return await fetchSpec(base, process.env.GENIRO_SWAGGER_TOKEN);
   }
-  return (await fromRunningDaemon()) ?? (await fromThrowawayDaemon());
+  return await fromThrowawayDaemon();
 };
 
 const out = process.argv[2];
@@ -168,8 +134,6 @@ try {
   );
 } catch (err) {
   console.error(`openapi: could not resolve the daemon spec — ${String(err)}`);
-  console.error(
-    'Build the daemon first (`pnpm build`) or start the app, then retry.',
-  );
+  console.error('Build the daemon first (`pnpm build`), then retry.');
   process.exit(1);
 }

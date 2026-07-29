@@ -162,42 +162,52 @@ export class ChatService {
   }
 
   /**
-   * PATCH /v1/chats/:runId/settings — flip the approval mode between turns.
-   * 409 while a turn is in flight (the daemon-side contract matching the
-   * disabled selector), 400 for a non-auto mode on a cursor chat.
+   * PATCH /v1/chats/:runId/settings — change what the NEXT turn runs as: the
+   * approval mode, the model, or both. 409 while a turn is in flight (the
+   * daemon-side contract matching the disabled selectors), 400 for a non-auto
+   * mode on a cursor chat.
+   *
+   * `model: null` is a real value — it clears the run back to the CLI's own
+   * default (no `--model` flag), which an omitted key cannot express.
    */
   async updateSettings(
     runId: string,
-    approval: ChatApprovalMode,
+    patch: { approval?: ChatApprovalMode; model?: string | null },
   ): Promise<RunWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
-    this.assertApprovalSupported(run.agentKind, approval);
+    if (patch.approval !== undefined) {
+      this.assertApprovalSupported(run.agentKind, patch.approval);
+    }
+    const changes = {
+      ...(patch.approval !== undefined ? { approval: patch.approval } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+    };
     // Captured before the write: BaseDao.updateById mutates this same
     // identity-mapped entity, so `run.approval` reflects the NEW value the
     // moment updateById returns — the revert path below needs the old one.
-    const previous = run.approval;
+    const previous = { approval: run.approval, model: run.model };
     if (this.registry.has(runId)) {
       throw new ConflictException(
         'RUN_BUSY',
-        'a turn is in flight — the approval mode is locked until it settles',
+        'a turn is in flight — chat settings are locked until it settles',
       );
     }
-    await this.runDao.updateById(runId, { approval }, em);
+    await this.runDao.updateById(runId, changes, em);
     // A turn may have claimed the run DURING the write above — after our
     // pre-check but before the flush. sendMessage snapshots the run row in
     // its own fork, so that turn may already be spawning under the pre-write
-    // mode. Refuse rather than ACK a mode the in-flight turn won't honor:
-    // revert and 409. (A PATCH that fully lands BEFORE the claim is still
-    // honored — sendMessage re-reads the committed mode after it claims.)
+    // settings. Refuse rather than ACK settings the in-flight turn won't
+    // honor: revert and 409. (A PATCH that fully lands BEFORE the claim is
+    // still honored — sendMessage re-reads the committed row after it claims.)
     if (this.registry.has(runId)) {
-      await this.runDao.updateById(runId, { approval: previous }, em);
+      await this.runDao.updateById(runId, previous, em);
       throw new ConflictException(
         'RUN_BUSY',
-        'a turn started while the approval change was in flight — retry once it settles',
+        'a turn started while the settings change was in flight — retry once it settles',
       );
     }
-    run.approval = approval;
+    Object.assign(run, changes);
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
@@ -311,17 +321,20 @@ export class ChatService {
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
-      const model = run.model ?? undefined;
 
-      // Re-read the committed approval mode from a FRESH fork now that the
-      // claim is held: a settings PATCH that flushed to its own fork between
-      // the getById above and the claim never mutated `run`, so its ACKed
-      // mode would otherwise be ignored. The claim now 409s any later PATCH,
-      // and updateSettings reverts a PATCH that raced the claim, so this read
-      // reflects exactly the acknowledged mode.
-      const committed = await this.runDao.getById(runId, this.em.fork());
+      // Re-read the committed settings from a FRESH fork now that the claim is
+      // held: a settings PATCH that flushed to its own fork between the getById
+      // above and the claim never mutated `run`, so its ACKed values would
+      // otherwise be ignored. The claim now 409s any later PATCH, and
+      // updateSettings reverts a PATCH that raced the claim, so this read
+      // reflects exactly the acknowledged settings. Read as one row, not field
+      // by field: `committed.model ?? run.model` would resurrect the old model
+      // for a PATCH that deliberately cleared it back to the CLI default.
+      const settings =
+        (await this.runDao.getById(runId, this.em.fork())) ?? run;
       let approvalMode: ChatApprovalMode | undefined =
-        committed?.approval ?? run.approval ?? undefined;
+        settings.approval ?? undefined;
+      const model = settings.model ?? undefined;
 
       // Store the bytes BEFORE persisting the item: the payload records only
       // the attachment rows, so an item written first would reference files

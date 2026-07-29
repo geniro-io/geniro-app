@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   cancelChat: vi.fn(),
   createChat: vi.fn(),
   renameRun: vi.fn(),
+  updateChatSettings: vi.fn(),
 }));
 const agentsApi = vi.hoisted(() => ({
   listAgentSkills: vi.fn(),
@@ -222,6 +223,13 @@ function composerButton(
 }
 
 /** The composer's target picker. The menu is OURS, so its rows are real DOM. */
+/** The composer's model chip (new-run and open-chat alike). */
+function modelTrigger(container: HTMLElement): HTMLButtonElement {
+  return [
+    ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+  ].find((trigger) => trigger.getAttribute('aria-label') === 'Model')!;
+}
+
 function targetTrigger(container: HTMLElement): HTMLButtonElement {
   return container.querySelector<HTMLButtonElement>(
     '[data-menu-trigger][aria-label="Agent or workflow for new runs"]',
@@ -297,6 +305,7 @@ beforeEach(() => {
   api.cancelChat.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
   api.renameRun.mockReset();
+  api.updateChatSettings.mockReset();
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
   // The composer's model rows come from the daemon, which asks the CLI.
   agentsApi.listAgentModels.mockReset().mockResolvedValue([
@@ -1669,11 +1678,6 @@ describe('Chats composer memory & suggestions', () => {
     expect(approvalTrigger(container).textContent).toContain('ask');
   });
 
-  const modelTrigger = (container: HTMLElement): HTMLButtonElement =>
-    [
-      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
-    ].find((trigger) => trigger.getAttribute('aria-label') === 'Model')!;
-
   /** Type a task into the composer and send it, creating the run. */
   async function sendTask(container: HTMLElement): Promise<void> {
     const textarea = container.querySelector('textarea')!;
@@ -2389,6 +2393,59 @@ describe('Chats run composer chips', () => {
     expect(composerButton(container, 'Send')).not.toBeNull();
   });
 
+  it('an open chat switches its model mid-conversation, without moving the new-run default', async () => {
+    // The agent and folder are run identity; the model is not — the CLIs
+    // themselves let a conversation change model between turns.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    api.updateChatSettings.mockResolvedValue({ ...run1, model: 'opus' });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await pickMenuRow(container, modelTrigger(container), 'opus');
+
+    expect(api.updateChatSettings).toHaveBeenCalledWith({
+      runId: 'r1',
+      updateChatSettingsDto: { model: 'opus' },
+    });
+    // The chip names what the run now carries, from the daemon's answer.
+    expect(modelTrigger(container).textContent).toContain('opus');
+    // Retargeting THIS chat says nothing about what the next one should open
+    // as — same reasoning as the approval chip, which is also not persisted.
+    expect(window.geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lastModels: expect.anything() }),
+    );
+  });
+
+  it("clears an open chat's model back to the CLI default with an explicit null", async () => {
+    // Omitting the key means "leave unchanged", so only an explicit null can
+    // say "stop passing --model".
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    api.listChats.mockResolvedValue([{ ...run1, model: 'opus' }]);
+    api.updateChatSettings.mockResolvedValue({ ...run1, model: null });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(modelTrigger(container).textContent).toContain('opus');
+
+    await pickMenuRow(container, modelTrigger(container), 'default model');
+
+    expect(api.updateChatSettings).toHaveBeenCalledWith({
+      runId: 'r1',
+      updateChatSettingsDto: { model: null },
+    });
+  });
+
+  it('locks the model chip mid-turn — the daemon 409s a change while a turn runs', async () => {
+    // History with no terminal item on a running run = a live turn.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(modelTrigger(container).disabled).toBe(true);
+  });
+
   it('a workflow run shows workflow + folder + trigger chips and a disabled send', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([
       {
@@ -2441,6 +2498,8 @@ describe('Chats run composer chips', () => {
     ).toEqual([]);
     // Workflow runs take one task — the round send stays disabled.
     expect(composerButton(container, 'Send')?.disabled).toBe(true);
+    // No model chip either: each agent node names its own model in the YAML.
+    expect(modelTrigger(container)).toBeUndefined();
   });
 });
 
@@ -2643,7 +2702,11 @@ describe('Chats sidebar list', () => {
         kind: 'turn_complete',
         role: null,
         payload: {
-          usage: { contextTokens: 45_200, costUsd: 0.23 },
+          usage: {
+            contextTokens: 45_200,
+            contextWindowTokens: 1_000_000,
+            costUsd: 0.23,
+          },
           stopReason: null,
         },
         createdAt: 'now',
@@ -2666,10 +2729,12 @@ describe('Chats sidebar list', () => {
     const workerRow = rows.find((text) => text?.includes('Worker A'));
     // One of its two turns settled — one still live, usage + ring recorded.
     expect(workerRow).toContain('running');
-    expect(workerRow).toContain('ctx 45.2k / 200k');
+    // The window the CLI reported on that item rides all the way to the card.
+    expect(workerRow).toContain('ctx 45.2k / 1M');
     expect(workerRow).toContain('$0.23');
     expect(
-      panel.querySelector('svg[aria-label="Context 23% full"]'),
+      // 45.2k of the reported 1M window — 23% is what the old flat 200k gave.
+      panel.querySelector('svg[aria-label="Context 5% full"]'),
     ).not.toBeNull();
     expect(rows.some((text) => text?.includes('start'))).toBe(false);
 

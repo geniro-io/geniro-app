@@ -49,6 +49,10 @@ function readUsage(root: Record<string, unknown>): AgentUsage {
     // Cursor doesn't break out cache tokens — its input count IS the best
     // available context figure.
     contextTokens: inputTokens,
+    // cursor-agent reports no window for the model it ran, so the consumer's
+    // default stands. Stated here rather than assumed: a wrong window silently
+    // mis-scales the fill ring, which is the whole reason claude reports one.
+    contextWindowTokens: null,
     costUsd: asNumber(root.total_cost_usd) ?? asNumber(root.cost_usd),
   };
 }

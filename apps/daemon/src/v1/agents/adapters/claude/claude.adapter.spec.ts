@@ -154,7 +154,7 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
-  it('maps a successful result to turn_complete with usage, summing cache tokens into contextTokens', () => {
+  it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage({
         type: 'result',
@@ -163,12 +163,26 @@ describe('mapClaudeMessage', () => {
         result: 'pong',
         stop_reason: 'end_turn',
         usage: {
+          // Turn-wide roll-up: three requests' worth of the same conversation.
           input_tokens: 12,
           output_tokens: 3,
-          // The bulk of a resumed session's context rides the cache counters —
-          // contextTokens must include them, not just input_tokens.
           cache_creation_input_tokens: 100,
-          cache_read_input_tokens: 900,
+          cache_read_input_tokens: 2_700,
+          iterations: [
+            {
+              input_tokens: 4,
+              output_tokens: 3,
+              cache_creation_input_tokens: 12,
+              cache_read_input_tokens: 996,
+            },
+          ],
+        },
+        modelUsage: {
+          'claude-opus-5[1m]': {
+            inputTokens: 12,
+            cacheReadInputTokens: 2_700,
+            contextWindow: 1_000_000,
+          },
         },
         total_cost_usd: 0.14,
       }),
@@ -178,7 +192,9 @@ describe('mapClaudeMessage', () => {
         usage: {
           inputTokens: 12,
           outputTokens: 3,
+          // The final request's prompt (4 + 12 + 996), not the 2_812 roll-up.
           contextTokens: 1012,
+          contextWindowTokens: 1_000_000,
           costUsd: 0.14,
         },
         stopReason: 'end_turn',
@@ -224,7 +240,7 @@ describe('ClaudeAdapter', () => {
       'ant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n',
     );
     child.stdout.emitData(
-      '{"type":"result","is_error":false,"result":"hi","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},"total_cost_usd":0.01}\n',
+      '{"type":"result","is_error":false,"result":"hi","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1,"iterations":[{"input_tokens":1,"output_tokens":1}]},"total_cost_usd":0.01}\n',
     );
     child.emit('close', 0, null);
     await handle.done;
@@ -238,6 +254,7 @@ describe('ClaudeAdapter', () => {
           inputTokens: 1,
           outputTokens: 1,
           contextTokens: 1,
+          contextWindowTokens: null,
           costUsd: 0.01,
         },
         stopReason: 'end_turn',

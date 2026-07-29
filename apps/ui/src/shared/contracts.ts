@@ -46,6 +46,21 @@ export interface Settings {
   recentFolders: string[];
   /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
   lastChatTarget: string | null;
+  /**
+   * The new-run composer's last approval mode, so it opens on the choice the
+   * user actually works in rather than resetting to `ask` every time. An
+   * opaque string here on purpose: the mode vocabulary is the DAEMON's (its
+   * `ChatApprovalMode`), and this file holds no daemon shapes — the renderer
+   * validates the stored value against the generated enum before applying it.
+   */
+  lastApprovalMode: string | null;
+  /**
+   * The new-run composer's last model per CLI. Keyed by CLI because the two
+   * have disjoint model vocabularies — one shared slot would hand cursor a
+   * claude alias the moment the user switched agents. A missing entry means
+   * that CLI's own default (no `--model` flag).
+   */
+  lastModels: Partial<Record<CliKind, string>>;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -58,6 +73,8 @@ export const DEFAULT_SETTINGS: Settings = {
   projectFolder: null,
   recentFolders: [],
   lastChatTarget: null,
+  lastApprovalMode: null,
+  lastModels: {},
   cliPaths: {},
   checkForUpdates: true,
 };

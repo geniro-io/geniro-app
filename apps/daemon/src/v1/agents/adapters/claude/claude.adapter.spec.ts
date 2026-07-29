@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -760,5 +761,57 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
         process.env.MCP_TOOL_TIMEOUT = previousTimeout;
       }
     }
+  });
+});
+
+describe('ClaudeAdapter image attachments', () => {
+  it('sends attached images as base64 content blocks, ahead of the text', () => {
+    // The CLI's stream-json input takes Messages-API content blocks, so an
+    // image reaches the model directly — probe-verified against claude 2.1.220
+    // in July 2026 (it described a magenta probe image without a tool call).
+    // Handing over a path instead would cost a Read round-trip and put the
+    // image behind the permission gate.
+    const dir = mkdtempSync(join(tmpdir(), 'claude-images-'));
+    const path = join(dir, 'shot.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    writeFileSync(path, bytes);
+    const { spawn, child } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn });
+
+    try {
+      adapter.start(
+        {
+          prompt: 'what is wrong here?',
+          cwd: dir,
+          images: [{ path, mediaType: 'image/png' }],
+        },
+        () => {},
+      );
+
+      const payload = JSON.parse(child.stdin.written) as {
+        message: { content: { type: string; source?: { data: string } }[] };
+      };
+      expect(payload.message.content.map((block) => block.type)).toEqual([
+        'image',
+        'text',
+      ]);
+      expect(payload.message.content[0]?.source?.data).toBe(
+        bytes.toString('base64'),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sends a text-only turn as a lone text block', () => {
+    const { spawn, child } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn });
+
+    adapter.start({ prompt: 'hello', cwd: tmpdir() }, () => {});
+
+    const payload = JSON.parse(child.stdin.written) as {
+      message: { content: { type: string }[] };
+    };
+    expect(payload.message.content).toEqual([{ type: 'text', text: 'hello' }]);
   });
 });

@@ -16,8 +16,13 @@
 import * as runtime from '../runtime';
 import type {
   AgentKind,
+  AgentModelDto,
   AgentSkillDto,
 } from '../models/index';
+
+export interface AgentsApiListAgentModelsRequest {
+    agent: AgentKind;
+}
 
 export interface AgentsApiListAgentSkillsRequest {
     agent: AgentKind;
@@ -28,6 +33,54 @@ export interface AgentsApiListAgentSkillsRequest {
  * 
  */
 export class AgentsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async listAgentModelsRaw(requestParameters: AgentsApiListAgentModelsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<AgentModelDto>>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentModels().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/models`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentModels(requestParameters: AgentsApiListAgentModelsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentModelDto>> {
+        const response = await this.listAgentModelsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 

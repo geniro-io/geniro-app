@@ -1,10 +1,18 @@
+import { type ChildProcess, execFile } from 'node:child_process';
+
 import type { AgentKind } from '../../runs/runs.types';
+import { buildChildEnv } from '../utils/child-env';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
+  AgentCommandOptions,
   AgentEvent,
+  AgentModel,
   AgentTurnHandle,
   AgentTurnInput,
 } from './adapter.types';
+
+/** Utility commands (`models`, `--version`) answer fast or not at all. */
+const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
 
 /**
  * Constructor options every adapter accepts — test seams, not user config. The
@@ -16,6 +24,8 @@ export interface AgentAdapterOptions {
   spawn?: SpawnFn;
   /** Sink for skipped-unparseable-line warnings; defaults to silent. */
   logger?: { warn(message: string): void };
+  /** Replacement execFile for the utility commands in tests; defaults to node's. */
+  execFileFn?: typeof execFile;
 }
 
 /**
@@ -36,6 +46,54 @@ export abstract class AgentAdapter {
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
   protected abstract buildArgs(input: AgentTurnInput): string[];
+
+  /**
+   * The models this CLI will accept for `--model`, newest information first.
+   *
+   * Every CLI answers this differently — one has a subcommand, another only a
+   * documented alias set — so the shape is fixed here and each subclass
+   * decides how to obtain it. An implementation must NEVER throw or hang: a
+   * CLI that cannot be asked returns its built-in set, so the picker always
+   * offers something.
+   */
+  abstract listModels(options?: AgentCommandOptions): Promise<AgentModel[]>;
+
+  /**
+   * Run a short-lived utility command for THIS CLI and return its stdout, or
+   * null if it failed, timed out, or the binary is missing.
+   *
+   * The single spawn path for everything that is not a turn — subclasses never
+   * reach for `execFile` themselves, exactly as they never reach for
+   * `runHeadlessCli`. It strips the daemon's `GENIRO_`-prefixed env like a
+   * turn does, and hands the child to `onSpawn` so the caller can register it
+   * for shutdown. Never rejects.
+   */
+  protected runCommand(
+    args: string[],
+    options: AgentCommandOptions = {},
+  ): Promise<string | null> {
+    return new Promise((resolve) => {
+      const run = this.options.execFileFn ?? execFile;
+      let child: ChildProcess;
+      try {
+        child = run(
+          this.command,
+          args,
+          {
+            timeout: options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS,
+            encoding: 'utf8',
+            env: buildChildEnv(),
+          },
+          (err, stdout) => resolve(err ? null : String(stdout)),
+        );
+      } catch {
+        // A missing binary throws synchronously on some platforms.
+        resolve(null);
+        return;
+      }
+      options.onSpawn?.(child);
+    });
+  }
 
   /** Map one parsed line of the CLI's stream-json output to normalized events. */
   protected abstract mapMessage(obj: unknown): AgentEvent[];

@@ -249,6 +249,29 @@ describe('CursorAdapter graph-node extras', () => {
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });
 
+  it('names attached image paths in the prompt, keeping the role prefix outermost', () => {
+    // cursor's stdin is a plain prompt string with no content-block channel,
+    // so a path is the only way to hand it an image. The role must still come
+    // first — it frames everything after it, attachments included.
+    const { spawn, child, captured } = fakeSpawn();
+    new CursorAdapter({ spawn }).start(
+      {
+        prompt: 'what is wrong here?',
+        cwd: '/proj',
+        systemPrompt: 'You are the reviewer.',
+        images: [{ path: '/data/att/run/a.png', mediaType: 'image/png' }],
+      },
+      () => {},
+    );
+
+    expect(child.stdin.written).toBe(
+      'You are the reviewer.\n\nThe user attached this image file:\n' +
+        '- /data/att/run/a.png\n\nwhat is wrong here?',
+    );
+    // The path rides stdin like the rest of the prompt — never argv.
+    expect(captured.args!.some((a) => a.includes('a.png'))).toBe(false);
+  });
+
   it('degrades every non-auto approval mode to --force (no approval callback)', () => {
     for (const mode of ['ask', 'acceptEdits', 'plan'] as const) {
       const { spawn, captured } = fakeSpawn();
@@ -295,5 +318,64 @@ describe('CursorAdapter binary override', () => {
     const { spawn, captured } = fakeSpawn();
     new CursorAdapter({ spawn }).start({ prompt: 'p', cwd: '/proj' }, () => {});
     expect(captured.command).toBe('/opt/tools/cursor-agent');
+  });
+});
+
+describe('CursorAdapter model listing', () => {
+  /** Capture the utility command and answer it with canned stdout. */
+  function fakeExec(stdout: string | null): {
+    execFileFn: typeof execFile;
+    captured: { args?: string[] };
+  } {
+    const captured: { args?: string[] } = {};
+    const execFileFn = ((
+      _cmd: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      captured.args = args;
+      cb(stdout === null ? new Error('spawn failed') : null, stdout ?? '');
+      return { on: () => {} };
+    }) as unknown as typeof execFile;
+    return { execFileFn, captured };
+  }
+
+  it('asks the CLI and returns exactly what it reported', async () => {
+    // `cursor-agent models` is the ONE CLI here that can be asked, so the list
+    // is live — a model the account gains shows up with no app change.
+    const { execFileFn, captured } = fakeExec('gpt-5.2-high\nsonnet-4.6\n');
+
+    const models = await new CursorAdapter({ execFileFn }).listModels();
+
+    expect(captured.args).toEqual(['models']);
+    expect(models.map((model) => model.id)).toEqual([
+      'gpt-5.2-high',
+      'sonnet-4.6',
+    ]);
+    expect(models.every((model) => model.source === 'cli')).toBe(true);
+  });
+
+  it('falls back to the documented ids when the CLI cannot answer', async () => {
+    // An install predating the `models` subcommand treats it as a prompt and
+    // drops into sign-in; the picker must still offer something usable.
+    const { execFileFn } = fakeExec(null);
+
+    const models = await new CursorAdapter({ execFileFn }).listModels();
+
+    expect(models.map((model) => model.id)).toEqual([
+      'gpt-5',
+      'sonnet-4',
+      'sonnet-4-thinking',
+    ]);
+    expect(models.every((model) => model.source === 'builtin')).toBe(true);
+  });
+
+  it('falls back when the CLI says the account has no models', async () => {
+    const { execFileFn } = fakeExec('No models available for this account.');
+
+    const models = await new CursorAdapter({ execFileFn }).listModels();
+
+    expect(models.every((model) => model.source === 'builtin')).toBe(true);
   });
 });

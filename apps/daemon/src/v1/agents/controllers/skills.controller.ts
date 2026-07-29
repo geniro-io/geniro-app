@@ -2,8 +2,14 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { AgentSkillWire } from '../chat.types';
-import { AgentSkillDto, ListSkillsQueryDto } from '../dto/skills.dto';
+import type { AgentModelWire, AgentSkillWire } from '../chat.types';
+import {
+  AgentModelDto,
+  AgentSkillDto,
+  ListModelsQueryDto,
+  ListSkillsQueryDto,
+} from '../dto/skills.dto';
+import { ModelsService } from '../services/models.service';
 import { SkillsService } from '../services/skills.service';
 
 /**
@@ -15,12 +21,22 @@ import { SkillsService } from '../services/skills.service';
 @ApiTags('agents')
 @ApiBearerAuth()
 export class SkillsController {
-  constructor(private readonly skillsService: SkillsService) {}
+  constructor(
+    private readonly skillsService: SkillsService,
+    private readonly modelsService: ModelsService,
+  ) {}
 
   @Get('skills')
   @ApiOperation({ operationId: 'listAgentSkills' })
   @ZodResponse({ status: 200, type: [AgentSkillDto] })
   listSkills(@Query() query: ListSkillsQueryDto): Promise<AgentSkillWire[]> {
     return this.skillsService.list(query.agent, query.cwd);
+  }
+
+  @Get('models')
+  @ApiOperation({ operationId: 'listAgentModels' })
+  @ZodResponse({ status: 200, type: [AgentModelDto] })
+  listModels(@Query() query: ListModelsQueryDto): Promise<AgentModelWire[]> {
+    return this.modelsService.list(query.agent);
   }
 }

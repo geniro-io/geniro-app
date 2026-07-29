@@ -25,7 +25,10 @@ const api = vi.hoisted(() => ({
   createChat: vi.fn(),
   renameRun: vi.fn(),
 }));
-const agentsApi = vi.hoisted(() => ({ listAgentSkills: vi.fn() }));
+const agentsApi = vi.hoisted(() => ({
+  listAgentSkills: vi.fn(),
+  listAgentModels: vi.fn(),
+}));
 // The mount path lists workflows + runs and reads capabilities once (which
 // gates the plan option in the approval chip).
 const workflowApi = vi.hoisted(() => ({
@@ -194,6 +197,11 @@ async function clickRun(container: HTMLElement, title: string): Promise<void> {
 }
 
 /** The composer's round icon actions, looked up by their accessible name. */
+/** An element's class list as exact tokens (substring checks lie about `shrink-0`). */
+function classesOf(el: Element): string[] {
+  return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+}
+
 function composerButton(
   container: HTMLElement,
   label: 'Send' | 'Stop' | 'Queue',
@@ -280,6 +288,12 @@ beforeEach(() => {
   api.createChat.mockReset();
   api.renameRun.mockReset();
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
+  // The composer's model rows come from the daemon, which asks the CLI.
+  agentsApi.listAgentModels.mockReset().mockResolvedValue([
+    { id: 'opus', label: 'opus', source: 'builtin' },
+    { id: 'sonnet', label: 'sonnet', source: 'builtin' },
+    { id: 'haiku', label: 'haiku', source: 'builtin' },
+  ]);
   workflowApi.listWorkflows.mockReset().mockResolvedValue([]);
   workflowApi.getWorkflow.mockReset().mockResolvedValue({
     slug: 'review-team',
@@ -1453,6 +1467,183 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
+  /** The composer's approval chip (the only ghost select showing a mode). */
+  const approvalTrigger = (container: HTMLElement): HTMLButtonElement =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find(
+      (trigger) => trigger.getAttribute('aria-label') === 'Tool-approval mode',
+    )!;
+
+  it('opens on the remembered approval mode instead of resetting to ask', async () => {
+    stubSettings({ lastApprovalMode: 'acceptEdits' });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(approvalTrigger(container).textContent).toContain('accept edits');
+  });
+
+  it('persists an approval-mode change as the next default', async () => {
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, approvalTrigger(container), 'auto-approve');
+
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastApprovalMode: 'auto',
+    });
+    expect(approvalTrigger(container).textContent).toContain('auto-approve');
+  });
+
+  it('ignores a stored mode the daemon does not accept', async () => {
+    // settings.json is a file the user can edit, and the mode vocabulary is
+    // the daemon's — a bad value must not ride into a run's approval setting.
+    stubSettings({ lastApprovalMode: 'yolo' });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(approvalTrigger(container).textContent).toContain('ask');
+  });
+
+  const modelTrigger = (container: HTMLElement): HTMLButtonElement =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Model')!;
+
+  /** Type a task into the composer and send it, creating the run. */
+  async function sendTask(container: HTMLElement): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'hello');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  it('starts the chat on the model the composer names, and remembers it', async () => {
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, modelTrigger(container), 'opus');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        agentKind: 'claude',
+        model: 'opus',
+      }),
+    });
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastModels: { claude: 'opus' },
+    });
+  });
+
+  it('lists what the DAEMON reports for whichever CLI is selected', async () => {
+    // No model list is baked into the renderer: the daemon asks each CLI
+    // (cursor's `models` subcommand; for claude the account models it caches
+    // for its own picker) and this picker shows that answer, so a model a CLI
+    // gains appears without an app release. Switching agents re-asks.
+    agentsApi.listAgentModels.mockImplementation(
+      ({ agent }: { agent: string }) =>
+        Promise.resolve(
+          agent === 'claude'
+            ? [
+                { id: 'claude-fable-5[1m]', label: 'Fable', source: 'cli' },
+                { id: 'opus', label: 'opus', source: 'builtin' },
+              ]
+            : [{ id: 'gpt-5.2-high', label: 'gpt-5.2-high', source: 'cli' }],
+        ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    // The account-specific model the CLI reported, which no hardcoded list
+    // could know, plus the alias — and always the no-flag row.
+    expect(await menuRows(container, modelTrigger(container))).toEqual([
+      'Fable',
+      'opus',
+      'default model',
+    ]);
+
+    await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
+
+    expect(await menuRows(container, modelTrigger(container))).toEqual([
+      'gpt-5.2-high',
+      'default model',
+    ]);
+    expect(agentsApi.listAgentModels).toHaveBeenCalledWith({
+      agent: 'cursor-agent',
+    });
+  });
+
+  it('still names a remembered model the CLI no longer reports', async () => {
+    // Otherwise the chip would show "default model" while the run actually
+    // passes `--model opus-4-1` — the picker must never misstate the argument.
+    stubSettings({ lastModels: { claude: 'retired-model' } });
+    agentsApi.listAgentModels.mockResolvedValue([
+      { id: 'opus', label: 'opus', source: 'builtin' },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(modelTrigger(container).textContent).toContain('retired-model');
+  });
+
+  it('remembers a model per CLI rather than carrying one across agents', async () => {
+    // The two CLIs have disjoint vocabularies — one shared slot would hand
+    // cursor a claude alias the moment the user switched agents.
+    stubSettings({ lastModels: { claude: 'haiku', 'cursor-agent': 'gpt-5' } });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(modelTrigger(container).textContent).toContain('haiku');
+
+    await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
+
+    expect(modelTrigger(container).textContent).toContain('gpt-5');
+  });
+
+  it('sends no model at all when the composer is on the CLI default', async () => {
+    // A run that names no model is what makes the daemon omit `--model`;
+    // sending an empty string would reach the CLI as a blank argument.
+    stubSettings({ lastModels: { claude: 'opus' } });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, modelTrigger(container), 'default model');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalled();
+    for (const [arg] of api.createChat.mock.calls) {
+      expect(
+        (arg as { createChatDto: object }).createChatDto,
+      ).not.toHaveProperty('model');
+    }
+  });
+
+  it('hides the model chip for a workflow target', async () => {
+    // A workflow's nodes each name their own model in its YAML — a composer
+    // model would silently apply to none of them.
+    stubSettings({ lastChatTarget: 'wf:review-team' });
+    workflowApi.listWorkflows.mockResolvedValue([reviewTeamSummary]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(modelTrigger(container)).toBeUndefined();
+  });
+
   it('the folder menu lists the recents INCLUDING the current one, and picking one re-persists recency order', async () => {
     // The recents used to be suggestion chips under the composer, which could
     // only ever show folders the user had already LEFT. In the menu the
@@ -1552,9 +1743,11 @@ describe('Chats composer memory & suggestions', () => {
 });
 
 describe('Chats defaults', () => {
-  it('creates a new chat with no model — new chats use the CLI default', async () => {
-    // The default-model setting was removed; a new chat must NOT carry a model
-    // (regressing it would re-introduce the concept this pins as gone).
+  it('creates a new chat with no model until the composer names one', async () => {
+    // The invisible default-model SETTING stays gone: an untouched composer
+    // must not smuggle a model into a run. What replaced it is the composer's
+    // model chip — an explicit, visible per-run choice, pinned in "Chats
+    // composer memory & suggestions" — so this pins the unchosen case only.
     // The run is only created when the composer sends its first message.
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
     api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
@@ -1607,6 +1800,165 @@ describe('Chats queued messages', () => {
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
   }
+
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const PNG_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
+
+  const staged = (container: HTMLElement): NodeListOf<Element> =>
+    container.querySelectorAll('[data-slot="staged-attachment"]');
+
+  /**
+   * Paste files onto the composer and wait until they are actually staged.
+   *
+   * The wait is on the observable, not a fixed tick: `FileReader` fires `load`
+   * on its own schedule, so flushing one macrotask races it under load — which
+   * is exactly how this spec first went flaky.
+   */
+  async function pasteImages(
+    container: HTMLElement,
+    files: File[],
+  ): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    const event = new Event('paste', { bubbles: true });
+    Object.defineProperty(event, 'clipboardData', { value: { files } });
+    await act(async () => {
+      textarea.dispatchEvent(event);
+    });
+    for (let attempt = 0; staged(container).length < files.length; attempt++) {
+      if (attempt >= 100) {
+        throw new Error(
+          `only ${staged(container).length}/${files.length} images staged`,
+        );
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  const pngFile = (name: string): File =>
+    new File([PNG_BYTES], name, { type: 'image/png' });
+
+  it('sends a pasted image with the message, carrying it through the queue', async () => {
+    // The whole paste path in one: the image stages visibly, survives the
+    // queue (a queued entry that dropped its images would have the agent
+    // answer about a screenshot it never received), and reaches the daemon as
+    // base64 on the send body.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'look at this'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await pasteImages(container, [pngFile('shot.png')]);
+
+    expect(staged(container)).toHaveLength(1);
+
+    await type(container, 'look at this');
+    await clickButton(container, 'Queue');
+
+    // Staged images clear with the text once queued.
+    expect(staged(container)).toHaveLength(0);
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: {
+        text: 'look at this',
+        images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
+      },
+    });
+  });
+
+  it('can send a message that is ONLY an image', async () => {
+    // An image alone is a complete message. Gating the send button on typed
+    // text left a pasted screenshot staged with no way out of the composer.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', ''));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    await pasteImages(container, [pngFile('shot.png')]);
+
+    const send = composerButton(container, 'Send')!;
+    expect(send.disabled).toBe(false);
+
+    await act(async () => {
+      send.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: {
+        text: '',
+        images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
+      },
+    });
+  });
+
+  it('lays the composer controls out on ONE line that never wraps', async () => {
+    // A crowded composer (agent + model + folder + branch + approval) used to
+    // wrap: first the send button dropped to a line of its own, then — once
+    // the button was pulled out of the wrapping box — the last chip did. Both
+    // grew the card and left a band of empty space. Nothing wraps now; the
+    // shrinkable chips give up width instead.
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const send = composerButton(container, 'Send')!;
+    const chipBox = send.previousElementSibling!;
+
+    // Neither the chip box nor the row holding it may wrap…
+    expect(chipBox.className).not.toContain('flex-wrap');
+    expect(send.parentElement?.className).not.toContain('flex-wrap');
+    // …the button is not inside the chip box and cannot be squeezed…
+    expect(chipBox.contains(send)).toBe(false);
+    expect(classesOf(send)).toContain('shrink-0');
+    // …and the folder chip is the one that yields, so the fixed-label chips
+    // beside it keep their full text. Exact tokens, not substrings: the chip's
+    // class list also carries an `[&>svg]:shrink-0` rule for its icon.
+    const folder = chipBox.querySelector<HTMLElement>(
+      '[data-menu-trigger][aria-label="Folder for new chats"]',
+    )!;
+    expect(classesOf(folder)).toContain('shrink');
+    expect(classesOf(folder)).not.toContain('shrink-0');
+  });
+
+  it('drops a staged image from the next message when it is removed', async () => {
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await pasteImages(container, [pngFile('one.png'), pngFile('two.png')]);
+    expect(staged(container)).toHaveLength(2);
+
+    await clickButton(container, 'Remove one.png');
+
+    expect(staged(container)).toHaveLength(1);
+  });
+
+  it('leaves a plain text paste alone', async () => {
+    // The handler only swallows the event when it carried images; otherwise
+    // the browser's own paste must still land in the textarea.
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const textarea = container.querySelector('textarea')!;
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { files: [] } });
+    await act(async () => {
+      textarea.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(staged(container)).toHaveLength(0);
+  });
 
   // run1 is 'running' with an empty history → the open transcript arms the
   // working state (Stop) straight from activation.

@@ -77,6 +77,62 @@ export type ClaudeModesCapability = z.infer<typeof ClaudeModesCapabilitySchema>;
 export const MAX_ANSWER_LENGTH = 32_768;
 
 /**
+ * Image types a pasted attachment may carry. Restricted to what the model APIs
+ * behind both CLIs accept, so an unsupported paste is refused at the daemon
+ * edge with a clear error rather than reaching an agent that silently ignores
+ * it. Clipboard images from macOS screenshots are PNG.
+ */
+export const ATTACHMENT_MEDIA_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+] as const;
+export const AttachmentMediaTypeSchema = z
+  .enum(ATTACHMENT_MEDIA_TYPES)
+  .meta({ id: 'AttachmentMediaType' });
+export type AttachmentMediaType = z.infer<typeof AttachmentMediaTypeSchema>;
+
+/**
+ * TWIN LIMIT: apps/ui/src/renderer/chats/use-attachments.ts.
+ *
+ * Per-image and per-message caps. A pasted screenshot is well under a
+ * megabyte; the ceiling exists because the bytes ride one JSON body and are
+ * then held in memory as base64 for the CLI payload, so an unbounded paste is
+ * a daemon OOM. Enforced at the daemon edge — the renderer's matching cap is a
+ * courtesy that keeps the user from composing a message that will be refused.
+ */
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
+
+/**
+ * One image attached to a user message. Only the METADATA lives in the item
+ * payload (and therefore SQLite) — the bytes are a file under
+ * `<userData>/attachments/<runId>/`, per the storage split: SQLite holds
+ * runtime/history, not blobs. `id` is the file's basename, so the row is all
+ * the attachment route needs to find the bytes again.
+ */
+export const AttachmentWireSchema = z
+  .object({
+    id: z.string(),
+    mediaType: AttachmentMediaTypeSchema,
+  })
+  .meta({ id: 'AttachmentWire' });
+export type AttachmentWire = z.infer<typeof AttachmentWireSchema>;
+
+/** One image as it arrives on the send-message body: bytes, not yet stored. */
+export interface SendMessageImage {
+  mediaType: AttachmentMediaType;
+  /** base64-encoded bytes. */
+  data: string;
+}
+
+/** A stored attachment read back for display (base64 — see AttachmentDataDto). */
+export interface AttachmentDataWire extends SendMessageImage {
+  id: string;
+}
+
+/**
  * A persisted transcript item projected to the wire — `payload` is parsed back
  * from its stored JSON string so the renderer receives structured data, not a
  * doubly-encoded string. This is the shape the daemon emits over `/ws` and the
@@ -120,6 +176,27 @@ export const AgentSkillWireSchema = z.object({
     .describe('Where it was discovered — disk scan, or the CLI session itself'),
 });
 export type AgentSkillWire = z.infer<typeof AgentSkillWireSchema>;
+
+/**
+ * One model a CLI accepts for `--model`.
+ *
+ * `source` says where the row came from, because the two CLIs can answer very
+ * differently: `cli` means the CLI itself reported it (cursor's `models`
+ * subcommand, or the account models claude caches for its own picker), `builtin`
+ * means the documented alias set we fall back to when the CLI cannot be asked —
+ * an install too old for the subcommand, or one that is not signed in.
+ */
+// No `.meta({ id })` on this root: it backs an ARRAY response DTO, and an id
+// there leaves the array pointing at a component that is never emitted (the
+// boot guard in setupSwagger fails on exactly that dangling $ref).
+export const AgentModelWireSchema = z.object({
+  id: z.string().describe('Passed verbatim to the CLI as `--model <id>`'),
+  label: z.string(),
+  source: z
+    .enum(['cli', 'builtin'])
+    .describe('Reported by the CLI, or our documented fallback set'),
+});
+export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
 
 /** One persisted item, ready to fan out to its run's WS room (persist-then-emit). */
 export interface RunItemEvent {

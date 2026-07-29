@@ -12,9 +12,11 @@ import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { AgentEventBus } from './services/agent-events.bus';
 import { ApprovalRegistry } from './services/approval-registry';
+import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { ClaudeProbeService } from './services/claude-probe.service';
 import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
+import { ModelsService } from './services/models.service';
 import { ProcessRegistry } from './services/process-registry';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -35,9 +37,23 @@ import { SkillsService } from './services/skills.service';
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
     {
+      provide: AttachmentStoreService,
+      useFactory: () => new AttachmentStoreService(),
+    },
+    {
       provide: SkillsService,
       useFactory: (harvest: SkillHarvestStore) => new SkillsService(harvest),
       inject: [SkillHarvestStore],
+    },
+    {
+      // Factory because the trailing options bag is a test seam, not a DI token.
+      provide: ModelsService,
+      useFactory: (
+        claude: ClaudeAdapter,
+        cursor: CursorAdapter,
+        processes: ProcessRegistry,
+      ) => new ModelsService(claude, cursor, processes),
+      inject: [ClaudeAdapter, CursorAdapter, ProcessRegistry],
     },
     AgentEventBus,
     ApprovalRegistry,

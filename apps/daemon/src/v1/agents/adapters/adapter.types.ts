@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process';
+
 /**
  * Token/cost accounting for a completed turn. Fields are nullable because not
  * every CLI version reports every figure — the defensive mappers fill what the
@@ -80,10 +82,53 @@ export type AgentEvent =
       requiresUserInteraction?: boolean;
     };
 
+/**
+ * One image attached to a turn, as the adapters receive it: a path on disk
+ * plus the media type the CLI must be told. Adapter-agnostic — how it reaches
+ * the child (content block vs path in the prompt) is each adapter's business.
+ */
+export interface TurnImage {
+  path: string;
+  mediaType: string;
+}
+
+/**
+ * One model a CLI will accept for `--model`, as that CLI reports it.
+ *
+ * `id` is passed through verbatim — never normalized, since only the CLI knows
+ * which spellings it honours. `label` is what the picker shows.
+ */
+export interface AgentModel {
+  id: string;
+  label: string;
+  /** How this entry was obtained — the UI says so when it is not live. */
+  source: 'cli' | 'builtin';
+}
+
+/** Options for a short-lived utility command a CLI is asked to run. */
+export interface AgentCommandOptions {
+  /**
+   * Handed the spawned child so the caller can register it with
+   * `ProcessRegistry` — every child the daemon spawns must be reapable on
+   * shutdown, including these one-shot utility ones.
+   */
+  onSpawn?: (child: ChildProcess) => void;
+  timeoutMs?: number;
+}
+
 /** Everything an adapter needs to drive one turn. */
 export interface AgentTurnInput {
   /** The user's message text for this turn. */
   prompt: string;
+  /**
+   * Images the user attached to this turn's message, already on disk under the
+   * daemon's attachments dir. Delivery is adapter-specific: claude gets real
+   * base64 image content blocks in its stream-json stdin payload (probe-verified
+   * on 2.1.220 — the model describes the image without touching a tool), while
+   * a CLI whose stdin is plain text can only be told the paths and left to open
+   * them itself. Empty/absent for a text-only turn.
+   */
+  images?: TurnImage[];
   /**
    * Working directory the CLI runs in — the user's project folder. The chat
    * service validates this exists and is a directory before the adapter spawns,

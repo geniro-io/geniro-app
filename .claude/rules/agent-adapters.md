@@ -28,8 +28,18 @@ globs:
     exactly once (Claude's per-turn `--mcp-config` file for caller nodes
     writes/removes the 0600 config here — the call token rides the file, never
     argv)
+  - implement `listModels(options?)` — the models that CLI accepts for
+    `--model`. Every CLI answers differently (cursor has a `models`
+    subcommand; claude has none, so its adapter reads the account models the
+    CLI caches in `~/.claude.json` for its own picker), so the SHAPE is fixed
+    on the base and the how is per-adapter. It must never throw or hang: a CLI
+    that cannot be asked returns its documented built-in set, so the picker is
+    never empty. No model list belongs anywhere else — the renderer has none.
 - Never wire `runHeadlessCli` (or `spawn`) directly from an adapter or service —
-  the base class's `start()` is the single spawn path.
+  the base class's `start()` is the single spawn path. For anything that is NOT
+  a turn (a `models` subcommand, a `--version` probe) the one path is the base's
+  `runCommand()`: an adapter never reaches for `execFile` itself, and the caller
+  registers the child via `onSpawn` so shutdown can reap it.
 - **Each adapter gets its own subdirectory** `adapters/<name>/` holding ALL of its
   classes, mapper functions, adapter-specific types, and specs
   (e.g. `adapters/claude/claude.adapter.ts`, `adapters/cursor/cursor.adapter.ts`).

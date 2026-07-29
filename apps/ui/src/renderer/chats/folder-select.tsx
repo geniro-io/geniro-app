@@ -73,6 +73,7 @@ export function FolderSelect({
       triggerLabel={folder === null ? undefined : folderName(folder)}
       placeholder="Choose folder…"
       searchPlaceholder="Search folders…"
+      shrinkable
       aria-label="Folder for new chats"
       title={folder ?? 'Choose the folder new chats run in'}
       disabled={disabled}

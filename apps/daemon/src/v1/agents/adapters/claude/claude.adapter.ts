@@ -12,8 +12,15 @@ import {
   asRecord,
   asString,
 } from '../../utils/json-util';
-import type { AgentEvent, AgentTurnInput, AgentUsage } from '../adapter.types';
+import type {
+  AgentEvent,
+  AgentModel,
+  AgentTurnInput,
+  AgentUsage,
+} from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import { claudeModels } from './claude-models';
+import { buildImageBlocks } from './image-blocks';
 
 /**
  * Default `MCP_TOOL_TIMEOUT` for turns that carry the call tools: a sync
@@ -29,6 +36,8 @@ export interface ClaudeAdapterOptions extends AgentAdapterOptions {
    * userData tmp dir); falls back to the OS tmpdir for standalone/spec use.
    */
   mcpConfigDir?: string;
+  /** Home dir holding `.claude.json` (test seam); defaults to the real one. */
+  homeDir?: string;
 }
 
 /**
@@ -287,6 +296,17 @@ export class ClaudeAdapter extends AgentAdapter {
     };
   }
 
+  /**
+   * claude has no list-models subcommand to run, so nothing is spawned: the
+   * list is the documented tier aliases plus the account-specific models the
+   * CLI caches in `~/.claude.json` for its own picker. Synchronous work behind
+   * an async signature — the contract is shared with cursor, which really does
+   * shell out.
+   */
+  override listModels(): Promise<AgentModel[]> {
+    return Promise.resolve(claudeModels(this.claudeOptions.homeDir));
+  }
+
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = [
       '-p',
@@ -348,7 +368,15 @@ export class ClaudeAdapter extends AgentAdapter {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: input.prompt }],
+        // Attached images ride as real base64 content blocks — the CLI's
+        // stream-json input accepts the Messages-API block shape, so the model
+        // SEES the image directly (probe-verified on claude 2.1.220, in either
+        // block order). Handing over a path instead would cost a Read
+        // round-trip and put an image behind the permission gate.
+        content: [
+          ...buildImageBlocks(input.images),
+          { type: 'text', text: input.prompt },
+        ],
       },
     })}\n`;
   }

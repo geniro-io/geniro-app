@@ -7,11 +7,16 @@ type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>();
+  // Spelled out rather than spread from DEFAULT_SETTINGS: this object is
+  // built inside vi.hoisted(), which runs BEFORE module imports initialize —
+  // referencing the import there throws at load.
   const settings: Settings = {
     onboardingComplete: false,
     projectFolder: null,
     recentFolders: [],
     lastChatTarget: null,
+    lastApprovalMode: null,
+    lastModels: {},
     cliPaths: {},
     checkForUpdates: true,
   };

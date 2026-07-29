@@ -10,8 +10,9 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { ItemWire, RunWire } from '../chat.types';
+import type { AttachmentDataWire, ItemWire, RunWire } from '../chat.types';
 import {
+  AttachmentDataDto,
   CancelledDto,
   CreateChatDto,
   HistoryQueryDto,
@@ -88,7 +89,17 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
-    return this.chatService.sendMessage(runId, dto.text);
+    return this.chatService.sendMessage(runId, dto.text, dto.images);
+  }
+
+  @Get(':runId/attachments/:attachmentId')
+  @ApiOperation({ operationId: 'readChatAttachment' })
+  @ZodResponse({ status: 200, type: AttachmentDataDto })
+  readAttachment(
+    @Param('runId') runId: string,
+    @Param('attachmentId') attachmentId: string,
+  ): AttachmentDataWire {
+    return this.chatService.readAttachment(runId, attachmentId);
   }
 
   @Post(':runId/cancel')

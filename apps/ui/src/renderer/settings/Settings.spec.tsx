@@ -7,18 +7,19 @@ import type {
   GeniroApi,
   Settings as SettingsShape,
 } from '../../shared/contracts';
+import { DEFAULT_SETTINGS } from '../../shared/contracts';
 import { Settings } from './Settings';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+// Spread the real defaults so a new Settings field is not a spec edit; only
+// the fields this spec actually asserts on are named.
 const settings: SettingsShape = {
+  ...DEFAULT_SETTINGS,
   onboardingComplete: true,
   projectFolder: '/proj',
-  recentFolders: [],
-  lastChatTarget: null,
-  cliPaths: {},
   checkForUpdates: false,
 };
 

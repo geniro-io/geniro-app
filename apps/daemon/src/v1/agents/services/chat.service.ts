@@ -13,10 +13,12 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import {
+  type AttachmentDataWire,
   type ChatApprovalMode,
   type ClaudeModesCapability,
   type ItemWire,
   type RunWire,
+  type SendMessageImage,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
@@ -30,6 +32,7 @@ import { assertChatRun } from '../utils/run-kind';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
+import { AttachmentStoreService } from './attachment-store.service';
 import { ClaudeProbeService } from './claude-probe.service';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
@@ -65,7 +68,18 @@ export class ChatService {
     private readonly cursor: CursorAdapter,
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
+    private readonly attachments: AttachmentStoreService,
   ) {}
+
+  /**
+   * One attachment's bytes for the renderer, base64 in JSON — an `<img src>`
+   * cannot carry the bearer token every daemon route demands, so the transcript
+   * fetches through the generated client and builds a data URL.
+   */
+  readAttachment(runId: string, attachmentId: string): AttachmentDataWire {
+    const { mediaType, bytes } = this.attachments.read(runId, attachmentId);
+    return { id: attachmentId, mediaType, data: bytes.toString('base64') };
+  }
 
   /**
    * Reconcile chat runs left `running` by a crash / SIGKILL / daemon restart
@@ -265,7 +279,11 @@ export class ChatService {
    * agent's reply streams over the bus → WS while this method has already
    * resolved.
    */
-  async sendMessage(runId: string, text: string): Promise<ItemWire> {
+  async sendMessage(
+    runId: string,
+    text: string,
+    images: SendMessageImage[] = [],
+  ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
     if (!run.cwd || !run.agentKind) {
@@ -299,9 +317,17 @@ export class ChatService {
       let approvalMode: ChatApprovalMode | undefined =
         committed?.approval ?? run.approval ?? undefined;
 
+      // Store the bytes BEFORE persisting the item: the payload records only
+      // the attachment rows, so an item written first would reference files
+      // that a failed write never created.
+      const attachments = images.map((image) =>
+        this.attachments.save(runId, image.mediaType, image.data),
+      );
+
       let seq = (await this.itemDao.maxSeq(runId, em)) + 1;
       const userWire = await this.persist(em, runId, seq++, 'message', 'user', {
         text,
+        ...(attachments.length > 0 ? { images: attachments } : {}),
       });
 
       // acceptEdits degrades to 'ask' VISIBLY (persisted system item) when the
@@ -357,7 +383,17 @@ export class ChatService {
         );
       }
       const handle = adapter.start(
-        { prompt: text, cwd, model, resumeSessionId, approvalMode },
+        {
+          prompt: text,
+          cwd,
+          model,
+          resumeSessionId,
+          approvalMode,
+          images: attachments.map((attachment) => ({
+            path: this.attachments.pathOf(runId, attachment.id),
+            mediaType: attachment.mediaType,
+          })),
+        },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even
           // though onEvent is a sync callback firing as stdout arrives.

@@ -66,10 +66,15 @@ Rules:
   answer is a **twin parser**: an independent implementation on each side
   carrying a reciprocal `TWIN PARSER:` doc block that cross-references its twin.
   A shape drift fixed on one side MUST be mirrored on the other, and the doc
-  block is what makes that obligation discoverable. Reference twin:
+  block is what makes that obligation discoverable. Reference twins:
   `apps/daemon/src/v1/agents/adapters/claude/question-payload.ts` ↔
   `apps/ui/src/renderer/chats/approval-card.tsx` (the AskUserQuestion
-  `{questions:[{question,options:[{label}]}]}` shape, M4).
+  `{questions:[{question,options:[{label}]}]}` shape, M4), and
+  `apps/daemon/src/v1/agents/chat.types.ts` `AttachmentWireSchema` ↔
+  `apps/ui/src/renderer/chats/attachment-payload.ts` (the `{id, mediaType}`
+  image rows inside a message item's `z.unknown()` payload — the payload is
+  untyped on the wire BY DESIGN, since each item kind carries a different
+  shape, so no generated type reaches the renderer).
 - Unit tests (`*.spec.ts`) are co-located in the same directory as the file under test and move with it.
 - When adding a file to a module, place it in its kind-directory from the start; never park it at the module root "temporarily".
 - Only create the directories the module actually needs — no empty placeholder dirs.

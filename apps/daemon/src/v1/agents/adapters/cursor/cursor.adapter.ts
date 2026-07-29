@@ -7,8 +7,16 @@ import {
   asString,
   firstString,
 } from '../../utils/json-util';
-import type { AgentEvent, AgentTurnInput, AgentUsage } from '../adapter.types';
+import type {
+  AgentCommandOptions,
+  AgentEvent,
+  AgentModel,
+  AgentTurnInput,
+  AgentUsage,
+} from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
+import { CURSOR_BUILTIN_MODELS, parseCursorModels } from './cursor-models';
+import { withImagePaths } from './image-paths';
 
 /**
  * Field names `cursor-agent` may use for the resumable chat/session id, across
@@ -213,6 +221,21 @@ export class CursorAdapter extends AgentAdapter {
     return resolveAgentBinary('cursor-agent');
   }
 
+  /**
+   * `cursor-agent models` (== `--list-models`) — "List available models for
+   * this account". It is the only CLI here that can actually be asked, so the
+   * list is live and stays in sync on its own. Builds older than the
+   * subcommand treat `models` as a PROMPT and drop into the sign-in flow
+   * instead of answering, which the timeout turns into a null; the built-in
+   * set covers that and the unauthenticated case alike.
+   */
+  override async listModels(
+    options: AgentCommandOptions = {},
+  ): Promise<AgentModel[]> {
+    const stdout = await this.runCommand(['models'], options);
+    return parseCursorModels(stdout) ?? CURSOR_BUILTIN_MODELS;
+  }
+
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = ['-p', '--output-format', 'stream-json', '--force'];
     if (input.trustWorkspace) {
@@ -238,9 +261,8 @@ export class CursorAdapter extends AgentAdapter {
     // surface the degrade to the user). In `-p` mode with no positional prompt
     // the CLI reads the prompt from stdin until EOF (spawn-cli ends stdin
     // right after the payload).
-    return input.systemPrompt
-      ? `${input.systemPrompt}\n\n${input.prompt}`
-      : input.prompt;
+    const prompt = withImagePaths(input.prompt, input.images);
+    return input.systemPrompt ? `${input.systemPrompt}\n\n${prompt}` : prompt;
   }
 
   protected override buildEnv(input: AgentTurnInput): Record<string, string> {

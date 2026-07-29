@@ -3,8 +3,10 @@ import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
+  AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
   ItemWireSchema,
+  MAX_ATTACHMENTS_PER_MESSAGE,
   RunWireSchema,
 } from '../chat.types';
 
@@ -39,9 +41,26 @@ export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
 ) {}
 
-export const sendMessageSchema = z.object({
-  text: z.string().min(1),
-});
+export const sendMessageSchema = z
+  .object({
+    // Not `.min(1)`: an image alone is a complete message ("what's wrong with
+    // this?" is carried by the screenshot). The refine below keeps the empty
+    // message — no text AND no images — refused.
+    text: z.string(),
+    images: z
+      .array(
+        z.object({
+          mediaType: AttachmentMediaTypeSchema,
+          data: z.string().min(1).describe('base64-encoded image bytes'),
+        }),
+      )
+      .max(MAX_ATTACHMENTS_PER_MESSAGE)
+      .optional(),
+  })
+  .refine(
+    (dto) => dto.text.trim().length > 0 || (dto.images?.length ?? 0) > 0,
+    'a message needs text or at least one image',
+  );
 export class SendMessageDto extends createZodDto(sendMessageSchema) {}
 
 export const renameRunSchema = z.object({
@@ -63,6 +82,20 @@ export class RunDto extends createZodDto(RunWireSchema) {}
 
 /** One persisted transcript item. */
 export class ItemDto extends createZodDto(ItemWireSchema) {}
+
+/**
+ * One attachment's bytes, base64 in JSON rather than a binary body: the daemon
+ * gates every route on the bearer token, and an `<img src>` cannot carry an
+ * Authorization header — so the renderer fetches through its generated client
+ * and builds a data URL. The root schema carries no `.meta({ id })` (see above).
+ */
+export class AttachmentDataDto extends createZodDto(
+  z.object({
+    id: z.string(),
+    mediaType: AttachmentMediaTypeSchema,
+    data: z.string().describe('base64-encoded image bytes'),
+  }),
+) {}
 
 /**
  * Acknowledgement of a cancel request. Shared with the workflow routes — the

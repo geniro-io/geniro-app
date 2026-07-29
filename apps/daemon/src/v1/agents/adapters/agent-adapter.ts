@@ -7,6 +7,8 @@ import type {
   AgentCommandOptions,
   AgentEvent,
   AgentModel,
+  AgentSkillEntry,
+  AgentSkillsInput,
   AgentTurnHandle,
   AgentTurnInput,
 } from './adapter.types';
@@ -42,6 +44,18 @@ export abstract class AgentAdapter {
   /** The CLI binary invoked for each turn. */
   protected abstract readonly command: string;
 
+  /**
+   * The tool this CLI uses to ask the USER a question, or `null` when it has
+   * no question channel at all.
+   *
+   * It is the ONE thing that separates a genuine question from a permission
+   * check on the approval path, and only the adapter knows the name — so no
+   * service, executor or util may spell a tool name itself. A CLI that returns
+   * null simply never produces a question, and every consumer degrades to
+   * "permission only" without branching on which CLI it is.
+   */
+  abstract readonly questionToolName: string | null;
+
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
@@ -57,6 +71,44 @@ export abstract class AgentAdapter {
    * offers something.
    */
   abstract listModels(options?: AgentCommandOptions): Promise<AgentModel[]>;
+
+  /**
+   * The skills / slash commands this CLI can be invoked with in a folder, as
+   * found on disk — each CLI keeps them under its own roots
+   * (`.claude/skills`, `.claude/commands`, `.cursor/commands`), scanned in the
+   * project folder and the user's home dir.
+   *
+   * Ordering is the adapter's: it returns them in the order the CLI would
+   * resolve a collision, first occurrence winning. Never throws — one broken
+   * file on disk must not fail the list.
+   */
+  abstract listSkills(input: AgentSkillsInput): Promise<AgentSkillEntry[]>;
+
+  /**
+   * The slash commands the CLI ITSELF reports it can run — its built-ins and
+   * plugin commands, which exist nowhere on disk to be scanned.
+   *
+   * Only the binary knows this set, and only some CLIs will say: an adapter
+   * whose CLI has no such report returns `[]`, and so does one that cannot be
+   * asked right now. Never throws, and never hangs. The caller decides how
+   * often to ask; this method always does the work when called.
+   */
+  abstract listReportedCommands(
+    options?: AgentCommandOptions,
+  ): Promise<string[]>;
+
+  /**
+   * Whether the INSTALLED binary can stream partial assistant text, so a turn
+   * may be started with `streamPartials`.
+   *
+   * Asked rather than assumed because the answer is per-binary, not per-CLI: a
+   * flag the current claude accepts is rejected on argv by an older one, which
+   * would fail every turn instead of merely not streaming. A CLI with no such
+   * mode answers false forever. Never throws; a CLI that cannot be asked
+   * answers false, so the worst case is block streaming — exactly today's
+   * behaviour.
+   */
+  abstract supportsLiveStream(options?: AgentCommandOptions): Promise<boolean>;
 
   /**
    * Run a short-lived utility command for THIS CLI and return its stdout, or

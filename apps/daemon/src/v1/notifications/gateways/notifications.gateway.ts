@@ -94,6 +94,7 @@ export class NotificationsGateway
 {
   private readonly logger = new Logger(NotificationsGateway.name);
   private busSubscription?: Subscription;
+  private deltaSubscription?: Subscription;
 
   constructor(
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -118,10 +119,28 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`agent event bus errored: ${String(err)}`),
     });
+    // The EPHEMERAL live-text plane rides the same rooms, as its own event so
+    // a client can ignore it entirely and still receive a complete transcript.
+    // Isolated for the same reason as above: a throw here must not kill item
+    // delivery, which is the durable half.
+    this.deltaSubscription = this.bus.allDeltas().subscribe({
+      next: (delta) => {
+        try {
+          server.to(runRoom(delta.runId)).emit('agent_delta', delta);
+        } catch (err) {
+          this.logger.error(
+            `failed to emit agent_delta to ${runRoom(delta.runId)}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`agent delta bus errored: ${String(err)}`),
+    });
   }
 
   onModuleDestroy(): void {
     this.busSubscription?.unsubscribe();
+    this.deltaSubscription?.unsubscribe();
   }
 
   handleConnection(client: Socket): void {

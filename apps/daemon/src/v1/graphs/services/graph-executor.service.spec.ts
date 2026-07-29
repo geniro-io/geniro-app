@@ -195,6 +195,10 @@ class FakeAdapter {
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
   constructor(readonly kind: 'claude' | 'cursor-agent') {}
+  /** Mirrors the real adapters: only claude has a question channel. */
+  get questionToolName(): string | null {
+    return this.kind === 'claude' ? 'AskUserQuestion' : null;
+  }
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
@@ -633,10 +637,11 @@ describe('GraphExecutorService', () => {
     claude.starts[0]!.finish();
     await drain();
 
-    expect(skillHarvest.record).toHaveBeenCalledWith(realpathSync(dir), [
-      'review',
-      'compact',
-    ]);
+    expect(skillHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      ['review', 'compact'],
+    );
     // The report never becomes a transcript row.
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),

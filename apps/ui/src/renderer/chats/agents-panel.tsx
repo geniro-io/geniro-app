@@ -91,29 +91,64 @@ export function AgentsPanel({
                 ? agent.contextTokens / CONTEXT_WINDOW_TOKENS
                 : null;
             const isExpanded = expanded.has(agent.id);
+            // An agent whose only thread is its own conversation has nothing
+            // to expand INTO — the card already is that conversation. Showing
+            // a chevron over a one-row list (the 1:1 chat's whole shape) is
+            // pure nesting, so the levels collapse and the terminal button
+            // moves up onto the card itself.
+            const soleThread =
+              agent.threads.length === 1 && agent.threads[0]?.kind === 'main'
+                ? agent.threads[0]
+                : null;
+            const soleThreadTerminal =
+              soleThread !== null && agent.agent === 'claude'
+                ? soleThread
+                : null;
+            const Header = soleThread ? 'div' : 'button';
             return (
               <li
                 key={agent.id}
                 className="flex flex-col rounded-lg border border-border bg-card shadow-panel-sm">
-                <button
-                  type="button"
-                  className="flex flex-col gap-1 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-accent/50"
-                  aria-expanded={isExpanded}
-                  aria-label={`${agent.name} threads`}
-                  onClick={() => toggleExpanded(agent.id)}>
+                <Header
+                  {...(soleThread
+                    ? {}
+                    : {
+                        type: 'button' as const,
+                        'aria-expanded': isExpanded,
+                        'aria-label': `${agent.name} threads`,
+                        onClick: () => toggleExpanded(agent.id),
+                      })}
+                  className={cn(
+                    'flex flex-col gap-1 rounded-lg px-2.5 py-2 text-left',
+                    !soleThread && 'transition-colors hover:bg-accent/50',
+                  )}>
                   <span className="flex items-center gap-1.5">
-                    <ChevronRight
-                      aria-hidden="true"
-                      className={cn(
-                        'size-3.5 shrink-0 text-muted-foreground transition-transform',
-                        isExpanded && 'rotate-90',
-                      )}
-                    />
+                    {soleThread ? null : (
+                      <ChevronRight
+                        aria-hidden="true"
+                        className={cn(
+                          'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                          isExpanded && 'rotate-90',
+                        )}
+                      />
+                    )}
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">
                       {agent.name}
                     </span>
                     {agent.agent ? (
                       <Badge variant="muted">{agent.agent}</Badge>
+                    ) : null}
+                    {soleThreadTerminal ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-6 shrink-0 text-muted-foreground"
+                        aria-label={`Open terminal for ${agent.name}`}
+                        title="Open a terminal on this conversation"
+                        onClick={() => onOpenThread(agent, soleThreadTerminal)}>
+                        <TerminalIcon className="size-3.5 shrink-0" />
+                      </Button>
                     ) : null}
                   </span>
                   <span className="flex items-center gap-1 text-xs">
@@ -121,10 +156,17 @@ export function AgentsPanel({
                     <span className={RUN_STATUS_META[agent.status].className}>
                       {agent.status}
                     </span>
-                    {agent.threads.length > 0 ? (
+                    {agent.threads.length > 0 && soleThread === null ? (
                       <span className="text-muted-foreground">
                         · {agent.activeTurns} active · {agent.threads.length}{' '}
                         {agent.threads.length === 1 ? 'thread' : 'threads'}
+                      </span>
+                    ) : soleThread !== null && agent.activeTurns > 0 ? (
+                      // The thread COUNT is noise when there is only one, but
+                      // how many turns are live on it is not — an agent can
+                      // run several at once on its own conversation.
+                      <span className="text-muted-foreground">
+                        · {agent.activeTurns} active
                       </span>
                     ) : null}
                   </span>
@@ -157,8 +199,8 @@ export function AgentsPanel({
                       ) : null}
                     </span>
                   ) : null}
-                </button>
-                {isExpanded ? (
+                </Header>
+                {isExpanded && soleThread === null ? (
                   <ul className="m-0 flex list-none flex-col gap-0.5 border-t border-border px-2 py-1.5">
                     {agent.threads.length === 0 ? (
                       <li className="px-1 py-1 text-xs text-muted-foreground">

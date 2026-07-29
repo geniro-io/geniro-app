@@ -204,6 +204,38 @@ export interface RunItemEvent {
   item: ItemWire;
 }
 
+/**
+ * The live text one agent has produced since its last DURABLE item — the
+ * ephemeral plane behind a growing bubble.
+ *
+ * TWIN PARSER: `apps/ui/src/renderer/chats/live-text.ts` reads this shape off
+ * the `agent_delta` Socket.IO event. It is deliberately outside the generated
+ * HTTP contract (no route carries it, so no OpenAPI schema exists), which is
+ * why the two sides are independent implementations — a shape change here MUST
+ * be mirrored there.
+ *
+ * `text` is the WHOLE tail, not an increment: a client that missed a delta is
+ * correct again on the next one, and an empty string means "that block is
+ * durable now, stop showing it". Nothing here is ever persisted or replayed.
+ */
+export interface RunDeltaEvent {
+  runId: string;
+  /** Owning graph node; null for a 1:1 chat's single agent. */
+  nodeId: string | null;
+  text: string;
+  /**
+   * Reasoning tokens spent so far this turn, or null when the agent is not
+   * (or no longer) thinking.
+   *
+   * Rides the SAME event as the text tail rather than a second channel: both
+   * answer "what is this agent doing right now", both are ephemeral, and one
+   * mechanism cannot get out of sync with itself. There is no reasoning TEXT
+   * to carry — headless claude redacts it — so a running total is the whole
+   * signal.
+   */
+  thinkingTokens: number | null;
+}
+
 /** A run projected to the wire (chat and workflow runs share the shape). */
 export const RunWireSchema = z.object({
   id: z.string(),

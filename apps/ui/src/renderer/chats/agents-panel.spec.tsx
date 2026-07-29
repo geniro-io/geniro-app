@@ -112,10 +112,15 @@ describe('AgentsPanel', () => {
       worker.querySelector('svg[aria-label="Context 6% full"]'),
     ).not.toBeNull();
 
+    // One main thread and nothing else: the card IS that conversation, so it
+    // shows no chevron, no thread list and no "1 thread" count to expand into.
     const orchestrator = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;
-    expect(orchestrator.textContent).toContain('1 active · 1 thread');
+    expect(orchestrator.textContent).not.toContain('1 thread');
+    // The live-turn count survives the collapse — only the thread COUNT goes.
+    expect(orchestrator.textContent).toContain('1 active');
+    expect(orchestrator.querySelector('button[aria-expanded]')).toBeNull();
     expect(orchestrator.textContent).toContain('ctx 45.2k / 200k');
     expect(orchestrator.textContent).toContain('$0.24');
 
@@ -155,21 +160,35 @@ describe('AgentsPanel', () => {
     click(openCall1);
     expect(onOpenThread).toHaveBeenCalledWith(agents[1], agents[1]!.threads[0]);
 
-    // The main thread of a claude agent opens without an explicit session.
-    click(el.querySelector('button[aria-label="Orchestrator threads"]'));
-    expect(
-      el.querySelector(
-        'button[aria-label="Open terminal for Orchestrator — main"]',
-      ),
-    ).not.toBeNull();
+    // A sole-thread claude agent needs no expanding: its terminal sits right
+    // on the card and opens without an explicit session id.
+    const openMain = el.querySelector(
+      'button[aria-label="Open terminal for Orchestrator"]',
+    );
+    expect(openMain).not.toBeNull();
+    click(openMain);
+    expect(onOpenThread).toHaveBeenCalledWith(agents[0], agents[0]!.threads[0]);
 
-    // Cursor has no interactive mirror — threads list, but no terminal.
-    click(el.querySelector('button[aria-label="Reviewer threads"]'));
+    // Cursor has no interactive mirror — no terminal anywhere on its card.
     expect(
-      el.querySelector(
-        'button[aria-label="Open terminal for Reviewer — main"]',
-      ),
+      el.querySelector('button[aria-label="Open terminal for Reviewer"]'),
     ).toBeNull();
+  });
+
+  it('still expands an agent that genuinely has several threads', () => {
+    // The collapse is for a SOLE main thread only — a fan-out agent's call
+    // threads must stay reachable.
+    const el = render(
+      <AgentsPanel agents={agents} onOpenThread={vi.fn()} onClose={vi.fn()} />,
+    );
+    const worker = [...el.querySelectorAll('ul > li')].find((row) =>
+      row.textContent?.includes('Worker'),
+    )!;
+
+    expect(worker.querySelector('button[aria-expanded]')).not.toBeNull();
+    expect(worker.textContent).not.toContain('Write a haiku about rivers.');
+    click(worker.querySelector('button[aria-expanded]'));
+    expect(worker.textContent).toContain('Write a haiku about rivers.');
   });
 
   it('the fill ring escalates its tone as the context window fills', () => {

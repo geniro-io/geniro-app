@@ -61,6 +61,7 @@ import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
 import { folderName, FolderSelect } from './folder-select';
+import { applyLiveText, type LiveState } from './live-text';
 import { AttachmentLoaderContext } from './message-attachments';
 import { ModelSelect } from './model-select';
 import { formatClockTime } from './relative-time';
@@ -69,7 +70,11 @@ import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { TranscriptEntryView } from './transcript-entry';
-import { buildTurnBlocks, groupTranscript } from './transcript-groups';
+import {
+  buildTurnBlocks,
+  groupTranscript,
+  withLiveText,
+} from './transcript-groups';
 import {
   collectVerdicts,
   expiredApprovalIds,
@@ -133,6 +138,9 @@ function runLabel(run: ChatRun, workflowNames: Map<string, string>): string {
   return run.agentKind ?? 'chat';
 }
 
+/** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
+const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
+
 export function Chats({
   client,
   handle,
@@ -154,6 +162,10 @@ export function Chats({
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
+  // The agent's not-yet-durable words, per agent. Ephemeral: never persisted,
+  // never replayed, and cleared whenever the durable transcript is refetched.
+  const [liveText, setLiveText] =
+    useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
   const [input, setInput] = useState('');
   // Images pasted into whichever composer is on screen — the landing card and
   // the follow-up card are never mounted at once, so one stage serves both.
@@ -575,6 +587,7 @@ export function Chats({
       sawTerminalRef.current = false;
       setActiveRunId(runId);
       setItems([]);
+      setLiveText(EMPTY_LIVE_TEXT);
       setStreaming(false);
       setError(null);
       // Join FIRST so any live item published during the history fetch is
@@ -635,8 +648,19 @@ export function Chats({
     });
     refreshRuns();
     const unsubscribeItem = client.onItem(addItem);
+    const unsubscribeLiveText = client.onLiveText((event) => {
+      // Throwaway by design — only ever shown for the run on screen, and
+      // dropped wholesale on a run switch or a disconnect.
+      if (event.runId !== activeRunIdRef.current) {
+        return;
+      }
+      setLiveText((prev) => applyLiveText(prev, event));
+    });
     const unsubscribeDisconnect = client.onDisconnect(() => {
       reconnectAfterSeqRef.current = lastSeqRef.current;
+      // The daemon kept streaming while we were away and the tail we hold is
+      // now arbitrarily stale; the durable replay below is complete on its own.
+      setLiveText(EMPTY_LIVE_TEXT);
     });
     // On reconnect the WS missed any items streamed while offline (the room
     // buffers nothing for an absent member); fetch just the delta past the last
@@ -669,6 +693,7 @@ export function Chats({
     }
     return () => {
       unsubscribeItem();
+      unsubscribeLiveText();
       unsubscribeDisconnect();
       unsubscribeReconnect();
       const active = activeRunIdRef.current;
@@ -798,6 +823,7 @@ export function Chats({
     activeRunIdRef.current = null;
     setActiveRunId(null);
     setItems([]);
+    setLiveText(EMPTY_LIVE_TEXT);
     setStreaming(false);
     setError(null);
     refreshRuns();
@@ -1228,9 +1254,15 @@ export function Chats({
     return map;
   }, [wfNodes]);
   const transcriptEntries = useMemo(
-    () => buildTurnBlocks(groupTranscript(items)),
-    [items],
+    () => withLiveText(buildTurnBlocks(groupTranscript(items)), liveText),
+    [items, liveText],
   );
+  // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
+  // identity: avatars and `claude · 18:43` lines only earn their space when
+  // several agents share a flow. Keyed on the RUN (a workflow run always keeps
+  // them), never on "how many agents happened to speak so far" — that would
+  // make the frame pop in mid-run as a second node starts.
+  const soloAgent = activeRun !== null && activeRun.workflowId === null;
   // Live per-agent state for the agents panel, derived purely from the
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
@@ -1624,6 +1656,7 @@ export function Chats({
                       entry={entry}
                       nodes={nodeMeta}
                       chatAgentName={activeRun?.agentKind ?? null}
+                      soloAgent={soloAgent}
                     />
                   );
                 }
@@ -1633,34 +1666,40 @@ export function Chats({
                   (item.nodeId
                     ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
                     : activeRun?.agentKind) ?? 'agent';
-                return (
+                const card = (
+                  <div className="w-full">
+                    <ApprovalCard
+                      toolName={
+                        payloadString(item.payload, 'toolName') ?? 'tool'
+                      }
+                      input={
+                        (item.payload as { input?: unknown } | null)?.input ??
+                        null
+                      }
+                      verdict={
+                        requestId ? (verdicts.get(requestId) ?? null) : null
+                      }
+                      expired={
+                        requestId !== null &&
+                        (expiredIds.has(requestId) ||
+                          deadRequestKeys.has(`${item.runId}:${requestId}`))
+                      }
+                      onRespond={(allow, answer) =>
+                        respondApproval(item, allow, answer)
+                      }
+                    />
+                  </div>
+                );
+                // A solo agent's card needs no identity frame either.
+                return soloAgent ? (
+                  <div key={item.id}>{card}</div>
+                ) : (
                   <SenderRow
                     key={item.id}
                     name={askerName}
                     colorKey={item.nodeId ?? undefined}
                     time={formatClockTime(item.createdAt)}>
-                    <div className="w-full">
-                      <ApprovalCard
-                        toolName={
-                          payloadString(item.payload, 'toolName') ?? 'tool'
-                        }
-                        input={
-                          (item.payload as { input?: unknown } | null)?.input ??
-                          null
-                        }
-                        verdict={
-                          requestId ? (verdicts.get(requestId) ?? null) : null
-                        }
-                        expired={
-                          requestId !== null &&
-                          (expiredIds.has(requestId) ||
-                            deadRequestKeys.has(`${item.runId}:${requestId}`))
-                        }
-                        onRespond={(allow, answer) =>
-                          respondApproval(item, allow, answer)
-                        }
-                      />
-                    </div>
+                    {card}
                   </SenderRow>
                 );
               })}

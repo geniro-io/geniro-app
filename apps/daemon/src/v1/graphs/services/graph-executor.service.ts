@@ -35,6 +35,7 @@ import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
+  isUserQuestion,
 } from '../../agents/utils/approval-answer';
 import {
   mapEventToItem,
@@ -890,7 +891,7 @@ export class GraphExecutorService {
           if (event.type === 'slash_commands') {
             // The CLI's own invokable set for this run's cwd — feeds the
             // composer's `/` autocomplete, never the transcript.
-            this.skillHarvest.record(cwd, event.commands);
+            this.skillHarvest.record(node.agent, cwd, event.commands);
             return;
           }
           if (event.type === 'text') {
@@ -914,7 +915,10 @@ export class GraphExecutorService {
             // version drift. A flag-only request stays on the approval path
             // (card or daemon auto-approve per node.approval) with a warning
             // so the drift is loud, never silent.
-            const isQuestion = event.toolName === 'AskUserQuestion';
+            const isQuestion = isUserQuestion(
+              adapter.questionToolName,
+              event.toolName,
+            );
             if (!isQuestion && event.requiresUserInteraction === true) {
               this.logger.warn(
                 `interactive control_request for unrecognized tool '${event.toolName}' on ${node.id} — kept on the approval path, not bridged to the caller`,
@@ -996,6 +1000,7 @@ export class GraphExecutorService {
                   // helper with the chat service) so the verdict channel
                   // can never mutate an arbitrary tool's input.
                   foldApprovalAnswer(
+                    adapter.questionToolName,
                     event.toolName,
                     event.input,
                     allow,
@@ -1011,7 +1016,12 @@ export class GraphExecutorService {
                       // Recorded only when it was actually folded — the
                       // transcript must never claim an answer the agent
                       // did not receive.
-                      ...(answerFoldsInto(event.toolName, allow, answer)
+                      ...(answerFoldsInto(
+                        adapter.questionToolName,
+                        event.toolName,
+                        allow,
+                        answer,
+                      )
                         ? { answer }
                         : {}),
                     });

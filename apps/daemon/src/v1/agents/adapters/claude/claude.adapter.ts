@@ -13,13 +13,24 @@ import {
   asString,
 } from '../../utils/json-util';
 import type {
+  AgentCommandOptions,
   AgentEvent,
   AgentModel,
+  AgentSkillEntry,
+  AgentSkillsInput,
   AgentTurnInput,
   AgentUsage,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import { probeClaudeCommands } from './claude-commands';
+import {
+  helpAdvertisesPartialMessages,
+  mapClaudeStreamEvent,
+  mapClaudeThinkingTokens,
+  PARTIAL_MESSAGES_FLAG,
+} from './claude-live-stream';
 import { claudeModels } from './claude-models';
+import { scanClaudeSkills } from './claude-skills';
 import { buildImageBlocks } from './image-blocks';
 
 /**
@@ -38,6 +49,11 @@ export interface ClaudeAdapterOptions extends AgentAdapterOptions {
   mcpConfigDir?: string;
   /** Home dir holding `.claude.json` (test seam); defaults to the real one. */
   homeDir?: string;
+  /**
+   * Root for the throwaway workspace the command-catalog probe runs in (the
+   * daemon passes its userData tmp dir); falls back to the OS tmpdir.
+   */
+  probeRootDir?: string;
 }
 
 /**
@@ -61,6 +77,9 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
 
   switch (asString(root.type)) {
     case 'system': {
+      if (asString(root.subtype) === 'thinking_tokens') {
+        return mapClaudeThinkingTokens(root);
+      }
       if (asString(root.subtype) === 'init') {
         const events: AgentEvent[] = [];
         const sessionId = asString(root.session_id);
@@ -80,6 +99,9 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
       }
       return [];
     }
+
+    case 'stream_event':
+      return mapClaudeStreamEvent(root);
 
     case 'assistant': {
       const message = asRecord(root.message);
@@ -227,6 +249,13 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
 export class ClaudeAdapter extends AgentAdapter {
   readonly kind = 'claude' as const;
 
+  /**
+   * Probe-verified: a plain chat turn under `--permission-mode default
+   * --permission-prompt-tool stdio` offers this tool, and its request arrives
+   * as `can_use_tool` with `requires_user_interaction: true`.
+   */
+  readonly questionToolName = 'AskUserQuestion';
+
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
 
@@ -307,6 +336,34 @@ export class ClaudeAdapter extends AgentAdapter {
     return Promise.resolve(claudeModels(this.claudeOptions.homeDir));
   }
 
+  override listSkills(input: AgentSkillsInput): Promise<AgentSkillEntry[]> {
+    return scanClaudeSkills(input);
+  }
+
+  /** Memoized: `--help` is asked once per adapter instance, not once per turn. */
+  private liveStreamSupport: Promise<boolean> | null = null;
+
+  override supportsLiveStream(
+    options: AgentCommandOptions = {},
+  ): Promise<boolean> {
+    this.liveStreamSupport ??= this.runCommand(['--help'], options).then(
+      helpAdvertisesPartialMessages,
+    );
+    return this.liveStreamSupport;
+  }
+
+  override listReportedCommands(
+    options: AgentCommandOptions = {},
+  ): Promise<string[]> {
+    return probeClaudeCommands(
+      {
+        start: (turn, onEvent) => this.start(turn, onEvent),
+        probeRootDir: this.claudeOptions.probeRootDir ?? tmpdir(),
+      },
+      options,
+    );
+  }
+
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = [
       '-p',
@@ -316,6 +373,9 @@ export class ClaudeAdapter extends AgentAdapter {
       '--input-format',
       'stream-json',
     ];
+    if (input.streamPartials) {
+      args.push(PARTIAL_MESSAGES_FLAG);
+    }
     if (input.model) {
       args.push('--model', input.model);
     }
@@ -325,7 +385,16 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.systemPrompt) {
       args.push('--append-system-prompt', input.systemPrompt);
     }
-    if (input.approvalMode === 'auto') {
+    if (input.approvalMode === 'auto' && input.allowUserQuestions) {
+      // `--dangerously-skip-permissions` STRIPS AskUserQuestion, so an auto
+      // turn that must be able to ask spawns on the stdio dialogue instead
+      // (`default` is the CLI's name for ask). Unattended semantics are not
+      // lost — the DAEMON becomes the bypass, auto-approving every plain
+      // permission request at its approval seam and reserving the human card
+      // for genuine questions.
+      args.push('--permission-mode', 'default');
+      args.push('--permission-prompt-tool', 'stdio');
+    } else if (input.approvalMode === 'auto') {
       args.push('--dangerously-skip-permissions');
     } else if (input.approvalMode) {
       // ask/acceptEdits/plan all hold the stdio approval dialogue; `ask` is
@@ -384,8 +453,13 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override keepStdinOpen(input: AgentTurnInput): boolean {
     // Every stdio-dialogue mode (ask/acceptEdits/plan) can raise a mid-turn
     // control_request; only auto (and plain chat) closes stdin after the
-    // prompt payload.
-    return input.approvalMode !== undefined && input.approvalMode !== 'auto';
+    // prompt payload — UNLESS that auto turn was spawned on the dialogue to
+    // keep its question channel, in which case the verdict has to have a way
+    // back in (see buildArgs).
+    if (input.approvalMode === undefined) {
+      return false;
+    }
+    return input.approvalMode !== 'auto' || input.allowUserQuestions === true;
   }
 
   protected override buildApprovalResponse(

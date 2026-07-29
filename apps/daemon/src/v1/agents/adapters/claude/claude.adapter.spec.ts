@@ -442,6 +442,113 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
+  it('gives an auto turn the stdio dialogue when it must be able to ask the user', () => {
+    // --dangerously-skip-permissions STRIPS AskUserQuestion (probe-verified),
+    // so an auto turn that wants the question channel spawns on the dialogue
+    // instead. The daemon then stands in for the bypass at its approval seam.
+    const { spawn, captured, child } = fakeSpawn();
+    const endSpy = vi.spyOn(child.stdin, 'end');
+    new ClaudeAdapter({ spawn }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        approvalMode: 'auto',
+        allowUserQuestions: true,
+      },
+      () => {},
+    );
+
+    expect(captured.args).not.toContain('--dangerously-skip-permissions');
+    expect(captured.args).toEqual(
+      expect.arrayContaining([
+        '--permission-mode',
+        'default',
+        '--permission-prompt-tool',
+        'stdio',
+      ]),
+    );
+    // The verdict needs a way back in, so stdin must NOT close after the prompt.
+    expect(endSpy).not.toHaveBeenCalled();
+  });
+
+  it('still bypasses permissions for an auto turn that will not ask', () => {
+    // The reversion pin for the branch above — and the stdin half the older
+    // auto-mode argv test never asserted.
+    const { spawn, captured, child } = fakeSpawn();
+    const endSpy = vi.spyOn(child.stdin, 'end');
+    new ClaudeAdapter({ spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'auto' },
+      () => {},
+    );
+
+    expect(captured.args).toContain('--dangerously-skip-permissions');
+    expect(captured.args).not.toContain('--permission-prompt-tool');
+    expect(endSpy).toHaveBeenCalled();
+  });
+
+  it('leaves a legacy turn (no approval mode) byte-identical when asking is allowed', () => {
+    // A pre-selector chat row carries no mode: it must keep the CLI's own
+    // defaults and no permission flags, even though every chat now asks for
+    // the question channel.
+    const plain = fakeSpawn();
+    new ClaudeAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
+    const asking = fakeSpawn();
+    const endSpy = vi.spyOn(asking.child.stdin, 'end');
+    new ClaudeAdapter({ spawn: asking.spawn }).start(
+      { prompt: 'p', cwd: '/proj', allowUserQuestions: true },
+      () => {},
+    );
+
+    expect(asking.captured.args).toEqual(plain.captured.args);
+    expect(asking.captured.args).not.toContain('--permission-mode');
+    expect(endSpy).toHaveBeenCalled();
+  });
+
+  it('reports the tool it asks the user with, so no service spells the name', () => {
+    expect(new ClaudeAdapter().questionToolName).toBe('AskUserQuestion');
+  });
+
+  it('asks for token-level output only when the turn wants it', () => {
+    const off = fakeSpawn();
+    new ClaudeAdapter({ spawn: off.spawn }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
+    const on = fakeSpawn();
+    new ClaudeAdapter({ spawn: on.spawn }).start(
+      { prompt: 'p', cwd: '/proj', streamPartials: true },
+      () => {},
+    );
+
+    expect(off.captured.args).not.toContain('--include-partial-messages');
+    expect(on.captured.args).toContain('--include-partial-messages');
+  });
+
+  it('turns a stream_event into a live text increment, never a message', () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new ClaudeAdapter({ spawn }).start(
+      { prompt: 'p', cwd: '/proj', streamPartials: true },
+      (e) => events.push(e),
+    );
+
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'The sea' },
+        },
+      })}\n`,
+    );
+
+    expect(events).toEqual([{ type: 'text_delta', text: 'The sea' }]);
+  });
+
   it('keeps stdin open in ask mode, answers via control_response, closes on the terminal event', async () => {
     const { spawn, child } = fakeSpawn();
     const endSpy = vi.spyOn(child.stdin, 'end');

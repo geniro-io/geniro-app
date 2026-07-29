@@ -28,6 +28,35 @@ export interface AgentUsage {
  */
 export type AgentEvent =
   | { type: 'text'; text: string }
+  | {
+      /**
+       * An INCREMENT of assistant text, as the CLI generates it — the live
+       * plane behind a growing bubble.
+       *
+       * EPHEMERAL BY CONTRACT: a delta is never persisted, never allocated a
+       * `seq`, and never replayed. The completed `text` event that follows is
+       * the durable record of the same words, so a client that missed deltas
+       * (a reconnect mid-block) loses nothing. `mapEventToItem` returns null
+       * for it, and that switch is deliberately default-less so a new arm
+       * cannot silently become a database row.
+       */
+      type: 'text_delta';
+      text: string;
+    }
+  | {
+      /**
+       * The model is REASONING, with the tokens it has spent so far.
+       *
+       * There is no text to show: headless claude redacts thinking entirely
+       * (probe-verified — the block ships an encrypted `signature` and an
+       * empty body, and `--include-partial-messages` does not reveal it), so
+       * a running total is the only honest signal that the agent is working
+       * during an otherwise silent stretch. EPHEMERAL, exactly like
+       * {@link AgentEvent} `text_delta`: never persisted, never replayed.
+       */
+      type: 'thinking_progress';
+      tokens: number;
+    }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; id: string; name: string; input: unknown }
   | {
@@ -105,6 +134,28 @@ export interface AgentModel {
   source: 'cli' | 'builtin';
 }
 
+/**
+ * One skill / slash command a CLI can be invoked with (`/name …`).
+ *
+ * `kind` separates a skill directory from a plain command file; `source` says
+ * where it was found — the project folder, the user's home dir, or `cli` when
+ * the CLI itself reported it rather than the disk scan finding it.
+ */
+export interface AgentSkillEntry {
+  name: string;
+  description: string | null;
+  kind: 'skill' | 'command';
+  source: 'project' | 'user' | 'cli';
+}
+
+/** Everything an adapter needs to list what it can be invoked with. */
+export interface AgentSkillsInput {
+  /** The user's project folder, already validated and canonicalized. */
+  cwd: string;
+  /** The "user" scan root — the real home dir outside tests. */
+  homeDir: string;
+}
+
 /** Options for a short-lived utility command a CLI is asked to run. */
 export interface AgentCommandOptions {
   /**
@@ -113,6 +164,12 @@ export interface AgentCommandOptions {
    * shutdown, including these one-shot utility ones.
    */
   onSpawn?: (child: ChildProcess) => void;
+  /**
+   * Handed a full TURN a utility method started (a probe), for the same
+   * reason as `onSpawn` — `start()` hands back a handle, not a child, so the
+   * two registration seams are separate.
+   */
+  onTurn?: (handle: AgentTurnHandle) => void;
   timeoutMs?: number;
 }
 
@@ -159,6 +216,26 @@ export interface AgentTurnInput {
    * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).
    */
   env?: Record<string, string>;
+  /**
+   * Stream this turn's assistant text as it is generated, if the CLI can.
+   *
+   * Adapter-agnostic intent, like {@link allowUserQuestions}: the caller says
+   * "someone is watching", each CLI decides what that costs. A CLI with no
+   * partial-output mode ignores it and streams whole blocks as before.
+   */
+  streamPartials?: boolean;
+  /**
+   * This turn may stop and ASK THE USER a question.
+   *
+   * Adapter-agnostic on purpose: the caller states the intent, and each CLI
+   * decides what (if anything) it costs. For claude it is load-bearing —
+   * `--dangerously-skip-permissions` strips the AskUserQuestion tool entirely
+   * (probe-verified), so an `auto` turn that wants the question channel must
+   * spawn on the stdio permission dialogue instead and have the DAEMON stand
+   * in for the bypass, auto-approving plain permission requests. A CLI with no
+   * question channel ignores this and spawns exactly as before.
+   */
+  allowUserQuestions?: boolean;
   /**
    * Trust the turn's cwd without prompting (cursor `--trust`, headless-only).
    * Needed when the cwd is a daemon-created directory the user never opened —

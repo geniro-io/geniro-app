@@ -16,6 +16,13 @@ export function mapEventToItem(
       return null; // captured into node_state, not a transcript item
     case 'slash_commands':
       return null; // captured into the skill-harvest store, not a transcript item
+    case 'thinking_progress':
+    case 'text_delta':
+      // The EPHEMERAL live plane. This switch has no `default` on purpose:
+      // adding an AgentEvent arm breaks the build until someone decides,
+      // here, whether it becomes a durable row — which is what stops a
+      // per-token delta from ever growing the database.
+      return null;
     case 'text':
       return {
         kind: 'message',

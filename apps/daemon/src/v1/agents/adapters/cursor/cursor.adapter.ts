@@ -11,11 +11,14 @@ import type {
   AgentCommandOptions,
   AgentEvent,
   AgentModel,
+  AgentSkillEntry,
+  AgentSkillsInput,
   AgentTurnInput,
   AgentUsage,
 } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import { CURSOR_BUILTIN_MODELS, parseCursorModels } from './cursor-models';
+import { scanCursorSkills } from './cursor-skills';
 import { withImagePaths } from './image-paths';
 
 /**
@@ -213,6 +216,14 @@ export function mapCursorMessage(obj: unknown): AgentEvent[] {
  * {@link CursorAdapter.buildEnv}).
  */
 export class CursorAdapter extends AgentAdapter {
+  /**
+   * cursor-agent has no per-turn approval channel at all (its permissions are
+   * the `--force` flag plus the static allow/deny list in
+   * `~/.cursor/cli-config.json`), so it has no way to ask the user anything
+   * mid-turn either.
+   */
+  readonly questionToolName = null;
+
   readonly kind = 'cursor-agent' as const;
 
   // Resolved per turn so the Settings cliPaths override (GENIRO_CURSOR_BIN on
@@ -234,6 +245,27 @@ export class CursorAdapter extends AgentAdapter {
   ): Promise<AgentModel[]> {
     const stdout = await this.runCommand(['models'], options);
     return parseCursorModels(stdout) ?? CURSOR_BUILTIN_MODELS;
+  }
+
+  override listSkills(input: AgentSkillsInput): Promise<AgentSkillEntry[]> {
+    return scanCursorSkills(input);
+  }
+
+  /**
+   * cursor-agent's stream-json has no partial-output mode — its assistant
+   * lines arrive whole — so a turn never streams increments.
+   */
+  override supportsLiveStream(): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+
+  /**
+   * Nothing to report: cursor-agent has no built-in slash commands and no
+   * equivalent of claude's `system/init` list — `.cursor/commands` on disk is
+   * the whole of what it can be invoked with.
+   */
+  override listReportedCommands(): Promise<string[]> {
+    return Promise.resolve([]);
   }
 
   protected buildArgs(input: AgentTurnInput): string[] {

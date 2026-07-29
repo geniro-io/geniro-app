@@ -17,6 +17,7 @@ import { ChatService } from './services/chat.service';
 import { ClaudeProbeService } from './services/claude-probe.service';
 import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
 import { ModelsService } from './services/models.service';
+import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -42,8 +43,18 @@ import { SkillsService } from './services/skills.service';
     },
     {
       provide: SkillsService,
-      useFactory: (harvest: SkillHarvestStore) => new SkillsService(harvest),
-      inject: [SkillHarvestStore],
+      useFactory: (
+        harvest: SkillHarvestStore,
+        claude: ClaudeAdapter,
+        cursor: CursorAdapter,
+        processes: ProcessRegistry,
+      ) => new SkillsService(harvest, claude, cursor, processes),
+      inject: [
+        SkillHarvestStore,
+        ClaudeAdapter,
+        CursorAdapter,
+        ProcessRegistry,
+      ],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -57,6 +68,7 @@ import { SkillsService } from './services/skills.service';
     },
     AgentEventBus,
     ApprovalRegistry,
+    PartialStreamService,
     ProcessRegistry,
     ItemDao,
     NodeStateDao,
@@ -68,6 +80,9 @@ import { SkillsService } from './services/skills.service';
       useFactory: () =>
         new ClaudeAdapter({
           mcpConfigDir: join(environment.userDataDir, 'tmp'),
+          // The command-catalog probe's throwaway workspace — daemon-owned,
+          // never a user folder.
+          probeRootDir: join(environment.userDataDir, 'claude-probe'),
         }),
     },
     { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
@@ -89,6 +104,7 @@ import { SkillsService } from './services/skills.service';
   exports: [
     AgentEventBus,
     ApprovalRegistry,
+    PartialStreamService,
     ClaudeProbeService,
     ProcessRegistry,
     SkillHarvestStore,

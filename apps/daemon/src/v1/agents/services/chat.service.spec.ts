@@ -12,14 +12,20 @@ import type { AgentKind } from '../../runs/runs.types';
 import type { AgentEvent, AgentTurnInput } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
-import type { ClaudeModesCapability, RunItemEvent } from '../chat.types';
+import type {
+  ClaudeModesCapability,
+  RunDeltaEvent,
+  RunItemEvent,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
+import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import type { ClaudeProbeService } from './claude-probe.service';
+import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import type { SkillHarvestStore } from './skill-harvest.store';
 
@@ -170,7 +176,14 @@ function fakeAdapter(kind: AgentKind): {
     },
   );
   return {
-    adapter: { kind, start } as unknown as ClaudeAdapter,
+    adapter: {
+      kind,
+      start,
+      // Mirrors the real adapters: only claude has a question channel.
+      questionToolName: kind === 'claude' ? 'AskUserQuestion' : null,
+      // Mirrors the real adapters: only claude can stream partial text.
+      supportsLiveStream: () => Promise.resolve(kind === 'claude'),
+    } as unknown as ClaudeAdapter,
     start,
     emit: (event) => onEvent?.(event),
     finish: () => resolveDone?.(),
@@ -190,8 +203,10 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
   const itemDao = new FakeItemDao();
   const nodeDao = new FakeNodeStateDao();
   const published: RunItemEvent[] = [];
+  const deltas: RunDeltaEvent[] = [];
   const bus = {
     publish: (event: RunItemEvent) => published.push(event),
+    publishDelta: (event: RunDeltaEvent) => deltas.push(event),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
   const approvals = new ApprovalRegistry();
@@ -211,6 +226,11 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     probedAt: 0,
     reason: null,
   };
+  const attachments = {
+    save: () => ({ id: 'att-0', mediaType: 'image/png' }),
+    pathOf: (runId: string, id: string) => `/tmp/${runId}/${id}`,
+  } as unknown as AttachmentStoreService;
+  const partials = new PartialStreamService(bus);
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -228,9 +248,13 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     cursor.adapter as unknown as CursorAdapter,
     claudeProbe,
     skillHarvest,
+    attachments,
+    partials,
   );
   return {
     service,
+    deltas,
+    partials,
     runDao,
     itemDao,
     nodeDao,
@@ -388,10 +412,13 @@ describe('ChatService', () => {
     claude.finish();
     await drain();
 
-    expect(skillHarvest.record).toHaveBeenCalledWith(realpathSync(dir), [
-      'deploy',
-      'compact',
-    ]);
+    // Keyed by the agent that reported it as well as the folder — one folder
+    // is routinely used by both CLIs.
+    expect(skillHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      ['deploy', 'compact'],
+    );
     // The report never becomes a transcript row — no persisted payload
     // carries the harvested names.
     expect(
@@ -947,6 +974,196 @@ describe('ChatService — approval modes (parity M1)', () => {
     claude.finish();
     await drain();
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('streams assistant text live WITHOUT writing a row per delta', async () => {
+    const { service, claude, itemDao, deltas } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    const before = itemDao.items.length;
+
+    claude.emit({ type: 'text_delta', text: 'The ' });
+    claude.emit({ type: 'text_delta', text: 'sea ' });
+    claude.emit({ type: 'text_delta', text: 'is wide.' });
+    await drain();
+
+    // Each delta publishes the WHOLE tail (replace semantics), so a client
+    // that missed one is correct again on the next.
+    expect(deltas.map((d) => d.text)).toEqual([
+      'The ',
+      'The sea ',
+      'The sea is wide.',
+    ]);
+    // …and not one of them became a durable row.
+    expect(itemDao.items.length).toBe(before);
+  });
+
+  it('retires the live text the moment the durable message lands', async () => {
+    const { service, claude, itemDao, deltas } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({ type: 'text_delta', text: 'The sea' });
+    claude.emit({ type: 'text', text: 'The sea is wide.' });
+    await drain();
+
+    // An empty tail is the signal to stop rendering the live copy — without
+    // it the same words would show twice, live and durable.
+    expect(deltas.at(-1)).toMatchObject({ text: '' });
+    const messages = itemDao.items.filter((i) => i.kind === 'message');
+    expect(JSON.parse(messages.at(-1)!.payload)).toEqual({
+      text: 'The sea is wide.',
+    });
+  });
+
+  it('flushes ONE partial-flagged message when a turn dies mid-block', async () => {
+    // The user watched these words appear; an afterSeq replay must show the
+    // same transcript rather than losing them.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({ type: 'text_delta', text: 'half a thou' });
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+
+    const partials = itemDao.items
+      .filter((i) => i.kind === 'message')
+      .map((i) => JSON.parse(i.payload) as Record<string, unknown>)
+      .filter((p) => p.partial === true);
+    expect(partials).toEqual([{ text: 'half a thou', partial: true }]);
+  });
+
+  it('flushes nothing when every streamed word already became durable', async () => {
+    // The common case: a clean turn must not append a duplicate partial row.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({ type: 'text_delta', text: 'all of it' });
+    claude.emit({ type: 'text', text: 'all of it' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: 'all of it',
+    });
+    claude.finish();
+    await drain();
+
+    const messages = itemDao.items
+      .filter((i) => i.kind === 'message')
+      .map((i) => JSON.parse(i.payload) as Record<string, unknown>);
+    expect(messages.filter((p) => p.partial === true)).toEqual([]);
+    expect(messages.filter((p) => p.text === 'all of it')).toHaveLength(1);
+  });
+
+  it('asks the ADAPTER whether the turn can stream, never the agent kind', async () => {
+    const { service, claude, cursor } = setup();
+    const claudeRun = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+    });
+    await service.sendMessage(claudeRun.id, 'hi');
+    const cursorRun = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+    await service.sendMessage(cursorRun.id, 'hi');
+
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).streamPartials,
+    ).toBe(true);
+    // cursor-agent reports no partial-output mode, so its turn is unchanged.
+    expect(
+      (cursor.start.mock.calls[0]![0] as AgentTurnInput).streamPartials,
+    ).toBe(false);
+  });
+
+  it('lets an AUTO chat ask the user a real question instead of writing prose', async () => {
+    // The screenshot bug: auto-approve mapped to --dangerously-skip-permissions,
+    // which strips AskUserQuestion, so the agent enumerated its options as text.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    // The turn must be spawned able to ask at all.
+    const input = claude.start.mock.calls[0]![0] as AgentTurnInput;
+    expect(input.allowUserQuestions).toBe(true);
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    // The question is NOT auto-approved away — it waits for the human.
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+  });
+
+  it('keeps an AUTO chat unattended for ordinary tool permissions', async () => {
+    // Spawning on the stdio dialogue must not turn auto-approve into a chat
+    // that prompts: the daemon becomes the bypass for everything that is not
+    // a question, silently and with no transcript row.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-1',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-1',
+      true,
+      {
+        command: 'ls',
+      },
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('still shows the card for every permission in ASK mode', async () => {
+    // The auto-approve branch must be reachable ONLY from auto — an ask chat
+    // keeps the human gate on ordinary tools.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-2',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    await drain();
+
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
   });
 
   it("never both ACKs a flip to 'ask' and spawns the racing turn as 'auto' — a settings PATCH landing during sendMessage's run-row read must not be ignored", async () => {

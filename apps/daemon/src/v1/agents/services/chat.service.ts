@@ -24,7 +24,11 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { answerFoldsInto, foldApprovalAnswer } from '../utils/approval-answer';
+import {
+  answerFoldsInto,
+  foldApprovalAnswer,
+  isUserQuestion,
+} from '../utils/approval-answer';
 import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -34,6 +38,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { ClaudeProbeService } from './claude-probe.service';
+import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 
@@ -69,6 +74,7 @@ export class ChatService {
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly attachments: AttachmentStoreService,
+    private readonly partials: PartialStreamService,
   ) {}
 
   /**
@@ -376,6 +382,11 @@ export class ChatService {
         });
       };
 
+      // Asked of the adapter, never inferred from the agent kind: the answer
+      // is per-INSTALLED-BINARY (an older claude rejects the flag on argv).
+      const streamPartials = await adapter
+        .supportsLiveStream()
+        .catch(() => false);
       if (!this.registry.canStart(runId)) {
         throw new ConflictException(
           'RUN_STOPPING',
@@ -389,6 +400,11 @@ export class ChatService {
           model,
           resumeSessionId,
           approvalMode,
+          // A human is watching a chat: let the agent ask, and stream its
+          // words as they are written. Each adapter decides what that costs —
+          // a CLI without either capability spawns exactly as before.
+          allowUserQuestions: true,
+          streamPartials,
           images: attachments.map((attachment) => ({
             path: this.attachments.pathOf(runId, attachment.id),
             mediaType: attachment.mediaType,
@@ -402,10 +418,26 @@ export class ChatService {
               await saveSessionId(event.sessionId);
               return;
             }
+            if (event.type === 'text_delta') {
+              // EPHEMERAL: no seq, no row, no replay — just the live tail.
+              this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
+              return;
+            }
+            if (event.type === 'thinking_progress') {
+              // EPHEMERAL, like a text delta: the only honest signal during a
+              // silent reasoning stretch, since the text itself is redacted.
+              this.partials.thinking(
+                runId,
+                SINGLE_AGENT_NODE,
+                null,
+                event.tokens,
+              );
+              return;
+            }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
               // composer's `/` autocomplete, never the transcript.
-              this.skillHarvest.record(cwd, event.commands);
+              this.skillHarvest.record(adapter.kind, cwd, event.commands);
               return;
             }
             const mapped = mapEventToItem(event);
@@ -413,6 +445,29 @@ export class ChatService {
               return;
             }
             if (event.type === 'approval_request') {
+              const isQuestion = isUserQuestion(
+                adapter.questionToolName,
+                event.toolName,
+              );
+              if (!isQuestion && event.requiresUserInteraction === true) {
+                // Flag-only drift: a tool we don't recognize as THE question
+                // tool claims it needs the user. It stays on the approval path
+                // (card, or the auto-approve below) so a future interactive
+                // tool can never silently acquire a human gate it shouldn't
+                // have — but the drift is loud. Mirrors the executor's warning.
+                this.logger.warn(
+                  `interactive control_request for unrecognized tool '${event.toolName}' on run ${runId} — kept on the approval path`,
+                );
+              }
+              if (approvalMode === 'auto' && !isQuestion) {
+                // The daemon-side stand-in for --dangerously-skip-permissions.
+                // An auto chat spawns on the stdio dialogue ONLY so the
+                // question channel survives (buildArgs), so every plain
+                // permission is approved here with its input unchanged and no
+                // transcript item — auto stays exactly as unattended as before.
+                handle.respondApproval(event.id, true, event.input);
+                return;
+              }
               // The CLI is now parked waiting for a verdict. Persist the card
               // first (persist-then-emit, so the user sees it), then track it
               // under the chat's one synthetic node so the WS verdict
@@ -445,6 +500,7 @@ export class ChatService {
                     event.id,
                     allow,
                     foldApprovalAnswer(
+                      adapter.questionToolName,
                       event.toolName,
                       event.input,
                       allow,
@@ -465,7 +521,12 @@ export class ChatService {
                           // Recorded only when it was actually folded — the
                           // transcript must never claim an answer the agent
                           // did not receive.
-                          ...(answerFoldsInto(event.toolName, allow, answer)
+                          ...(answerFoldsInto(
+                            adapter.questionToolName,
+                            event.toolName,
+                            allow,
+                            answer,
+                          )
                             ? { answer }
                             : {}),
                         },
@@ -486,6 +547,14 @@ export class ChatService {
               mapped.role,
               mapped.payload,
             );
+            if (mapped.kind === 'message') {
+              // ONLY a message retires the tail: it is the durable copy of the
+              // very words being streamed. Retiring on any item would let a
+              // terminal one (turn_cancelled/error) erase the tail a moment
+              // before the finalizer flushes it — the text the user watched
+              // would vanish from the replayed transcript.
+              this.partials.retire(runId, SINGLE_AGENT_NODE, null);
+            }
             const status = terminalStatus(event);
             if (status) {
               await this.runDao.updateById(runId, { status }, em);
@@ -505,6 +574,22 @@ export class ChatService {
           // and a settled turn must never leave a pending card that no
           // verdict can ever reach.
           this.approvals.sweepNode(runId, SINGLE_AGENT_NODE);
+          // A turn that died mid-block leaves text the user WATCHED being
+          // written but that no durable item covers. Persist it once, flagged,
+          // so an afterSeq replay shows the same transcript they saw. The only
+          // item row the live plane is ever allowed to create.
+          const tail = this.partials.takeTail(runId, SINGLE_AGENT_NODE);
+          if (tail !== null) {
+            await this.persist(em, runId, seq++, 'message', 'assistant', {
+              text: tail,
+              partial: true,
+            }).catch((err: unknown) => {
+              this.logger.error(
+                `run ${runId} partial-text flush failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+          this.partials.clearRun(runId);
           if (eventHandlingFailed) {
             const message = 'run event persistence failed';
             await this.runDao

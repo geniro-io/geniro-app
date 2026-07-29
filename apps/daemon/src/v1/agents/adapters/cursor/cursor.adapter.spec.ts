@@ -143,6 +143,32 @@ describe('mapCursorMessage', () => {
 });
 
 describe('CursorAdapter', () => {
+  it('has no way to ask the user anything, and ignores a turn that wants one', () => {
+    // The adapter rule at work: the caller asks uniformly for the question
+    // channel and THIS CLI answers "I have none" — so no service ever needs to
+    // know which agent it is talking to. cursor-agent has no per-turn approval
+    // channel at all, so allowUserQuestions must not change a single flag.
+    expect(new CursorAdapter().questionToolName).toBeNull();
+
+    const plain = fakeSpawn();
+    new CursorAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'auto' },
+      () => {},
+    );
+    const asking = fakeSpawn();
+    new CursorAdapter({ spawn: asking.spawn }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        approvalMode: 'auto',
+        allowUserQuestions: true,
+      },
+      () => {},
+    );
+
+    expect(asking.captured.args).toEqual(plain.captured.args);
+  });
+
   it('delivers the prompt on stdin — never on ps-visible argv — and streams a turn', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];

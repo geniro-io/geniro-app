@@ -104,6 +104,24 @@ export function languageForPath(
   return registered(BY_EXTENSION[name.slice(dot + 1)]);
 }
 
+/**
+ * The grammar for a markdown fence's info string (```` ```ts ````).
+ *
+ * A fence names its language the way a file names its extension — `ts`, `sh`,
+ * `yml` — so the extension table answers most of them, with the full grammar
+ * id (```` ```typescript ````) as the fallback. An unknown token degrades to
+ * null and the block renders as plain text.
+ */
+export function languageForFence(
+  language: string | null | undefined,
+): string | null {
+  if (!language) {
+    return null;
+  }
+  const token = language.toLowerCase();
+  return registered(BY_EXTENSION[token] ?? token);
+}
+
 /** A grammar id only if refractor actually has it. */
 export function registered(language: string | null | undefined): string | null {
   return language && refractor.registered(language) ? language : null;

@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import { refractor } from 'refractor';
 
+import { CopyButton } from '../copy-button';
 import { registered } from './code-language';
 import { cn } from './utils';
 
@@ -54,21 +55,29 @@ export function CodeBlock({
     }
   }, [code, grammar]);
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
+    <div className="group/code flex min-w-0 flex-col gap-0.5">
       {caption ? (
         <div className="truncate font-mono text-xs text-muted-foreground">
           {caption}
         </div>
       ) : null}
-      <pre
-        data-slot="code-block"
-        data-language={grammar ?? 'text'}
-        className={cn(
-          'm-0 max-h-64 overflow-auto rounded-md bg-muted px-2.5 py-2 font-mono text-xs leading-relaxed text-foreground',
-          className,
-        )}>
-        <code>{highlighted ?? code}</code>
-      </pre>
+      <div className="relative min-w-0">
+        <pre
+          data-slot="code-block"
+          data-language={grammar ?? 'text'}
+          className={cn(
+            'm-0 max-h-64 overflow-auto rounded-md bg-muted px-2.5 py-2 font-mono text-xs leading-relaxed text-foreground',
+            className,
+          )}>
+          <code>{highlighted ?? code}</code>
+        </pre>
+        {/* Given the RAW `code`, never the highlighted tree — see CopyButton. */}
+        <CopyButton
+          text={code}
+          label="Copy code"
+          className="absolute top-1 right-1 bg-muted opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100"
+        />
+      </div>
     </div>
   );
 }

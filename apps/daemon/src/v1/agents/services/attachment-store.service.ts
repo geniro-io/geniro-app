@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Injectable } from '@nestjs/common';
@@ -82,6 +82,25 @@ export class AttachmentStoreService {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, id), bytes);
     return { id, mediaType };
+  }
+
+  /**
+   * Delete every attachment of one run, and the run's directory with them.
+   *
+   * Lives here, beside `save`, because this service is the only thing that
+   * knows the layout — a caller composing `join(userData, 'attachments', id)`
+   * itself would be a second place that has to be right. The run id is matched
+   * against the shape this service mints before anything is removed, so a
+   * `..` segment can never make this recurse out of the attachments root.
+   *
+   * Best-effort and idempotent: a run that never had an attachment has no
+   * directory, and that is a success, not an error.
+   */
+  removeRun(runId: string): void {
+    if (!UUID.test(runId)) {
+      return;
+    }
+    rmSync(join(this.root, runId), { recursive: true, force: true });
   }
 
   /**

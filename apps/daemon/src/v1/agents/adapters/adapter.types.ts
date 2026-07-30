@@ -1,5 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 
+import type { ClaudeModesCapability } from '../chat.types';
+
 /**
  * Token/cost accounting for a completed turn. Fields are nullable because not
  * every CLI version reports every figure — the defensive mappers fill what the
@@ -67,6 +69,21 @@ export type AgentEvent =
       type: 'thinking_progress';
       tokens: number;
     }
+  | {
+      /**
+       * How full the model's context window is as of the request that just
+       * produced output — the live counterpart of the `turn_complete` usage.
+       *
+       * Every claude `assistant` line carries its own request's prompt-side
+       * usage (probe-verified on 2.1.220), so the meter can move DURING a turn
+       * instead of jumping once at the end, which is what made it read stale.
+       * EPHEMERAL, exactly like {@link AgentEvent} `text_delta`: never
+       * persisted, never replayed. The window it is measured against does NOT
+       * ride here — the CLI reports that only on the `result` line.
+       */
+      type: 'context_progress';
+      contextTokens: number;
+    }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; id: string; name: string; input: unknown }
   | {
@@ -101,6 +118,21 @@ export type AgentEvent =
        */
       type: 'slash_commands';
       commands: string[];
+    }
+  | {
+      /**
+       * The CLI sent a control message on the stdin dialogue that this adapter
+       * does not model, carrying the subtype it was.
+       *
+       * DIAGNOSTIC ONLY — never a transcript item, never delivered to a turn's
+       * consumer: {@link AgentAdapter.start} logs it and drops it. It exists
+       * because the mappers are pure module-scope functions that cannot log,
+       * so an unmodelled subtype has to travel back to the caller AS DATA to
+       * be visible at all. Before it, a control subtype we did not recognize
+       * vanished into a bare `return []`.
+       */
+      type: 'unhandled_control';
+      subtype: string;
     }
   | {
       /**
@@ -145,6 +177,18 @@ export interface AgentModel {
 }
 
 /**
+ * One reasoning-effort level a CLI accepts for a turn, as that CLI names it.
+ *
+ * `id` is passed through verbatim — the flag's vocabulary belongs to the CLI,
+ * and only its adapter knows which spellings it honours. `label` is what the
+ * picker shows.
+ */
+export interface AgentEffort {
+  id: string;
+  label: string;
+}
+
+/**
  * One skill / slash command a CLI can be invoked with (`/name …`).
  *
  * `kind` separates a skill directory from a plain command file; `source` says
@@ -183,6 +227,57 @@ export interface AgentCommandOptions {
   timeoutMs?: number;
 }
 
+/**
+ * The tool-approval modes a caller may ask for. The vocabulary is shared, but
+ * which of them a given CLI honours is not — see
+ * {@link AgentAdapter.approvalModes}.
+ */
+export type AgentApprovalMode = 'auto' | 'ask' | 'acceptEdits' | 'plan';
+
+/**
+ * What the daemon's probes have established about the INSTALLED CLIs, as an
+ * adapter reads it.
+ *
+ * Structurally the subset of the `GET /v1/capabilities` wire shape that
+ * adapters care about, declared HERE rather than imported: `CapabilitiesWire`
+ * lives in the graphs module, which imports this one, and an adapter reaching
+ * back across that edge would invert the dependency. Structural typing means a
+ * consumer holding the full wire object can pass it straight in.
+ *
+ * The fields are per-CLI by nature — a probe result belongs to the binary it
+ * probed — but no CONSUMER has to know which adapter reads which field: it
+ * hands the whole bag to `AgentAdapter.approvalSupportFrom` and each adapter
+ * takes its own.
+ */
+export interface InstalledCapabilities {
+  claudeModes: ClaudeModesCapability;
+}
+
+/**
+ * What a per-binary probe established about the INSTALLED CLI's approval
+ * modes, in terms no consumer has to know a CLI to build.
+ *
+ * Tri-state per mode, and the distinction is load-bearing: `false` means a
+ * probe PROVED this binary rejects the mode (degrade it), while absent means
+ * nobody asked (keep the requested mode, so a genuine rejection still surfaces
+ * loudly from the CLI itself instead of being pre-empted by a guess).
+ */
+export interface InstalledApprovalSupport {
+  supported: Partial<Record<AgentApprovalMode, boolean>>;
+}
+
+/** The mode a turn actually runs under, and what the transcript owes the user. */
+export interface ApprovalResolution {
+  mode: AgentApprovalMode;
+  /**
+   * Null when the requested mode survived; otherwise the one line explaining
+   * what the turn runs as instead, and why. The caller persists it as a system
+   * item — a degrade the user cannot see reads as enforced permissions that
+   * never were.
+   */
+  degradeReason: string | null;
+}
+
 /** Everything an adapter needs to drive one turn. */
 export interface AgentTurnInput {
   /** The user's message text for this turn. */
@@ -204,6 +299,17 @@ export interface AgentTurnInput {
   cwd: string;
   /** Model alias/name (adapter-specific); null/undefined = the CLI default. */
   model?: string | null;
+  /**
+   * How hard the model should think this turn, spelled as the CLI spells it
+   * (one of {@link AgentAdapter.listEfforts}); null/undefined = the CLI's own
+   * default, no flag.
+   *
+   * A plain string rather than a union, for the same reason as `model`: the
+   * vocabulary is per-CLI, so a fixed enum here would put one CLI's facts in
+   * the shared contract. The caller validates against the adapter's list; an
+   * adapter whose CLI has no such control ignores the field entirely.
+   */
+  effort?: string | null;
   /** Prior CLI session id to resume; null/undefined starts a fresh session. */
   resumeSessionId?: string | null;
   /**
@@ -220,7 +326,7 @@ export interface AgentTurnInput {
    * bypassed. Undefined (legacy chat rows) keeps the CLI's own defaults —
    * no extra permission flags.
    */
-  approvalMode?: 'auto' | 'ask' | 'acceptEdits' | 'plan';
+  approvalMode?: AgentApprovalMode;
   /**
    * Extra environment merged over `process.env` for the child process — e.g.
    * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).

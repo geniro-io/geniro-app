@@ -1,10 +1,12 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
+import type { Subscription } from 'rxjs';
 
 import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { claudeCredentialEnv } from '../../agents/utils/child-env';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
@@ -24,7 +26,8 @@ import { PtyService } from './pty.service';
  * can be mirrored, not just the most recent one.
  */
 @Injectable()
-export class TerminalsService {
+export class TerminalsService implements OnApplicationShutdown {
+  private readonly logger = new Logger(TerminalsService.name);
   /**
    * In-flight creates keyed by the mirror target — `runId:nodeId:sessionId`
    * (the RESOLVED session). The daemon owns the one-running-mirror-per-target
@@ -34,6 +37,8 @@ export class TerminalsService {
    * invisible to the UI until daemon shutdown.
    */
   private readonly pending = new Map<string, Promise<TerminalSessionWire>>();
+  /** Unsubscribes the run-deleted listener when the daemon shuts down. */
+  private readonly deletedSubscription: Subscription;
 
   constructor(
     private readonly em: EntityManager,
@@ -41,7 +46,25 @@ export class TerminalsService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly workflowStore: WorkflowStoreService,
     private readonly pty: PtyService,
-  ) {}
+    bus: AgentEventBus,
+  ) {
+    // A mirror of a deleted run would keep a `claude --resume` child alive
+    // against a transcript that no longer exists. Subscribed HERE rather than
+    // called from the deleting service, because `TerminalsModule` imports
+    // `AgentsModule` — the dependency only runs this way.
+    this.deletedSubscription = bus.allDeleted().subscribe((runId) => {
+      const killed = this.pty.killRun(runId);
+      if (killed > 0) {
+        this.logger.log(
+          `killed ${killed} terminal mirror(s) of deleted run ${runId}`,
+        );
+      }
+    });
+  }
+
+  onApplicationShutdown(): void {
+    this.deletedSubscription.unsubscribe();
+  }
 
   /**
    * Idempotent per (run, node, session): a still-running mirror of the same

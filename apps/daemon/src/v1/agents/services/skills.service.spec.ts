@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentCommandOptions } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { SkillsService } from './skills.service';
@@ -94,11 +95,16 @@ function build(
   const claude = new ScriptedClaude(catalog);
   const cursor = new ScriptedCursor();
   return {
-    service: new SkillsService(harvest, claude, cursor, new ProcessRegistry(), {
-      homeDir: home,
-      resolveVersionFn: () => Promise.resolve('pinned'),
-      ...options,
-    }),
+    service: new SkillsService(
+      harvest,
+      new AgentAdapterRegistry(claude, cursor),
+      new ProcessRegistry(),
+      {
+        homeDir: home,
+        resolveVersionFn: () => Promise.resolve('pinned'),
+        ...options,
+      },
+    ),
     cwd,
     home,
     harvest,

@@ -1,5 +1,5 @@
 import { MessageCircleQuestion, ShieldQuestion } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -11,21 +11,64 @@ import { DiffView, editDiffOf } from './diff-view';
 /** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
   question: string;
+  /** The CLI's short tab title for this question; null when it sent none. */
+  header: string | null;
   options: string[];
+  multiSelect: boolean;
 }
 
 /** TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts MAX_ANSWER_LENGTH. */
 const MAX_ANSWER_LENGTH = 32_768;
 
+/**
+ * TWIN LIMIT: apps/daemon/src/v1/agents/chat.types.ts
+ * MAX_QUESTION_HEADER_LENGTH. A header is rendered as a tab title, and the tab
+ * strip has no truncation of its own.
+ */
+const MAX_QUESTION_HEADER_LENGTH = 64;
+
 /** How long "Sending…" holds before the one-shot freeze re-arms for a retry. */
 const RESPONDED_RETRY_MS = 10_000;
 
+/** The tab title for one question — its header, or its position as a fallback. */
+function tabLabel(question: ParsedQuestion, index: number): string {
+  return question.header ?? `Question ${index + 1}`;
+}
+
+/**
+ * How much of a question's own text may prefix its answer in the submission.
+ * The question is AGENT-written and unbounded, while the submission it rides in
+ * is capped at MAX_ANSWER_LENGTH — so without this an over-long question would
+ * spend the budget the user's answer needs and kill Submit before a character
+ * was typed. It only shortens the LABEL; the question renders in full above.
+ */
+const MAX_ANSWER_LABEL_LENGTH = 80;
+
+function answerLabel(question: ParsedQuestion): string {
+  return question.question.length <= MAX_ANSWER_LABEL_LENGTH
+    ? question.question
+    : `${question.question.slice(0, MAX_ANSWER_LABEL_LENGTH - 1)}…`;
+}
+
+/**
+ * Join one tab's answer parts. The ONE rule for it, shared by the staged path
+ * and the answer-on-click path — which disagreed until an adversarial test
+ * caught the click path silently dropping a typed qualifier.
+ */
+function joinParts(parts: string[]): string {
+  return parts.filter((part) => part.length > 0).join(', ');
+}
+
+/**
+ * The multi-question submission: one labelled line per question, so the single
+ * `response` wire channel stays unambiguous about which answer belongs where.
+ */
 function combinedAnswer(
   questions: ParsedQuestion[],
-  answers: Record<number, string>,
+  answerAt: (index: number) => string,
 ): string {
   return questions
-    .map((question, index) => `${question.question}: ${answers[index] ?? ''}`)
+    .map((question, index) => `${answerLabel(question)}: ${answerAt(index)}`)
     .join('\n');
 }
 
@@ -38,7 +81,10 @@ function combinedAnswer(
  * apps/daemon/src/v1/agents/adapters/claude/question-payload.ts (no
  * daemon↔renderer shared package exists) — a shape drift fixed there must be
  * mirrored here, and vice versa. Mirrored rules: option labels are kept only
- * when non-empty and ≤ MAX_ANSWER_LENGTH.
+ * when non-empty and ≤ MAX_ANSWER_LENGTH; `header` only when non-empty and
+ * ≤ MAX_QUESTION_HEADER_LENGTH; `multiSelect` only when the payload says so
+ * literally (a truthy string would let one side offer multi-pick while the
+ * other offers one).
  */
 function readQuestions(input: unknown): ParsedQuestion[] {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -53,7 +99,12 @@ function readQuestions(input: unknown): ParsedQuestion[] {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
-    const q = entry as { question?: unknown; options?: unknown };
+    const q = entry as {
+      question?: unknown;
+      header?: unknown;
+      options?: unknown;
+      multiSelect?: unknown;
+    };
     if (typeof q.question !== 'string' || q.question.length === 0) {
       continue;
     }
@@ -71,7 +122,17 @@ function readQuestions(input: unknown): ParsedQuestion[] {
               label.length <= MAX_ANSWER_LENGTH,
           )
       : [];
-    parsed.push({ question: q.question, options });
+    parsed.push({
+      question: q.question,
+      header:
+        typeof q.header === 'string' &&
+        q.header.length > 0 &&
+        q.header.length <= MAX_QUESTION_HEADER_LENGTH
+          ? q.header
+          : null,
+      options,
+      multiSelect: q.multiSelect === true,
+    });
   }
   return parsed;
 }
@@ -103,10 +164,14 @@ export function ApprovalCard({
   expired?: boolean;
   onRespond: (allow: boolean, answer?: string) => void;
 }): React.JSX.Element {
-  const [freeText, setFreeText] = useState('');
-  const [selectedAnswers, setSelectedAnswers] = useState<
-    Record<number, string>
-  >({});
+  // Per question, kept independently so every tab stays returnable: switching
+  // away and back must show the same picks and the same typed text, and both
+  // must remain changeable until the one submission is sent.
+  const [activeTab, setActiveTab] = useState(0);
+  const [picked, setPicked] = useState<Record<number, string[]>>({});
+  const [texts, setTexts] = useState<Record<number, string>>({});
+  const cardId = useId();
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // The verdict channel is one-shot: freeze the card the moment an answer is
   // sent, until the persisted verdict item (or expiry) round-trips — a
   // double-click or Approve-then-Deny would emit a conflicting verdict the
@@ -140,13 +205,112 @@ export function ApprovalCard({
   // collect an answer the daemon would refuse to deliver (a flag-only
   // interactive tool renders the plain approve/deny body instead).
   const questions = toolName === 'AskUserQuestion' ? readQuestions(input) : [];
-  const isMultiQuestion = questions.length > 1;
-  const allQuestionsAnswered =
-    isMultiQuestion &&
-    questions.every((_, index) => Boolean(selectedAnswers[index]));
-  const multiAnswer = combinedAnswer(questions, selectedAnswers);
 
   if (questions.length > 0) {
+    const pending = verdict === null && !expired;
+    // One tab per question, and only while the card can still be answered —
+    // a settled card is a transcript row, so it lists every question instead.
+    const showTabs = pending && questions.length > 1;
+    const activeIndex = Math.min(activeTab, questions.length - 1);
+    const active = questions[activeIndex]!;
+    // A click can only BE the whole answer when there is exactly one question
+    // and it takes exactly one pick; otherwise picks stage until Submit —
+    // which is also what makes each of them re-answerable.
+    const staged = questions.length > 1 || questions[0]!.multiSelect;
+    // Each tab's answer: the labels it picked, plus whatever was typed there.
+    // Both, so "Red, but a lighter shade" survives as one answer.
+    const answerAt = (index: number): string =>
+      joinParts([...(picked[index] ?? []), (texts[index] ?? '').trim()]);
+    const submission =
+      questions.length > 1 ? combinedAnswer(questions, answerAt) : answerAt(0);
+    // The per-tab budget: the daemon drops an oversized verdict on the floor
+    // (notifications.gateway `readVerdict`), so the tabs share the one wire
+    // limit rather than letting any single tab spend all of it. The labelled
+    // prefixes are reserved out of it first, so filling every tab to its own
+    // maxLength always yields a submission the daemon will accept.
+    const prefixCost =
+      questions.length > 1
+        ? questions.reduce(
+            // `: ` after the label, `\n` between lines.
+            (total, question) => total + answerLabel(question).length + 3,
+            0,
+          )
+        : 0;
+    const perTabBudget = Math.max(
+      1,
+      Math.floor((MAX_ANSWER_LENGTH - prefixCost) / questions.length),
+    );
+    // What is left of THIS tab's share once its picked labels are counted. The
+    // answer that travels is picks + typed text joined, so bounding only the
+    // typed half would let a pick push the tab past its budget — and the user
+    // would hit the refusal by typing inside a limit the field itself allowed.
+    const chosen = picked[activeIndex] ?? [];
+    // On the staged path the picks are already made, so charge exactly them.
+    // On the answer-on-click path NOTHING is picked yet and a click is the
+    // submit — so reserve room for the WIDEST label this tab could add, or a
+    // full-length typed answer plus a click would exceed the wire limit on a
+    // path that has no Submit button to disable.
+    const pendingPickCost = staged
+      ? chosen.length === 0
+        ? 0
+        : joinParts(chosen).length + 2
+      : active.options.reduce(
+          (widest, label) => Math.max(widest, label.length),
+          0,
+        ) + 2;
+    // Floored at 0, not 1: an option label wide enough to consume the whole
+    // budget must leave NO room to type, or the click path — the one submit
+    // path with no gate in front of it — sends label + text past the wire
+    // limit and the daemon drops it with no on-card explanation.
+    const typedBudget = Math.max(0, perTabBudget - pendingPickCost);
+    const unanswered = questions
+      .map((q, index) =>
+        answerAt(index).length === 0 ? tabLabel(q, index) : null,
+      )
+      .filter((label): label is string => label !== null);
+    const tooLong = submission.length > MAX_ANSWER_LENGTH;
+    // ONE gate, shared by the Submit button and the Enter key — two conditions
+    // would drift, and an Enter that outran the button's guard would send an
+    // answer the daemon drops on the floor with no on-card explanation.
+    const canSubmit = unanswered.length === 0 && !tooLong;
+    // Submit is disabled for exactly two reasons, and both are SAID: a
+    // disabled button with no explanation is the defect this card had.
+    const blockedReason = tooLong
+      ? `That answer is ${submission.length.toLocaleString()} characters — ${MAX_ANSWER_LENGTH.toLocaleString()} is the most the agent can receive. Shorten one of the answers.`
+      : unanswered.length === 0
+        ? null
+        : questions.length > 1
+          ? `Answer every tab to submit — still empty: ${unanswered.join(', ')}.`
+          : 'Pick an option or type an answer to submit.';
+    const pickOption = (index: number, label: string): void => {
+      if (!staged) {
+        // The click IS the whole answer here — but it is not the whole answer
+        // TEXT: a qualifier already typed beside the options rides with it,
+        // through the same join the staged path uses. Dropping it would spend
+        // the one-shot verdict on a partial answer the user can't resend.
+        respond(true, joinParts([label, (texts[index] ?? '').trim()]));
+        return;
+      }
+      setPicked((previous) => {
+        const current = previous[index] ?? [];
+        if (!questions[index]!.multiSelect) {
+          // Single-pick: clicking the chosen label again clears it, so a
+          // mis-tap is recoverable without spending the one-shot verdict.
+          return { ...previous, [index]: current[0] === label ? [] : [label] };
+        }
+        return {
+          ...previous,
+          [index]: current.includes(label)
+            ? current.filter((chosen) => chosen !== label)
+            : [...current, label],
+        };
+      });
+    };
+    const focusTab = (index: number): void => {
+      const next = (index + questions.length) % questions.length;
+      setActiveTab(next);
+      tabRefs.current[next]?.focus();
+    };
     return (
       <Card className="flex flex-col gap-2.5 border-primary/40 p-3">
         <div className="flex items-center gap-2">
@@ -155,46 +319,147 @@ export function ApprovalCard({
             className="size-4 shrink-0 text-primary"
           />
           <span className="text-sm font-medium">Agent asks a question</span>
+          {questions.length === 1 && active.header ? (
+            <Badge variant="secondary">{active.header}</Badge>
+          ) : null}
         </div>
-        {questions.map((q, qi) => (
-          // Index-composite keys: one payload may repeat a question/label.
-          <div key={`${qi}-${q.question}`} className="flex flex-col gap-1.5">
-            <p className="m-0 text-sm whitespace-pre-wrap">{q.question}</p>
-            {verdict === null && !expired && q.options.length > 0 ? (
+        {showTabs ? (
+          <div
+            role="tablist"
+            aria-label="Questions"
+            className="flex flex-wrap gap-1 border-b border-border pb-1.5">
+            {questions.map((q, qi) => {
+              const selected = qi === activeIndex;
+              const answered = answerAt(qi).length > 0;
+              return (
+                // Index-composite keys: one payload may repeat a question.
+                <button
+                  key={`${qi}-${q.question}`}
+                  ref={(node) => {
+                    tabRefs.current[qi] = node;
+                  }}
+                  type="button"
+                  role="tab"
+                  id={`${cardId}-tab-${qi}`}
+                  aria-selected={selected}
+                  aria-controls={`${cardId}-panel-${qi}`}
+                  // Roving tabindex: the strip is ONE tab stop, arrows move
+                  // within it — the pattern `role="tab"` promises.
+                  tabIndex={selected ? 0 : -1}
+                  data-answered={answered}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowRight') {
+                      focusTab(activeIndex + 1);
+                    } else if (e.key === 'ArrowLeft') {
+                      focusTab(activeIndex - 1);
+                    } else if (e.key === 'Home') {
+                      focusTab(0);
+                    } else if (e.key === 'End') {
+                      focusTab(questions.length - 1);
+                    } else {
+                      return;
+                    }
+                    e.preventDefault();
+                  }}
+                  onClick={() => setActiveTab(qi)}
+                  className={cn(
+                    'inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                    selected
+                      ? 'bg-secondary text-secondary-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  )}>
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      'size-1.5 rounded-full',
+                      answered ? 'bg-primary' : 'bg-border',
+                    )}
+                  />
+                  {tabLabel(q, qi)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {pending ? (
+          <div
+            role={showTabs ? 'tabpanel' : undefined}
+            id={showTabs ? `${cardId}-panel-${activeIndex}` : undefined}
+            aria-labelledby={
+              showTabs ? `${cardId}-tab-${activeIndex}` : undefined
+            }
+            className="flex flex-col gap-1.5">
+            <p className="m-0 text-sm whitespace-pre-wrap">{active.question}</p>
+            {active.multiSelect ? (
+              <p className="m-0 text-xs text-muted-foreground">
+                Pick as many as apply.
+              </p>
+            ) : null}
+            {active.options.length > 0 ? (
               <div className="flex flex-wrap gap-2">
-                {q.options.map((label, li) => (
-                  <Button
-                    key={`${li}-${label}`}
-                    type="button"
-                    variant={
-                      isMultiQuestion && selectedAnswers[qi] === label
-                        ? 'secondary'
-                        : 'outline'
-                    }
-                    size="sm"
-                    disabled={responded}
-                    aria-pressed={
-                      isMultiQuestion
-                        ? selectedAnswers[qi] === label
-                        : undefined
-                    }
-                    onClick={() => {
-                      if (isMultiQuestion) {
-                        setSelectedAnswers((previous) => ({
-                          ...previous,
-                          [qi]: label,
-                        }));
-                      } else {
-                        respond(true, label);
-                      }
-                    }}>
-                    {label}
-                  </Button>
-                ))}
+                {active.options.map((label, li) => {
+                  const chosen = (picked[activeIndex] ?? []).includes(label);
+                  return (
+                    <Button
+                      key={`${li}-${label}`}
+                      type="button"
+                      variant={staged && chosen ? 'secondary' : 'outline'}
+                      size="sm"
+                      disabled={responded}
+                      aria-pressed={staged ? chosen : undefined}
+                      onClick={() => pickOption(activeIndex, label)}>
+                      {label}
+                    </Button>
+                  );
+                })}
               </div>
             ) : null}
+            {/* On EVERY tab, not just a lone question: it is the only way to
+                answer one the agent offered no options for, and the only way
+                to qualify a pick. */}
+            <Input
+              value={texts[activeIndex] ?? ''}
+              maxLength={typedBudget}
+              disabled={responded}
+              aria-label={
+                questions.length > 1
+                  ? `Answer: ${tabLabel(active, activeIndex)}`
+                  : "Answer the agent's question"
+              }
+              placeholder={
+                active.options.length > 0
+                  ? 'Or type your own answer…'
+                  : 'Type your answer…'
+              }
+              onChange={(e) =>
+                setTexts((previous) => ({
+                  ...previous,
+                  [activeIndex]: e.target.value,
+                }))
+              }
+              onKeyDown={(e) => {
+                // The verdict is one-shot — an Enter that merely confirms an
+                // IME composition must not submit a half-composed answer.
+                if (e.nativeEvent.isComposing) {
+                  return;
+                }
+                // Only when this tab IS the whole answer; with more to fill in,
+                // Enter would submit the others empty.
+                if (e.key === 'Enter' && !staged && canSubmit) {
+                  respond(true, submission);
+                }
+              }}
+            />
           </div>
-        ))}
+        ) : (
+          questions.map((q, qi) => (
+            <p
+              key={`${qi}-${q.question}`}
+              className="m-0 text-sm whitespace-pre-wrap">
+              {q.question}
+            </p>
+          ))
+        )}
         {expired && verdict === null ? (
           <p className="text-xs text-muted-foreground">
             ⏱ expired — the turn ended before an answer
@@ -202,51 +467,25 @@ export function ApprovalCard({
         ) : sending ? (
           <p className="text-xs text-muted-foreground">Sending…</p>
         ) : verdict === null ? (
-          <div className="flex items-center gap-2">
-            {questions.length === 1 ? (
-              <>
-                <Input
-                  value={freeText}
-                  maxLength={MAX_ANSWER_LENGTH}
-                  aria-label="Answer the agent's question"
-                  placeholder="Or type your own answer…"
-                  onChange={(e) => setFreeText(e.target.value)}
-                  onKeyDown={(e) => {
-                    // The verdict is one-shot — an Enter that merely confirms an
-                    // IME composition must not submit a half-composed answer.
-                    if (e.nativeEvent.isComposing) {
-                      return;
-                    }
-                    if (e.key === 'Enter' && freeText.trim().length > 0) {
-                      respond(true, freeText.trim());
-                    }
-                  }}
-                />
-                <Button
-                  type="button"
-                  disabled={freeText.trim().length === 0}
-                  onClick={() => respond(true, freeText.trim())}>
-                  Answer
-                </Button>
-              </>
-            ) : (
+          <>
+            {blockedReason ? (
+              <p className="m-0 text-xs text-warning">{blockedReason}</p>
+            ) : null}
+            <div className="flex items-center gap-2">
               <Button
                 type="button"
-                disabled={
-                  !allQuestionsAnswered ||
-                  multiAnswer.length > MAX_ANSWER_LENGTH
-                }
-                onClick={() => respond(true, multiAnswer)}>
-                Submit answers
+                disabled={!canSubmit}
+                onClick={() => respond(true, submission)}>
+                {staged ? 'Submit answers' : 'Answer'}
               </Button>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => respond(false)}>
-              Decline
-            </Button>
-          </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => respond(false)}>
+                Decline
+              </Button>
+            </div>
+          </>
         ) : (
           <p
             className={cn(

@@ -18,6 +18,7 @@ import type {
   AttachmentDataDto,
   CancelledDto,
   CreateChatDto,
+  DeletedDto,
   ItemDto,
   RenameRunDto,
   RunDto,
@@ -31,6 +32,10 @@ export interface ChatsApiCancelChatRequest {
 
 export interface ChatsApiCreateChatRequest {
     createChatDto: CreateChatDto;
+}
+
+export interface ChatsApiDeleteChatRequest {
+    runId: string;
 }
 
 export interface ChatsApiListRunItemsRequest {
@@ -152,6 +157,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async createChat(requestParameters: ChatsApiCreateChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.createChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async deleteChatRaw(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeletedDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling deleteChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async deleteChat(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
+        const response = await this.deleteChatRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

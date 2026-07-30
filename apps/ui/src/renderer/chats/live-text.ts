@@ -22,14 +22,26 @@ export interface LiveTextEvent {
   runId: string;
   nodeId: string | null;
   text: string;
-  /** Reasoning tokens so far, or null when the agent is not thinking. */
+  /**
+   * Reasoning tokens spent so far THIS TURN, or null when not thinking.
+   * Cumulative across the turn's reasoning stretches, not per stretch.
+   */
   thinkingTokens: number | null;
+  /** Epoch ms this turn's first reasoning began, or null when not thinking. */
+  thinkingSince: number | null;
+  /** Prompt-side tokens as of the turn's latest request, or null. */
+  contextTokens: number | null;
+  /** The window those tokens are measured against, or null if unreported. */
+  contextWindowTokens: number | null;
 }
 
 /** What one agent is doing right now, as the transcript renders it. */
 export interface LiveState {
   text: string;
   thinkingTokens: number | null;
+  thinkingSince: number | null;
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
 }
 
 /**
@@ -45,16 +57,21 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
   if (typeof runId !== 'string' || typeof text !== 'string') {
     return null;
   }
-  const thinkingTokens = (data as Record<string, unknown>).thinkingTokens;
+  const record = data as Record<string, unknown>;
   return {
     runId,
     nodeId: typeof nodeId === 'string' ? nodeId : null,
     text,
-    thinkingTokens:
-      typeof thinkingTokens === 'number' && thinkingTokens > 0
-        ? thinkingTokens
-        : null,
+    thinkingTokens: positiveNumber(record.thinkingTokens),
+    thinkingSince: positiveNumber(record.thinkingSince),
+    contextTokens: positiveNumber(record.contextTokens),
+    contextWindowTokens: positiveNumber(record.contextWindowTokens),
   };
+}
+
+/** A positive number off an untyped field, else null — the defensive default. */
+function positiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && value > 0 ? value : null;
 }
 
 /** Which agent's bubble a delta belongs to. */
@@ -73,12 +90,23 @@ export function applyLiveText(
 ): Map<string, LiveState> {
   const next = new Map(current);
   const key = liveTextKey(event.nodeId);
-  if (event.text === '' && event.thinkingTokens === null) {
+  // A context figure alone is NOT "doing something" — it keeps arriving after
+  // a block goes durable — so the entry is KEPT (the meter still needs the
+  // number) while `withLiveText` declines to draw a bubble for it. Only an
+  // entry with nothing at all to say is dropped.
+  if (
+    event.text === '' &&
+    event.thinkingTokens === null &&
+    event.contextTokens === null
+  ) {
     next.delete(key);
   } else {
     next.set(key, {
       text: event.text,
       thinkingTokens: event.thinkingTokens,
+      thinkingSince: event.thinkingSince,
+      contextTokens: event.contextTokens,
+      contextWindowTokens: event.contextWindowTokens,
     });
   }
   return next;

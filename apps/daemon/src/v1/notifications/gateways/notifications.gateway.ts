@@ -95,6 +95,7 @@ export class NotificationsGateway
   private readonly logger = new Logger(NotificationsGateway.name);
   private busSubscription?: Subscription;
   private deltaSubscription?: Subscription;
+  private statusSubscription?: Subscription;
 
   constructor(
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -136,11 +137,29 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`agent delta bus errored: ${String(err)}`),
     });
+    // Run status goes to EVERY client, not to the run's room. A client only
+    // joins the run it is showing, so a background run's badge had no way to
+    // learn it had settled and lied until the next refetch. Isolated like the
+    // two above.
+    this.statusSubscription = this.bus.allStatuses().subscribe({
+      next: (status) => {
+        try {
+          server.emit('run_status', status);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast run_status for ${status.runId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`run status bus errored: ${String(err)}`),
+    });
   }
 
   onModuleDestroy(): void {
     this.busSubscription?.unsubscribe();
     this.deltaSubscription?.unsubscribe();
+    this.statusSubscription?.unsubscribe();
   }
 
   handleConnection(client: Socket): void {

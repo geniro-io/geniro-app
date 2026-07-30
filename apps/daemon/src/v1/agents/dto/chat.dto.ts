@@ -31,6 +31,12 @@ export const createChatSchema = z.object({
   title: z.string().min(1).optional(),
   /** Omitted = the service default (claude 'ask', cursor 'auto'). */
   approval: ChatApprovalModeSchema.optional(),
+  /**
+   * Reasoning effort in the CLI's own vocabulary; omitted = its default. A
+   * plain string here and checked against the adapter's `listEfforts()` in
+   * the service — an enum would pin one CLI's levels into the shared schema.
+   */
+  effort: z.string().min(1).optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 
@@ -42,10 +48,15 @@ export const updateChatSettingsSchema = z
      * thing an omitted key (= leave unchanged) cannot say.
      */
     model: z.string().min(1).nullable().optional(),
+    /** Same null-vs-omitted contract as `model` above. */
+    effort: z.string().min(1).nullable().optional(),
   })
   .refine(
-    (dto) => dto.approval !== undefined || dto.model !== undefined,
-    'a settings patch must change the approval mode or the model',
+    (dto) =>
+      dto.approval !== undefined ||
+      dto.model !== undefined ||
+      dto.effort !== undefined,
+    'a settings patch must change the approval mode, the model or the effort',
   );
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
@@ -116,5 +127,18 @@ export class CancelledDto extends createZodDto(
     cancelled: z
       .boolean()
       .describe('True when a live turn was signalled to stop'),
+  }),
+) {}
+
+/**
+ * Acknowledgement of a delete. Mirrors the workflow route's own `DeletedDto`
+ * rather than sharing it: they belong to different modules' contracts, and the
+ * generated client names one class per tag.
+ */
+export class DeletedDto extends createZodDto(
+  z.object({
+    deleted: z
+      .boolean()
+      .describe('True when the chat and everything it owned were removed'),
   }),
 ) {}

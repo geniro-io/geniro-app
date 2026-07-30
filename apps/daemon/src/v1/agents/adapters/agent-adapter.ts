@@ -4,13 +4,18 @@ import type { AgentKind } from '../../runs/runs.types';
 import { buildChildEnv } from '../utils/child-env';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
+  AgentApprovalMode,
   AgentCommandOptions,
+  AgentEffort,
   AgentEvent,
   AgentModel,
   AgentSkillEntry,
   AgentSkillsInput,
   AgentTurnHandle,
   AgentTurnInput,
+  ApprovalResolution,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
 } from './adapter.types';
 
 /** Utility commands (`models`, `--version`) answer fast or not at all. */
@@ -24,10 +29,28 @@ const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
 export interface AgentAdapterOptions {
   /** Replacement spawn for tests; defaults to the group-leader `defaultSpawn`. */
   spawn?: SpawnFn;
-  /** Sink for skipped-unparseable-line warnings; defaults to silent. */
-  logger?: { warn(message: string): void };
+  /**
+   * Sink for the base class's diagnostics — skipped unparseable lines,
+   * unmodelled control subtypes, an unverified CLI version. Defaults to
+   * silent, so production wiring MUST pass a real one (`agents.module.ts`).
+   * `error` is optional: a plain `{ warn }` test double stays valid, and
+   * callers fall back to `warn` when it is absent.
+   */
+  logger?: {
+    warn(message: string): void;
+    error?(message: string): void;
+  };
   /** Replacement execFile for the utility commands in tests; defaults to node's. */
   execFileFn?: typeof execFile;
+  /**
+   * Sink for utility children an adapter spawns on its OWN initiative rather
+   * than on a caller's — today the `--version` probe behind the control
+   * protocol check. Every other utility child is started through a service
+   * that passes its own `onSpawn`; these have no such caller, and the
+   * "every spawned child registers with ProcessRegistry" rule has no
+   * short-lived exemption, so `agents.module.ts` wires this to the registry.
+   */
+  onUtilitySpawn?: (child: ChildProcess) => void;
 }
 
 /**
@@ -56,6 +79,85 @@ export abstract class AgentAdapter {
    */
   abstract readonly questionToolName: string | null;
 
+  /**
+   * The approval modes this CLI honours at all, as a user-visible choice.
+   *
+   * A mode outside this list is refused where the choice is MADE (chat
+   * create/patch), so the user is told no rather than handed a control that
+   * silently does nothing. A CLI with no approval channel lists only the mode
+   * it effectively always runs — see `CursorAdapter`.
+   */
+  abstract readonly approvalModes: readonly AgentApprovalMode[];
+
+  /**
+   * The subset of {@link approvalModes} whose support cannot be known from the
+   * CLI's name alone and must be PROVED against the installed binary.
+   *
+   * It is what decides whether a run pays for a probe turn at all: a workflow
+   * whose nodes never request a probed mode never waits on one. An empty list
+   * means every mode this CLI claims, it has.
+   */
+  abstract readonly probedApprovalModes: readonly AgentApprovalMode[];
+
+  /**
+   * Translate the daemon's machine-capability bag into THIS CLI's installed
+   * approval support.
+   *
+   * The bag is adapter-agnostic (`GET /v1/capabilities`), so every consumer can
+   * hold one without knowing whose probe filled which field — and each adapter
+   * reads only its own. Without this the translation lived in the consumers:
+   * both of them imported claude's, and the gate in front of it was
+   * `probedApprovalModes.includes(mode)` rather than "is this claude", so a
+   * second CLI declaring any probed mode would have been judged against
+   * CLAUDE's installed binary and silently degraded.
+   *
+   * A CLI with nothing to probe returns `{ supported: {} }` — absent, never
+   * `false`, so a mode nobody asked about is still attempted and any genuine
+   * rejection surfaces from the CLI itself.
+   */
+  abstract approvalSupportFrom(
+    capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport;
+
+  /**
+   * The mode a turn actually runs under, given what a probe proved about the
+   * installed binary — plus the line the transcript owes the user when that is
+   * not the mode they asked for.
+   *
+   * The ONE answer behind every approval seam (the chat turn and each graph
+   * node alike), because the two encoding it separately is exactly how a
+   * degrade gets fixed on one path and silently missed on the other. Policy
+   * lives here, not in the caller: which modes degrade, which ride through to
+   * be rejected loudly by the CLI, and what the user is told.
+   */
+  abstract resolveApprovalMode(
+    requested: AgentApprovalMode,
+    installed: InstalledApprovalSupport,
+  ): ApprovalResolution;
+
+  /**
+   * Whether this CLI may hold the agent-call tools only after a machine-level
+   * trust probe has PASSED, rather than on the strength of the endpoint grant
+   * alone.
+   *
+   * True is the cautious answer: the run withholds the tools until a probe
+   * verdict says otherwise, and the shut-out caller degrades visibly. False
+   * means the endpoint is sufficient — the CLI accepts a per-turn server the
+   * daemon hands it, with no persistent trust store in the way.
+   */
+  abstract readonly callToolsRequireTrustProbe: boolean;
+
+  /**
+   * Whether an MCP endpoint reaches this CLI ONLY through a config file in the
+   * run's own cwd, merged before the spawn and restored after it.
+   *
+   * A CLI answering false takes the endpoint per turn (claude's
+   * `--mcp-config`), which is both cheaper and safer — nothing outside the
+   * turn ever sees the token. True obliges the caller to run the merge
+   * lifecycle around the spawn.
+   */
+  abstract readonly mcpEndpointRequiresCwdConfig: boolean;
+
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
@@ -71,6 +173,22 @@ export abstract class AgentAdapter {
    * offers something.
    */
   abstract listModels(options?: AgentCommandOptions): Promise<AgentModel[]>;
+
+  /**
+   * The reasoning-effort levels this CLI accepts for one turn, weakest first,
+   * or `[]` when it has no such control at all.
+   *
+   * Synchronous because it is a documented constant on every adapter that has
+   * one — nothing is asked of the binary. It must NOT be scraped from the
+   * CLI's own help output: claude's `--help` under-reports its own vocabulary
+   * (probe-verified — see `claude/claude-effort.ts`), so a scrape would
+   * silently drop a level the CLI accepts.
+   *
+   * An adapter returning `[]` is the whole signal that the CLI has no effort
+   * control: the consumer refuses an effort for it and the UI omits the
+   * picker, without anything outside this layer knowing which CLI it is.
+   */
+  abstract listEfforts(): AgentEffort[];
 
   /**
    * The skills / slash commands this CLI can be invoked with in a folder, as
@@ -203,6 +321,20 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Report a diagnostic at the loudest level the configured sink offers.
+   * Used for conditions that do not justify failing a turn but must not be
+   * whispered either — an unverified CLI version, a dropped control subtype.
+   */
+  protected reportProblem(message: string): void {
+    const logger = this.options.logger;
+    if (logger?.error) {
+      logger.error(message);
+      return;
+    }
+    logger?.warn(message);
+  }
+
+  /**
    * Start a turn. Events are delivered to `onEvent` in stream order. The
    * returned handle settles via `done` and can `cancel` the turn.
    */
@@ -223,7 +355,19 @@ export abstract class AgentAdapter {
         buildApprovalResponse: (id, allow, updatedInput) =>
           this.buildApprovalResponse(id, allow, updatedInput),
         mapper: (obj) => this.mapMessage(obj),
-        onEvent,
+        // The mappers are pure module-scope functions, so a control message
+        // an adapter does not model comes back as data and is logged HERE —
+        // the one caller of `mapMessage`, rather than once per consumer. It
+        // is diagnostic, so it stops here and never reaches the turn.
+        onEvent: (event) => {
+          if (event.type === 'unhandled_control') {
+            this.options.logger?.warn(
+              `${this.kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
+            );
+            return;
+          }
+          onEvent(event);
+        },
         spawn: this.options.spawn,
         logger: this.options.logger,
       });

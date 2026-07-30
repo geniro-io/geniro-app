@@ -38,6 +38,25 @@ export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
 }
 
 /**
+ * How full the window is as of ONE `assistant` line — its `message.usage`.
+ *
+ * The live counterpart of {@link readClaudeUsage}'s `contextTokens`, and the
+ * same arithmetic: an `assistant` line reports the usage of the single request
+ * that produced it, which is exactly the per-request shape the roll-up must
+ * never be confused with. PROBE-VERIFIED on claude 2.1.220 — every `assistant`
+ * line carried `input_tokens` + `cache_creation_input_tokens` +
+ * `cache_read_input_tokens`, while `contextWindow` appeared ONLY on `result`.
+ *
+ * Null when the line carries no usage, so a CLI build that omits it degrades
+ * to "the meter waits for the turn to finish", never to a wrong number.
+ */
+export function readClaudeAssistantContext(
+  message: Record<string, unknown>,
+): number | null {
+  return promptSideTokens(asRecord(message.usage));
+}
+
+/**
  * Everything one request put on the prompt side of the window: fresh input,
  * newly cached input, and cache reads. `input_tokens` alone excludes all cache
  * traffic, which on a resumed conversation is nearly the entire context.

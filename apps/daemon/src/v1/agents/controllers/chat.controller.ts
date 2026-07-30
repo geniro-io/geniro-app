@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -15,6 +16,7 @@ import {
   AttachmentDataDto,
   CancelledDto,
   CreateChatDto,
+  DeletedDto,
   HistoryQueryDto,
   ItemDto,
   RenameRunDto,
@@ -107,5 +109,12 @@ export class ChatController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancel(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.chatService.cancel(runId);
+  }
+
+  @Delete(':runId')
+  @ApiOperation({ operationId: 'deleteChat' })
+  @ZodResponse({ status: 200, type: DeletedDto })
+  delete(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
+    return this.chatService.delete(runId);
   }
 }

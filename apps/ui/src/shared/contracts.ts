@@ -61,6 +61,14 @@ export interface Settings {
    * that CLI's own default (no `--model` flag).
    */
   lastModels: Partial<Record<CliKind, string>>;
+  /**
+   * The new-run composer's last reasoning-effort level per CLI. Keyed per CLI
+   * for the same reason as `lastModels`, and opaque here for the same reason
+   * as `lastApprovalMode`: the vocabulary belongs to the CLI (the daemon asks
+   * its adapter), so this file cannot name the levels. A missing entry means
+   * that CLI's own default — which is also every CLI that has no such control.
+   */
+  lastEfforts: Partial<Record<CliKind, string>>;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -75,6 +83,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastChatTarget: null,
   lastApprovalMode: null,
   lastModels: {},
+  lastEfforts: {},
   cliPaths: {},
   checkForUpdates: true,
 };

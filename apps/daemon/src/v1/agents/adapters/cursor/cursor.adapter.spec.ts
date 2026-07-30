@@ -170,6 +170,57 @@ describe('CursorAdapter', () => {
     expect(asking.captured.args).toEqual(plain.captured.args);
   });
 
+  it('honours only auto, and REPORTS anything else rather than ignoring it', () => {
+    // The same rule again: a workflow node may be authored 'ask' (the graph
+    // schema is CLI-agnostic), and this CLI's honest answer is "that becomes
+    // auto, and here is the line to show the user" — never a silent swap.
+    const adapter = new CursorAdapter();
+    expect(adapter.approvalModes).toEqual(['auto']);
+    expect(adapter.probedApprovalModes).toEqual([]);
+
+    expect(adapter.resolveApprovalMode('auto', { supported: {} })).toEqual({
+      mode: 'auto',
+      degradeReason: null,
+    });
+    for (const requested of ['ask', 'acceptEdits', 'plan'] as const) {
+      const resolved = adapter.resolveApprovalMode(requested, {
+        supported: {},
+      });
+      expect(resolved.mode).toBe('auto');
+      expect(resolved.degradeReason).toContain(
+        `approval '${requested}' degrades to auto-approve`,
+      );
+    }
+  });
+
+  it('needs a machine trust probe and a cwd config file before it can call', () => {
+    // Both true because of how cursor-agent takes an MCP server at all: a
+    // persistent trust store to satisfy, and no per-turn --mcp-config flag.
+    const adapter = new CursorAdapter();
+    expect(adapter.callToolsRequireTrustProbe).toBe(true);
+    expect(adapter.mcpEndpointRequiresCwdConfig).toBe(true);
+  });
+
+  it('has no reasoning-effort control, and a turn carrying one adds no flag', () => {
+    // Same rule as questionToolName above: the caller asks uniformly and this
+    // CLI answers "none" — effort is folded into its model ids instead.
+    expect(new CursorAdapter().listEfforts()).toEqual([]);
+
+    const plain = fakeSpawn();
+    new CursorAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
+    const withEffort = fakeSpawn();
+    new CursorAdapter({ spawn: withEffort.spawn }).start(
+      { prompt: 'p', cwd: '/proj', effort: 'high' },
+      () => {},
+    );
+
+    expect(withEffort.captured.args).toEqual(plain.captured.args);
+    expect(withEffort.captured.args).not.toContain('--effort');
+  });
+
   it('delivers the prompt on stdin — never on ps-visible argv — and streams a turn', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];
@@ -405,5 +456,23 @@ describe('CursorAdapter model listing', () => {
     const models = await new CursorAdapter({ execFileFn }).listModels();
 
     expect(models.every((model) => model.source === 'builtin')).toBe(true);
+  });
+});
+
+describe('CursorAdapter — installed approval support', () => {
+  it('reads NOTHING from the capability bag, whatever claude probed', () => {
+    // The fold's whole point: the bag is shared, but each adapter takes only
+    // its own slice. Handing cursor a bag in which claude's probe FAILED must
+    // not make cursor report a mode as unsupported — it has no probed mode at
+    // all, and an absent verdict is not a negative one.
+    expect(
+      new CursorAdapter().approvalSupportFrom({
+        claudeModes: {
+          acceptEdits: 'fail',
+          plan: 'fail',
+          reason: 'claude rejected both',
+        },
+      }),
+    ).toEqual({ supported: {} });
   });
 });

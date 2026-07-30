@@ -15,10 +15,15 @@
 
 import * as runtime from '../runtime';
 import type {
+  AgentEffortDto,
   AgentKind,
   AgentModelDto,
   AgentSkillDto,
 } from '../models/index';
+
+export interface AgentsApiListAgentEffortsRequest {
+    agent: AgentKind;
+}
 
 export interface AgentsApiListAgentModelsRequest {
     agent: AgentKind;
@@ -33,6 +38,54 @@ export interface AgentsApiListAgentSkillsRequest {
  * 
  */
 export class AgentsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async listAgentEffortsRaw(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<AgentEffortDto>>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentEfforts().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/efforts`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentEffortDto>> {
+        const response = await this.listAgentEffortsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 

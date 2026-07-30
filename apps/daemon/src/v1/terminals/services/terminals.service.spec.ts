@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { TerminalsService } from './terminals.service';
 
 function build(overrides: {
@@ -30,6 +31,7 @@ function build(overrides: {
   let ptySeq = 0;
   const pty = {
     findRunning: vi.fn().mockReturnValue(null),
+    killRun: vi.fn().mockReturnValue(0),
     create: vi.fn((input: Record<string, unknown>) => ({
       id: `t-${ptySeq++}`,
       runId: input.runId,
@@ -41,14 +43,16 @@ function build(overrides: {
     })),
   };
   const em = { fork: () => ({}) };
+  const bus = new AgentEventBus();
   const service = new TerminalsService(
     em as never,
     runDao as never,
     nodeStateDao as never,
     workflowStore as never,
     pty as never,
+    bus,
   );
-  return { service, runDao, nodeStateDao, workflowStore, pty };
+  return { service, runDao, nodeStateDao, workflowStore, pty, bus };
 }
 
 const CHAT_RUN = {
@@ -310,5 +314,25 @@ describe('TerminalsService', () => {
     await expect(
       noCwd.service.createForRun({ runId: 'run-1' }),
     ).rejects.toThrow(/TERMINAL_NO_CWD|working directory/);
+  });
+});
+
+describe('TerminalsService — a deleted run takes its mirrors with it', () => {
+  it('kills the run’s live mirrors when the run is deleted', () => {
+    // A mirror of a deleted run would keep a `claude --resume` child alive
+    // against a transcript that no longer exists. The chat service cannot
+    // call PtyService (its module sits below this one), so the signal is a
+    // subscription — deleting the subscription must break this test.
+    const { pty, bus } = build({ run: null });
+    pty.killRun.mockReturnValue(2);
+    bus.publishRunDeleted('run-gone');
+    expect(pty.killRun).toHaveBeenCalledWith('run-gone');
+  });
+
+  it('stops listening once the daemon shuts down', () => {
+    const { service, pty, bus } = build({ run: null });
+    service.onApplicationShutdown();
+    bus.publishRunDeleted('run-gone');
+    expect(pty.killRun).not.toHaveBeenCalled();
   });
 });

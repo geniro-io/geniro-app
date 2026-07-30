@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_ANSWER_LENGTH } from '../../chat.types';
+import {
+  MAX_ANSWER_LENGTH,
+  MAX_QUESTION_HEADER_LENGTH,
+} from '../../chat.types';
 import {
   optionLabelsOf,
   questionTextOf,
@@ -20,8 +23,53 @@ const INPUT = {
 };
 
 describe('question-payload projections', () => {
-  it('projects the question text (multi-question inputs join per line)', () => {
-    expect(questionTextOf(INPUT)).toBe('Which color?\nDeploy now?');
+  it('pins the twin limits to the NUMBERS the renderer restates as literals', () => {
+    // The renderer card cannot import these — there is no daemon↔renderer
+    // shared package, which is why the two parsers are declared TWINS — so it
+    // hardcodes 32_768 and 64. Every other test here derives its expectation
+    // from the constant, which means a change to either would sail through the
+    // daemon suite while silently diverging from the card. These two lines are
+    // what turn that drift into a failure on this side.
+    expect(MAX_ANSWER_LENGTH).toBe(32_768);
+    expect(MAX_QUESTION_HEADER_LENGTH).toBe(64);
+  });
+
+  it('projects the question text, qualified by header (multi-question joins per line)', () => {
+    // The envelope's `options` are FLAT across questions, so the header is the
+    // only thing telling a caller which option belongs to which question.
+    expect(questionTextOf(INPUT)).toBe('[Color] Which color?\nDeploy now?');
+  });
+
+  it('discloses multiSelect so a caller knows more than one label is wanted', () => {
+    expect(
+      questionTextOf({
+        questions: [
+          { question: 'Which files?', header: 'Files', multiSelect: true },
+        ],
+      }),
+    ).toBe('[Files] Which files? (pick one or more)');
+  });
+
+  it('drops an empty or oversized header, and treats a truthy non-true multiSelect as false', () => {
+    // TWIN PARSER rule: a header is a tab title on the renderer side, where an
+    // unbounded one would push the answer controls off the card; and a truthy
+    // STRING would let one twin offer multi-pick while the other offers one.
+    const oversized = 'h'.repeat(MAX_QUESTION_HEADER_LENGTH + 1);
+    expect(
+      questionTextOf({
+        questions: [
+          { question: 'a', header: '' },
+          { question: 'b', header: oversized },
+          { question: 'c', header: 42 },
+          { question: 'd', multiSelect: 'yes' },
+        ],
+      }),
+    ).toBe('a\nb\nc\nd');
+    // The largest header that still fits IS kept — the bound is inclusive.
+    const atLimit = 'h'.repeat(MAX_QUESTION_HEADER_LENGTH);
+    expect(
+      questionTextOf({ questions: [{ question: 'e', header: atLimit }] }),
+    ).toBe(`[${atLimit}] e`);
   });
 
   it('flattens every offered option label across questions', () => {

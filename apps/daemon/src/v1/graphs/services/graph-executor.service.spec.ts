@@ -8,15 +8,21 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import type {
+  AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
+  ApprovalResolution,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
 } from '../../agents/adapters/adapter.types';
-import type { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
-import type { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
+import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
 import type { ClaudeModesCapability } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ClaudeProbeService } from '../../agents/services/claude-probe.service';
@@ -94,6 +100,11 @@ class FakeItemDao {
     } as unknown as Item;
     this.items.push(item);
     return item;
+  }
+  async getByRun(runId: string, afterSeq = -1): Promise<Item[]> {
+    return this.items
+      .filter((i) => i.runId === runId && i.seq > afterSeq)
+      .sort((a, b) => a.seq - b.seq);
   }
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
@@ -194,10 +205,42 @@ class FakeAdapter {
   readonly starts: FakeTurn[] = [];
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
-  constructor(readonly kind: 'claude' | 'cursor-agent') {}
-  /** Mirrors the real adapters: only claude has a question channel. */
+  /**
+   * The REAL adapter for this kind, delegated to for every CLI-fact
+   * declaration. The double fakes the SPAWN, never the contract: a
+   * hand-rolled copy of these would let the executor pass against an approval
+   * policy or a call-tool gate the shipped adapter does not actually have,
+   * which is precisely the drift folding them behind the adapter removes.
+   */
+  private readonly real: AgentAdapter;
+  constructor(readonly kind: 'claude' | 'cursor-agent') {
+    this.real = kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
+  }
   get questionToolName(): string | null {
-    return this.kind === 'claude' ? 'AskUserQuestion' : null;
+    return this.real.questionToolName;
+  }
+  get approvalModes(): readonly AgentApprovalMode[] {
+    return this.real.approvalModes;
+  }
+  get probedApprovalModes(): readonly AgentApprovalMode[] {
+    return this.real.probedApprovalModes;
+  }
+  get callToolsRequireTrustProbe(): boolean {
+    return this.real.callToolsRequireTrustProbe;
+  }
+  get mcpEndpointRequiresCwdConfig(): boolean {
+    return this.real.mcpEndpointRequiresCwdConfig;
+  }
+  resolveApprovalMode(
+    requested: AgentApprovalMode,
+    installed: InstalledApprovalSupport,
+  ): ApprovalResolution {
+    return this.real.resolveApprovalMode(requested, installed);
+  }
+  approvalSupportFrom(
+    capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport {
+    return this.real.approvalSupportFrom(capabilities);
   }
   start(
     input: AgentTurnInput,
@@ -291,6 +334,7 @@ function setup(
   callTokens: CallTokenRegistry;
   callBroker: CallBroker;
   ensureVerdict: ReturnType<typeof vi.fn>;
+  claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
 } {
@@ -327,9 +371,10 @@ function setup(
     probedAt: 0,
     reason: null,
   };
+  const claudeEnsureVerdict = vi.fn(async () => claudeModes);
   const claudeProbe = {
     capability: () => claudeModes,
-    ensureVerdict: vi.fn(async () => claudeModes),
+    ensureVerdict: claudeEnsureVerdict,
     wireCapability: () => claudeModes,
   } as unknown as ClaudeProbeService;
   const mergeReleases: ReturnType<typeof vi.fn>[] = [];
@@ -359,16 +404,25 @@ function setup(
   } as unknown as SkillHarvestStore;
   const storeGet = vi.fn();
   const workflowStore = { get: storeGet } as unknown as WorkflowStoreService;
+  // A real bus, tapped: run-status announcements are a wire-visible effect of
+  // every status write, so the spec observes the real stream rather than a stub.
+  const bus = new AgentEventBus();
+  const statusEvents: { runId: string; status: string }[] = [];
+  bus.allStatuses().subscribe((event) => {
+    statusEvents.push({ runId: event.runId, status: event.status });
+  });
   const service = new GraphExecutorService(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
-    new AgentEventBus(),
+    bus,
     registry,
     approvals,
-    claude as unknown as ClaudeAdapter,
-    cursor as unknown as CursorAdapter,
+    new AgentAdapterRegistry(
+      claude as unknown as ClaudeAdapter,
+      cursor as unknown as CursorAdapter,
+    ),
     callTokens,
     callBroker,
     cursorProbe,
@@ -395,10 +449,12 @@ function setup(
     callTokens,
     callBroker,
     ensureVerdict,
+    claudeEnsureVerdict,
     mergeAcquire,
     mergeReleases,
     skillHarvest,
     storeGet,
+    statusEvents,
   };
 }
 
@@ -439,6 +495,59 @@ const LINEAR: Workflow = {
 };
 
 describe('GraphExecutorService', () => {
+  it('ANNOUNCES a COMPLETED settle, so a workflow row in the sidebar goes live too', async () => {
+    // The chat sidebar lists workflow runs beside chats. The chat path writes
+    // status through a helper that also publishes; the executor wrote the
+    // column directly, so a workflow run settled in SQLite while its badge kept
+    // reading "running" until something forced a refetch — item 17 fixed for
+    // one row type and left broken for the other.
+    const { service, claude, runDao, statusEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // The terminal status reached the wire, not just the row.
+    expect(statusEvents).toContainEqual({
+      runId: run.id,
+      status: 'completed',
+    });
+  });
+
+  it('announces a FAILED settle too — the badge that lies longest', async () => {
+    // Asserting only the happy path leaves the four other setRunStatus sites
+    // unpinned, and `failed`/`cancelled` are exactly the states the stale-badge
+    // defect was reported against.
+    const { service, claude, runDao, statusEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'error', message: 'the CLI died' });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('failed');
+    expect(statusEvents).toContainEqual({ runId: run.id, status: 'failed' });
+  });
+
   it('runs a call-edge workflow: the callee is on-demand, the broker gets the run', async () => {
     // Milestone-2 replaces the M1 GRAPH_CALL_RUNTIME_UNAVAILABLE guard: a
     // call-only callee never launches with the DAG (it runs per CallBroker
@@ -845,7 +954,7 @@ describe('GraphExecutorService', () => {
       nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
       edges: [],
     };
-    const run = await service.startRun({
+    await service.startRun({
       slug: 'ask',
       workflow: triggered(askFlow),
       cwd: dir,
@@ -970,6 +1079,15 @@ describe('GraphExecutorService', () => {
     expect(
       itemDao.items.find((i) => i.kind === 'approval_verdict'),
     ).toBeUndefined();
+    // …and the transcript SAYS the card is dead. Sweeping alone left it on
+    // screen with live buttons; the renderer had to infer staleness from a
+    // later terminal item, which it could not do reliably.
+    const dead = itemDao.items.find((i) => i.kind === 'unanswerable');
+    expect(JSON.parse(dead!.payload)).toEqual({
+      id: 'req-late',
+      toolName: 'Bash',
+      nodeId: 'a',
+    });
   });
 
   it('labels upstream output with the producer display name when set', async () => {
@@ -1042,6 +1160,40 @@ describe('GraphExecutorService', () => {
       (i) => i.runId === orphan.id && i.kind === 'error',
     );
     expect(errorItem).toBeDefined();
+  });
+
+  it('boot reconcile closes a graph card the KILLED daemon never swept, keeping its node', async () => {
+    // Same crash gap as the chat path: the approval registry died with the
+    // process, so the only surviving record of an open card is the transcript.
+    // The row must stay attributed to the node that asked, or it lands under
+    // the run and the card it closes is somewhere else entirely.
+    const { service, runDao, nodeDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      workflowId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+    await nodeDao.createPending(orphan.id, 'a');
+    await itemDao.create({
+      runId: orphan.id,
+      nodeId: 'a',
+      seq: 0,
+      kind: 'approval_request',
+      payload: JSON.stringify({ id: 'req-open', toolName: 'Bash' }),
+    });
+
+    await service.reconcileOrphanedRuns();
+
+    const dead = itemDao.items.filter(
+      (i) => i.runId === orphan.id && i.kind === 'unanswerable',
+    );
+    expect(dead).toHaveLength(1);
+    expect(dead[0]!.nodeId).toBe('a');
+    expect(JSON.parse(dead[0]!.payload)).toEqual({
+      id: 'req-open',
+      toolName: 'Bash',
+      nodeId: 'a',
+    });
   });
 });
 
@@ -1437,6 +1589,81 @@ describe('GraphExecutorService — agent calls', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it("a callee sub-turn settling does NOT kill the SAME node's still-live DAG-turn approval", async () => {
+    // The invariant the renderer's deleted inference tried to reconstruct from
+    // callIds in the transcript. A node reachable by BOTH a data edge and a
+    // call edge holds two turns at once; the daemon knows which are live, so
+    // the card dies only when the node's LAST turn does — never when a callee
+    // sub-turn happens to settle first.
+    const dualRole: Workflow = {
+      name: 'dual',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'orch', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'worker',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          role: 'I am the worker.',
+        },
+      ],
+      edges: [
+        { from: 'start', to: 'orch', kind: 'data' as const },
+        { from: 'start', to: 'worker', kind: 'data' as const },
+        { from: 'orch', to: 'worker', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker, itemDao, approvals } = setup();
+    const run = await service.startRun({
+      slug: 'dual',
+      workflow: dualRole,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const dagTurn = claude.starts.find(
+      (t) => t.input.systemPrompt === 'I am the worker.',
+    )!;
+    dagTurn.emit({
+      type: 'approval_request',
+      id: 'req-dag',
+      toolName: 'Write',
+      input: { path: 'x' },
+    });
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+    // A callee sub-turn on the SAME node runs and settles…
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'worker',
+      message: 'sub-task',
+    });
+    await drain();
+    const calleeTurn = claude.starts[claude.starts.length - 1]!;
+    expect(calleeTurn.input.prompt).toBe('sub-task');
+    completeTurn(calleeTurn, 'sub-done');
+    expect((await envelope).status).toBe('ok');
+    await drain();
+
+    // …and the DAG turn's approval is untouched: still answerable, no row.
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'unanswerable')).toBe(false);
+
+    // Only the node's LAST live turn ending closes the card.
+    completeTurn(dagTurn, 'dag-done');
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(0);
+    const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
+    expect(dead).toHaveLength(1);
+    expect(JSON.parse(dead[0]!.payload)).toEqual({
+      id: 'req-dag',
+      toolName: 'Write',
+      nodeId: 'worker',
+    });
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {
@@ -1855,7 +2082,9 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
       status: 'question',
       call_id: 'call-1',
       agent: 'callee',
-      question: 'Which color?',
+      // Header-qualified: `options` is FLAT across questions, so the header is
+      // what lets a caller tell which option belongs to which question.
+      question: '[Color] Which color?',
       options: ['Red', 'Blue'],
     });
     // Bridged questions never become renderer approvals.
@@ -2397,6 +2626,75 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     );
     expect(warn).toBeDefined();
     completeTurn(cursor.starts[0]!, 'done');
+    await drain();
+  });
+
+  it("keeps a claude plan node on 'plan' even when the probe FAILED it", async () => {
+    // The graph half of the policy the adapter owns: acceptEdits degrades,
+    // plan does not — turning a no-execute mode into an executing 'ask' would
+    // invert what the author selected. Same verdict as the acceptEdits test
+    // above, opposite outcome, which is what proves the adapter is deciding
+    // rather than the executor pattern-matching a probe field.
+    const { service, claude, itemDao } = setup(4880, {
+      claudeModes: {
+        acceptEdits: 'fail',
+        plan: 'fail',
+        version: 'claude-old',
+        probedAt: 0,
+        reason: 'installed claude rejects both probed modes',
+      },
+    });
+    await service.startRun({
+      slug: 'plan-no-degrade',
+      workflow: triggered({
+        name: 'plan-no-degrade',
+        nodes: [{ id: 'p', kind: 'agent', agent: 'claude', approval: 'plan' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(claude.starts[0]!.input.approvalMode).toBe('plan');
+    expect(
+      itemDao.items.some(
+        (i) => i.kind === 'system' && i.payload.includes('degrade'),
+      ),
+    ).toBe(false);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('waits on the mode probe only for a workflow that asks for a probed mode', async () => {
+    // `hasProbedApprovalMode` asks each node's ADAPTER which of its modes are
+    // empirical, so an all-auto graph never pays for a probe turn. Without the
+    // predicate every run would block on it.
+    const auto = setup(4881);
+    await auto.service.startRun({
+      slug: 'auto-only',
+      workflow: triggered({
+        name: 'auto-only',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(auto.claudeEnsureVerdict).not.toHaveBeenCalled();
+    completeTurn(auto.claude.starts[0]!, 'done');
+    await drain();
+
+    const probed = setup(4882);
+    await probed.service.startRun({
+      slug: 'accept-edits',
+      workflow: triggered(ACCEPT_EDITS_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(probed.claudeEnsureVerdict).toHaveBeenCalledTimes(1);
+    completeTurn(probed.claude.starts[0]!, 'done');
     await drain();
   });
 });

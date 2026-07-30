@@ -66,6 +66,7 @@ export function runToWire(
     cwd: run.cwd,
     model: run.model,
     approval: run.approval,
+    effort: run.effort,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     lastMessage,

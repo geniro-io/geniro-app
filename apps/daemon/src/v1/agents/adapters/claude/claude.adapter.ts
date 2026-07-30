@@ -4,18 +4,30 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../../utils/agent-binary';
+import { resolveAgentVersion } from '../../utils/agent-version';
 import { claudeCredentialEnv } from '../../utils/child-env';
 import { asArray, asBoolean, asRecord, asString } from '../../utils/json-util';
 import type {
+  AgentApprovalMode,
   AgentCommandOptions,
+  AgentEffort,
   AgentEvent,
   AgentModel,
   AgentSkillEntry,
   AgentSkillsInput,
   AgentTurnInput,
+  ApprovalResolution,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import { claudeApprovalSupport } from './claude-approval';
 import { probeClaudeCommands } from './claude-commands';
+import {
+  isControlProtocolVerified,
+  unverifiedControlProtocolMessage,
+} from './claude-control-protocol';
+import { CLAUDE_EFFORT_LEVELS } from './claude-effort';
 import {
   helpAdvertisesPartialMessages,
   mapClaudeStreamEvent,
@@ -24,7 +36,7 @@ import {
 } from './claude-live-stream';
 import { claudeModels } from './claude-models';
 import { scanClaudeSkills } from './claude-skills';
-import { readClaudeUsage } from './claude-usage';
+import { readClaudeAssistantContext, readClaudeUsage } from './claude-usage';
 import { buildImageBlocks } from './image-blocks';
 
 /**
@@ -103,6 +115,12 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
         return [];
       }
       const events: AgentEvent[] = [];
+      // Lifted BEFORE the content blocks so the meter moves as soon as the
+      // request lands, rather than trailing the words it produced.
+      const contextTokens = readClaudeAssistantContext(message);
+      if (contextTokens !== null) {
+        events.push({ type: 'context_progress', contextTokens });
+      }
       for (const block of asArray(message.content)) {
         const b = asRecord(block);
         if (!b) {
@@ -164,8 +182,12 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
     case 'control_request': {
       const request = asRecord(root.request);
       const id = asString(root.request_id);
-      if (!request || !id || asString(request.subtype) !== 'can_use_tool') {
-        return [];
+      const subtype = request ? asString(request.subtype) : null;
+      if (!request || !id || subtype !== 'can_use_tool') {
+        // Not a bare drop: the subtype travels back as data so the caller can
+        // log it. This mapper is pure by contract, so a subtype the adapter
+        // does not model is invisible unless it leaves the function.
+        return [{ type: 'unhandled_control', subtype: subtype ?? '<none>' }];
       }
       return [
         {
@@ -173,8 +195,9 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           id,
           toolName: asString(request.tool_name) ?? '',
           input: request.input ?? null,
-          // AskUserQuestion carries requires_user_interaction: true (verified
-          // live on 2.1.202) — the M4 question-vs-permission discriminator.
+          // AskUserQuestion carries requires_user_interaction: true — the M4
+          // question-vs-permission discriminator. Verified live on 2.1.202 and
+          // re-probed on 2.1.220 (2026-07-29).
           requiresUserInteraction: asBoolean(request.requires_user_interaction)
             ? true
             : undefined,
@@ -231,8 +254,105 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   readonly questionToolName = 'AskUserQuestion';
 
+  /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
+  readonly approvalModes = [
+    'auto',
+    'ask',
+    'acceptEdits',
+    'plan',
+  ] as const satisfies readonly AgentApprovalMode[];
+
+  /**
+   * The two modes headless claude has been seen to reject on some builds — so
+   * a run requesting either waits out the mode probe, and a run that never
+   * does pays nothing.
+   */
+  /**
+   * Claude's own slice of the capability bag: the permission-mode probe's
+   * verdict, translated into the adapter-agnostic tri-state. `unknown` maps to
+   * ABSENT, never `false` — nobody asked, so the mode is still attempted and a
+   * genuine rejection surfaces from the CLI rather than from a guess here.
+   */
+  override approvalSupportFrom(
+    capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport {
+    return claudeApprovalSupport(capabilities.claudeModes);
+  }
+
+  readonly probedApprovalModes = [
+    'acceptEdits',
+    'plan',
+  ] as const satisfies readonly AgentApprovalMode[];
+
+  /**
+   * `acceptEdits` degrades to `ask` on a probed FAIL — the turn still runs,
+   * every edit just asks first.
+   *
+   * `plan` deliberately does NOT degrade, even though it is probed the same
+   * way: turning a no-execute mode into an executing `ask` would invert the
+   * whole promise the user selected it for. An unsupported `plan` rides
+   * through and the CLI rejects it loudly, which is the honest failure.
+   *
+   * An UNPROBED mode keeps what was asked for, so a real rejection surfaces
+   * from the CLI rather than from a guess made here.
+   */
+  override resolveApprovalMode(
+    requested: AgentApprovalMode,
+    installed: InstalledApprovalSupport,
+  ): ApprovalResolution {
+    if (
+      requested === 'acceptEdits' &&
+      installed.supported.acceptEdits === false
+    ) {
+      return {
+        mode: 'ask',
+        degradeReason:
+          "installed claude does not support acceptEdits — this turn runs as 'ask'",
+      };
+    }
+    return { mode: requested, degradeReason: null };
+  }
+
+  /**
+   * The endpoint is handed to claude per turn, so nothing about the machine
+   * has to be trusted in advance.
+   */
+  readonly callToolsRequireTrustProbe = false;
+
+  /** `--mcp-config` carries the endpoint for one turn; no cwd file is touched. */
+  readonly mcpEndpointRequiresCwdConfig = false;
+
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
+
+  /** Resolved at most once per daemon launch; see verifyControlProtocol. */
+  private controlProtocolCheck?: Promise<void>;
+
+  /**
+   * Report — once per launch — when a turn drives the stdin control protocol
+   * on a claude this adapter's mapping has never been probed against.
+   *
+   * Deliberately NOT a throw. A new claude release is the common case and is
+   * usually fine; refusing every turn on it would break the app on an upgrade
+   * the user did not connect to us. The failure this guards is quieter and
+   * worse — a renamed field turning every approval into a silent mis-map — so
+   * the answer is to say so, loudly, not to stop.
+   *
+   * Fire-and-forget: `prepareTurn` is synchronous and a `--version` probe must
+   * never sit in front of a spawn, so the report lands beside the turn rather
+   * than before it. `resolveAgentVersion` never throws and never hangs.
+   */
+  private verifyControlProtocol(): void {
+    this.controlProtocolCheck ??= resolveAgentVersion('claude', {
+      execFileFn: this.claudeOptions.execFileFn,
+      onSpawn: this.claudeOptions.onUtilitySpawn,
+    }).then((version) => {
+      if (isControlProtocolVerified(version)) {
+        return;
+      }
+      this.reportProblem(unverifiedControlProtocolMessage(version));
+    });
+  }
 
   constructor(private readonly claudeOptions: ClaudeAdapterOptions = {}) {
     super(claudeOptions);
@@ -274,6 +394,9 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override prepareTurn(
     input: AgentTurnInput,
   ): (() => void) | undefined {
+    if (this.keepStdinOpen(input)) {
+      this.verifyControlProtocol();
+    }
     if (!input.mcpEndpoint) {
       return undefined;
     }
@@ -315,6 +438,11 @@ export class ClaudeAdapter extends AgentAdapter {
     return scanClaudeSkills(input);
   }
 
+  /** The probe-verified `--effort` vocabulary — see `claude-effort.ts`. */
+  override listEfforts(): AgentEffort[] {
+    return [...CLAUDE_EFFORT_LEVELS];
+  }
+
   /** Memoized: `--help` is asked once per adapter instance, not once per turn. */
   private liveStreamSupport: Promise<boolean> | null = null;
 
@@ -353,6 +481,12 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     if (input.model) {
       args.push('--model', input.model);
+    }
+    if (input.effort) {
+      // An unknown value here is not fatal — the CLI warns and runs on its own
+      // default — but the caller has already refused anything outside
+      // `listEfforts()`, so the flag only carries a level claude accepts.
+      args.push('--effort', input.effort);
     }
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);

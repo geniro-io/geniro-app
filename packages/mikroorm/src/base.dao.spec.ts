@@ -312,6 +312,22 @@ describe('BaseDao', () => {
     expect(em.flush).not.toHaveBeenCalled();
   });
 
+  it('hardDeleteIncludingSoftDeleted disables the softDelete filter BY NAME', async () => {
+    // `filters: false` would disable EVERY registered filter. Only softDelete
+    // exists here today, so the two behave identically and no behavioural test
+    // can tell them apart — but this package is vendored to stay upstreamable,
+    // and in a codebase with a scoping filter the blanket form is the
+    // difference between purging one tenant's rows and purging everyone's.
+    vi.mocked(repo.find).mockResolvedValue([]);
+
+    await dao.hardDeleteIncludingSoftDeleted({ name: 'x' } as never);
+
+    expect(repo.find).toHaveBeenCalledWith(
+      { name: 'x' },
+      { filters: { softDelete: false } },
+    );
+  });
+
   it('hardDelete with txEm uses transactional EM', async () => {
     const txRepo = createMockRepo();
     const txEm = createMockEm(txRepo);
@@ -397,5 +413,37 @@ describe('BaseDao (real in-memory sqlite driver)', () => {
 
     expect(await dao.getById('t1')).toBeNull();
     expect(await dao.count({})).toBe(0);
+  });
+
+  it('hardDelete CANNOT reach a soft-deleted row — it hydrates through the filter', async () => {
+    // The trap the sibling method exists for: `hardDelete` reads through the
+    // default `deletedAt: null` filter, so a row that was ever soft-deleted is
+    // invisible to it and survives the "hard" delete as a physical orphan.
+    await dao.create({ id: 't1', name: 'a' });
+    await dao.deleteById('t1');
+
+    await dao.hardDelete({ name: 'a' } as never);
+
+    const rows = await orm.em
+      .getConnection()
+      .execute<{ id: string }[]>("select id from things where id = 't1'");
+    expect(rows).toHaveLength(1);
+  });
+
+  it('hardDeleteIncludingSoftDeleted DOES reach it, and reports the count', async () => {
+    await dao.create({ id: 't2', name: 'b' });
+    await dao.deleteById('t2');
+
+    expect(
+      await dao.hardDeleteIncludingSoftDeleted({ name: 'b' } as never),
+    ).toBe(1);
+
+    // Gone from the table itself, not merely from a filtered read — asserted
+    // against raw SQL, because every DAO read hides soft-deleted rows anyway
+    // and would report success either way.
+    const rows = await orm.em
+      .getConnection()
+      .execute<{ id: string }[]>("select id from things where id = 't2'");
+    expect(rows).toHaveLength(0);
   });
 });

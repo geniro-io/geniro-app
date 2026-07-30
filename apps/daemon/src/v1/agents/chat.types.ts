@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AgentKindSchema,
   ItemKindSchema,
+  type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
 
@@ -31,6 +32,14 @@ export const ChatApprovalModeSchema = z
   .enum(CHAT_APPROVAL_MODES)
   .meta({ id: 'ChatApprovalMode' });
 export type ChatApprovalMode = z.infer<typeof ChatApprovalModeSchema>;
+
+/**
+ * What a new chat starts in when the user expresses no preference — a PRODUCT
+ * choice (ask before acting), not a CLI fact, which is why it lives here and
+ * not on an adapter. A CLI that cannot honour it falls back to the `auto`
+ * floor; see `ChatService.initialApproval`.
+ */
+export const CHAT_DEFAULT_APPROVAL: ChatApprovalMode = 'ask';
 
 /** One probed claude permission mode's headless support verdict. */
 export const ProbeStatusSchema = z
@@ -75,6 +84,18 @@ export type ClaudeModesCapability = z.infer<typeof ClaudeModesCapabilitySchema>;
  * remains pending) and the MCP answer_agent tool (oversize → INVALID_ARGS).
  */
 export const MAX_ANSWER_LENGTH = 32_768;
+
+/**
+ * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
+ * MAX_QUESTION_HEADER_LENGTH.
+ *
+ * Sanity cap on one question's `header` — the short noun phrase the CLI's own
+ * picker uses as a tab title (claude documents 12 characters; this leaves room
+ * for drift). A version-drifted payload could put a whole paragraph there, and
+ * the renderer's tab strip has no truncation of its own, so an unbounded header
+ * would push the answer controls off the card.
+ */
+export const MAX_QUESTION_HEADER_LENGTH = 64;
 
 /**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
@@ -198,10 +219,63 @@ export const AgentModelWireSchema = z.object({
 });
 export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
 
+/**
+ * One reasoning-effort level a CLI accepts for `--effort`.
+ *
+ * Opaque strings, never an enum on the wire: the vocabulary belongs to one
+ * CLI (`AgentAdapter.listEfforts`), and pinning claude's six values into the
+ * shared contract would put a CLI fact outside the adapter layer — and hand
+ * the renderer a list it must never carry. An EMPTY array is the meaningful
+ * answer for a CLI with no effort control; the composer omits the chip.
+ */
+// No `.meta({ id })` on this root: it backs an ARRAY response DTO (see
+// AgentModelWireSchema above for the dangling-$ref this avoids).
+export const AgentEffortWireSchema = z.object({
+  id: z.string().describe('Passed verbatim to the CLI as `--effort <id>`'),
+  label: z.string(),
+});
+export type AgentEffortWire = z.infer<typeof AgentEffortWireSchema>;
+
+/**
+ * Payload of an `unanswerable` item: one approval request whose turn settled
+ * while it was still pending, so no verdict can ever reach it.
+ *
+ * `id` is the SAME request id the `approval_request` payload carries, which is
+ * what lets the renderer close exactly that card.
+ *
+ * TWIN PARSER: `apps/ui/src/renderer/chats/transcript-item.tsx` reads this
+ * shape out of the item's `payload`. Item payloads are `z.unknown()` on the
+ * wire BY DESIGN (each kind carries a different shape), so no generated type
+ * spans the two sides — a change here MUST be mirrored there.
+ */
+export interface UnanswerableWire {
+  id: string;
+  toolName: string;
+}
+
 /** One persisted item, ready to fan out to its run's WS room (persist-then-emit). */
 export interface RunItemEvent {
   runId: string;
   item: ItemWire;
+}
+
+/**
+ * A run's status changed, broadcast to every client rather than to one room.
+ *
+ * TWIN PARSER: `apps/ui/src/renderer/daemon-client.ts` reads this shape off the
+ * `run_status` Socket.IO event. Outside the generated HTTP contract (no route
+ * carries it), so the two sides are independent implementations and a shape
+ * change here MUST be mirrored there.
+ *
+ * `activity` is a short plain-English phrase naming what the run is doing
+ * right now ("running Bash", "waiting for you"), or null when it is not doing
+ * anything — a badge that says only "running" cannot distinguish an agent
+ * working from one parked on a question nobody answered.
+ */
+export interface RunStatusEvent {
+  runId: string;
+  status: RunStatus;
+  activity: string | null;
 }
 
 /**
@@ -232,8 +306,36 @@ export interface RunDeltaEvent {
    * mechanism cannot get out of sync with itself. There is no reasoning TEXT
    * to carry — headless claude redacts it — so a running total is the whole
    * signal.
+   *
+   * CUMULATIVE OVER THE TURN, not over one reasoning stretch: the CLI restarts
+   * its own count each time the agent breaks off to write, which made the
+   * number appear to reset mid-turn.
    */
   thinkingTokens: number | null;
+  /**
+   * Epoch ms when this turn's FIRST reasoning began, or null when the agent is
+   * not reasoning right now.
+   *
+   * A timestamp rather than an elapsed number so the client owns the clock: a
+   * duration computed here would be frozen at publish time and would need a
+   * delta per second to keep ticking.
+   */
+  thinkingSince: number | null;
+  /**
+   * Prompt-side tokens as of the turn's most recent request — how full the
+   * window is RIGHT NOW.
+   *
+   * Mid-turn, unlike the `turn_complete` payload the meter used to be limited
+   * to. Null before the turn's first `assistant` line, or for a CLI that
+   * reports no per-request usage.
+   */
+  contextTokens: number | null;
+  /**
+   * The window `contextTokens` is measured against, as last reported for this
+   * run. Remembered across turns because it rides the `result` line only, so a
+   * turn's first request has none of its own. Null until a turn has completed.
+   */
+  contextWindowTokens: number | null;
 }
 
 /** A run projected to the wire (chat and workflow runs share the shape). */
@@ -251,6 +353,12 @@ export const RunWireSchema = z.object({
   approval: ChatApprovalModeSchema.nullable().describe(
     'Chat approval mode; null = legacy row (no permission flags, pre-selector)',
   ),
+  effort: z
+    .string()
+    .nullable()
+    .describe(
+      "Reasoning-effort level for the next turn, in the CLI's own vocabulary; null = the CLI's default (no --effort flag)",
+    ),
   createdAt: z.string(),
   /**
    * Last write to the run row — every send flips status to `running` and every

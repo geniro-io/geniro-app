@@ -6,12 +6,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentSkillEntry } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import type { AgentSkillWire } from '../chat.types';
 import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
 import { resolveValidCwd } from '../utils/resolve-cwd';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 
@@ -84,8 +83,7 @@ export class SkillsService {
 
   constructor(
     private readonly harvest: SkillHarvestStore,
-    private readonly claude: ClaudeAdapter,
-    private readonly cursor: CursorAdapter,
+    private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     options: SkillsServiceOptions = {},
   ) {
@@ -134,7 +132,7 @@ export class SkillsService {
   }
 
   private adapterFor(kind: AgentKind): AgentAdapter {
-    return kind === 'claude' ? this.claude : this.cursor;
+    return this.adapters.for(kind);
   }
 
   /**

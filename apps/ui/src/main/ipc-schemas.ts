@@ -45,6 +45,9 @@ export const settingsPatchSchema = z.strictObject({
   // Model aliases are the CLIs' vocabulary, not ours — bounded, not enumerated,
   // so a CLI adding an alias needs no change here.
   lastModels: z.partialRecord(cliKind, z.string().min(1).max(64)).optional(),
+  // Effort levels are likewise the CLIs' own vocabulary (claude accepts one
+  // its --help does not even list), so they are bounded, never enumerated.
+  lastEfforts: z.partialRecord(cliKind, z.string().min(1).max(64)).optional(),
   // partialRecord, not record: in zod v4 z.record over an enum key is
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),

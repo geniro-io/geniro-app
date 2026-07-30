@@ -8,13 +8,18 @@ import {
   firstString,
 } from '../../utils/json-util';
 import type {
+  AgentApprovalMode,
   AgentCommandOptions,
+  AgentEffort,
   AgentEvent,
   AgentModel,
   AgentSkillEntry,
   AgentSkillsInput,
   AgentTurnInput,
   AgentUsage,
+  ApprovalResolution,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
 } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import { CURSOR_BUILTIN_MODELS, parseCursorModels } from './cursor-models';
@@ -228,6 +233,66 @@ export class CursorAdapter extends AgentAdapter {
    */
   readonly questionToolName = null;
 
+  /**
+   * `auto` is the only honest entry: `--force` plus the static allow/deny list
+   * in `~/.cursor/cli-config.json` IS this CLI's permission model, and there is
+   * no per-turn channel to hold a tool call on. Offering `ask` would be a
+   * control that changes nothing.
+   */
+  readonly approvalModes = [
+    'auto',
+  ] as const satisfies readonly AgentApprovalMode[];
+
+  /**
+   * Nothing to read: cursor-agent has no probed approval mode, so no probe
+   * fills a field for it. Empty support means "nobody established anything",
+   * which leaves every requested mode to `resolveApprovalMode` below.
+   */
+  override approvalSupportFrom(
+    // Declared and deliberately unread: taking the bag and returning nothing
+    // from it is the STATEMENT — cursor has no probed mode, so no field in
+    // there is about this CLI. Omitting the parameter would make the same test
+    // pass by signature rather than by behaviour.
+    _capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport {
+    return { supported: {} };
+  }
+
+  /** Nothing to probe — the one mode it has needs no binary to confirm it. */
+  readonly probedApprovalModes =
+    [] as const satisfies readonly AgentApprovalMode[];
+
+  /**
+   * Everything becomes `auto`, and anything else asked for is REPORTED rather
+   * than quietly ignored: a workflow node may still be authored with `ask` (the
+   * graph schema is CLI-agnostic), and a silent degrade there would read as
+   * enforced permissions that never existed.
+   */
+  override resolveApprovalMode(
+    requested: AgentApprovalMode,
+  ): ApprovalResolution {
+    return requested === 'auto'
+      ? { mode: 'auto', degradeReason: null }
+      : {
+          mode: 'auto',
+          degradeReason: `cursor-agent has no approval callback — approval '${requested}' degrades to auto-approve for this turn`,
+        };
+  }
+
+  /**
+   * cursor-agent keeps its own persistent MCP trust store, and a server it has
+   * not trusted is silently unavailable to the model — so the daemon must PROVE
+   * the endpoint is reachable on this machine before a run admits a cursor
+   * caller, rather than launch a turn whose call tools quietly do nothing.
+   */
+  readonly callToolsRequireTrustProbe = true;
+
+  /**
+   * There is no `--mcp-config` flag: the only way in is a `geniro` entry merged
+   * into the run cwd's `.cursor/mcp.json` for the turn and removed after it.
+   */
+  readonly mcpEndpointRequiresCwdConfig = true;
+
   readonly kind = 'cursor-agent' as const;
 
   // Resolved per turn so the Settings cliPaths override (GENIRO_CURSOR_BIN on
@@ -253,6 +318,17 @@ export class CursorAdapter extends AgentAdapter {
 
   override listSkills(input: AgentSkillsInput): Promise<AgentSkillEntry[]> {
     return scanCursorSkills(input);
+  }
+
+  /**
+   * Nothing to offer: cursor-agent has no reasoning-effort flag, because it
+   * folds effort INTO the model id instead — `sonnet-4-thinking`,
+   * `gpt-5.2-high` (see `cursor-models.ts`). Picking a level here would be a
+   * second control over the same thing, and the CLI would reject the flag; the
+   * model chip already IS the effort chip for this CLI.
+   */
+  override listEfforts(): AgentEffort[] {
+    return [];
   }
 
   /**

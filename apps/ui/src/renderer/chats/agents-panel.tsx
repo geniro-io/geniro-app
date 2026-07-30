@@ -4,15 +4,9 @@ import { useState } from 'react';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { ProgressRing } from '../components/ui/progress-ring';
 import { cn } from '../components/ui/utils';
-import {
-  type AgentDisplay,
-  type AgentThread,
-  DEFAULT_CONTEXT_WINDOW_TOKENS,
-  formatTokens,
-  formatUsd,
-} from './agent-activity';
+import { type AgentDisplay, type AgentThread } from './agent-activity';
+import { ContextMeter } from './context-meter';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 
 /**
@@ -86,15 +80,6 @@ export function AgentsPanel({
           </li>
         ) : (
           agents.map((agent) => {
-            // The model's OWN window when its CLI named one — the same figure
-            // must scale the ring and label the denominator, or a 1M-window
-            // model reads as full at a fifth of its context.
-            const window =
-              agent.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-            const fraction =
-              agent.contextTokens !== null
-                ? agent.contextTokens / window
-                : null;
             const isExpanded = expanded.has(agent.id);
             // An agent whose only thread is its own conversation has nothing
             // to expand INTO — the card already is that conversation. Showing
@@ -175,35 +160,11 @@ export function AgentsPanel({
                       </span>
                     ) : null}
                   </span>
-                  {fraction !== null || agent.spentUsd !== null ? (
-                    <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {agent.contextTokens !== null ? (
-                        <span title="Context of the latest turn / the model's window">
-                          ctx {formatTokens(agent.contextTokens)} /{' '}
-                          {formatTokens(window)}
-                        </span>
-                      ) : null}
-                      {agent.spentUsd !== null ? (
-                        <span title="Total spend across this run's turns">
-                          {formatUsd(agent.spentUsd)}
-                        </span>
-                      ) : null}
-                      {fraction !== null ? (
-                        <ProgressRing
-                          fraction={fraction}
-                          label={`Context ${Math.round(fraction * 100)}% full`}
-                          className={cn(
-                            'ml-auto',
-                            fraction >= 0.9
-                              ? 'text-destructive'
-                              : fraction >= 0.7
-                                ? 'text-warning'
-                                : 'text-primary',
-                          )}
-                        />
-                      ) : null}
-                    </span>
-                  ) : null}
+                  <ContextMeter
+                    contextTokens={agent.contextTokens}
+                    contextWindowTokens={agent.contextWindowTokens}
+                    spentUsd={agent.spentUsd}
+                  />
                 </Header>
                 {isExpanded && soleThread === null ? (
                   <ul className="m-0 flex list-none flex-col gap-0.5 border-t border-border px-2 py-1.5">

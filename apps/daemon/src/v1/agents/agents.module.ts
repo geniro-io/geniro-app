@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 
 import { environment } from '../../environments';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
@@ -10,17 +11,20 @@ import { SkillsController } from './controllers/skills.controller';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
+import { AgentAdapterRegistry } from './services/agent-adapter.registry';
 import { AgentEventBus } from './services/agent-events.bus';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { ClaudeProbeService } from './services/claude-probe.service';
 import { CursorMcpMergeService } from './services/cursor-mcp-merge.service';
+import { EffortsService } from './services/efforts.service';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
+import { childProcessHandle } from './utils/child-handle';
 
 /**
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
@@ -35,6 +39,7 @@ import { SkillsService } from './services/skills.service';
   controllers: [ChatController, SkillsController],
   providers: [
     ChatService,
+    AgentAdapterRegistry,
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
     {
@@ -45,27 +50,23 @@ import { SkillsService } from './services/skills.service';
       provide: SkillsService,
       useFactory: (
         harvest: SkillHarvestStore,
-        claude: ClaudeAdapter,
-        cursor: CursorAdapter,
+        adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
-      ) => new SkillsService(harvest, claude, cursor, processes),
-      inject: [
-        SkillHarvestStore,
-        ClaudeAdapter,
-        CursorAdapter,
-        ProcessRegistry,
-      ],
+      ) => new SkillsService(harvest, adapters, processes),
+      inject: [SkillHarvestStore, AgentAdapterRegistry, ProcessRegistry],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
       provide: ModelsService,
       useFactory: (
-        claude: ClaudeAdapter,
-        cursor: CursorAdapter,
+        adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
-      ) => new ModelsService(claude, cursor, processes),
-      inject: [ClaudeAdapter, CursorAdapter, ProcessRegistry],
+      ) => new ModelsService(adapters, processes),
+      inject: [AgentAdapterRegistry, ProcessRegistry],
     },
+    // Plain provider, unlike its siblings above: it has no options bag to seed,
+    // because an adapter answers from a documented constant (no spawn, no TTL).
+    EffortsService,
     AgentEventBus,
     ApprovalRegistry,
     PartialStreamService,
@@ -77,15 +78,30 @@ import { SkillsService } from './services/skills.service';
       provide: ClaudeAdapter,
       // Per-turn --mcp-config files live under the daemon's own userData tmp
       // (never the OS-shared tmpdir) — they carry the per-run call token.
-      useFactory: () =>
+      useFactory: (processes: ProcessRegistry) =>
         new ClaudeAdapter({
           mcpConfigDir: join(environment.userDataDir, 'tmp'),
           // The command-catalog probe's throwaway workspace — daemon-owned,
           // never a user folder.
           probeRootDir: join(environment.userDataDir, 'claude-probe'),
+          // Without a real sink the base class's diagnostics (skipped
+          // unparseable lines, unmodelled control subtypes, an unprobed CLI
+          // version) are `?.warn` on undefined — silently discarded in the one
+          // build that matters.
+          logger: new Logger(ClaudeAdapter.name),
+          onUtilitySpawn: (child) =>
+            processes.register(
+              `claude:version:${randomUUID()}`,
+              childProcessHandle(child),
+            ),
         }),
+      inject: [ProcessRegistry],
     },
-    { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
+    {
+      provide: CursorAdapter,
+      useFactory: () =>
+        new CursorAdapter({ logger: new Logger(CursorAdapter.name) }),
+    },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
       provide: ClaudeProbeService,
@@ -113,6 +129,7 @@ import { SkillsService } from './services/skills.service';
     RunDao,
     ClaudeAdapter,
     CursorAdapter,
+    AgentAdapterRegistry,
     CursorMcpMergeService,
   ],
 })

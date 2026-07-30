@@ -2,7 +2,11 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
-import { AgentModelWireSchema, AgentSkillWireSchema } from '../chat.types';
+import {
+  AgentEffortWireSchema,
+  AgentModelWireSchema,
+  AgentSkillWireSchema,
+} from '../chat.types';
 
 /**
  * Query for the skills listing — which agent's on-disk skill convention to
@@ -24,3 +28,10 @@ export class ListModelsQueryDto extends createZodDto(listModelsQuerySchema) {}
 
 /** One model an agent CLI accepts for `--model`. */
 export class AgentModelDto extends createZodDto(AgentModelWireSchema) {}
+
+/** Query for the effort listing — which agent CLI's levels to report. */
+export const listEffortsQuerySchema = z.object({ agent: AgentKindSchema });
+export class ListEffortsQueryDto extends createZodDto(listEffortsQuerySchema) {}
+
+/** One reasoning-effort level an agent CLI accepts for `--effort`. */
+export class AgentEffortDto extends createZodDto(AgentEffortWireSchema) {}

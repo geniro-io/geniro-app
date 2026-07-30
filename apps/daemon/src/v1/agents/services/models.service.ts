@@ -4,11 +4,10 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import type { AgentModelWire } from '../chat.types';
 import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ProcessRegistry } from './process-registry';
 
 /** Constructor options — test seams, not user config. */
@@ -47,8 +46,7 @@ export class ModelsService {
   private readonly now: () => number;
 
   constructor(
-    private readonly claude: ClaudeAdapter,
-    private readonly cursor: CursorAdapter,
+    private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     options: ModelsServiceOptions = {},
   ) {
@@ -72,7 +70,7 @@ export class ModelsService {
     ) {
       return cached.models;
     }
-    const adapter: AgentAdapter = kind === 'claude' ? this.claude : this.cursor;
+    const adapter: AgentAdapter = this.adapters.for(kind);
     let models: AgentModelWire[];
     try {
       models = await adapter.listModels({

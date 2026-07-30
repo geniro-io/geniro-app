@@ -21,6 +21,25 @@ export interface AgentCount {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AgentEffortDto
+ */
+export interface AgentEffortDto {
+    /**
+     * Passed verbatim to the CLI as `--effort <id>`
+     * @type {string}
+     * @memberof AgentEffortDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentEffortDto
+     */
+    label: string;
+}
 
 /**
  * 
@@ -292,6 +311,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    effort?: string;
 }
 
 
@@ -536,6 +561,7 @@ export const ItemKind = {
     Status: 'status',
     ApprovalRequest: 'approval_request',
     ApprovalVerdict: 'approval_verdict',
+    Unanswerable: 'unanswerable',
     CallStarted: 'call_started',
     CallResult: 'call_result',
     AwaitCollected: 'await_collected',
@@ -702,6 +728,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     approval: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    effort: string | null;
     /**
      * 
      * @type {string}
@@ -906,6 +938,12 @@ export interface UpdateChatSettingsDto {
      * @memberof UpdateChatSettingsDto
      */
     model?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateChatSettingsDto
+     */
+    effort?: string | null;
 }
 
 

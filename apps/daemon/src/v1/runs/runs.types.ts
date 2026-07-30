@@ -22,6 +22,24 @@ export const RUN_STATUSES = [
 export const RunStatusSchema = z.enum(RUN_STATUSES).meta({ id: 'RunStatus' });
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
+/**
+ * Statuses a run never leaves. `pending` and `running` are the live ones;
+ * everything else is settled.
+ *
+ * Derived from {@link RUN_STATUSES} by exclusion rather than listed
+ * separately, so adding a status forces a decision here instead of silently
+ * defaulting to "not terminal" — which would make a settled run look live.
+ */
+const LIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
+  'pending',
+  'running',
+]);
+
+/** Whether a run has settled and will never change status on its own again. */
+export function isTerminalRunStatus(status: RunStatus): boolean {
+  return !LIVE_RUN_STATUSES.has(status);
+}
+
 /** A node may additionally be `skipped` — an upstream node failed. */
 export const NodeStatusSchema = z
   .enum([...RUN_STATUSES, 'skipped'])
@@ -47,6 +65,12 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * parked, awaiting the caller) and `call_answer` (how it resolved: answered
  * via answer_agent, TTL timeout, or orphaned by the caller ending) — both
  * attributed to the CALLER node like the other call kinds.
+ *
+ * `unanswerable` closes an `approval_request` that can never be answered now:
+ * its turn settled while the request was still pending, so the card on screen
+ * is a dead control. The daemon says so explicitly rather than leaving the
+ * renderer to infer staleness from a settled turn — an inference that has no
+ * way to distinguish a request the CLI abandoned from one still in flight.
  */
 export const ItemKindSchema = z
   .enum([
@@ -63,6 +87,7 @@ export const ItemKindSchema = z
     'status',
     'approval_request',
     'approval_verdict',
+    'unanswerable',
     'call_started',
     'call_result',
     'await_collected',

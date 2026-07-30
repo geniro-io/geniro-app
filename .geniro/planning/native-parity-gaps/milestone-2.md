@@ -57,9 +57,9 @@ Expose model selection at chat creation and between turns, add the cursor auto m
 
 - [ ] 1. Promote model-select to components/ with CLI-default + chip variant; add auto to AGENT_MODEL_OPTIONS cursor list (model-select.tsx; node-schema.ts symbol AGENT_MODEL_OPTIONS). <!-- step-1 -->
 - [ ] 2. New-chat card wires agentKind-aware ModelSelect and sends model on create (Chats.tsx symbol startChat/createChat call site). <!-- step-2 -->
-- [ ] 3. Extend PATCH /settings with model; header Model chip switches it between turns (chat.controller.ts settings route from milestone 1; chat-header.tsx). <!-- step-3 -->
+- [x] 3. Extend PATCH /settings with model; header Model chip switches it between turns (chat.controller.ts settings route from milestone 1; chat-header.tsx). **[BUILT — ticked 2026-07-29 while implementing `chat-ux-improvements`; verified present in the tree, not merely planned. `PATCH /settings` carries `model` (`chat.dto.ts:39`) and the header model chip switches it between turns.]**  <!-- step-3 -->
 - [ ] 4. Compact probe spike (child-handle + agent-version cache) exposed via capabilities (cursor-probe.service.ts pattern, symbol CursorProbeService). <!-- step-4 -->
-- [ ] 5. ContextMeter component + Compact action wiring in the header (chat-header.tsx; usage from the latest turn_complete item payload, event-to-item.ts symbol mapEventToItem). <!-- step-5 -->
+- [~] 5. ContextMeter component + Compact action wiring in the header (chat-header.tsx; usage from the latest turn_complete item payload, event-to-item.ts symbol mapEventToItem). **[SUPERSEDED 2026-07-29 by `.geniro/planning/chat-ux-improvements/` step-11. That spec reverses the mechanism pinned here: the meter must read a LIVE mid-turn usage signal off the delta plane, not `the latest turn_complete item payload`, which is the staleness item 11 actually complains about. The Compact action stays unbuilt and unowned by that spec — it depends on step-4, which remains this plan's.]**  <!-- step-5 -->
 - [ ] 6. Co-located specs: model-select variant, settings PATCH, meter thresholds, compact service path. <!-- step-6 -->
 
 ## 7. Tools Required

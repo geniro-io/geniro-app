@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     lastChatTarget: null,
     lastApprovalMode: null,
     lastModels: {},
+    lastEfforts: {},
     cliPaths: {},
     checkForUpdates: true,
   };
@@ -99,6 +100,26 @@ describe('registerIpc daemon configuration refresh', () => {
     restart.mockClear();
     await handler(IPC.updateSettings)(event, { checkForUpdates: false });
     expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('accepts the composer chips the renderer remembers, and still refuses an unknown key', async () => {
+    // The patch schema is a strictObject, so a key it does not name is DROPPED
+    // with a throw — a chip whose value silently never persists is exactly the
+    // failure this pins. Neither vocabulary is enumerated here: both belong to
+    // the CLIs.
+    await handler(IPC.updateSettings)(event, {
+      lastEfforts: { claude: 'ultracode' },
+      lastModels: { claude: 'opus' },
+    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      lastEfforts: { claude: 'ultracode' },
+      lastModels: { claude: 'opus' },
+    });
+    expect(restart).not.toHaveBeenCalled();
+
+    await expect(
+      handler(IPC.updateSettings)(event, { notASetting: 'x' }),
+    ).rejects.toThrow();
   });
 
   it('restarts after saving or deleting the Cursor secret', async () => {

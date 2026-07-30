@@ -242,10 +242,14 @@ export function computeAgentActivity(
       if (typeof context === 'number') {
         agent.contextTokens = context;
       }
-      // Kept only when this turn reported one: a CLI that stops reporting must
-      // fall back to the default, not keep scaling against a stale window.
+      // Kept only when this turn reported a USABLE one: a CLI that stops
+      // reporting must fall back to the default, not keep scaling against a
+      // stale window — and a reported 0 is not a window at all. Consumers read
+      // this as `?? DEFAULT`, which passes 0 straight through and divides by
+      // it, so the zero has to be rejected here rather than at each of them.
       const window = usage.contextWindowTokens;
-      agent.contextWindowTokens = typeof window === 'number' ? window : null;
+      agent.contextWindowTokens =
+        typeof window === 'number' && window > 0 ? window : null;
       if (typeof usage.costUsd === 'number') {
         agent.spentUsd = (agent.spentUsd ?? 0) + usage.costUsd;
       }

@@ -1,3 +1,4 @@
+import type { ChildProcess, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   existsSync,
@@ -45,6 +46,21 @@ class FakeChild extends EventEmitter {
     this.killSignal = signal;
     return true;
   }
+}
+
+/** Stands in for `execFile` so `--version` answers without a real child. */
+function fakeVersion(line: string): typeof execFile {
+  return vi.fn(
+    (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+      callback: (err: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, `${line}\n`, '');
+      return {} as ChildProcess;
+    },
+  ) as unknown as typeof execFile;
 }
 
 function fakeSpawn(): {
@@ -278,6 +294,40 @@ describe('ClaudeAdapter', () => {
     });
   });
 
+  it('passes --effort only when the turn names a level', () => {
+    const withEffort = fakeSpawn();
+    new ClaudeAdapter({ spawn: withEffort.spawn }).start(
+      { prompt: 'go', cwd: '/proj', effort: 'ultracode' },
+      () => {},
+    );
+    expect(withEffort.captured.args).toEqual(
+      expect.arrayContaining(['--effort', 'ultracode']),
+    );
+
+    const without = fakeSpawn();
+    new ClaudeAdapter({ spawn: without.spawn }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(without.captured.args).not.toContain('--effort');
+  });
+
+  it('lists exactly the probe-verified effort vocabulary, ultracode included', () => {
+    const levels = new ClaudeAdapter().listEfforts().map((e) => e.id);
+    // `--help` names only the first five; ultracode is accepted but
+    // undocumented, so a list scraped from help output would be missing it.
+    expect(levels).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultracode',
+    ]);
+    // A rejected value the CLI warns about must never be offered.
+    expect(levels).not.toContain('ultrathink');
+  });
+
   it('passes --resume when a prior session id is supplied', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn }).start(
@@ -365,14 +415,118 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     ).toBeUndefined();
   });
 
-  it('ignores control_requests that are not can_use_tool', () => {
+  it('lifts message.usage off a REAL assistant line as live context', () => {
+    // Captured verbatim from `claude -p --output-format stream-json --verbose`
+    // on 2.1.220 (2026-07-29), trimmed to the fields under test. Fabricating
+    // this line would pin our own guess about the CLI, not the CLI.
+    const events = mapClaudeMessage({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'A teapot.' }],
+        usage: {
+          input_tokens: 2,
+          cache_creation_input_tokens: 36569,
+          cache_read_input_tokens: 18366,
+          output_tokens: 1,
+          service_tier: 'standard',
+        },
+      },
+    });
+    // Prompt side only — output tokens are not context — and cache traffic
+    // counts, because on a resumed session it IS the context.
+    expect(events).toEqual([
+      { type: 'context_progress', contextTokens: 2 + 36569 + 18366 },
+      { type: 'text', text: 'A teapot.' },
+    ]);
+  });
+
+  it('emits no context event for an assistant line that carries no usage', () => {
+    // A CLI build that omits it must degrade to "the meter waits", never to a
+    // zero that reads as an empty context.
+    expect(
+      mapClaudeMessage({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'hi' }] },
+      }),
+    ).toEqual([{ type: 'text', text: 'hi' }]);
+  });
+
+  it('returns an unmodelled control subtype as data instead of dropping it', () => {
+    // The mapper is pure and cannot log, so the ONLY way an
+    // unrecognized subtype becomes visible is by leaving the function. If this
+    // ever goes back to `[]` the daemon is silently blind again.
     expect(
       mapClaudeMessage({
         type: 'control_request',
         request_id: 'r',
         request: { subtype: 'initialize' },
       }),
-    ).toEqual([]);
+    ).toEqual([{ type: 'unhandled_control', subtype: 'initialize' }]);
+  });
+
+  it('reports a control_request with no readable subtype rather than swallowing it', () => {
+    expect(
+      mapClaudeMessage({ type: 'control_request', request_id: 'r' }),
+    ).toEqual([{ type: 'unhandled_control', subtype: '<none>' }]);
+  });
+
+  it('logs the unmodelled subtype from the base class and keeps it off the turn', () => {
+    // The mapper hands it back; `AgentAdapter.start` is the one caller that
+    // logs it. It must NOT reach the consumer — a diagnostic is not an event.
+    const warnings: string[] = [];
+    const fake = fakeSpawn();
+    const seen: AgentEvent[] = [];
+    new ClaudeAdapter({
+      spawn: fake.spawn,
+      logger: { warn: (m) => warnings.push(m) },
+    }).start({ prompt: 'p', cwd: '/proj' }, (event) => seen.push(event));
+    fake.child.stdout.emitData(
+      '{"type":"control_request","request_id":"r","request":{"subtype":"initialize"}}\n',
+    );
+    expect(seen).toEqual([]);
+    expect(warnings).toEqual([
+      "claude: unmodelled control_request subtype 'initialize' — dropped",
+    ]);
+  });
+
+  it('reports loudly when a stdio-dialogue turn runs on an unprobed claude', async () => {
+    // Enters the version-assertion branch deliberately —
+    // without a test that reaches it, a later "dead code" sweep deletes it.
+    const errors: string[] = [];
+    const fake = fakeSpawn();
+    new ClaudeAdapter({
+      spawn: fake.spawn,
+      execFileFn: fakeVersion('3.0.0 (Claude Code)'),
+      logger: { warn: () => {}, error: (m) => errors.push(m) },
+    }).start({ prompt: 'p', cwd: '/proj', approvalMode: 'ask' }, () => {});
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    expect(errors[0]).toContain('3.0.0');
+    expect(errors[0]).toContain('2.1');
+  });
+
+  it('stays silent on a probed version, and never probes a plain chat turn', async () => {
+    const errors: string[] = [];
+    const versions = fakeVersion('2.1.220 (Claude Code)');
+    const verified = fakeSpawn();
+    new ClaudeAdapter({
+      spawn: verified.spawn,
+      execFileFn: versions,
+      logger: { warn: () => {}, error: (m) => errors.push(m) },
+    }).start({ prompt: 'p', cwd: '/proj', approvalMode: 'ask' }, () => {});
+    await vi.waitFor(() => expect(versions).toHaveBeenCalled());
+    expect(errors).toEqual([]);
+
+    // A plain chat holds no control dialogue, so it must not even ask.
+    const plainVersions = fakeVersion('3.0.0 (Claude Code)');
+    const plain = fakeSpawn();
+    new ClaudeAdapter({
+      spawn: plain.spawn,
+      execFileFn: plainVersions,
+      logger: { warn: () => {}, error: (m) => errors.push(m) },
+    }).start({ prompt: 'p', cwd: '/proj' }, () => {});
+    await Promise.resolve();
+    expect(plainVersions).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
   });
 
   it('adds the stdio permission flags in ask mode and none in plain chat', () => {
@@ -526,6 +680,49 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
   it('reports the tool it asks the user with, so no service spells the name', () => {
     expect(new ClaudeAdapter().questionToolName).toBe('AskUserQuestion');
+  });
+
+  it('degrades a PROVEN-unsupported acceptEdits to ask, and says so', () => {
+    const resolved = new ClaudeAdapter().resolveApprovalMode('acceptEdits', {
+      supported: { acceptEdits: false },
+    });
+    expect(resolved.mode).toBe('ask');
+    expect(resolved.degradeReason).toContain('does not support acceptEdits');
+  });
+
+  it('keeps an UNPROBED acceptEdits, so a real rejection comes from the CLI', () => {
+    // Absent ≠ false: nobody asked this binary, so degrading here would
+    // pre-empt the CLI's own answer on a guess.
+    const resolved = new ClaudeAdapter().resolveApprovalMode('acceptEdits', {
+      supported: {},
+    });
+    expect(resolved).toEqual({ mode: 'acceptEdits', degradeReason: null });
+  });
+
+  it('never degrades plan — an executing fallback would invert what it promises', () => {
+    // `plan` is probed exactly like acceptEdits, and a FAIL still must not turn
+    // a no-execute mode into an executing 'ask'.
+    const resolved = new ClaudeAdapter().resolveApprovalMode('plan', {
+      supported: { plan: false },
+    });
+    expect(resolved).toEqual({ mode: 'plan', degradeReason: null });
+  });
+
+  it('declares the modes it honours, which of them are empirical, and how calls reach it', () => {
+    const adapter = new ClaudeAdapter();
+    expect(adapter.approvalModes).toEqual([
+      'auto',
+      'ask',
+      'acceptEdits',
+      'plan',
+    ]);
+    // Only these two cost a run a probe turn — the pair `claudeApprovalSupport`
+    // translates.
+    expect(adapter.probedApprovalModes).toEqual(['acceptEdits', 'plan']);
+    // The endpoint rides --mcp-config per turn: no machine trust to establish,
+    // and nothing written into the user's cwd.
+    expect(adapter.callToolsRequireTrustProbe).toBe(false);
+    expect(adapter.mcpEndpointRequiresCwdConfig).toBe(false);
   });
 
   it('asks for token-level output only when the turn wants it', () => {

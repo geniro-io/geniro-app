@@ -5,26 +5,37 @@ import { join } from 'node:path';
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
-import type { AgentEvent, AgentTurnInput } from '../adapters/adapter.types';
+import type {
+  AgentApprovalMode,
+  AgentEvent,
+  AgentTurnInput,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
+} from '../adapters/adapter.types';
+import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import type {
   ClaudeModesCapability,
   RunDeltaEvent,
   RunItemEvent,
+  RunStatusEvent,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import type { ClaudeProbeService } from './claude-probe.service';
+import { EffortsService } from './efforts.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import type { SkillHarvestStore } from './skill-harvest.store';
@@ -32,9 +43,25 @@ import type { SkillHarvestStore } from './skill-harvest.store';
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
   readonly runs = new Map<string, Run>();
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
+  /**
+   * When set, the run-row purge blocks on it — a test seam for the window in
+   * which a delete is IN FLIGHT: cancelled and past its own guards, but with
+   * the rows still present, which is precisely the state `getById` cannot
+   * detect and only the `deleting` Set covers.
+   */
+  purgeGate: Promise<void> | null = null;
   private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
+  }
+  async hardDeleteIncludingSoftDeleted(where: { id: string }): Promise<number> {
+    this.hardDeleted.push(where);
+    if (this.purgeGate) {
+      await this.purgeGate;
+    }
+    return this.runs.delete(where.id) ? 1 : 0;
   }
   async create(data: Partial<Run>): Promise<Run> {
     const run = {
@@ -73,7 +100,20 @@ class FakeRunDao {
 
 class FakeItemDao {
   readonly items: Item[] = [];
+  readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
+  async hardDeleteIncludingSoftDeleted(where: {
+    runId: string;
+  }): Promise<number> {
+    this.hardDeleted.push(where);
+    const before = this.items.length;
+    for (let i = this.items.length - 1; i >= 0; i -= 1) {
+      if (this.items[i]!.runId === where.runId) {
+        this.items.splice(i, 1);
+      }
+    }
+    return before - this.items.length;
+  }
   async create(data: Partial<Item>): Promise<Item> {
     if (data.kind === this.failNextKind) {
       this.failNextKind = null;
@@ -127,6 +167,13 @@ class FakeItemDao {
 
 class FakeNodeStateDao {
   readonly saved: string[] = [];
+  readonly hardDeleted: unknown[] = [];
+  async hardDeleteIncludingSoftDeleted(where: {
+    runId: string;
+  }): Promise<number> {
+    this.hardDeleted.push(where);
+    return 0;
+  }
   private state: NodeState | null = null;
   preset(sessionId: string | null): void {
     this.state = sessionId
@@ -156,8 +203,13 @@ function fakeAdapter(kind: AgentKind): {
   handles: { respondApproval: ReturnType<typeof vi.fn> }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
+  /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
+  let streamGate: Promise<void> | null = null;
   let resolveDone: (() => void) | null = null;
-  const handles: { respondApproval: ReturnType<typeof vi.fn> }[] = [];
+  const handles: {
+    respondApproval: ReturnType<typeof vi.fn>;
+    cancel: ReturnType<typeof vi.fn>;
+  }[] = [];
   const start = vi.fn(
     (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
       void input;
@@ -167,7 +219,11 @@ function fakeAdapter(kind: AgentKind): {
       });
       const handle = {
         done,
-        cancel: vi.fn(),
+        // Cancelling a REAL handle kills the child, so `done` settles a moment
+        // later — the fake settles it too. A cancel that left `done` pending
+        // forever would model a wedged child as the normal case, and any code
+        // that waits for a cancelled turn to finish would look like a hang.
+        cancel: vi.fn(() => resolveDone?.()),
         // A live turn delivers verdicts — true is the realistic default.
         respondApproval: vi.fn(() => true),
       };
@@ -175,18 +231,47 @@ function fakeAdapter(kind: AgentKind): {
       return handle;
     },
   );
+  // Every CLI-fact declaration comes from the REAL adapter: the double fakes
+  // the SPAWN, never the contract, so a policy this service leans on cannot
+  // pass here while being absent from the adapter that ships.
+  const real: AgentAdapter =
+    kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
   return {
     adapter: {
       kind,
       start,
-      // Mirrors the real adapters: only claude has a question channel.
-      questionToolName: kind === 'claude' ? 'AskUserQuestion' : null,
+      questionToolName: real.questionToolName,
+      approvalModes: real.approvalModes,
+      probedApprovalModes: real.probedApprovalModes,
+      resolveApprovalMode: (
+        requested: AgentApprovalMode,
+        installed: InstalledApprovalSupport,
+      ) => real.resolveApprovalMode(requested, installed),
+      approvalSupportFrom: (capabilities: InstalledCapabilities) =>
+        real.approvalSupportFrom(capabilities),
       // Mirrors the real adapters: only claude can stream partial text.
-      supportsLiveStream: () => Promise.resolve(kind === 'claude'),
+      // A test seam for the claim→register window: the real adapter probes the
+      // installed CLI here, so this is where a concurrent delete lands.
+      supportsLiveStream: () =>
+        streamGate === null
+          ? Promise.resolve(kind === 'claude')
+          : streamGate.then(() => kind === 'claude'),
+      listEfforts: () => real.listEfforts(),
     } as unknown as ClaudeAdapter,
     start,
     emit: (event) => onEvent?.(event),
     finish: () => resolveDone?.(),
+    /** Hold the next turn inside its pre-spawn probe until the returned fn runs. */
+    stallBeforeSpawn: (): (() => void) => {
+      let release = (): void => {};
+      streamGate = new Promise<void>((resolve) => {
+        release = () => {
+          streamGate = null;
+          resolve();
+        };
+      });
+      return release;
+    },
     handles,
   };
 }
@@ -204,9 +289,13 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
   const nodeDao = new FakeNodeStateDao();
   const published: RunItemEvent[] = [];
   const deltas: RunDeltaEvent[] = [];
+  const deletedRuns: string[] = [];
+  const statuses: RunStatusEvent[] = [];
   const bus = {
     publish: (event: RunItemEvent) => published.push(event),
     publishDelta: (event: RunDeltaEvent) => deltas.push(event),
+    publishRunStatus: (event: RunStatusEvent) => statuses.push(event),
+    publishRunDeleted: (runId: string) => deletedRuns.push(runId),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
   const approvals = new ApprovalRegistry();
@@ -226,16 +315,29 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     probedAt: 0,
     reason: null,
   };
+  const removedAttachmentRuns: string[] = [];
   const attachments = {
     save: () => ({ id: 'att-0', mediaType: 'image/png' }),
     pathOf: (runId: string, id: string) => `/tmp/${runId}/${id}`,
+    removeRun: (runId: string) => removedAttachmentRuns.push(runId),
   } as unknown as AttachmentStoreService;
   const partials = new PartialStreamService(bus);
+  const callTokens = new CallTokenRegistry();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
     wireCapability: () => claudeModes,
   } as unknown as ClaudeProbeService;
+  // The REAL service over the fake adapters: what it refuses is exactly what
+  // they decline to list, which is the behaviour the effort tests below pin.
+  // One registry over the fake adapters, exactly as the module wires it: the
+  // services under test resolve a kind through it rather than holding two
+  // adapters each.
+  const adapters = new AgentAdapterRegistry(
+    claude.adapter,
+    cursor.adapter as unknown as CursorAdapter,
+  );
+  const efforts = new EffortsService(adapters);
   const service = new ChatService(
     em,
     runDao as unknown as RunDao,
@@ -244,17 +346,22 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     bus,
     registry,
     approvals,
-    claude.adapter,
-    cursor.adapter as unknown as CursorAdapter,
+    adapters,
     claudeProbe,
     skillHarvest,
     attachments,
     partials,
+    callTokens,
+    efforts,
   );
   return {
     service,
     deltas,
     partials,
+    callTokens,
+    statuses,
+    deletedRuns,
+    removedAttachmentRuns,
     runDao,
     itemDao,
     nodeDao,
@@ -605,6 +712,38 @@ describe('ChatService', () => {
     expect(items.at(-1)?.kind).toBe('error');
   });
 
+  it('boot reconcile closes cards a KILLED daemon never swept, and leaves answered ones alone', async () => {
+    // The registry is in-memory, so a SIGKILL takes every pending entry with
+    // it and no settle path ever runs. Without this the cards come back on
+    // the next launch looking answerable forever — the transcript is the only
+    // surviving record of which ones were still open.
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    // What the KILLED process left on disk: a run stuck 'running', two cards,
+    // one of them already answered — and no registry entry in THIS process,
+    // which is the whole difference from a live turn.
+    for (const [seq, kind, payload] of [
+      [0, 'approval_request', { id: 'req-open', toolName: 'Bash' }],
+      [1, 'approval_request', { id: 'req-answered', toolName: 'Write' }],
+      [2, 'approval_verdict', { id: 'req-answered', allow: true }],
+    ] as const) {
+      await itemDao.create({
+        runId: run.id,
+        seq,
+        kind,
+        payload: JSON.stringify(payload),
+      });
+    }
+    await runDao.updateById(run.id, { status: 'running' });
+
+    await service.reconcileOrphanedRuns();
+
+    const dead = (await itemDao.getByRun(run.id))
+      .filter((i) => i.kind === 'unanswerable')
+      .map((i) => JSON.parse(i.payload));
+    expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
+  });
+
   it('reconcile SKIPS a running run whose turn is legitimately in flight', async () => {
     const { service, runDao, itemDao, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -738,7 +877,7 @@ describe('ChatService — approval modes (parity M1)', () => {
         cwd: dir,
         approval: 'ask',
       }),
-    ).rejects.toThrow("cursor chats run 'auto' only");
+    ).rejects.toThrow("cursor-agent does not support the approval mode 'ask'");
   });
 
   it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a non-auto cursor mode', async () => {
@@ -761,7 +900,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     await expect(
       service.updateSettings(cursorRun.id, { approval: 'ask' }),
-    ).rejects.toThrow("cursor chats run 'auto' only");
+    ).rejects.toThrow("cursor-agent does not support the approval mode 'ask'");
     const pinned = await service.updateSettings(cursorRun.id, {
       approval: 'auto',
     });
@@ -809,6 +948,86 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).toBeUndefined();
     claude.finish();
     await drain();
+  });
+
+  it('carries the stored effort onto the turn and clears it back to no flag', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      effort: 'xhigh',
+    });
+    expect(run.effort).toBe('xhigh');
+    await service.sendMessage(run.id, 'first');
+    expect((claude.start.mock.calls[0]![0] as AgentTurnInput).effort).toBe(
+      'xhigh',
+    );
+    claude.finish();
+    await drain();
+
+    const cleared = await service.updateSettings(run.id, { effort: null });
+    expect(cleared.effort).toBeNull();
+    await service.sendMessage(run.id, 'second');
+    // undefined, not 'xhigh': null means the CLI's own default, so the adapter
+    // must omit `--effort` rather than re-send the previous level.
+    expect(
+      (claude.start.mock.calls[1]![0] as AgentTurnInput).effort,
+    ).toBeUndefined();
+    claude.finish();
+    await drain();
+  });
+
+  it('refuses an effort the run CLI does not list — an unknown claude level, and ANY level on cursor', async () => {
+    const { service } = setup();
+    // 'ultrathink' is the probe-verified REJECTED value: claude warns and runs
+    // at its own effort, so accepting it here would ACK a turn setting that
+    // never takes effect.
+    await expect(
+      service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        effort: 'ultrathink',
+      }),
+    ).rejects.toThrow(
+      "claude does not accept the reasoning effort 'ultrathink'",
+    );
+
+    // cursor-agent lists nothing at all — it folds effort into the model id.
+    const cursorRun = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+    await expect(
+      service.updateSettings(cursorRun.id, { effort: 'high' }),
+    ).rejects.toThrow(
+      "cursor-agent does not accept the reasoning effort 'high'",
+    );
+
+    // …while a level claude DOES list goes through on the same path.
+    const claudeRun = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+    });
+    const updated = await service.updateSettings(claudeRun.id, {
+      effort: 'ultracode',
+    });
+    expect(updated.effort).toBe('ultracode');
+  });
+
+  it('locks the effort mid-turn like the model — a claimed run 409s and keeps the stored level', async () => {
+    const { service, registry } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      effort: 'low',
+    });
+    expect(registry.tryClaim(run.id)).toBe(true);
+    await expect(
+      service.updateSettings(run.id, { effort: 'max' }),
+    ).rejects.toThrow('a turn is in flight');
+    registry.release(run.id);
+    const after = await service.updateSettings(run.id, { model: 'opus' });
+    expect(after.effort).toBe('low');
   });
 
   it('locks the model mid-turn like the approval mode — a claimed run 409s', async () => {
@@ -1002,6 +1221,53 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
+  it("keeps a plan chat on 'plan' under the SAME failing verdict — one policy, both paths", async () => {
+    // The chat mirror of the graph executor's plan test: identical probe
+    // verdict, opposite outcome from acceptEdits above. Both paths now read one
+    // adapter answer, so a policy change cannot land on one and miss the other
+    // — which is exactly the divergence this fold removed.
+    const { service, claude, itemDao } = setup({
+      claudeModes: {
+        acceptEdits: 'fail',
+        plan: 'fail',
+        version: 'claude-old',
+        probedAt: 0,
+        reason: 'installed claude rejects both probed modes',
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'plan',
+    });
+    await service.sendMessage(run.id, 'hi');
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).approvalMode,
+    ).toBe('plan');
+    expect(
+      itemDao.items.some(
+        (i) => i.kind === 'system' && i.payload.includes('does not support'),
+      ),
+    ).toBe(false);
+    claude.finish();
+    await drain();
+  });
+
+  it('does not probe for a mode the CLI never declared empirical', async () => {
+    // `probedApprovalModes` is what keeps an 'auto' chat off the probe path;
+    // without it every turn would await a verdict it has no use for.
+    const { service, claude, claudeProbe } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    await service.sendMessage(run.id, 'hi');
+    expect(claudeProbe.ensureVerdict).not.toHaveBeenCalled();
+    claude.finish();
+    await drain();
+  });
+
   it('tracks a chat approval card, folds the answer into AskUserQuestion, and persists the verdict item', async () => {
     const { service, claude, approvals, itemDao } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -1038,6 +1304,40 @@ describe('ChatService — approval modes (parity M1)', () => {
     claude.finish();
     await drain();
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('records every approval still pending when the turn settles as unanswerable — and none when they were answered', async () => {
+    // The run-level half of the expiry the renderer used to infer: a chat turn
+    // that ends leaves cards on screen whose buttons answer into nothing. The
+    // daemon names each dead request instead, so the UI needs no inference.
+    const { service, claude, itemDao, approvals } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'req-a',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    claude.emit({
+      type: 'approval_request',
+      id: 'req-b',
+      toolName: 'Write',
+      input: { path: 'x' },
+    });
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(2);
+
+    // One gets an answer; only the OTHER can be unanswerable.
+    expect(approvals.resolve(run.id, 'req-a', true)).toBe(true);
+    await drain();
+
+    claude.finish();
+    await drain();
+    const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
+    expect(dead.map((i) => JSON.parse(i.payload))).toEqual([
+      { id: 'req-b', toolName: 'Write' },
+    ]);
   });
 
   it('streams assistant text live WITHOUT writing a row per delta', async () => {
@@ -1317,5 +1617,368 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
     expect((await runDao.getById(run.id))?.status).toBe('failed');
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+});
+
+describe('ChatService — delete is a one-way door', () => {
+  /** A chat with one persisted item, ready to delete. */
+  async function chatWithHistory() {
+    const ctx = setup();
+    const run = await ctx.service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await ctx.itemDao.create({
+      runId: run.id,
+      seq: 0,
+      kind: 'message',
+      payload: JSON.stringify({ text: 'hi' }),
+    });
+    return { ...ctx, run };
+  }
+
+  it('removes the run, its items and its node state', async () => {
+    const { service, run, runDao, itemDao, nodeDao } = await chatWithHistory();
+    expect(itemDao.items).toHaveLength(1);
+
+    expect(await service.delete(run.id)).toEqual({ deleted: true });
+
+    expect(await runDao.getById(run.id)).toBeNull();
+    expect(itemDao.items).toHaveLength(0);
+    // All three tables, not just the one the run row lives in: nothing
+    // cascades — `Item.runId` is a plain string column with no FK.
+    expect(nodeDao.hardDeleted).toEqual([{ runId: run.id }]);
+  });
+
+  it('deletes with the soft-delete filter DISABLED', async () => {
+    // Spied rather than driven through a pre-soft-deleted row: nothing in the
+    // daemon writes `deletedAt`, so such a row is unreachable and a test that
+    // manufactured one would pin an invented state instead of this call.
+    const { service, run, runDao, itemDao, nodeDao } = await chatWithHistory();
+    await service.delete(run.id);
+
+    // The filter-disabling variant, never the plain `hardDelete` that hydrates
+    // through `deletedAt: null` and would silently skip a soft-deleted row.
+    expect(runDao.hardDeleted).toEqual([{ id: run.id }]);
+    expect(itemDao.hardDeleted).toEqual([{ runId: run.id }]);
+    expect(nodeDao.hardDeleted).toEqual([{ runId: run.id }]);
+  });
+
+  it('removes the run’s attachments directory', async () => {
+    const { service, run, removedAttachmentRuns } = await chatWithHistory();
+    await service.delete(run.id);
+    // Files on disk cascade from nothing at all — only an explicit removal
+    // takes them, and the store is the one place that knows the layout.
+    expect(removedAttachmentRuns).toEqual([run.id]);
+  });
+
+  it('revokes the run’s call tokens', async () => {
+    const { service, run, callTokens } = await chatWithHistory();
+    callTokens.issue(run.id, 'orch', 'secret-token');
+    expect(callTokens.get(run.id, 'orch')).toBe('secret-token');
+
+    await service.delete(run.id);
+    expect(callTokens.get(run.id, 'orch')).toBeNull();
+  });
+
+  it('announces the deletion so live mirrors can be dropped', async () => {
+    // The PTY mirror lives in a module ABOVE this one, so it learns by
+    // subscription. Without the announcement a `claude --resume` child would
+    // stay alive against a transcript that no longer exists.
+    const { service, run, deletedRuns } = await chatWithHistory();
+    await service.delete(run.id);
+    expect(deletedRuns).toEqual([run.id]);
+  });
+
+  it('stops a live turn BEFORE deleting the rows it is still writing', async () => {
+    const { service, claude, registry, itemDao, runDao } =
+      await chatWithHistory();
+    const run = [...runDao.runs.values()][0]!;
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    expect(registry.has(run.id)).toBe(true);
+
+    await service.delete(run.id);
+    // The CANCEL itself, not merely the handle's existence: asserting the
+    // handle is defined passes with `registry.cancel(runId)` deleted outright,
+    // which is the whole behaviour this test is named for.
+    expect(claude.handles[0]!.cancel).toHaveBeenCalled();
+    expect(registry.has(run.id)).toBe(false);
+    expect(itemDao.items).toHaveLength(0);
+  });
+
+  it('waits for a cancelled turn to FINALIZE before destroying its rows', async () => {
+    // Cancelling only SIGNALS the child. The turn's finalizer then drains the
+    // persist queue and writes its terminal rows — so a delete that merely
+    // cancels and proceeds leaves items for a run whose `runs` row is gone,
+    // unreachable forever because nothing can ever query them again.
+    //
+    // `delete` therefore awaits the FINALIZER, not `handle.done`: the finalizer
+    // is a continuation on that same promise, so awaiting the handle would
+    // resume while the finalizer is still suspended at its own first await.
+    const { service, claude, itemDao, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    expect(claude.handles[0]).toBeDefined();
+
+    await service.delete(run.id);
+
+    // By the time delete resolves the turn has fully finalized (the fake's
+    // cancel settles `done`, as a real handle's does) and wrote nothing.
+    expect(itemDao.items).toEqual([]);
+    expect(await runDao.getById(run.id)).toBeNull();
+
+    // Nothing arrives afterwards either.
+    await drain();
+    expect(itemDao.items).toEqual([]);
+  });
+
+  it('a turn still crossing the claim→register window aborts instead of outliving the delete', async () => {
+    // `finalizing` only covers a turn that reached adapter.start(). Between
+    // tryClaim and register the turn is claimed but has no finalizer, and that
+    // window contains real awaits (the approval probe, the live-stream check).
+    // A delete landing there waits on NOTHING — so the turn must notice the
+    // delete itself, or it registers afterwards and writes a whole turn's rows
+    // for a run that no longer exists.
+    const { service, claude, itemDao, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    const release = claude.stallBeforeSpawn();
+    const sending = service.sendMessage(run.id, 'go');
+    await drain();
+    // The turn is claimed but not yet spawned.
+    expect(claude.start).not.toHaveBeenCalled();
+
+    const deleted = service.delete(run.id);
+    await drain();
+    release();
+    await expect(sending).rejects.toThrow(
+      /deleted while the turn was starting/,
+    );
+    await deleted;
+
+    // Never spawned, and nothing survives the delete.
+    expect(claude.start).not.toHaveBeenCalled();
+    expect(itemDao.items).toEqual([]);
+    expect(await runDao.getById(run.id)).toBeNull();
+  });
+
+  it('a turn resuming while a delete is IN FLIGHT aborts — the row is still there', async () => {
+    // The other arm of the same guard. Here the delete has cancelled the turn
+    // and passed its own checks but has NOT yet purged the rows, so re-reading
+    // the run finds it alive; only the `deleting` Set knows the run is doomed.
+    // Without that arm the turn spawns and its finalizer writes rows the purge
+    // then orphans.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    const releaseSpawn = claude.stallBeforeSpawn();
+    const sending = service.sendMessage(run.id, 'go');
+    await drain();
+
+    let releasePurge = (): void => {};
+    runDao.purgeGate = new Promise<void>((resolve) => {
+      releasePurge = resolve;
+    });
+    const deleted = service.delete(run.id);
+    await drain();
+    // Mid-delete: the row still exists, so only the Set can catch this.
+    expect(await runDao.getById(run.id)).not.toBeNull();
+
+    releaseSpawn();
+    await expect(sending).rejects.toThrow(
+      /deleted while the turn was starting/,
+    );
+    releasePurge();
+    await deleted;
+
+    expect(claude.start).not.toHaveBeenCalled();
+    expect(itemDao.items).toEqual([]);
+    expect(await runDao.getById(run.id)).toBeNull();
+  });
+
+  it('refuses to delete a WORKFLOW run through the chat route', async () => {
+    // The graph executor owns its own teardown; deleting through here would
+    // skip it.
+    const { service, runDao } = setup();
+    const workflowRun = await runDao.create({
+      workflowId: 'wf-1',
+      status: 'completed',
+    });
+    await expect(service.delete(workflowRun.id)).rejects.toThrow();
+    expect(await runDao.getById(workflowRun.id)).not.toBeNull();
+  });
+
+  it('404s on a run that does not exist', async () => {
+    const { service } = setup();
+    await expect(service.delete('nope')).rejects.toThrow();
+  });
+});
+
+describe('ChatService — run status is the truth, and it is broadcast', () => {
+  it('reconciles a run whose status LIES when cancel finds no live turn', async () => {
+    // The reported defect: a row still saying `running` with no turn left to
+    // settle it (a daemon killed mid-turn) stayed "running" forever, and its
+    // badge lied in every list that showed it. Cancel is the user saying it is
+    // over — before, cancel wrote nothing at all.
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({ status: 'running', workflowId: null });
+
+    expect(await service.cancel(run.id)).toEqual({ cancelled: false });
+
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    // …and the transcript gets its terminal item, so it does not dangle.
+    expect(itemDao.items.map((i) => i.kind)).toContain('turn_cancelled');
+  });
+
+  it('leaves a settled run alone — cancel is not a way to reopen it', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({ status: 'completed', workflowId: null });
+    await service.cancel(run.id);
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(itemDao.items).toHaveLength(0);
+  });
+
+  it('lets the turn finalizer settle a LIVE run instead of racing it', async () => {
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    statuses.length = 0;
+
+    expect(await service.cancel(run.id)).toEqual({ cancelled: true });
+    // Cancel wrote nothing itself — a write here would race the finalizer.
+    expect(statuses).toEqual([]);
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).not.toBe('running');
+  });
+
+  it('announces every status change, so a background badge cannot go stale', async () => {
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: 'running',
+      activity: null,
+    });
+
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: 'completed',
+      activity: null,
+    });
+  });
+
+  it('announces a FAILED and a CANCELLED settle too, not just the happy one', async () => {
+    // "every status change" is only true if the terminal ones are covered, and
+    // a failed or cancelled run is precisely the badge that lies longest. The
+    // completed-only assertion above passes with the announce dropped from
+    // every other call site.
+    const failed = setup();
+    const failedRun = await failed.service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await failed.service.sendMessage(failedRun.id, 'go');
+    await drain();
+    failed.claude.emit({ type: 'error', message: 'the CLI died' });
+    failed.claude.finish();
+    await drain();
+    expect(failed.statuses.at(-1)).toEqual({
+      runId: failedRun.id,
+      status: 'failed',
+      activity: null,
+    });
+
+    const cancelled = setup();
+    const liveRun = await cancelled.runDao.create({
+      status: 'running',
+      workflowId: null,
+    });
+    await cancelled.service.cancel(liveRun.id);
+    expect(cancelled.statuses.at(-1)).toEqual({
+      runId: liveRun.id,
+      status: 'cancelled',
+      activity: null,
+    });
+  });
+
+  it('names what a running turn is DOING, not just that it is running', async () => {
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    await drain();
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: 'running',
+      activity: 'running Bash',
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('says a run is WAITING on the user, which "running" alone cannot', async () => {
+    const { service, claude, statuses } = setup({
+      claudeModes: {
+        acceptEdits: 'pass',
+        plan: 'pass',
+        version: 'claude-test',
+        probedAt: 0,
+        reason: null,
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'req-1',
+      toolName: 'Write',
+      input: {},
+    });
+    await drain();
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: 'running',
+      activity: 'waiting for approval',
+    });
+    claude.finish();
+    await drain();
   });
 });

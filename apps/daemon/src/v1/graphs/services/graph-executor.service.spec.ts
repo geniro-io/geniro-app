@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import type {
+  AdapterConfig,
+  AdapterQuestion,
   AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
@@ -17,24 +19,27 @@ import type {
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
-import type { ClaudeModesCapability } from '../../agents/chat.types';
+import type { CursorMcpMergeService } from '../../agents/adapters/cursor/cursor-mcp-merge.service';
+import type { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
+import type {
+  ClaudeModesCapability,
+  CursorCallsCapability,
+} from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
-import type { ClaudeProbeService } from '../../agents/services/claude-probe.service';
-import type { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
-import type { CursorCallsCapability, Workflow } from '../graphs.types';
+import type { Workflow } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
-import type { CursorProbeService } from './cursor-probe.service';
 import { GraphExecutorService } from './graph-executor.service';
 import type { WorkflowStoreService } from './workflow-store.service';
 
@@ -210,26 +215,29 @@ class FakeAdapter {
    * declaration. The double fakes the SPAWN, never the contract: a
    * hand-rolled copy of these would let the executor pass against an approval
    * policy or a call-tool gate the shipped adapter does not actually have,
-   * which is precisely the drift folding them behind the adapter removes.
+   * which is precisely the drift folding them behind the adapter removes. So
+   * `config` is the SHIPPED object itself, by reference — never a restated
+   * one, which would go on passing after the real config changed.
    */
   private readonly real: AgentAdapter;
+  readonly config: AdapterConfig;
+  /**
+   * When true the double answers the BASE default for `questionFrom` (null),
+   * modelling a CLI that declares a question tool but whose adapter projects
+   * nothing out of the payload — the one state the shipped claude adapter
+   * cannot produce, and the reason the executor must not park a blank
+   * question on a caller.
+   */
+  projectsNoQuestion = false;
   constructor(readonly kind: 'claude' | 'cursor-agent') {
     this.real = kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
+    this.config = this.real.config;
   }
-  get questionToolName(): string | null {
-    return this.real.questionToolName;
+  questionFrom(input: unknown): AdapterQuestion | null {
+    return this.projectsNoQuestion ? null : this.real.questionFrom(input);
   }
-  get approvalModes(): readonly AgentApprovalMode[] {
-    return this.real.approvalModes;
-  }
-  get probedApprovalModes(): readonly AgentApprovalMode[] {
-    return this.real.probedApprovalModes;
-  }
-  get callToolsRequireTrustProbe(): boolean {
-    return this.real.callToolsRequireTrustProbe;
-  }
-  get mcpEndpointRequiresCwdConfig(): boolean {
-    return this.real.mcpEndpointRequiresCwdConfig;
+  withAnswer(input: unknown, answer: string): unknown {
+    return this.real.withAnswer(input, answer);
   }
   resolveApprovalMode(
     requested: AgentApprovalMode,
@@ -2368,6 +2376,46 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
       answer: 'Blue',
     });
     completeTurn(callee, 'done');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
+  it('denies a question its adapter projects nothing out of — a blank question is never parked on the caller', async () => {
+    const ctx = setup();
+    // The adapter answers the BASE default (null): the payload carries no
+    // question this CLI can project. Parking it anyway would hand the caller
+    // an empty question it can only answer blind.
+    ctx.claude.projectsNoQuestion = true;
+    const run = await ctx.service.startRun({
+      slug: 'qa2-unprojectable',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = ctx.claude.starts[0]!;
+    const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = ctx.claude.starts[1]!;
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect(callee.respondApproval).toHaveBeenCalledWith('q-1', false);
+    expect(ctx.itemDao.items.some((i) => i.kind === 'call_question')).toBe(
+      false,
+    );
+    completeTurn(callee, 'done');
+    // The call ran to completion instead of stalling on a question nobody
+    // could answer.
+    expect(((await sync) as { status: string }).status).toBe('ok');
     completeTurn(caller, 'done');
     await drain();
   });

@@ -21,7 +21,8 @@ export const createTerminalSchema = z.object({
   /**
    * Mirror one SPECIFIC CLI session of the node (a call thread's resume id
    * from its `call_result` item) instead of the node's latest session.
-   * Shape-checked here; `terminalCommand` re-validates before argv.
+   * Shape-checked here; the agent's own adapter (`AgentAdapter.terminalCommand`)
+   * re-validates against ITS session-id shape before argv.
    */
   sessionId: z
     .string()

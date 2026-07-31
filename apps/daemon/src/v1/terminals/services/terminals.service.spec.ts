@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { TerminalsService } from './terminals.service';
 
@@ -44,12 +47,19 @@ function build(overrides: {
   };
   const em = { fork: () => ({}) };
   const bus = new AgentEventBus();
+  // The REAL adapters: the mirror invocation is now each CLI's own
+  // `terminalCommand`, so a double here would assert against a fake argv.
+  const adapters = new AgentAdapterRegistry(
+    new ClaudeAdapter(),
+    new CursorAdapter(),
+  );
   const service = new TerminalsService(
     em as never,
     runDao as never,
     nodeStateDao as never,
     workflowStore as never,
     pty as never,
+    adapters,
     bus,
   );
   return { service, runDao, nodeStateDao, workflowStore, pty, bus };
@@ -88,7 +98,7 @@ describe('TerminalsService', () => {
 
   it('re-injects the inherited Anthropic credential for the claude-only mirror', async () => {
     // buildChildEnv strips the credential from every child; the terminal
-    // mirror is definitionally claude (terminalCommand rejects cursor), so
+    // mirror is definitionally claude (cursor's adapter answers unsupported), so
     // the create input must carry the re-injection or every `claude --resume`
     // mirror silently de-authenticates.
     const saved = process.env.ANTHROPIC_API_KEY;

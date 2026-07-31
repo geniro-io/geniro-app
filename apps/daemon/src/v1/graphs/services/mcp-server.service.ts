@@ -8,12 +8,12 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
 import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import { closeQuietly } from '../utils/close-quietly';
 import { CallBroker } from './call-broker.service';
-import { CursorProbeService } from './cursor-probe.service';
 
 /**
  * The MCP protocol host behind the per-run endpoint

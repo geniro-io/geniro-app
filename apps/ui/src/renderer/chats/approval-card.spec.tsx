@@ -623,7 +623,7 @@ describe('ApprovalCard', () => {
   });
 
   it('a truthy-but-not-true multiSelect is NOT multi-select (twin parser rule)', () => {
-    // Mirrored with question-payload.ts: `=== true`, never Boolean(). A string
+    // Mirrored with claude-question.utils.ts: `=== true`, never Boolean(). A string
     // would make one twin offer multi-pick while the other offers one.
     const onRespond = vi.fn();
     const el = render(

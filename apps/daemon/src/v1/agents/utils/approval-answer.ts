@@ -1,14 +1,16 @@
-import { withResponse } from '../adapters/claude/question-payload';
+import type { AgentAdapter } from '../adapters/agent-adapter';
 
 /**
  * The question/answer seam shared by the two approval-card producers (the
  * graph executor and the chat service).
  *
- * None of these helpers knows a CLI's tool names: the caller passes the
- * `questionToolName` its adapter reports (`AgentAdapter.questionToolName`),
- * which is `null` for a CLI with no question channel. That keeps the one
- * CLI-specific fact in the adapter layer while the seam itself stays shared,
- * so the recording condition can never drift from the fold condition.
+ * None of these helpers knows a CLI's tool names or payload shapes: the caller
+ * passes the question tool its adapter declares
+ * (`AgentAdapter.config.questionToolName`), which is `null` for a CLI with no
+ * question channel, and the fold itself is handed back to that adapter
+ * (`AgentAdapter.withAnswer`). That keeps every CLI-specific fact in the
+ * adapter layer while the seam itself stays shared, so the recording condition
+ * can never drift from the fold condition.
  */
 
 /**
@@ -46,19 +48,27 @@ export function answerFoldsInto(
 
 /**
  * The one place a verdict's answer may mutate a tool input: it folds ONLY
- * into the CLI's question tool (claude's AskUserQuestion, via the
- * probe-verified `updatedInput.response` free-text channel) — every other tool
- * echoes its input unchanged, so the verdict channel can never rewrite an
- * arbitrary tool's arguments.
+ * into the CLI's question tool — every other tool echoes its input unchanged,
+ * so the verdict channel can never rewrite an arbitrary tool's arguments.
+ *
+ * WHERE the answer lands inside that input is the adapter's own knowledge
+ * (`withAnswer`), so this seam names no CLI's field: what it owns is the
+ * CONDITION, shared with `answerFoldsInto` so the transcript can never claim
+ * an answer the agent did not receive.
  */
 export function foldApprovalAnswer(
-  questionToolName: string | null,
+  adapter: AgentAdapter,
   toolName: string,
   input: unknown,
   allow: boolean,
   answer: string | undefined,
 ): unknown {
-  return answerFoldsInto(questionToolName, toolName, allow, answer)
-    ? withResponse(input, answer)
+  return answerFoldsInto(
+    adapter.config.questionToolName,
+    toolName,
+    allow,
+    answer,
+  )
+    ? adapter.withAnswer(input, answer)
     : input;
 }

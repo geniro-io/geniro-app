@@ -11,8 +11,8 @@ function registry(): AgentAdapterRegistry {
 
 describe('AgentAdapterRegistry', () => {
   it('resolves each registered kind to that CLI’s own adapter', () => {
-    expect(registry().for('claude').kind).toBe('claude');
-    expect(registry().for('cursor-agent').kind).toBe('cursor-agent');
+    expect(registry().for('claude').config.kind).toBe('claude');
+    expect(registry().for('cursor-agent').config.kind).toBe('cursor-agent');
   });
 
   it('THROWS on an unregistered kind instead of falling back to one', () => {

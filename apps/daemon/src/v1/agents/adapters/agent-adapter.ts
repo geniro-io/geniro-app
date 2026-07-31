@@ -1,9 +1,15 @@
 import { type ChildProcess, execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import type { AgentKind } from '../../runs/runs.types';
+import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
+  AdapterConfig,
+  AdapterQuestion,
   AgentApprovalMode,
   AgentCommandOptions,
   AgentEffort,
@@ -16,7 +22,9 @@ import type {
   ApprovalResolution,
   InstalledApprovalSupport,
   InstalledCapabilities,
+  TerminalCommandResult,
 } from './adapter.types';
+import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
 
 /** Utility commands (`models`, `--version`) answer fast or not at all. */
 const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
@@ -31,26 +39,22 @@ export interface AgentAdapterOptions {
   spawn?: SpawnFn;
   /**
    * Sink for the base class's diagnostics — skipped unparseable lines,
-   * unmodelled control subtypes, an unverified CLI version. Defaults to
+   * unmodelled control subtypes, a failed turn-resource disposer. Defaults to
    * silent, so production wiring MUST pass a real one (`agents.module.ts`).
-   * `error` is optional: a plain `{ warn }` test double stays valid, and
-   * callers fall back to `warn` when it is absent.
+   * A plain `{ warn }` double is the whole contract: every base-class
+   * diagnostic is a warning.
    */
   logger?: {
     warn(message: string): void;
-    error?(message: string): void;
   };
   /** Replacement execFile for the utility commands in tests; defaults to node's. */
   execFileFn?: typeof execFile;
   /**
-   * Sink for utility children an adapter spawns on its OWN initiative rather
-   * than on a caller's — today the `--version` probe behind the control
-   * protocol check. Every other utility child is started through a service
-   * that passes its own `onSpawn`; these have no such caller, and the
-   * "every spawned child registers with ProcessRegistry" rule has no
-   * short-lived exemption, so `agents.module.ts` wires this to the registry.
+   * Root for the throwaway workspace {@link AgentAdapter.listReportedCommands}
+   * runs its probe turn in (the daemon passes its own userData tmp dir, never
+   * a user folder); falls back to the OS tmpdir for standalone/spec use.
    */
-  onUtilitySpawn?: (child: ChildProcess) => void;
+  probeRootDir?: string;
 }
 
 /**
@@ -62,42 +66,21 @@ export interface AgentAdapterOptions {
  * or extra child env. One instance per agent kind; `start` is called per turn.
  */
 export abstract class AgentAdapter {
-  /** The agent this adapter drives (`claude` / `cursor-agent`). */
-  abstract readonly kind: AgentKind;
-  /** The CLI binary invoked for each turn. */
-  protected abstract readonly command: string;
+  /**
+   * Everything STATIC about the CLI this adapter drives, declared once in its
+   * `<name>.const.ts`. It is the single source of every per-CLI VALUE, so the
+   * members below are concrete here rather than restated per adapter.
+   */
+  abstract readonly config: AdapterConfig;
 
   /**
-   * The tool this CLI uses to ask the USER a question, or `null` when it has
-   * no question channel at all.
-   *
-   * It is the ONE thing that separates a genuine question from a permission
-   * check on the approval path, and only the adapter knows the name — so no
-   * service, executor or util may spell a tool name itself. A CLI that returns
-   * null simply never produces a question, and every consumer degrades to
-   * "permission only" without branching on which CLI it is.
+   * The CLI binary invoked for each turn. Resolved per access so the Settings
+   * cliPaths override (`GENIRO_<AGENT>_BIN` on the daemon env) takes effect
+   * without reconstructing the adapter.
    */
-  abstract readonly questionToolName: string | null;
-
-  /**
-   * The approval modes this CLI honours at all, as a user-visible choice.
-   *
-   * A mode outside this list is refused where the choice is MADE (chat
-   * create/patch), so the user is told no rather than handed a control that
-   * silently does nothing. A CLI with no approval channel lists only the mode
-   * it effectively always runs — see `CursorAdapter`.
-   */
-  abstract readonly approvalModes: readonly AgentApprovalMode[];
-
-  /**
-   * The subset of {@link approvalModes} whose support cannot be known from the
-   * CLI's name alone and must be PROVED against the installed binary.
-   *
-   * It is what decides whether a run pays for a probe turn at all: a workflow
-   * whose nodes never request a probed mode never waits on one. An empty list
-   * means every mode this CLI claims, it has.
-   */
-  abstract readonly probedApprovalModes: readonly AgentApprovalMode[];
+  protected get command(): string {
+    return resolveAgentBinary(this.config.kind);
+  }
 
   /**
    * Translate the daemon's machine-capability bag into THIS CLI's installed
@@ -107,17 +90,27 @@ export abstract class AgentAdapter {
    * hold one without knowing whose probe filled which field — and each adapter
    * reads only its own. Without this the translation lived in the consumers:
    * both of them imported claude's, and the gate in front of it was
-   * `probedApprovalModes.includes(mode)` rather than "is this claude", so a
-   * second CLI declaring any probed mode would have been judged against
-   * CLAUDE's installed binary and silently degraded.
+   * `config.approval.probedModes.includes(mode)` rather than "is this
+   * claude", so a second CLI declaring any probed mode would have been judged
+   * against CLAUDE's installed binary and silently degraded.
    *
-   * A CLI with nothing to probe returns `{ supported: {} }` — absent, never
-   * `false`, so a mode nobody asked about is still attempted and any genuine
-   * rejection surfaces from the CLI itself.
+   * The default answers `{ supported: {} }` — absent, never `false` — which is
+   * the whole truth for a CLI with nothing to probe (`config.approval.
+   * probedModes: []`): a mode nobody asked about is still attempted and any
+   * genuine rejection surfaces from the CLI itself. Only an adapter whose
+   * probe verdict lives under a CLI-NAMED field of the bag overrides this;
+   * config can declare WHICH modes are probed, but not which field holds the
+   * answer.
    */
-  abstract approvalSupportFrom(
-    capabilities: InstalledCapabilities,
-  ): InstalledApprovalSupport;
+  approvalSupportFrom(
+    // Declared and deliberately unread here: taking the bag and returning
+    // nothing from it is the STATEMENT — an adapter with no probed mode has no
+    // field in there that is about its CLI. Omitting the parameter would make
+    // the same test pass by signature rather than by behaviour.
+    _capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport {
+    return { supported: {} };
+  }
 
   /**
    * The mode a turn actually runs under, given what a probe proved about the
@@ -129,34 +122,109 @@ export abstract class AgentAdapter {
    * degrade gets fixed on one path and silently missed on the other. Policy
    * lives here, not in the caller: which modes degrade, which ride through to
    * be rejected loudly by the CLI, and what the user is told.
+   *
+   * The policy itself is per-CLI DATA (`config.approval`), so this is concrete
+   * and the order is fixed for everyone:
+   *
+   * 1. A CLI with exactly ONE honoured mode collapses onto it — that comes
+   *    FIRST because a single-mode CLI has nothing to probe, so a probe-table
+   *    entry could otherwise route a turn to a mode the CLI does not honour at
+   *    all.
+   * 2. Otherwise a mode a probe PROVED the installed binary rejects degrades
+   *    per `config.approval.degradeOnProbeFail` — only on `false`, never on an
+   *    absent verdict.
+   * 3. Otherwise the requested mode rides through, so a real rejection comes
+   *    from the CLI instead of from a guess made here. A probed mode left OUT
+   *    of the table takes this path deliberately (see claude's `plan`).
    */
-  abstract resolveApprovalMode(
+  resolveApprovalMode(
     requested: AgentApprovalMode,
     installed: InstalledApprovalSupport,
-  ): ApprovalResolution;
+  ): ApprovalResolution {
+    const { modes, degradeOnProbeFail, soleModeDegradeReason } =
+      this.config.approval;
+    const [soleMode] = modes;
+    if (modes.length === 1 && soleMode && soleMode !== requested) {
+      return {
+        mode: soleMode,
+        degradeReason: soleModeDegradeReason?.(requested) ?? null,
+      };
+    }
+    const degrade = degradeOnProbeFail[requested];
+    if (degrade && installed.supported[requested] === false) {
+      return { mode: degrade.to, degradeReason: degrade.reason };
+    }
+    return { mode: requested, degradeReason: null };
+  }
 
   /**
-   * Whether this CLI may hold the agent-call tools only after a machine-level
-   * trust probe has PASSED, rather than on the strength of the endpoint grant
-   * alone.
+   * Project one question this CLI asked into the CLI-agnostic
+   * {@link AdapterQuestion} a caller envelope or a renderer card is built
+   * from, or null when the payload carries no question at all.
    *
-   * True is the cautious answer: the run withholds the tools until a probe
-   * verdict says otherwise, and the shut-out caller degrades visibly. False
-   * means the endpoint is sufficient — the CLI accepts a per-turn server the
-   * daemon hands it, with no persistent trust store in the way.
+   * The input is the question tool's own arguments — a shape only this CLI's
+   * adapter knows. Consumers hold a payload they must never parse: the graph
+   * executor bridges a callee's question to its caller without knowing which
+   * CLI raised it, which is exactly what this method buys.
+   *
+   * The base answers null, the whole truth for a CLI whose
+   * `config.questionToolName` is null: it has no question channel, so nothing
+   * it emits can be a question. Only an adapter whose CLI HAS one overrides
+   * this, delegating to a projection in its own `utils/`.
    */
-  abstract readonly callToolsRequireTrustProbe: boolean;
+  questionFrom(_input: unknown): AdapterQuestion | null {
+    return null;
+  }
 
   /**
-   * Whether an MCP endpoint reaches this CLI ONLY through a config file in the
-   * run's own cwd, merged before the spawn and restored after it.
+   * Fold a free-text answer back into this CLI's question-tool input, so the
+   * verdict the CLI receives carries the answer the user (or a calling agent)
+   * gave.
    *
-   * A CLI answering false takes the endpoint per turn (claude's
-   * `--mcp-config`), which is both cheaper and safer — nothing outside the
-   * turn ever sees the token. True obliges the caller to run the merge
-   * lifecycle around the spawn.
+   * The counterpart of {@link questionFrom} on the way back, and the only
+   * sanctioned mutation of a tool input anywhere: the base echoes the input
+   * UNCHANGED, because a CLI with no question channel has no field to fold
+   * into and inventing one would hand a tool an argument it never asked for.
    */
-  abstract readonly mcpEndpointRequiresCwdConfig: boolean;
+  withAnswer(input: unknown, _answer: string): unknown {
+    return input;
+  }
+
+  /**
+   * The interactive TUI invocation that mirrors one of this CLI's headless
+   * sessions — the same conversation the run produced, reopened in the CLI's
+   * own terminal UI.
+   *
+   * Config-driven and concrete: `config.terminal` carries the resume flag and
+   * what a resumable session id looks like for this CLI, so no consumer spells
+   * a binary, a flag or an id shape. A CLI with `terminal: null` has no such
+   * mode at all and answers `unsupported`, rather than being handed another
+   * CLI's argv.
+   *
+   * It RETURNS the refusal instead of throwing: the two failure arms mean
+   * different things to the HTTP caller (a CLI that will never mirror vs a
+   * session that does not exist YET), and mapping them to status codes is the
+   * consuming module's job — the adapter layer stays free of HTTP exceptions.
+   *
+   * A missing or foreign-shaped session id is `no-session`, never a bare TUI
+   * launch: opening the CLI without a resume target would show an unrelated
+   * fresh conversation while claiming to mirror the run.
+   */
+  terminalCommand(sessionId: string | null): TerminalCommandResult {
+    const terminal = this.config.terminal;
+    if (!terminal) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    const trimmed = sessionId?.trim();
+    if (!trimmed || !terminal.sessionIdPattern.test(trimmed)) {
+      return { ok: false, reason: 'no-session' };
+    }
+    return {
+      ok: true,
+      command: this.command,
+      args: [terminal.resumeFlag, trimmed],
+    };
+  }
 
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
@@ -181,39 +249,143 @@ export abstract class AgentAdapter {
    * Synchronous because it is a documented constant on every adapter that has
    * one — nothing is asked of the binary. It must NOT be scraped from the
    * CLI's own help output: claude's `--help` under-reports its own vocabulary
-   * (probe-verified — see `claude/claude-effort.ts`), so a scrape would
+   * (probe-verified — see `claude/claude.const.ts`), so a scrape would
    * silently drop a level the CLI accepts.
    *
-   * An adapter returning `[]` is the whole signal that the CLI has no effort
+   * A `config.efforts` of `[]` is the whole signal that the CLI has no effort
    * control: the consumer refuses an effort for it and the UI omits the
    * picker, without anything outside this layer knowing which CLI it is.
    */
-  abstract listEfforts(): AgentEffort[];
+  listEfforts(): AgentEffort[] {
+    return [...this.config.efforts];
+  }
 
   /**
    * The skills / slash commands this CLI can be invoked with in a folder, as
    * found on disk — each CLI keeps them under its own roots
-   * (`.claude/skills`, `.claude/commands`, `.cursor/commands`), scanned in the
-   * project folder and the user's home dir.
+   * (`config.skillRoots`: `.claude/skills`, `.claude/commands`,
+   * `.cursor/commands`), scanned in the project folder and then the user's
+   * home dir.
    *
-   * Ordering is the adapter's: it returns them in the order the CLI would
-   * resolve a collision, first occurrence winning. Never throws — one broken
-   * file on disk must not fail the list.
+   * The ORDER is the contract, and it is the CLI's own shadowing order: root
+   * by root, skills before commands, project before user. The caller de-dupes
+   * first-occurrence-wins, so this is what makes it keep the entry the CLI
+   * would actually run. Never throws — one broken file on disk must not fail
+   * the list (the scanners skip unreadable entries).
    */
-  abstract listSkills(input: AgentSkillsInput): Promise<AgentSkillEntry[]>;
+  async listSkills({
+    cwd,
+    homeDir,
+  }: AgentSkillsInput): Promise<AgentSkillEntry[]> {
+    const roots = [
+      { source: 'project' as const, dir: cwd },
+      { source: 'user' as const, dir: homeDir },
+    ];
+    const found: AgentSkillEntry[] = [];
+    for (const { source, dir } of roots) {
+      for (const segments of this.config.skillRoots.skills) {
+        found.push(...(await scanSkillDirs(join(dir, ...segments), source)));
+      }
+      for (const segments of this.config.skillRoots.commands) {
+        found.push(...(await scanCommandFiles(join(dir, ...segments), source)));
+      }
+    }
+    return found;
+  }
 
   /**
    * The slash commands the CLI ITSELF reports it can run — its built-ins and
    * plugin commands, which exist nowhere on disk to be scanned.
    *
-   * Only the binary knows this set, and only some CLIs will say: an adapter
-   * whose CLI has no such report returns `[]`, and so does one that cannot be
-   * asked right now. Never throws, and never hangs. The caller decides how
-   * often to ask; this method always does the work when called.
+   * Only the binary knows this set, and only some CLIs will say: a CLI that
+   * makes no such report (`config.reportedCommands: null`) answers `[]` without
+   * spawning anything, and so does one that cannot be asked right now. Never
+   * throws, and never hangs. The caller decides how often to ask; this method
+   * always does the work when called.
+   *
+   * The harvest itself is the same for every CLI that HAS such a report,
+   * because it rides the normalized `slash_commands` event rather than any
+   * CLI's own field: start one headless turn and cancel it the instant the list
+   * lands, before the model runs — which is what makes the answer free.
+   *
+   * The turn runs in a throwaway temp cwd on purpose, on both counts: it fires
+   * no project hooks and starts no session in a repo the user did not ask us to
+   * touch, and the answer is CWD-INDEPENDENT — verified live against claude, an
+   * empty temp dir reports the same built-ins and plugin commands as a real
+   * project — so one probe serves every folder. What that necessarily excludes
+   * is the per-project layer, which the disk scan (`listSkills`) already covers.
+   *
+   * Returns `[]` when the CLI never reached its report (missing binary, auth
+   * failure, a hang).
    */
-  abstract listReportedCommands(
-    options?: AgentCommandOptions,
-  ): Promise<string[]>;
+  async listReportedCommands(
+    options: AgentCommandOptions = {},
+  ): Promise<string[]> {
+    const probe = this.config.reportedCommands;
+    if (!probe) {
+      return [];
+    }
+    const cwd = join(
+      this.options.probeRootDir ?? tmpdir(),
+      `commands-${randomUUID()}`,
+    );
+    let captured: string[] = [];
+    try {
+      mkdirSync(cwd, { recursive: true });
+      let resolveCaptured!: () => void;
+      const commandsSeen = new Promise<void>((resolve) => {
+        resolveCaptured = resolve;
+      });
+      // No approvalMode: the turn gets the CLI's own defaults and NO
+      // permission-bypass flag. It is cancelled before the model runs, so the
+      // least-privileged argv is also the sufficient one.
+      const handle = this.start({ prompt: probe.probePrompt, cwd }, (event) => {
+        if (event.type === 'slash_commands' && captured.length === 0) {
+          captured = event.commands
+            .filter(
+              (name) =>
+                probe.internalPrefix === null ||
+                !name.startsWith(probe.internalPrefix),
+            )
+            .slice(0, probe.maxCommands);
+          resolveCaptured();
+        }
+      });
+      options.onTurn?.(handle);
+      const timer = setTimeout(
+        () => handle.cancel(),
+        options.timeoutMs ?? probe.probeTimeoutMs,
+      );
+      timer.unref?.();
+      const capturedWon = await Promise.race([
+        commandsSeen.then(() => true),
+        handle.done.then(() => false),
+      ]);
+      if (capturedWon) {
+        // Proof is in — the rest of the turn is spent without information.
+        handle.cancel();
+      }
+      await handle.done;
+      clearTimeout(timer);
+    } catch {
+      // A turn that fails synchronously (an unusable probe root, a bad argv)
+      // leaves the caller with the disk scan.
+      return [];
+    } finally {
+      try {
+        rmSync(cwd, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup only: a straggler of the just-cancelled probe
+        // process group writing into `cwd` can make rmSync throw
+        // (EBUSY/ENOTEMPTY — `force` suppresses only ENOENT). That must never
+        // fail the read; the temp dir is reaped on the next probe/boot.
+      }
+    }
+    return captured;
+  }
+
+  /** Memoized: the binary is asked once per adapter instance, not once per turn. */
+  private liveStreamSupport: Promise<boolean> | null = null;
 
   /**
    * Whether the INSTALLED binary can stream partial assistant text, so a turn
@@ -222,11 +394,26 @@ export abstract class AgentAdapter {
    * Asked rather than assumed because the answer is per-binary, not per-CLI: a
    * flag the current claude accepts is rejected on argv by an older one, which
    * would fail every turn instead of merely not streaming. A CLI with no such
-   * mode answers false forever. Never throws; a CLI that cannot be asked
-   * answers false, so the worst case is block streaming — exactly today's
-   * behaviour.
+   * mode (`config.liveStream: null`) answers false forever, without spawning
+   * anything.
+   *
+   * `config.liveStream.probeArgs` is `--help`-shaped by design: the cheapest
+   * honest source, since it is the same binary that would reject the flag on
+   * argv, it needs no account and no network, and it cannot start a turn.
+   * Never throws — absent output (a missing binary, a timeout) reads as "no",
+   * which degrades to block streaming rather than failing turns.
    */
-  abstract supportsLiveStream(options?: AgentCommandOptions): Promise<boolean>;
+  supportsLiveStream(options: AgentCommandOptions = {}): Promise<boolean> {
+    const liveStream = this.config.liveStream;
+    if (!liveStream) {
+      return Promise.resolve(false);
+    }
+    this.liveStreamSupport ??= this.runCommand(
+      [...liveStream.probeArgs],
+      options,
+    ).then((stdout) => (stdout ?? '').includes(liveStream.flag));
+    return this.liveStreamSupport;
+  }
 
   /**
    * Run a short-lived utility command for THIS CLI and return its stdout, or
@@ -321,20 +508,6 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * Report a diagnostic at the loudest level the configured sink offers.
-   * Used for conditions that do not justify failing a turn but must not be
-   * whispered either — an unverified CLI version, a dropped control subtype.
-   */
-  protected reportProblem(message: string): void {
-    const logger = this.options.logger;
-    if (logger?.error) {
-      logger.error(message);
-      return;
-    }
-    logger?.warn(message);
-  }
-
-  /**
    * Start a turn. Events are delivered to `onEvent` in stream order. The
    * returned handle settles via `done` and can `cancel` the turn.
    */
@@ -362,7 +535,7 @@ export abstract class AgentAdapter {
         onEvent: (event) => {
           if (event.type === 'unhandled_control') {
             this.options.logger?.warn(
-              `${this.kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
+              `${this.config.kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
             );
             return;
           }

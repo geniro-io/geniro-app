@@ -16,6 +16,7 @@ import {
   type RunStatus,
 } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
 import {
   type AttachmentDataWire,
   CHAT_DEFAULT_APPROVAL,
@@ -45,7 +46,6 @@ import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
-import { ClaudeProbeService } from './claude-probe.service';
 import { EffortsService } from './efforts.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -335,7 +335,7 @@ export class ChatService {
   /**
    * Refuse an approval mode the run's CLI does not honour.
    *
-   * Asked of the adapter (`approvalModes`) rather than branched on the agent
+   * Asked of the adapter (`config.approval.modes`) rather than branched on the agent
    * kind, for the same reason as {@link assertEffortSupported}: which modes
    * exist is that CLI's fact. Refusing here — where the choice is made — is
    * deliberate and differs from a workflow node's visible degrade: a chat's
@@ -350,7 +350,7 @@ export class ChatService {
       return;
     }
     const adapter = this.adapterFor(agentKind);
-    if (!adapter.approvalModes.includes(approval)) {
+    if (!adapter.config.approval.modes.includes(approval)) {
       throw new BadRequestException(
         'APPROVAL_MODE_UNSUPPORTED',
         `${agentKind} does not support the approval mode '${approval}'`,
@@ -374,7 +374,7 @@ export class ChatService {
     if (picked !== undefined) {
       return picked;
     }
-    const modes = this.adapterFor(kind).approvalModes;
+    const modes = this.adapterFor(kind).config.approval.modes;
     return modes.includes(CHAT_DEFAULT_APPROVAL)
       ? CHAT_DEFAULT_APPROVAL
       : 'auto';
@@ -622,7 +622,7 @@ export class ChatService {
           // service only assembles the bag from the probes it holds. Reading
           // claude's field here instead would judge any future CLI with a
           // probed mode against claude's installed binary.
-          adapter.probedApprovalModes.includes(approvalMode)
+          adapter.config.approval.probedModes.includes(approvalMode)
             ? adapter.approvalSupportFrom({
                 claudeModes: await this.claudeModesSafe(),
               })
@@ -764,7 +764,11 @@ export class ChatService {
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
               // composer's `/` autocomplete, never the transcript.
-              this.skillHarvest.record(adapter.kind, cwd, event.commands);
+              this.skillHarvest.record(
+                adapter.config.kind,
+                cwd,
+                event.commands,
+              );
               return;
             }
             const mapped = mapEventToItem(event);
@@ -778,7 +782,7 @@ export class ChatService {
             }
             if (event.type === 'approval_request') {
               const isQuestion = isUserQuestion(
-                adapter.questionToolName,
+                adapter.config.questionToolName,
                 event.toolName,
               );
               if (!isQuestion && event.requiresUserInteraction === true) {
@@ -853,7 +857,7 @@ export class ChatService {
                     event.id,
                     allow,
                     foldApprovalAnswer(
-                      adapter.questionToolName,
+                      adapter,
                       event.toolName,
                       event.input,
                       allow,
@@ -875,7 +879,7 @@ export class ChatService {
                           // transcript must never claim an answer the agent
                           // did not receive.
                           ...(answerFoldsInto(
-                            adapter.questionToolName,
+                            adapter.config.questionToolName,
                             event.toolName,
                             allow,
                             answer,

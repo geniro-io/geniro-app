@@ -75,6 +75,33 @@ export const ClaudeModesCapabilitySchema = z
 export type ClaudeModesCapability = z.infer<typeof ClaudeModesCapabilitySchema>;
 
 /**
+ * Whether cursor-agent caller nodes can receive the call tools on THIS
+ * machine — the cached verdict of the one-shot MCP-trust probe (headless
+ * cursor-agent silently drops MCP servers it hasn't approved, so the only
+ * honest answer comes from actually running one turn against an echo tool).
+ * `unknown` = not probed yet this launch (no cursor caller ran, or the
+ * binary version could not be read so the verdict is not disk-cacheable).
+ */
+export const CursorCallsCapabilitySchema = z
+  .object({
+    status: ProbeStatusSchema,
+    version: z
+      .string()
+      .nullable()
+      .describe('`cursor-agent --version` line the verdict is keyed by'),
+    probedAt: z
+      .number()
+      .nullable()
+      .describe('Epoch ms of the probe that produced this verdict'),
+    reason: z
+      .string()
+      .nullable()
+      .describe('One-liner for the builder warning when status is not pass'),
+  })
+  .meta({ id: 'CursorCallsCapability' });
+export type CursorCallsCapability = z.infer<typeof CursorCallsCapabilitySchema>;
+
+/**
  * TWIN LIMIT: apps/ui/src/renderer/chats/approval-card.tsx
  * MAX_ANSWER_LENGTH.
  *

@@ -1,6 +1,35 @@
 import type { ChildProcess } from 'node:child_process';
 
+import type { AgentKind } from '../../runs/runs.types';
 import type { ClaudeModesCapability } from '../chat.types';
+
+// ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
+// The two names that identify OUR server and OUR tools inside a CLI's config
+// file. They live in the adapter contract because WRITING that file is an
+// adapter's job — claude's per-turn `--mcp-config` and cursor's
+// `.cursor/mcp.json` merge both spell them — and a name two adapters must
+// agree on cannot be owned by a module that imports this one.
+
+/**
+ * The name geniro's own MCP server is published under, in EVERY CLI's config:
+ * claude's per-turn `--mcp-config` file and the `.cursor/mcp.json` entry
+ * merged for a cursor turn. It belongs to us, not to either CLI — spelling it
+ * twice is how the two configs would silently name different servers.
+ * A foreign entry found under this key is a conflict, never ours to overwrite.
+ */
+export const GENIRO_MCP_SERVER_KEY = 'geniro';
+
+/**
+ * The tool names the per-run MCP endpoint serves. The cursor entry
+ * auto-approves exactly these (never `--approve-mcps`, which would
+ * blanket-approve the user's other servers too), so the trust expansion stays
+ * bounded to what geniro itself publishes.
+ */
+export const GENIRO_MCP_CALL_TOOLS = [
+  'call_agent',
+  'await_agent',
+  'answer_agent',
+] as const;
 
 /**
  * Token/cost accounting for a completed turn. Fields are nullable because not
@@ -16,7 +45,7 @@ export interface AgentUsage {
    *
    * Per-request, never a turn total: a turn re-sends the conversation once per
    * tool call, so adding those up measures work done, not context held (see
-   * `claude/claude-usage.ts`). Cache traffic counts — on a resumed session it
+   * `claude/utils/claude-usage.utils.ts`). Cache traffic counts — on a resumed session it
    * IS the context — so a CLI that breaks it out reports input + cache-creation
    * + cache-read, and one that doesn't reports its plain input count.
    */
@@ -230,7 +259,7 @@ export interface AgentCommandOptions {
 /**
  * The tool-approval modes a caller may ask for. The vocabulary is shared, but
  * which of them a given CLI honours is not — see
- * {@link AgentAdapter.approvalModes}.
+ * {@link AdapterConfig.approval}.modes.
  */
 export type AgentApprovalMode = 'auto' | 'ask' | 'acceptEdits' | 'plan';
 
@@ -396,4 +425,194 @@ export interface AgentTurnHandle {
    * protocol.
    */
   respondApproval(id: string, allow: boolean, updatedInput?: unknown): boolean;
+}
+
+/** One question a CLI asked the user, projected out of its own tool payload. */
+export interface AdapterQuestion {
+  /** The question text, ready for a caller envelope or a renderer card. */
+  text: string;
+  /** Every option label offered, flat across questions; [] when free-text only. */
+  options: string[];
+}
+
+/** What resolving a terminal-mirror invocation produced. */
+export type TerminalCommandResult =
+  | { ok: true; command: string; args: string[] }
+  | { ok: false; reason: 'unsupported' | 'no-session' };
+
+/**
+ * Everything about ONE CLI that is STATIC — true of the binary before any turn
+ * runs, and knowable without asking it anything.
+ *
+ * One object per adapter, declared in that adapter's `<name>.const.ts` and
+ * returned by `AgentAdapter.config`, so every question whose only per-CLI input
+ * is a VALUE is answered once, concretely, on the base class. A field here is
+ * the reason a `listEfforts` / `listSkills` / `resolveApprovalMode` override no
+ * longer exists on either adapter.
+ *
+ * What deliberately does NOT belong here:
+ * - anything env-dependent (`command` is derived from `kind` through
+ *   `resolveAgentBinary`, so a Settings cliPaths override still takes effect
+ *   per access);
+ * - anything the INSTALLED binary has to be asked (its model list, its reported
+ *   commands, whether it streams partials) — config carries only how to ask and
+ *   what to fall back to;
+ * - anything with per-turn branching (argv assembly, stdin payload, child env)
+ *   — those stay `buildArgs` / `buildStdinPayload` / `buildEnv`.
+ */
+export interface AdapterConfig {
+  // ── Identity ────────────────────────────────────────────────────────────
+  /**
+   * The agent this adapter drives. Also the key `resolveAgentBinary` looks up,
+   * so the binary name is never spelled a second time.
+   */
+  readonly kind: AgentKind;
+
+  // ── Asking the user ─────────────────────────────────────────────────────
+  /**
+   * The tool this CLI uses to ask the USER a question, or null when it has no
+   * question channel at all. The ONE discriminator between a genuine question
+   * and a permission check — no service, executor or util may spell a tool name
+   * itself.
+   */
+  readonly questionToolName: string | null;
+
+  // ── Approval policy ─────────────────────────────────────────────────────
+  readonly approval: {
+    /**
+     * Every mode this CLI honours as a user-visible choice. A mode outside this
+     * list is refused where the choice is MADE (chat create/patch).
+     */
+    readonly modes: readonly AgentApprovalMode[];
+    /**
+     * The subset of `modes` whose support cannot be known from the CLI's name
+     * alone and must be PROVED against the installed binary. It decides whether
+     * a run pays for a probe turn at all; `[]` means every claimed mode is real.
+     */
+    readonly probedModes: readonly AgentApprovalMode[];
+    /**
+     * What a mode degrades to once a probe PROVED the installed binary rejects
+     * it, plus the line the transcript owes the user.
+     *
+     * A probed mode deliberately ABSENT from this table rides through and is
+     * rejected loudly by the CLI. That absence is policy, not an oversight —
+     * see claude's `plan`, where degrading a no-execute mode into an executing
+     * one would invert the intent the user selected it for.
+     */
+    readonly degradeOnProbeFail: Readonly<
+      Partial<
+        Record<
+          AgentApprovalMode,
+          { readonly to: AgentApprovalMode; readonly reason: string }
+        >
+      >
+    >;
+    /**
+     * The line owed to the user when a CLI with exactly ONE honoured mode is
+     * asked for a different one — evaluated only when `modes.length === 1`, and
+     * checked BEFORE `degradeOnProbeFail` (a single-mode CLI has nothing to
+     * probe). Null when `modes` has more than one entry.
+     */
+    readonly soleModeDegradeReason:
+      ((requested: AgentApprovalMode) => string) | null;
+  };
+
+  // ── Reasoning effort ────────────────────────────────────────────────────
+  /**
+   * The `--effort` vocabulary this CLI accepts, weakest first, or `[]` when it
+   * has no such control at all. WRITTEN DOWN, never scraped from `--help`: a
+   * CLI can accept a level its own help omits.
+   */
+  readonly efforts: readonly AgentEffort[];
+
+  // ── Models ──────────────────────────────────────────────────────────────
+  /**
+   * The documented alias / fallback set — the FLOOR of `listModels`, never the
+   * whole of it, and what a CLI that cannot be asked answers with so the picker
+   * is never empty. How the live list is obtained stays `listModels`, which is
+   * the one member config cannot express (a home-file read vs a subcommand).
+   */
+  readonly builtinModels: readonly AgentModel[];
+
+  // ── Skills / commands on disk ───────────────────────────────────────────
+  /**
+   * Where this CLI keeps what it can be invoked with, as path SEGMENTS joined
+   * under each root (the project cwd first, then the user's home dir). Within
+   * one root, `skills` are scanned before `commands` — the two arrays' order IS
+   * the shadowing order the CLI itself applies, which the caller's
+   * first-occurrence-wins de-dup relies on.
+   */
+  readonly skillRoots: {
+    /** `<root>/<…>/<name>/SKILL.md` dirs; `[]` when the CLI has no skills convention. */
+    readonly skills: readonly (readonly string[])[];
+    /** `<root>/<…>/**.md` command files; `[]` when the CLI has no commands convention. */
+    readonly commands: readonly (readonly string[])[];
+  };
+
+  // ── Live (token-level) streaming ────────────────────────────────────────
+  /**
+   * How to establish whether the INSTALLED binary can stream partial assistant
+   * text. Null when the CLI has no such mode at all, which answers
+   * `supportsLiveStream` false without spawning anything.
+   */
+  readonly liveStream: {
+    /** Utility argv whose stdout is searched — `--help` is the cheapest honest source. */
+    readonly probeArgs: readonly string[];
+    /**
+     * ONE string, used twice by design: pushed onto argv when a turn asks for
+     * partials, and searched for in `probeArgs`' stdout. The same binary that
+     * would reject it on argv is the one that advertises it, so a single field
+     * makes the two reads incapable of drifting apart.
+     */
+    readonly flag: string;
+  } | null;
+
+  // ── Commands the CLI reports about ITSELF ───────────────────────────────
+  /**
+   * How to harvest the built-ins and plugin commands that exist nowhere on disk
+   * to be scanned: start one turn in a throwaway cwd and cancel it the instant
+   * the normalized `slash_commands` event lands. Null when the CLI makes no such
+   * report, which answers `listReportedCommands` with `[]` and never spawns.
+   */
+  readonly reportedCommands: {
+    /** Never reached by the model — the turn is cancelled the moment init lands. */
+    readonly probePrompt: string;
+    /** A hung probe must not wedge the caller forever. */
+    readonly probeTimeoutMs: number;
+    /** Defensive bound on the reported list. */
+    readonly maxCommands: number;
+    /** Names starting with this are the CLI's INTERNALS, not things a user invokes. */
+    readonly internalPrefix: string | null;
+  } | null;
+
+  // ── Agent-to-agent calls (MCP) ──────────────────────────────────────────
+  readonly mcp: {
+    /**
+     * Whether the call tools are withheld until a machine-level trust probe has
+     * PASSED. True is the cautious answer: the shut-out caller degrades VISIBLY.
+     */
+    readonly callToolsRequireTrustProbe: boolean;
+    /**
+     * Whether an MCP endpoint reaches this CLI ONLY through a config file in the
+     * run's own cwd, merged before the spawn and restored after. False means the
+     * endpoint rides the turn itself, so nothing outside it ever sees the token.
+     */
+    readonly endpointRequiresCwdConfig: boolean;
+  };
+
+  // ── Interactive terminal mirror ─────────────────────────────────────────
+  /**
+   * How to reopen an existing headless session in the CLI's own TUI, or null
+   * when this CLI has no such mode (the mirror is then refused for it, rather
+   * than opening an unrelated fresh TUI).
+   */
+  readonly terminal: {
+    /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
+    readonly resumeFlag: string;
+    /**
+     * What a resumable session id looks like for this CLI. A value produced by
+     * a DIFFERENT CLI must not be handed to this one's TUI.
+     */
+    readonly sessionIdPattern: RegExp;
+  } | null;
 }

@@ -19,6 +19,7 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import type { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
 import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 import type {
   ClaudeModesCapability,
@@ -34,7 +35,6 @@ import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
-import type { ClaudeProbeService } from './claude-probe.service';
 import { EffortsService } from './efforts.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -233,22 +233,26 @@ function fakeAdapter(kind: AgentKind): {
   );
   // Every CLI-fact declaration comes from the REAL adapter: the double fakes
   // the SPAWN, never the contract, so a policy this service leans on cannot
-  // pass here while being absent from the adapter that ships.
+  // pass here while being absent from the adapter that ships. The whole
+  // `config` object is carried through by REFERENCE rather than field by
+  // field — a hand-mirrored copy is exactly how a config change keeps passing
+  // the tests it should have broken.
   const real: AgentAdapter =
     kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
   return {
     adapter: {
-      kind,
+      config: real.config,
       start,
-      questionToolName: real.questionToolName,
-      approvalModes: real.approvalModes,
-      probedApprovalModes: real.probedApprovalModes,
       resolveApprovalMode: (
         requested: AgentApprovalMode,
         installed: InstalledApprovalSupport,
       ) => real.resolveApprovalMode(requested, installed),
       approvalSupportFrom: (capabilities: InstalledCapabilities) =>
         real.approvalSupportFrom(capabilities),
+      // The answer fold is the adapter's too: the double must not decide
+      // where a verdict's free text lands inside a CLI's tool input.
+      withAnswer: (input: unknown, answer: string) =>
+        real.withAnswer(input, answer),
       // Mirrors the real adapters: only claude can stream partial text.
       // A test seam for the claim→register window: the real adapter probes the
       // installed CLI here, so this is where a concurrent delete lands.
@@ -1254,8 +1258,9 @@ describe('ChatService — approval modes (parity M1)', () => {
   });
 
   it('does not probe for a mode the CLI never declared empirical', async () => {
-    // `probedApprovalModes` is what keeps an 'auto' chat off the probe path;
-    // without it every turn would await a verdict it has no use for.
+    // `config.approval.probedModes` is what keeps an 'auto' chat off the
+    // probe path; without it every turn would await a verdict it has no use
+    // for.
     const { service, claude, claudeProbe } = setup();
     const run = await service.createChat({
       agentKind: 'claude',

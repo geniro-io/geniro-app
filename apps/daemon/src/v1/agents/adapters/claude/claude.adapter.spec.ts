@@ -2,6 +2,7 @@ import type { ChildProcess, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -10,13 +11,26 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { ClaudeModesCapability } from '../../chat.types';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
-import type { AgentEvent, AgentTurnInput } from '../adapter.types';
-import { ClaudeAdapter, mapClaudeMessage } from './claude.adapter';
+import type {
+  AdapterConfig,
+  AgentEvent,
+  AgentTurnHandle,
+  AgentTurnInput,
+} from '../adapter.types';
+import { ClaudeAdapter } from './claude.adapter';
+import {
+  CLAUDE_BASE_ARGS,
+  CLAUDE_COMMANDS_PROBE_PROMPT,
+  CLAUDE_CONFIG,
+  CLAUDE_MAX_REPORTED_COMMANDS,
+  CLAUDE_RESUME_FLAG,
+} from './claude.const';
 
 // ── Minimal synchronous child-process fake (no real I/O timing) ──────────────
 class FakeReadable extends EventEmitter {
@@ -42,30 +56,33 @@ class FakeChild extends EventEmitter {
   readonly stderr = new FakeReadable();
   readonly stdin = new FakeWritable();
   killSignal: NodeJS.Signals | null = null;
+  kills = 0;
   kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
     this.killSignal = signal;
+    this.kills += 1;
     return true;
   }
 }
 
-/** Stands in for `execFile` so `--version` answers without a real child. */
-function fakeVersion(line: string): typeof execFile {
-  return vi.fn(
-    (
-      _command: string,
-      _args: readonly string[],
-      _options: unknown,
-      callback: (err: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      callback(null, `${line}\n`, '');
-      return {} as ChildProcess;
-    },
-  ) as unknown as typeof execFile;
+/**
+ * A child that DIES when signalled, the way a real CLI does: `close` follows
+ * the SIGTERM. The command probe cancels its own turn and then awaits `done`,
+ * so a fake that swallowed the kill would hang the read instead of testing it.
+ */
+class KillableChild extends FakeChild {
+  override kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    super.kill(signal);
+    // A real child's `close` lands after the signal, never within it.
+    setTimeout(() => this.emit('close', null, signal), 0);
+    return true;
+  }
 }
 
-function fakeSpawn(): {
+function fakeSpawn<C extends FakeChild = FakeChild>(
+  child: C = new FakeChild() as C,
+): {
   spawn: SpawnFn;
-  child: FakeChild;
+  child: C;
   captured: {
     command?: string;
     args?: string[];
@@ -73,7 +90,6 @@ function fakeSpawn(): {
     env?: NodeJS.ProcessEnv;
   };
 } {
-  const child = new FakeChild();
   const captured: {
     command?: string;
     args?: string[];
@@ -89,155 +105,6 @@ function fakeSpawn(): {
   };
   return { spawn, child, captured };
 }
-
-describe('mapClaudeMessage', () => {
-  it('extracts the session id from system/init', () => {
-    expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 'sess-1',
-      }),
-    ).toEqual([{ type: 'session', sessionId: 'sess-1' }]);
-  });
-
-  it('harvests init slash_commands alongside the session id, dropping non-strings', () => {
-    expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 'sess-1',
-        slash_commands: ['review', 42, '', 'compact'],
-      }),
-    ).toEqual([
-      { type: 'session', sessionId: 'sess-1' },
-      { type: 'slash_commands', commands: ['review', 'compact'] },
-    ]);
-  });
-
-  it('ignores non-init system events (hook_*, post_turn_summary)', () => {
-    expect(
-      mapClaudeMessage({ type: 'system', subtype: 'hook_started' }),
-    ).toEqual([]);
-    expect(
-      mapClaudeMessage({ type: 'system', subtype: 'post_turn_summary' }),
-    ).toEqual([]);
-  });
-
-  it('maps assistant text/thinking/tool_use blocks in order', () => {
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [
-          { type: 'thinking', thinking: 'let me think' },
-          { type: 'text', text: 'hello' },
-          { type: 'tool_use', id: 't1', name: 'Read', input: { path: '/x' } },
-        ],
-      },
-    });
-    expect(events).toEqual([
-      { type: 'reasoning', text: 'let me think' },
-      { type: 'text', text: 'hello' },
-      { type: 'tool_call', id: 't1', name: 'Read', input: { path: '/x' } },
-    ]);
-  });
-
-  it('maps a user tool_result block', () => {
-    expect(
-      mapClaudeMessage({
-        type: 'user',
-        message: {
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: 't1',
-              content: 'file body',
-              is_error: false,
-            },
-          ],
-        },
-      }),
-    ).toEqual([
-      {
-        type: 'tool_result',
-        id: 't1',
-        name: null,
-        result: 'file body',
-        isError: false,
-      },
-    ]);
-  });
-
-  it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
-    expect(
-      mapClaudeMessage({
-        type: 'result',
-        subtype: 'success',
-        is_error: false,
-        result: 'pong',
-        stop_reason: 'end_turn',
-        usage: {
-          // Turn-wide roll-up: three requests' worth of the same conversation.
-          input_tokens: 12,
-          output_tokens: 3,
-          cache_creation_input_tokens: 100,
-          cache_read_input_tokens: 2_700,
-          iterations: [
-            {
-              input_tokens: 4,
-              output_tokens: 3,
-              cache_creation_input_tokens: 12,
-              cache_read_input_tokens: 996,
-            },
-          ],
-        },
-        modelUsage: {
-          'claude-opus-5[1m]': {
-            inputTokens: 12,
-            cacheReadInputTokens: 2_700,
-            contextWindow: 1_000_000,
-          },
-        },
-        total_cost_usd: 0.14,
-      }),
-    ).toEqual([
-      {
-        type: 'turn_complete',
-        usage: {
-          inputTokens: 12,
-          outputTokens: 3,
-          // The final request's prompt (4 + 12 + 996), not the 2_812 roll-up.
-          contextTokens: 1012,
-          contextWindowTokens: 1_000_000,
-          costUsd: 0.14,
-        },
-        stopReason: 'end_turn',
-        finalText: 'pong',
-      },
-    ]);
-  });
-
-  it('maps an error result to an error event', () => {
-    expect(
-      mapClaudeMessage({
-        type: 'result',
-        is_error: true,
-        result: 'context limit exceeded',
-      }),
-    ).toEqual([{ type: 'error', message: 'context limit exceeded' }]);
-  });
-
-  it('ignores unknown event types and non-objects', () => {
-    expect(mapClaudeMessage({ type: 'rate_limit_event', tier: 'x' })).toEqual(
-      [],
-    );
-    expect(mapClaudeMessage('garbage')).toEqual([]);
-    expect(mapClaudeMessage(null)).toEqual([]);
-    expect(mapClaudeMessage(42)).toEqual([]);
-  });
-});
 
 describe('ClaudeAdapter', () => {
   it('spawns with stream-json flags, streams a turn, and sends the prompt on stdin', async () => {
@@ -378,98 +245,6 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   const CONTROL_REQUEST =
     '{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"a.txt"}}}\n';
 
-  it('maps a can_use_tool control_request to an approval_request event', () => {
-    expect(mapClaudeMessage(JSON.parse(CONTROL_REQUEST))).toEqual([
-      {
-        type: 'approval_request',
-        id: 'req-1',
-        toolName: 'Write',
-        input: { file_path: 'a.txt' },
-      },
-    ]);
-  });
-
-  it('carries requires_user_interaction — the question-vs-permission discriminator (M4)', () => {
-    const events = mapClaudeMessage({
-      type: 'control_request',
-      request_id: 'req-q',
-      request: {
-        subtype: 'can_use_tool',
-        tool_name: 'AskUserQuestion',
-        input: { questions: [] },
-        requires_user_interaction: true,
-      },
-    });
-    expect(events).toEqual([
-      expect.objectContaining({
-        type: 'approval_request',
-        toolName: 'AskUserQuestion',
-        requiresUserInteraction: true,
-      }),
-    ]);
-    // A plain permission carries no flag — the event must not fake one.
-    const plain = mapClaudeMessage(JSON.parse(CONTROL_REQUEST));
-    expect(
-      (plain[0] as { requiresUserInteraction?: boolean })
-        .requiresUserInteraction,
-    ).toBeUndefined();
-  });
-
-  it('lifts message.usage off a REAL assistant line as live context', () => {
-    // Captured verbatim from `claude -p --output-format stream-json --verbose`
-    // on 2.1.220 (2026-07-29), trimmed to the fields under test. Fabricating
-    // this line would pin our own guess about the CLI, not the CLI.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      message: {
-        content: [{ type: 'text', text: 'A teapot.' }],
-        usage: {
-          input_tokens: 2,
-          cache_creation_input_tokens: 36569,
-          cache_read_input_tokens: 18366,
-          output_tokens: 1,
-          service_tier: 'standard',
-        },
-      },
-    });
-    // Prompt side only — output tokens are not context — and cache traffic
-    // counts, because on a resumed session it IS the context.
-    expect(events).toEqual([
-      { type: 'context_progress', contextTokens: 2 + 36569 + 18366 },
-      { type: 'text', text: 'A teapot.' },
-    ]);
-  });
-
-  it('emits no context event for an assistant line that carries no usage', () => {
-    // A CLI build that omits it must degrade to "the meter waits", never to a
-    // zero that reads as an empty context.
-    expect(
-      mapClaudeMessage({
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'hi' }] },
-      }),
-    ).toEqual([{ type: 'text', text: 'hi' }]);
-  });
-
-  it('returns an unmodelled control subtype as data instead of dropping it', () => {
-    // The mapper is pure and cannot log, so the ONLY way an
-    // unrecognized subtype becomes visible is by leaving the function. If this
-    // ever goes back to `[]` the daemon is silently blind again.
-    expect(
-      mapClaudeMessage({
-        type: 'control_request',
-        request_id: 'r',
-        request: { subtype: 'initialize' },
-      }),
-    ).toEqual([{ type: 'unhandled_control', subtype: 'initialize' }]);
-  });
-
-  it('reports a control_request with no readable subtype rather than swallowing it', () => {
-    expect(
-      mapClaudeMessage({ type: 'control_request', request_id: 'r' }),
-    ).toEqual([{ type: 'unhandled_control', subtype: '<none>' }]);
-  });
-
   it('logs the unmodelled subtype from the base class and keeps it off the turn', () => {
     // The mapper hands it back; `AgentAdapter.start` is the one caller that
     // logs it. It must NOT reach the consumer — a diagnostic is not an event.
@@ -487,46 +262,6 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(warnings).toEqual([
       "claude: unmodelled control_request subtype 'initialize' — dropped",
     ]);
-  });
-
-  it('reports loudly when a stdio-dialogue turn runs on an unprobed claude', async () => {
-    // Enters the version-assertion branch deliberately —
-    // without a test that reaches it, a later "dead code" sweep deletes it.
-    const errors: string[] = [];
-    const fake = fakeSpawn();
-    new ClaudeAdapter({
-      spawn: fake.spawn,
-      execFileFn: fakeVersion('3.0.0 (Claude Code)'),
-      logger: { warn: () => {}, error: (m) => errors.push(m) },
-    }).start({ prompt: 'p', cwd: '/proj', approvalMode: 'ask' }, () => {});
-    await vi.waitFor(() => expect(errors).toHaveLength(1));
-    expect(errors[0]).toContain('3.0.0');
-    expect(errors[0]).toContain('2.1');
-  });
-
-  it('stays silent on a probed version, and never probes a plain chat turn', async () => {
-    const errors: string[] = [];
-    const versions = fakeVersion('2.1.220 (Claude Code)');
-    const verified = fakeSpawn();
-    new ClaudeAdapter({
-      spawn: verified.spawn,
-      execFileFn: versions,
-      logger: { warn: () => {}, error: (m) => errors.push(m) },
-    }).start({ prompt: 'p', cwd: '/proj', approvalMode: 'ask' }, () => {});
-    await vi.waitFor(() => expect(versions).toHaveBeenCalled());
-    expect(errors).toEqual([]);
-
-    // A plain chat holds no control dialogue, so it must not even ask.
-    const plainVersions = fakeVersion('3.0.0 (Claude Code)');
-    const plain = fakeSpawn();
-    new ClaudeAdapter({
-      spawn: plain.spawn,
-      execFileFn: plainVersions,
-      logger: { warn: () => {}, error: (m) => errors.push(m) },
-    }).start({ prompt: 'p', cwd: '/proj' }, () => {});
-    await Promise.resolve();
-    expect(plainVersions).not.toHaveBeenCalled();
-    expect(errors).toEqual([]);
   });
 
   it('adds the stdio permission flags in ask mode and none in plain chat', () => {
@@ -679,7 +414,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   });
 
   it('reports the tool it asks the user with, so no service spells the name', () => {
-    expect(new ClaudeAdapter().questionToolName).toBe('AskUserQuestion');
+    expect(new ClaudeAdapter().config.questionToolName).toBe('AskUserQuestion');
   });
 
   it('degrades a PROVEN-unsupported acceptEdits to ask, and says so', () => {
@@ -710,19 +445,22 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
   it('declares the modes it honours, which of them are empirical, and how calls reach it', () => {
     const adapter = new ClaudeAdapter();
-    expect(adapter.approvalModes).toEqual([
+    expect(adapter.config.approval.modes).toEqual([
       'auto',
       'ask',
       'acceptEdits',
       'plan',
     ]);
-    // Only these two cost a run a probe turn — the pair `claudeApprovalSupport`
-    // translates.
-    expect(adapter.probedApprovalModes).toEqual(['acceptEdits', 'plan']);
+    // Only these two cost a run a probe turn — the pair `approvalSupportFrom`
+    // translates out of the capability bag.
+    expect(adapter.config.approval.probedModes).toEqual([
+      'acceptEdits',
+      'plan',
+    ]);
     // The endpoint rides --mcp-config per turn: no machine trust to establish,
     // and nothing written into the user's cwd.
-    expect(adapter.callToolsRequireTrustProbe).toBe(false);
-    expect(adapter.mcpEndpointRequiresCwdConfig).toBe(false);
+    expect(adapter.config.mcp.callToolsRequireTrustProbe).toBe(false);
+    expect(adapter.config.mcp.endpointRequiresCwdConfig).toBe(false);
   });
 
   it('asks for token-level output only when the turn wants it', () => {
@@ -1134,5 +872,574 @@ describe('ClaudeAdapter image attachments', () => {
       message: { content: { type: string }[] };
     };
     expect(payload.message.content).toEqual([{ type: 'text', text: 'hello' }]);
+  });
+});
+
+describe('ClaudeAdapter — installed approval support', () => {
+  function verdict(
+    overrides: Partial<ClaudeModesCapability> = {},
+  ): ClaudeModesCapability {
+    return {
+      acceptEdits: 'unknown',
+      plan: 'unknown',
+      version: null,
+      probedAt: null,
+      reason: null,
+      ...overrides,
+    };
+  }
+
+  it('maps an unprobed mode to ABSENT, never to false', () => {
+    // The distinction the whole degrade rests on: `false` means "proved
+    // rejected" and degrades the turn, while absent means "nobody asked" and
+    // must leave the requested mode alone. Collapsing `unknown` into `false`
+    // would silently downgrade every turn on a machine that has not probed yet.
+    const support = new ClaudeAdapter().approvalSupportFrom({
+      claudeModes: verdict(),
+    });
+    expect(support.supported).toEqual({});
+    expect('acceptEdits' in support.supported).toBe(false);
+  });
+
+  it('maps a pass to true and a fail to false, per mode', () => {
+    expect(
+      new ClaudeAdapter().approvalSupportFrom({
+        claudeModes: verdict({ acceptEdits: 'fail', plan: 'pass' }),
+      }).supported,
+    ).toEqual({ acceptEdits: false, plan: true });
+  });
+
+  it('carries only the probed modes — nothing is invented for the rest', () => {
+    const support = new ClaudeAdapter().approvalSupportFrom({
+      claudeModes: verdict({ acceptEdits: 'pass', plan: 'fail' }),
+    });
+    expect(Object.keys(support.supported).sort()).toEqual([
+      'acceptEdits',
+      'plan',
+    ]);
+  });
+});
+
+describe('ClaudeAdapter — the AskUserQuestion channel', () => {
+  const QUESTION_INPUT = {
+    questions: [
+      {
+        question: 'Which color?',
+        header: 'Color',
+        options: [{ label: 'Red' }, { label: 'Blue' }],
+      },
+    ],
+  };
+
+  it('projects the tool input into the CLI-agnostic question shape', () => {
+    // The consumers (the graph executor's Q&A bridge) hold this projection,
+    // never claude's payload — so the header qualification and the FLAT option
+    // list are the adapter's promise, not the executor's.
+    expect(new ClaudeAdapter().questionFrom(QUESTION_INPUT)).toEqual({
+      text: '[Color] Which color?',
+      options: ['Red', 'Blue'],
+    });
+  });
+
+  it('folds an answer into the tool input as AskUserQuestion `response`', () => {
+    // The probe-verified free-text channel: the answer must ride INSIDE the
+    // tool input claude gets back, with the questions left intact.
+    expect(new ClaudeAdapter().withAnswer(QUESTION_INPUT, 'Blue')).toEqual({
+      ...QUESTION_INPUT,
+      response: 'Blue',
+    });
+  });
+});
+
+describe('ClaudeAdapter — skills and commands on disk', () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function tempDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    dirs.push(dir);
+    return dir;
+  }
+
+  function writeSkill(root: string, name: string, frontmatter: string): void {
+    const dir = join(root, '.claude', 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), `---\n${frontmatter}\n---\nBody.\n`);
+  }
+
+  function writeCommand(root: string, relPath: string, content: string): void {
+    const path = join(root, '.claude', 'commands', relPath);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
+
+  function build(): { cwd: string; homeDir: string } {
+    return { cwd: tempDir('claude-cwd-'), homeDir: tempDir('claude-home-') };
+  }
+
+  it('scans skills and commands from the project folder and from ~', async () => {
+    const { cwd, homeDir } = build();
+    writeSkill(cwd, 'deploy', 'name: deploy\ndescription: Ship it');
+    writeCommand(cwd, 'review.md', '---\ndescription: Review\n---\n');
+    writeSkill(homeDir, 'zsh-help', 'description: Home skill');
+    writeCommand(homeDir, 'auth.md', 'Check auth flows.');
+
+    expect(await new ClaudeAdapter().listSkills({ cwd, homeDir })).toEqual([
+      {
+        name: 'deploy',
+        description: 'Ship it',
+        kind: 'skill',
+        source: 'project',
+      },
+      {
+        name: 'review',
+        description: 'Review',
+        kind: 'command',
+        source: 'project',
+      },
+      {
+        name: 'zsh-help',
+        description: 'Home skill',
+        kind: 'skill',
+        source: 'user',
+      },
+      {
+        name: 'auth',
+        description: 'Check auth flows.',
+        kind: 'command',
+        source: 'user',
+      },
+    ]);
+  });
+
+  it('returns project before user, and a skill before a same-named command', async () => {
+    // The ORDER is the contract: the caller de-dupes first-occurrence-wins, so
+    // this is what makes it keep the entry claude would actually run. The base
+    // reproduces it by iterating roots outer, skills-then-commands inner.
+    const { cwd, homeDir } = build();
+    writeSkill(cwd, 'deploy', 'name: deploy\ndescription: Project skill');
+    writeCommand(cwd, 'deploy.md', '---\ndescription: Project command\n---\n');
+    writeSkill(homeDir, 'deploy', 'name: deploy\ndescription: User skill');
+
+    const found = await new ClaudeAdapter().listSkills({ cwd, homeDir });
+    expect(found.map((entry) => entry.description)).toEqual([
+      'Project skill',
+      'Project command',
+      'User skill',
+    ]);
+  });
+
+  it('returns [] when no skill/command directories exist at all', async () => {
+    const { cwd, homeDir } = build();
+    await expect(
+      new ClaudeAdapter().listSkills({ cwd, homeDir }),
+    ).resolves.toEqual([]);
+  });
+
+  it('never reads cursor-agent roots', async () => {
+    const { cwd, homeDir } = build();
+    mkdirSync(join(cwd, '.cursor', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.cursor', 'commands', 'fix.md'), 'Fix it.');
+
+    await expect(
+      new ClaudeAdapter().listSkills({ cwd, homeDir }),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe('ClaudeAdapter — live (token-level) stream support', () => {
+  /** Answers the utility command with canned stdout, capturing its argv. */
+  function fakeHelp(stdout: string | null): {
+    execFileFn: typeof execFile;
+    captured: { args?: readonly string[]; calls: number };
+  } {
+    const captured: { args?: readonly string[]; calls: number } = { calls: 0 };
+    const execFileFn = ((
+      _cmd: string,
+      args: readonly string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      captured.args = args;
+      captured.calls += 1;
+      cb(stdout === null ? new Error('spawn failed') : null, stdout ?? '');
+      return {} as ChildProcess;
+    }) as unknown as typeof execFile;
+    return { execFileFn, captured };
+  }
+
+  it('reads support off the binary that would reject the flag', async () => {
+    // `--help` is the cheapest honest source: same binary, no account, no turn.
+    const { execFileFn, captured } = fakeHelp(
+      '  --verbose\n  --include-partial-messages   Include partial message chunks\n',
+    );
+
+    await expect(
+      new ClaudeAdapter({ execFileFn }).supportsLiveStream(),
+    ).resolves.toBe(true);
+    expect(captured.args).toEqual(['--help']);
+  });
+
+  it('answers NO for an older CLI, so turns degrade to block streaming', async () => {
+    // The whole point of asking: passing the flag to a CLI that does not know
+    // it fails every turn on argv, which is far worse than not streaming.
+    const { execFileFn } = fakeHelp('  --verbose\n  --model\n');
+
+    await expect(
+      new ClaudeAdapter({ execFileFn }).supportsLiveStream(),
+    ).resolves.toBe(false);
+  });
+
+  it('answers NO when the binary could not be asked at all, and asks once', async () => {
+    const { execFileFn, captured } = fakeHelp(null);
+    const adapter = new ClaudeAdapter({ execFileFn });
+
+    await expect(adapter.supportsLiveStream()).resolves.toBe(false);
+    // Memoized per adapter instance: a second turn must not re-spawn --help.
+    await expect(adapter.supportsLiveStream()).resolves.toBe(false);
+    expect(captured.calls).toBe(1);
+  });
+});
+
+describe('ClaudeAdapter — commands the CLI reports about itself', () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function tempDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    dirs.push(dir);
+    return dir;
+  }
+
+  /** The `system/init` line the CLI reports its invokable set on. */
+  function initLine(commands: string[]): string {
+    return `${JSON.stringify({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'probe-1',
+      slash_commands: commands,
+    })}\n`;
+  }
+
+  /** A killable child plus what the probe turn was spawned with. */
+  function probeSpawn(): {
+    spawn: SpawnFn;
+    child: KillableChild;
+    captured: { command?: string; args?: string[]; cwd?: string };
+    cwdExistedDuringTurn: () => boolean;
+  } {
+    const inner = fakeSpawn(new KillableChild());
+    let existed = false;
+    const spawn: SpawnFn = (command, args, options) => {
+      existed = existsSync(options.cwd);
+      return inner.spawn(command, args, options);
+    };
+    return {
+      spawn,
+      child: inner.child,
+      captured: inner.captured,
+      cwdExistedDuringTurn: () => existed,
+    };
+  }
+
+  it('returns the commands the CLI reported about itself', async () => {
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear', 'compact', 'geniro:review']));
+
+    await expect(reported).resolves.toEqual([
+      'clear',
+      'compact',
+      'geniro:review',
+    ]);
+  });
+
+  it("drops claude's internal `_`-prefixed commands", async () => {
+    // `__remote-workflow` is reported but is not something a user invokes —
+    // offering it in the autocomplete would be a dead row.
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(
+      initLine(['clear', '__remote-workflow', '_hidden', 'compact']),
+    );
+
+    await expect(reported).resolves.toEqual(['clear', 'compact']);
+  });
+
+  it('caps the reported list, however much the CLI claims', async () => {
+    // A defensive bound: init reports ~60 entries today, and an autocomplete
+    // is not the place to discover that a plugin registered thousands.
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(
+      initLine(
+        Array.from(
+          { length: CLAUDE_MAX_REPORTED_COMMANDS + 100 },
+          (_, i) => `cmd-${i}`,
+        ),
+      ),
+    );
+
+    await expect(reported).resolves.toHaveLength(CLAUDE_MAX_REPORTED_COMMANDS);
+  });
+
+  it('cancels the turn the moment the list lands, before the model runs', async () => {
+    // The whole point of probing this way: init carries the list, so paying
+    // for the rest of the turn buys nothing.
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear']));
+    await reported;
+
+    expect(child.kills).toBe(1);
+    expect(child.killSignal).toBe('SIGTERM');
+  });
+
+  it('runs in a throwaway workspace under the given root, and removes it', async () => {
+    const probeRootDir = tempDir('probe-root-');
+    const { spawn, child, captured, cwdExistedDuringTurn } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir,
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear']));
+    await reported;
+
+    const cwd = captured.cwd ?? '';
+    expect(cwd.startsWith(probeRootDir)).toBe(true);
+    expect(cwdExistedDuringTurn()).toBe(true);
+    expect(existsSync(cwd)).toBe(false);
+    expect(readdirSync(probeRootDir)).toEqual([]);
+  });
+
+  it('runs the least-privileged turn — no permission bypass, no MCP endpoint', async () => {
+    // The probe never reaches a tool, so it asks for nothing that would let it:
+    // the argv is the plain stream-json head, and the prompt is the config's.
+    const { spawn, child, captured } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear']));
+    await reported;
+
+    expect(captured.args).toEqual([...CLAUDE_BASE_ARGS]);
+    expect(captured.args).not.toContain('--dangerously-skip-permissions');
+    expect(captured.args).not.toContain('--permission-mode');
+    expect(captured.args).not.toContain('--mcp-config');
+    expect(JSON.parse(child.stdin.written.trim())).toEqual({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: CLAUDE_COMMANDS_PROBE_PROMPT }],
+      },
+    });
+  });
+
+  it('reports nothing when the CLI exits before its init line', async () => {
+    // A missing binary or a failed sign-in ends the turn with no report; the
+    // caller falls back to the disk scan rather than surfacing an error.
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.emit('close', 0, null);
+
+    await expect(reported).resolves.toEqual([]);
+  });
+
+  it('reports nothing when the CLI cannot be spawned at all', async () => {
+    const spawn: SpawnFn = () => {
+      throw new Error('spawn ENOENT');
+    };
+
+    await expect(
+      new ClaudeAdapter({
+        spawn,
+        probeRootDir: tempDir('probe-root-'),
+      }).listReportedCommands(),
+    ).resolves.toEqual([]);
+  });
+
+  it('reports nothing when the probe workspace cannot even be created', async () => {
+    // Enters the probe's own catch: a probeRootDir that is a FILE makes the
+    // mkdir throw before any turn exists. Without a test that reaches it, a
+    // later "dead code" sweep deletes the guard and the read starts throwing
+    // at the composer instead of degrading to the disk scan.
+    const root = join(tempDir('probe-root-'), 'not-a-dir');
+    writeFileSync(root, 'file, not a directory');
+    const { spawn } = probeSpawn();
+
+    await expect(
+      new ClaudeAdapter({ spawn, probeRootDir: root }).listReportedCommands(),
+    ).resolves.toEqual([]);
+  });
+
+  it('gives up on a turn that never reports, rather than hanging forever', async () => {
+    // A CLI that dropped into an interactive login holds the turn open; the
+    // timeout must cancel it so the autocomplete read still completes.
+    const { spawn, child } = probeSpawn();
+
+    await expect(
+      new ClaudeAdapter({
+        spawn,
+        probeRootDir: tempDir('probe-root-'),
+      }).listReportedCommands({ timeoutMs: 10 }),
+    ).resolves.toEqual([]);
+    expect(child.kills).toBe(1);
+  });
+
+  it('hands the turn to onTurn so it can be reaped on shutdown', async () => {
+    // Every child the daemon spawns must be registered — a probe turn is no
+    // exception, and start() hands back a handle rather than a child.
+    const { spawn, child } = probeSpawn();
+    const registered: AgentTurnHandle[] = [];
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands({ onTurn: (handle) => registered.push(handle) });
+
+    child.stdout.emitData(initLine(['clear']));
+    await reported;
+
+    expect(registered.length).toBe(1);
+  });
+});
+
+describe('ClaudeAdapter — the interactive terminal mirror', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('resumes the stored claude session', () => {
+    expect(new ClaudeAdapter().terminalCommand('sess-42')).toEqual({
+      ok: true,
+      command: 'claude',
+      args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+    });
+  });
+
+  it('refuses with no-session until a resumable session id is stored', () => {
+    // Not a mirror target: launching the TUI without a resume id would open an
+    // unrelated fresh conversation while claiming to show the run's own.
+    expect(new ClaudeAdapter().terminalCommand(null)).toEqual({
+      ok: false,
+      reason: 'no-session',
+    });
+  });
+
+  it('refuses a whitespace-only session id instead of building a broken resume argv', () => {
+    expect(new ClaudeAdapter().terminalCommand(' \t\n ')).toEqual({
+      ok: false,
+      reason: 'no-session',
+    });
+  });
+
+  it('refuses a zero-width-only session id instead of an invisible resume target', () => {
+    // U+200B is not trimmed as whitespace, so only the id PATTERN rejects it.
+    expect(new ClaudeAdapter().terminalCommand('\u200b')).toEqual({
+      ok: false,
+      reason: 'no-session',
+    });
+  });
+
+  it('mirrors through the GENIRO_CLAUDE_BIN override path', () => {
+    // The mirror spawns the same binary a turn would — resolved per access, so
+    // a Settings cliPaths override reaches the TUI too.
+    vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
+    expect(new ClaudeAdapter().terminalCommand('sess-42')).toEqual({
+      ok: true,
+      command: '/opt/tools/claude',
+      args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+    });
+  });
+});
+
+describe('ClaudeAdapter — models', () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  function emptyHome(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-no-cache-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  it('floors the picker with the set its CONFIG declares, not the shipped const', async () => {
+    // `config.builtinModels` is documented as THE fallback contract — "what a
+    // CLI that cannot be asked answers with so the picker is never empty" — so
+    // it must be what listModels actually reads. An adapter whose config
+    // carries a different floor answers with THAT floor; reaching past config
+    // to CLAUDE_BUILTIN_MODELS would leave the field write-only, and this test
+    // is the thing that fails when someone does.
+    class ConfiguredClaudeAdapter extends ClaudeAdapter {
+      override readonly config: AdapterConfig = {
+        ...CLAUDE_CONFIG,
+        builtinModels: [
+          {
+            id: 'pinned-floor-model',
+            label: 'Pinned floor',
+            source: 'builtin',
+          },
+        ],
+      };
+    }
+
+    const models = await new ConfiguredClaudeAdapter({
+      homeDir: emptyHome(),
+    }).listModels();
+
+    expect(models).toEqual([
+      { id: 'pinned-floor-model', label: 'Pinned floor', source: 'builtin' },
+    ]);
+  });
+
+  it('offers the shipped aliases as the floor of a stock adapter', async () => {
+    // The other half: the config the adapter actually ships must carry the
+    // documented tier aliases, so a real install's picker is never empty.
+    const models = await new ClaudeAdapter({
+      homeDir: emptyHome(),
+    }).listModels();
+
+    expect(models.map((model) => model.id)).toEqual([
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
   });
 });

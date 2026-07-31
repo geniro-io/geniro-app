@@ -1,0 +1,333 @@
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { buildCursorMcpServerEntry } from './cursor-mcp-entry.utils';
+import {
+  backupPathOf,
+  mergeGeniroEntry,
+  restoreGeniroEntry,
+} from './cursor-mcp-file.utils';
+
+const ENTRY = buildCursorMcpServerEntry({
+  url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
+  token: 'tok-secret',
+});
+
+const cwds: string[] = [];
+afterEach(() => {
+  for (const cwd of cwds.splice(0)) {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+function tempCwd(): string {
+  const cwd = mkdtempSync(join(tmpdir(), 'cursor-mcp-file-spec-'));
+  cwds.push(cwd);
+  return cwd;
+}
+
+function configPath(cwd: string): string {
+  return join(cwd, '.cursor', 'mcp.json');
+}
+
+function readConfig(cwd: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(configPath(cwd), 'utf8')) as Record<
+    string,
+    unknown
+  >;
+}
+
+describe('mergeGeniroEntry / restoreGeniroEntry', () => {
+  it('creates a 0600 file when none exists, and restore deletes it entirely', () => {
+    const cwd = tempCwd();
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    expect(result).toEqual({ ok: true, created: true });
+    expect(readConfig(cwd)).toEqual({ mcpServers: { geniro: ENTRY } });
+    expect(statSync(configPath(cwd)).mode & 0o777).toBe(0o600);
+    expect(existsSync(backupPathOf(cwd))).toBe(false);
+
+    restoreGeniroEntry(cwd, { created: true });
+    expect(existsSync(configPath(cwd))).toBe(false);
+  });
+
+  it('merges into an existing file with a backup; restore removes ONLY the geniro key and keeps user edits made mid-turn', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const original = {
+      mcpServers: { userServer: { command: 'my-mcp' } },
+      other: 'setting',
+    };
+    writeFileSync(configPath(cwd), JSON.stringify(original), 'utf8');
+
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    expect(result).toMatchObject({ ok: true, created: false });
+    // The original mode is recorded so restore can put it back.
+    expect((result as { mode?: number }).mode).toBeTypeOf('number');
+    expect(readConfig(cwd)).toEqual({
+      mcpServers: { userServer: { command: 'my-mcp' }, geniro: ENTRY },
+      other: 'setting',
+    });
+    expect(JSON.parse(readFileSync(backupPathOf(cwd), 'utf8'))).toEqual(
+      original,
+    );
+
+    // The user edits the file WHILE the agent runs — those edits must survive.
+    const midTurn = readConfig(cwd);
+    (midTurn.mcpServers as Record<string, unknown>).addedMidTurn = {
+      command: 'new',
+    };
+    writeFileSync(configPath(cwd), JSON.stringify(midTurn), 'utf8');
+
+    restoreGeniroEntry(cwd, { created: false });
+    expect(readConfig(cwd)).toEqual({
+      mcpServers: {
+        userServer: { command: 'my-mcp' },
+        addedMidTurn: { command: 'new' },
+      },
+      other: 'setting',
+    });
+    expect(existsSync(backupPathOf(cwd))).toBe(false);
+  });
+
+  it('merges via an atomic temp+rename so the token file is never briefly world-readable', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const path = configPath(cwd);
+    writeFileSync(path, JSON.stringify({ mcpServers: {} }), 'utf8');
+    // A user's file is commonly group/world-readable (0644). The merged file
+    // carries a bearer call token and must land 0600 with NO in-between window.
+    chmodSync(path, 0o644);
+    const before = statSync(path).ino;
+
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    expect(result).toMatchObject({ ok: true, created: false });
+
+    // End state is owner-only, and the token content actually landed.
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readConfig(cwd)).toMatchObject({ mcpServers: { geniro: ENTRY } });
+    // Atomic replace: the token was written to a fresh 0600 sibling and renamed
+    // over the file, so the inode changed. The reverted bug — an in-place
+    // writeFileSync — truncates the SAME inode and keeps its 0644 mode until a
+    // follow-up chmod; that is the world-readable window this pins shut.
+    expect(statSync(path).ino).not.toBe(before);
+    // The temp sibling is consumed by the rename — no loose-mode leftover.
+    expect(existsSync(`${path}.geniro-tmp`)).toBe(false);
+  });
+
+  it('restore sweeps a .geniro-tmp orphaned by a crash between write and rename', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const tmp = `${configPath(cwd)}.geniro-tmp`;
+    // Simulate the staging temp a merge stranded when it died before renameSync
+    // (0600, holds an already-revoked token).
+    writeFileSync(tmp, '{"mcpServers":{"geniro":{}}}', { mode: 0o600 });
+    expect(existsSync(tmp)).toBe(true);
+
+    // restore is the one cleanup path both settle and the boot reconcile take.
+    restoreGeniroEntry(cwd, { created: false });
+    expect(existsSync(tmp)).toBe(false);
+  });
+
+  it('refuses an unparseable file without writing anything', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    writeFileSync(configPath(cwd), '{not json', 'utf8');
+
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { reason: string }).reason).toContain('not valid JSON');
+    expect(readFileSync(configPath(cwd), 'utf8')).toBe('{not json');
+    expect(existsSync(backupPathOf(cwd))).toBe(false);
+  });
+
+  it('refuses when a foreign geniro entry already occupies the key', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const original = JSON.stringify({
+      mcpServers: { geniro: { command: 'the-users-own' } },
+    });
+    writeFileSync(configPath(cwd), original, 'utf8');
+
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { reason: string }).reason).toContain('not ours');
+    expect(readFileSync(configPath(cwd), 'utf8')).toBe(original);
+  });
+
+  it('byte-restores from the backup when the merged file no longer parses', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const original = JSON.stringify({ mcpServers: { keep: { command: 'x' } } });
+    writeFileSync(configPath(cwd), original, 'utf8');
+    expect(mergeGeniroEntry(cwd, ENTRY)).toMatchObject({
+      ok: true,
+      created: false,
+    });
+
+    // Simulate a torn write during the turn.
+    writeFileSync(configPath(cwd), '{torn', 'utf8');
+    restoreGeniroEntry(cwd, { created: false });
+    expect(readFileSync(configPath(cwd), 'utf8')).toBe(original);
+    expect(existsSync(backupPathOf(cwd))).toBe(false);
+  });
+
+  it('reports an unparseable created file as still needing recovery', () => {
+    const cwd = tempCwd();
+    expect(mergeGeniroEntry(cwd, ENTRY)).toEqual({
+      ok: true,
+      created: true,
+    });
+    writeFileSync(configPath(cwd), '{torn', 'utf8');
+
+    expect(restoreGeniroEntry(cwd, { created: true })).toBe(false);
+    expect(readFileSync(configPath(cwd), 'utf8')).toBe('{torn');
+  });
+
+  it('restore of a geniro-created file must not delete a file the user REPLACED mid-turn with their own config', () => {
+    const cwd = tempCwd();
+    expect(mergeGeniroEntry(cwd, ENTRY)).toEqual({ ok: true, created: true });
+
+    // The user replaced the created file with their own config while the
+    // agent ran — from here on the file is user data, not ours to delete.
+    const theirs = {
+      mcpServers: { theirServer: { command: 'their-mcp' } },
+    };
+    writeFileSync(configPath(cwd), JSON.stringify(theirs), 'utf8');
+
+    restoreGeniroEntry(cwd, { created: true });
+    expect(existsSync(configPath(cwd))).toBe(true);
+    expect(readConfig(cwd)).toEqual(theirs);
+  });
+
+  it('restore of a geniro-created file keeps server entries the user added mid-turn, removing only the geniro key', () => {
+    const cwd = tempCwd();
+    expect(mergeGeniroEntry(cwd, ENTRY)).toEqual({ ok: true, created: true });
+
+    // The user added their own server to the created file while the agent
+    // ran — deleting the whole file would destroy that entry.
+    const midTurn = readConfig(cwd);
+    (midTurn.mcpServers as Record<string, unknown>).addedMidTurn = {
+      command: 'new',
+    };
+    writeFileSync(configPath(cwd), JSON.stringify(midTurn), 'utf8');
+
+    restoreGeniroEntry(cwd, { created: true });
+    expect(readConfig(cwd)).toEqual({
+      mcpServers: { addedMidTurn: { command: 'new' } },
+    });
+  });
+
+  it('restore removes a substituted reserved geniro entry', () => {
+    const cwd = tempCwd();
+    expect(mergeGeniroEntry(cwd, ENTRY)).toEqual({ ok: true, created: true });
+    const theirs = {
+      mcpServers: { geniro: { command: 'user-owned-server' } },
+    };
+    writeFileSync(configPath(cwd), JSON.stringify(theirs), 'utf8');
+
+    restoreGeniroEntry(cwd, { created: true });
+
+    expect(existsSync(configPath(cwd))).toBe(false);
+  });
+
+  it('restores the original mode when the user removes the geniro key mid-turn', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const original = { mcpServers: { keep: { command: 'x' } } };
+    writeFileSync(configPath(cwd), JSON.stringify(original), 'utf8');
+    chmodSync(configPath(cwd), 0o644);
+    const merged = mergeGeniroEntry(cwd, ENTRY);
+    expect(merged).toMatchObject({ ok: true, created: false, mode: 0o644 });
+
+    writeFileSync(configPath(cwd), JSON.stringify(original), 'utf8');
+    restoreGeniroEntry(cwd, { created: false, mode: 0o644 });
+
+    expect(readConfig(cwd)).toEqual(original);
+    expect(statSync(configPath(cwd)).mode & 0o777).toBe(0o644);
+  });
+
+  it('refuses to write the bearer token through a dangling mcp.json symlink', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const target = join(cwd, 'outside-mcp.json');
+    symlinkSync('../outside-mcp.json', configPath(cwd));
+
+    try {
+      mergeGeniroEntry(cwd, ENTRY);
+    } catch {
+      // Refusal may be reported as either a result or a filesystem error.
+    }
+
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('a refused staging symlink does not leave recovery data that blocks a safe retry', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    const path = configPath(cwd);
+    const tmp = `${path}.geniro-tmp`;
+    const original = JSON.stringify({ mcpServers: { mine: { command: 'x' } } });
+    writeFileSync(path, original, 'utf8');
+    symlinkSync('../outside-mcp.json', tmp);
+
+    expect(mergeGeniroEntry(cwd, ENTRY)).toMatchObject({ ok: false });
+    rmSync(tmp);
+
+    const retry = mergeGeniroEntry(cwd, ENTRY);
+    expect(retry).toMatchObject({ ok: true });
+    if (retry.ok) {
+      expect(
+        restoreGeniroEntry(cwd, {
+          created: retry.created,
+          mode: retry.mode,
+        }),
+      ).toBe(true);
+    }
+    expect(readFileSync(path, 'utf8')).toBe(original);
+  });
+
+  it('a merge+restore round-trip never corrupts a parseable file whose mcpServers is not an object', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    // Valid JSON, unexpected shape — spreading an array into an object turns
+    // it into {"0": …} keys, a shape the surgical restore cannot undo.
+    const original = { mcpServers: ['not', 'an', 'object'] };
+    writeFileSync(configPath(cwd), JSON.stringify(original), 'utf8');
+
+    const result = mergeGeniroEntry(cwd, ENTRY);
+    if (result.ok) {
+      restoreGeniroEntry(cwd, { created: result.created });
+    }
+    // Whatever merge decided (merge or refuse), the user's file must come out
+    // of the round trip byte-meaning-identical: mcpServers stays an ARRAY.
+    expect(readConfig(cwd)).toEqual(original);
+  });
+
+  it('drops the backup quietly when the user deleted the file mid-turn', () => {
+    const cwd = tempCwd();
+    mkdirSync(join(cwd, '.cursor'), { recursive: true });
+    writeFileSync(configPath(cwd), JSON.stringify({ mcpServers: {} }), 'utf8');
+    expect(mergeGeniroEntry(cwd, ENTRY)).toMatchObject({
+      ok: true,
+      created: false,
+    });
+
+    rmSync(configPath(cwd), { force: true });
+    restoreGeniroEntry(cwd, { created: false });
+    expect(existsSync(configPath(cwd))).toBe(false);
+    expect(existsSync(backupPathOf(cwd))).toBe(false);
+  });
+});

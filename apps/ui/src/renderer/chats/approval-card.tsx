@@ -78,7 +78,7 @@ function combinedAnswer(
  * input — the card then falls back to the plain approve/deny body.
  *
  * TWIN PARSER: the daemon parses the same wire shape in
- * apps/daemon/src/v1/agents/adapters/claude/question-payload.ts (no
+ * apps/daemon/src/v1/agents/adapters/claude/utils/claude-question.utils.ts (no
  * daemon↔renderer shared package exists) — a shape drift fixed there must be
  * mirrored here, and vice versa. Mirrored rules: option labels are kept only
  * when non-empty and ≤ MAX_ANSWER_LENGTH; `header` only when non-empty and

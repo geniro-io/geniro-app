@@ -12,13 +12,12 @@ import type {
   ApprovalResolution,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
-import {
-  optionLabelsOf,
-  questionTextOf,
-  withResponse,
-} from '../../agents/adapters/claude/question-payload';
+import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import { CursorMcpMergeService } from '../../agents/adapters/cursor/cursor-mcp-merge.service';
+import { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
 import type {
   ClaudeModesCapability,
+  CursorCallsCapability,
   ItemWire,
   RunWire,
 } from '../../agents/chat.types';
@@ -28,8 +27,6 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
-import { ClaudeProbeService } from '../../agents/services/claude-probe.service';
-import { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
@@ -53,7 +50,6 @@ import {
 import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
-  CursorCallsCapability,
   NodeStateWire,
   Workflow,
   WorkflowAgentNode,
@@ -71,7 +67,6 @@ import {
 } from '../utils/graph-validate';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
-import { CursorProbeService } from './cursor-probe.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
@@ -119,7 +114,7 @@ function hasTrustProbedCaller(
     const from = byId.get(edge.from);
     return (
       from?.kind === 'agent' &&
-      adapterFor(from.agent).callToolsRequireTrustProbe
+      adapterFor(from.agent).config.mcp.callToolsRequireTrustProbe
     );
   });
 }
@@ -136,7 +131,9 @@ function hasProbedApprovalMode(
   return workflow.nodes.some(
     (node) =>
       node.kind === 'agent' &&
-      adapterFor(node.agent).probedApprovalModes.includes(node.approval),
+      adapterFor(node.agent).config.approval.probedModes.includes(
+        node.approval,
+      ),
   );
 }
 
@@ -747,7 +744,7 @@ export class GraphExecutorService {
      * gate.
      */
     const callCapable = (node: WorkflowAgentNode): boolean =>
-      !this.adapterFor(node.agent).callToolsRequireTrustProbe ||
+      !this.adapterFor(node.agent).config.mcp.callToolsRequireTrustProbe ||
       cursorCalls.status === 'pass';
 
     /** Nodes that hold the call tools in THIS run (callers, not callees). */
@@ -795,7 +792,7 @@ export class GraphExecutorService {
       // The escalation half differs per CLI, and the tool's NAME is the
       // adapter's to spell: a caller whose CLI has a question channel can
       // relay to the user; one without it can only answer-or-time-out.
-      const questionTool = this.adapterFor(node.agent).questionToolName;
+      const questionTool = this.adapterFor(node.agent).config.questionToolName;
       const questionLine =
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
@@ -954,7 +951,7 @@ export class GraphExecutorService {
        * so it keeps its requested mode.
        */
       const questionCapable =
-        adapter.questionToolName !== null &&
+        adapter.config.questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
       const input: AgentTurnInput = {
@@ -1005,7 +1002,7 @@ export class GraphExecutorService {
             // (card or daemon auto-approve per node.approval) with a warning
             // so the drift is loud, never silent.
             const isQuestion = isUserQuestion(
-              adapter.questionToolName,
+              adapter.config.questionToolName,
               event.toolName,
             );
             if (!isQuestion && event.requiresUserInteraction === true) {
@@ -1017,26 +1014,31 @@ export class GraphExecutorService {
               // A call-initiated callee's question goes to its CALLER (the
               // M4 Q&A bridge) — never to a renderer card. The broker parks
               // it; answer_agent delivers the answer through these closures.
-              const parked = this.callBroker.parkQuestion(
-                runId,
-                callContext.callId,
-                {
-                  question: questionTextOf(event.input),
-                  options: optionLabelsOf(event.input),
+              //
+              // The payload is the CLI's own, so the ADAPTER projects it and
+              // folds the answer back in: the executor bridges the question
+              // without ever knowing which CLI's shape it is carrying.
+              const question = adapter.questionFrom(event.input);
+              const parked =
+                question !== null &&
+                this.callBroker.parkQuestion(runId, callContext.callId, {
+                  question: question.text,
+                  options: question.options,
                   payload: event.input,
                   deliver: (answer) =>
                     handle.respondApproval(
                       event.id,
                       true,
-                      withResponse(event.input, answer),
+                      adapter.withAnswer(event.input, answer),
                     ),
                   fail: () => handle.cancel(),
-                },
-              );
+                });
               if (!parked) {
                 // Unknown/settled call (or a second question raced the
                 // first) — deny so the callee continues instead of hanging
-                // on a question nobody can answer.
+                // on a question nobody can answer. An adapter that projects
+                // NO question takes this path too: parking a blank question
+                // would strand the caller on something it cannot answer.
                 handle.respondApproval(event.id, false);
               }
               return;
@@ -1089,7 +1091,7 @@ export class GraphExecutorService {
                   // helper with the chat service) so the verdict channel
                   // can never mutate an arbitrary tool's input.
                   foldApprovalAnswer(
-                    adapter.questionToolName,
+                    adapter,
                     event.toolName,
                     event.input,
                     allow,
@@ -1106,7 +1108,7 @@ export class GraphExecutorService {
                       // transcript must never claim an answer the agent
                       // did not receive.
                       ...(answerFoldsInto(
-                        adapter.questionToolName,
+                        adapter.config.questionToolName,
                         event.toolName,
                         allow,
                         answer,
@@ -1123,7 +1125,7 @@ export class GraphExecutorService {
         });
       };
       const handle: AgentTurnHandle =
-        adapter.mcpEndpointRequiresCwdConfig && input.mcpEndpoint
+        adapter.config.mcp.endpointRequiresCwdConfig && input.mcpEndpoint
           ? startCursorCallerTurn(
               adapter,
               node,

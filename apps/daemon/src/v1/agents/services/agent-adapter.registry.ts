@@ -26,10 +26,13 @@ export class AgentAdapterRegistry {
   private readonly byKind: ReadonlyMap<AgentKind, AgentAdapter>;
 
   constructor(claude: ClaudeAdapter, cursor: CursorAdapter) {
-    this.byKind = new Map<AgentKind, AgentAdapter>([
-      ['claude', claude],
-      ['cursor-agent', cursor],
-    ]);
+    // Keyed off each adapter's OWN `config.kind` rather than a literal spelled
+    // here: the kind is already declared once, in that CLI's const file, and a
+    // second spelling is a place for the two to disagree — a mis-keyed entry
+    // would route every turn of one CLI to the other's binary, silently.
+    this.byKind = new Map<AgentKind, AgentAdapter>(
+      [claude, cursor].map((adapter) => [adapter.config.kind, adapter]),
+    );
   }
 
   /** The adapter driving one agent kind. */

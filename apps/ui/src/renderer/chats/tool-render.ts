@@ -17,7 +17,7 @@ import { editDiffOf } from './diff-view';
  * they never pass through a typed daemon response, so no generated type
  * describes them and every field is read defensively. The daemon's matching
  * knowledge lives in `apps/daemon/src/v1/agents/adapters/claude/` (see
- * `question-payload.ts` for the same pattern on AskUserQuestion).
+ * `utils/claude-question.utils.ts` for the same pattern on AskUserQuestion).
  */
 export type ToolCodeBody = {
   kind: 'code';

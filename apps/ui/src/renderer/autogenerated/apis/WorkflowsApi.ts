@@ -41,6 +41,10 @@ export interface WorkflowsApiDeleteWorkflowRequest {
     slug: string;
 }
 
+export interface WorkflowsApiDeleteWorkflowRunRequest {
+    runId: string;
+}
+
 export interface WorkflowsApiExportWorkflowRequest {
     slug: string;
     exportWorkflowDto: ExportWorkflowDto;
@@ -207,6 +211,51 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async deleteWorkflow(requestParameters: WorkflowsApiDeleteWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
         const response = await this.deleteWorkflowRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async deleteWorkflowRunRaw(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeletedDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling deleteWorkflowRun().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async deleteWorkflowRun(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
+        const response = await this.deleteWorkflowRunRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

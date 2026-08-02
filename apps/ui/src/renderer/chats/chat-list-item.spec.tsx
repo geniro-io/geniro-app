@@ -277,14 +277,21 @@ describe('ChatListItem', () => {
     expect(container.textContent).not.toContain('daemon PATCH failed');
   });
 
-  it('a WORKFLOW row offers neither rename nor delete', async () => {
-    // Its name comes from the workflow it ran and its lifecycle belongs to the
-    // Graphs library — both are out of this list's scope.
-    const container = await mount(
-      <ChatListItem {...props({ isWorkflow: true })} />,
-    );
+  it('a WORKFLOW row offers delete but not rename', async () => {
+    // Its NAME comes from the workflow it ran, so renaming here would read as
+    // editing the library entry from another view. Deleting does not: the row
+    // is one run's history, and the workflow stays in the library. Gating the
+    // two together is what left these rows undeletable.
+    const p = props({ isWorkflow: true });
+    const container = await mount(<ChatListItem {...p} />);
     expect(buttonLabelled(container, 'Rename Review team')).toBeNull();
-    expect(buttonLabelled(container, 'Delete Review team')).toBeNull();
+
+    await act(async () => {
+      buttonLabelled(container, 'Delete Review team').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(p.onDelete).toHaveBeenCalledWith('run-1');
     // The row still activates.
     expect(buttonLabelled(container, 'Review team')).not.toBeNull();
   });

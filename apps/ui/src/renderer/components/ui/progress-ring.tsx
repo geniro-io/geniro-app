@@ -1,6 +1,18 @@
 import { cn } from './utils';
 
 /**
+ * Font size as a share of the ring, by how many glyphs must fit inside it.
+ * Stepped rather than continuous: three sizes cover every label this ring is
+ * meant to hold ("9", "16%", "100%"), and a formula would invite longer ones.
+ */
+function centerLabelRatio(label: string): number {
+  if (label.length <= 2) {
+    return 0.4;
+  }
+  return label.length === 3 ? 0.36 : 0.29;
+}
+
+/**
  * A small unfilled-circle progress indicator: a token-coloured track ring with
  * an arc that fills clockwise to `fraction` (0..1, clamped). The arc draws in
  * `currentColor`, so callers set its tone with a text-* class; the track reads
@@ -72,7 +84,10 @@ export function ProgressRing({
           // `currentColor` matches the arc, and the size is derived from the
           // ring so one prop still controls the whole component's scale.
           fill="currentColor"
-          fontSize={size * 0.4}
+          // Scaled by BOTH the ring and the label's length: the inner well is
+          // only `size - 2 * strokeWidth` wide, so a fixed ratio that seats
+          // "16" nicely spills "16%" — and "100%" — over the arc.
+          fontSize={size * centerLabelRatio(centerLabel)}
           // The ring already carries the accessible name; the glyphs would
           // otherwise be read out a second time.
           aria-hidden>

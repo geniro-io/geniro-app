@@ -6,7 +6,6 @@ import {
   NotFoundException,
 } from '@packages/common';
 
-import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import {
@@ -49,6 +48,7 @@ import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
 
 function parsePayload(raw: string): unknown {
@@ -58,14 +58,6 @@ function parsePayload(raw: string): unknown {
     return raw;
   }
 }
-
-/**
- * How long `delete` waits for a cancelled turn to finish writing before it
- * destroys the run's rows anyway. Bounded on purpose: a wedged child must not
- * hang a delete the user asked for, and `cancel()` already escalates
- * SIGTERM→SIGKILL well inside this window.
- */
-const DELETE_SETTLE_TIMEOUT_MS = 5_000;
 
 /**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
@@ -117,7 +109,7 @@ export class ChatService {
     private readonly skillHarvest: SkillHarvestStore,
     private readonly attachments: AttachmentStoreService,
     private readonly partials: PartialStreamService,
-    private readonly callTokens: CallTokenRegistry,
+    private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
   ) {}
 
@@ -479,18 +471,11 @@ export class ChatService {
   }
 
   /**
-   * Delete a chat and everything it owns. A ONE-WAY DOOR — there is no trash
-   * and none is planned, so nothing here is recoverable.
-   *
-   * Order matters. The live turn is stopped FIRST: a running turn writes items
-   * as it goes, so deleting its rows underneath it would let the turn re-create
-   * some of them after the delete "finished".
-   *
-   * Every store the run touched is then cleared, because none of them cascade:
-   * `Item.runId` is a plain string column with no FK, `node_state` is keyed by
-   * `(runId, nodeId)`, attachments are files on disk, PTY mirrors are in
-   * memory, and call tokens are in a registry. A delete that dropped only the
-   * `runs` row would leave every one of those behind, invisible and unreachable.
+   * Delete a chat and everything it owns — a ONE-WAY DOOR. The teardown itself
+   * is {@link RunTeardownService}, shared with the workflow-run delete so the
+   * two cannot drift; what this method owns is the chat-specific part: the
+   * run-kind guard, the claim→register window, and WHICH promise counts as
+   * "the run has stopped writing" (this turn's finalizer, not its handle).
    */
   async delete(runId: string): Promise<{ deleted: boolean }> {
     const em = this.em.fork();
@@ -503,48 +488,10 @@ export class ChatService {
     // rather than registering behind our back.
     this.deleting.add(runId);
     try {
-      return await this.deleteSettled(em, runId);
+      return await this.teardown.purge(em, runId, this.finalizing.get(runId));
     } finally {
       this.deleting.delete(runId);
     }
-  }
-
-  private async deleteSettled(
-    em: EntityManager,
-    runId: string,
-  ): Promise<{ deleted: boolean }> {
-    this.registry.cancel(runId);
-    // Cancel only SIGNALS; the turn's finalizer keeps writing until it settles.
-    // Wait for it before destroying anything, or it persists a terminal item
-    // (and swept-approval rows) for a run whose `runs` row is already gone —
-    // `Item.runId` has no FK, so those inserts SUCCEED, and the result is
-    // transcript text that no route can ever reach or delete again. That is the
-    // opposite of what this method promises.
-    await this.awaitFinalized(runId);
-    // The in-memory planes this module owns. Cleared first — pure bookkeeping,
-    // and a failure here must not leave the durable rows half-deleted.
-    this.callTokens.revokeRun(runId);
-    this.partials.forgetRun(runId);
-
-    const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
-      { runId },
-      em,
-    );
-    const nodeStates = await this.nodeStateDao.hardDeleteIncludingSoftDeleted(
-      { runId },
-      em,
-    );
-    await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
-    this.attachments.removeRun(runId);
-
-    // Announced last, once the run genuinely no longer exists: modules above
-    // this one (the PTY mirror) hold per-run state and drop it on this signal.
-    this.bus.publishRunDeleted(runId);
-
-    this.logger.log(
-      `deleted chat run ${runId}: ${items} item(s), ${nodeStates} node state(s), attachments and live mirrors dropped`,
-    );
-    return { deleted: true };
   }
 
   /**
@@ -1029,38 +976,6 @@ export class ChatService {
       );
       this.registry.release(runId);
       throw err;
-    }
-  }
-
-  /**
-   * Wait for the run's in-flight turn to finish finalizing, bounded by
-   * {@link DELETE_SETTLE_TIMEOUT_MS}. Resolves immediately when nothing is in
-   * flight. A timeout is REPORTED rather than silently accepted: past it the
-   * caller destroys the rows anyway, so a straggling finalizer can still orphan
-   * a row, and the log line is the only trace of why.
-   */
-  private async awaitFinalized(runId: string): Promise<void> {
-    const finalizing = this.finalizing.get(runId);
-    if (!finalizing) {
-      return;
-    }
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        finalizing,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, DELETE_SETTLE_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
-    if (this.finalizing.get(runId) === finalizing) {
-      this.logger.warn(
-        `run ${runId} did not settle within ${DELETE_SETTLE_TIMEOUT_MS}ms — deleting anyway; a late finalizer write may orphan a row`,
-      );
     }
   }
 

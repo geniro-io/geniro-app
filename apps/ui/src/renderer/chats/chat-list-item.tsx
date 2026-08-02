@@ -154,40 +154,41 @@ export const ChatListItem = memo(function ChatListItem({
             <span className="min-w-0 flex-1 truncate text-sm font-medium">
               {label}
             </span>
-            {/* Chats only. A workflow run's name comes from the workflow it
-                ran, and its lifecycle belongs to the Graphs library — renaming
-                or destroying it from this list would edit one view's object
-                from another. */}
+            {/* Chats only: a workflow run's name comes from the workflow it
+                ran, so renaming it here would read as editing the library
+                entry from another view. */}
             {isWorkflow ? null : (
-              <>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                  aria-label={`Rename ${label}`}
-                  title="Rename"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    startEditing();
-                  }}>
-                  <Pencil className="size-3 shrink-0" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100"
-                  aria-label={`Delete ${label}`}
-                  title="Delete"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDelete(runId);
-                  }}>
-                  <Trash2 className="size-3 shrink-0" />
-                </Button>
-              </>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`Rename ${label}`}
+                title="Rename"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  startEditing();
+                }}>
+                <Pencil className="size-3 shrink-0" />
+              </Button>
             )}
+            {/* BOTH kinds. A workflow ROW is one run's history, not the
+                workflow — deleting it leaves the library entry untouched. It
+                was gated with rename before, which is why the sidebar's
+                workflow rows could not be removed at all. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100"
+              aria-label={`Delete ${label}`}
+              title="Delete"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete(runId);
+              }}>
+              <Trash2 className="size-3 shrink-0" />
+            </Button>
           </>
         )}
       </span>

@@ -217,7 +217,7 @@ describe('AgentsPanel', () => {
     const el = render(
       <AgentsPanel
         agents={[
-          withContext('calm', 45_200), // 23% → accent
+          withContext('calm', 45_200), // 23% → success
           withContext('hot', 150_000), // 75% → warning
           withContext('critical', 185_000), // 92.5% → destructive
         ]}
@@ -227,7 +227,7 @@ describe('AgentsPanel', () => {
     );
     const ring = (label: string): SVGElement =>
       el.querySelector<SVGElement>(`svg[aria-label="${label}"]`)!;
-    expect(ring('Context 23% full').classList.contains('text-primary')).toBe(
+    expect(ring('Context 23% full').classList.contains('text-success')).toBe(
       true,
     );
     expect(ring('Context 75% full').classList.contains('text-warning')).toBe(

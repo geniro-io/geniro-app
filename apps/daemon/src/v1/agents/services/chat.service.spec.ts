@@ -38,6 +38,7 @@ import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
@@ -342,6 +343,18 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     cursor.adapter as unknown as CursorAdapter,
   );
   const efforts = new EffortsService(adapters);
+  // The REAL teardown over the same fakes: `delete` is a thin caller of it, so
+  // a mock here would leave every assertion below pinning the mock.
+  const teardown = new RunTeardownService(
+    itemDao as unknown as ItemDao,
+    nodeDao as unknown as NodeStateDao,
+    runDao as unknown as RunDao,
+    bus,
+    registry,
+    callTokens,
+    partials,
+    attachments,
+  );
   const service = new ChatService(
     em,
     runDao as unknown as RunDao,
@@ -355,7 +368,7 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     skillHarvest,
     attachments,
     partials,
-    callTokens,
+    teardown,
     efforts,
   );
   return {

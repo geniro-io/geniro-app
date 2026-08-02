@@ -61,6 +61,7 @@ import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
+import { ComposerChipRow } from './composer-chip-row';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
 import { applyLiveText, CHAT_LIVE_KEY, type LiveState } from './live-text';
@@ -925,7 +926,13 @@ export function Chats({
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      await chatApi.deleteChat({ runId: deleting.id });
+      // The sidebar lists both kinds of run, and each owns its own teardown:
+      // the chat route REFUSES a workflow run (its graph executor has state
+      // the chat path knows nothing about), so routing every row through it
+      // left the workflow rows permanently undeletable.
+      await (deleting.workflowId
+        ? workflowApi.deleteWorkflowRun({ runId: deleting.id })
+        : chatApi.deleteChat({ runId: deleting.id }));
       setDeleting(null);
       if (activeRunIdRef.current === deleting.id) {
         // The open transcript belongs to a run that no longer exists: leave its
@@ -940,7 +947,7 @@ export function Chats({
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleting, chatApi, newChat]);
+  }, [deleting, chatApi, workflowApi, newChat]);
 
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
@@ -1664,122 +1671,112 @@ export function Chats({
                         }
                       }}
                     />
-                    {/* ONE line, always. The chips live in their own box so the
-                      send button is never a wrap candidate, and nothing here
-                      wraps: a crowded row makes the chips give up width (their
-                      labels truncate, full text in the tooltip and the menu)
-                      rather than spilling onto a second line and growing the
-                      card. */}
-                    <div className="flex items-center gap-2 p-2">
-                      <div className="flex min-w-0 flex-1 items-center gap-0.5">
+                    <ComposerChipRow
+                      actions={
+                        <Button
+                          type="button"
+                          size="icon"
+                          className="size-8 shrink-0 rounded-full"
+                          disabled={!hasContent || streaming}
+                          aria-label={workflowSlug ? 'Start run' : 'Send'}
+                          title={workflowSlug ? 'Start run' : 'Send'}
+                          onClick={() => void send()}>
+                          {workflowSlug ? (
+                            <Zap className="size-4 shrink-0" />
+                          ) : (
+                            <ArrowUp className="size-4 shrink-0" />
+                          )}
+                        </Button>
+                      }>
+                      <Select
+                        variant="ghost"
+                        value={target}
+                        aria-label="Agent or workflow for new runs"
+                        searchPlaceholder="Search agents, workflows…"
+                        groups={[
+                          {
+                            label: 'Agents',
+                            items: CLI_KINDS.map((kind) => ({
+                              value: kind,
+                              label: kind,
+                            })),
+                          },
+                          ...(workflows.length > 0
+                            ? [
+                                {
+                                  label: 'Workflows',
+                                  items: workflows.map((wf) => ({
+                                    value: `wf:${wf.slug}`,
+                                    label: wf.name,
+                                    icon: <WorkflowIcon />,
+                                  })),
+                                },
+                              ]
+                            : []),
+                        ]}
+                        onValueChange={changeTarget}
+                      />
+                      {!workflowSlug ? (
+                        // Only a single-agent run picks a model here — a
+                        // workflow's nodes each name their own in its YAML.
+                        <ModelSelect
+                          agentKind={agentKind}
+                          models={agentModels}
+                          value={models[agentKind] ?? null}
+                          onChange={(model) => changeModel(agentKind, model)}
+                        />
+                      ) : null}
+                      {!workflowSlug ? (
+                        // Absent, not disabled, for a CLI with no effort
+                        // control — the component decides that from an empty
+                        // list, so nothing here branches on the agent kind.
+                        <EffortSelect
+                          efforts={agentEfforts}
+                          value={efforts[agentKind] ?? null}
+                          onChange={(effort) => changeEffort(agentKind, effort)}
+                        />
+                      ) : null}
+                      <FolderSelect
+                        folder={folder}
+                        recentFolders={recentFolders}
+                        onChoose={chooseFolder}
+                        onBrowse={() => void pickFolder()}
+                      />
+                      <BranchSelect
+                        info={git.info}
+                        switching={git.switching}
+                        onSwitch={(branch) => void git.switchTo(branch)}
+                      />
+                      {workflowSlug && triggers.length > 0 ? (
                         <Select
                           variant="ghost"
-                          value={target}
-                          aria-label="Agent or workflow for new runs"
-                          searchPlaceholder="Search agents, workflows…"
+                          value={triggerId}
+                          aria-label="Trigger the run starts from"
                           groups={[
                             {
-                              label: 'Agents',
-                              items: CLI_KINDS.map((kind) => ({
-                                value: kind,
-                                label: kind,
+                              items: triggers.map((entry) => ({
+                                value: entry.id,
+                                label: `${entry.name} · ${entry.trigger} trigger`,
+                                icon: <Zap />,
                               })),
                             },
-                            ...(workflows.length > 0
-                              ? [
-                                  {
-                                    label: 'Workflows',
-                                    items: workflows.map((wf) => ({
-                                      value: `wf:${wf.slug}`,
-                                      label: wf.name,
-                                      icon: <WorkflowIcon />,
-                                    })),
-                                  },
-                                ]
-                              : []),
                           ]}
-                          onValueChange={changeTarget}
+                          onValueChange={setTriggerId}
                         />
-                        {!workflowSlug ? (
-                          // Only a single-agent run picks a model here — a
-                          // workflow's nodes each name their own in its YAML.
-                          <ModelSelect
-                            agentKind={agentKind}
-                            models={agentModels}
-                            value={models[agentKind] ?? null}
-                            onChange={(model) => changeModel(agentKind, model)}
-                          />
-                        ) : null}
-                        {!workflowSlug ? (
-                          // Absent, not disabled, for a CLI with no effort
-                          // control — the component decides that from an empty
-                          // list, so nothing here branches on the agent kind.
-                          <EffortSelect
-                            efforts={agentEfforts}
-                            value={efforts[agentKind] ?? null}
-                            onChange={(effort) =>
-                              changeEffort(agentKind, effort)
-                            }
-                          />
-                        ) : null}
-                        <FolderSelect
-                          folder={folder}
-                          recentFolders={recentFolders}
-                          onChoose={chooseFolder}
-                          onBrowse={() => void pickFolder()}
+                      ) : null}
+                      {!workflowSlug ? (
+                        // Approval mode of the next chat — graph runs keep their
+                        // per-node modes from the workflow YAML instead.
+                        <ApprovalModeSelect
+                          agentKind={agentKind}
+                          value={agentKind === 'claude' ? approvalMode : 'auto'}
+                          planSupported={
+                            capabilities?.claudeModes.plan === 'pass'
+                          }
+                          onChange={changeApprovalMode}
                         />
-                        <BranchSelect
-                          info={git.info}
-                          switching={git.switching}
-                          onSwitch={(branch) => void git.switchTo(branch)}
-                        />
-                        {workflowSlug && triggers.length > 0 ? (
-                          <Select
-                            variant="ghost"
-                            value={triggerId}
-                            aria-label="Trigger the run starts from"
-                            groups={[
-                              {
-                                items: triggers.map((entry) => ({
-                                  value: entry.id,
-                                  label: `${entry.name} · ${entry.trigger} trigger`,
-                                  icon: <Zap />,
-                                })),
-                              },
-                            ]}
-                            onValueChange={setTriggerId}
-                          />
-                        ) : null}
-                        {!workflowSlug ? (
-                          // Approval mode of the next chat — graph runs keep their
-                          // per-node modes from the workflow YAML instead.
-                          <ApprovalModeSelect
-                            agentKind={agentKind}
-                            value={
-                              agentKind === 'claude' ? approvalMode : 'auto'
-                            }
-                            planSupported={
-                              capabilities?.claudeModes.plan === 'pass'
-                            }
-                            onChange={changeApprovalMode}
-                          />
-                        ) : null}
-                      </div>
-                      <Button
-                        type="button"
-                        size="icon"
-                        className="size-8 shrink-0 rounded-full"
-                        disabled={!hasContent || streaming}
-                        aria-label={workflowSlug ? 'Start run' : 'Send'}
-                        title={workflowSlug ? 'Start run' : 'Send'}
-                        onClick={() => void send()}>
-                        {workflowSlug ? (
-                          <Zap className="size-4 shrink-0" />
-                        ) : (
-                          <ArrowUp className="size-4 shrink-0" />
-                        )}
-                      </Button>
-                    </div>
+                      ) : null}
+                    </ComposerChipRow>
                   </ComposerCard>
                 </div>
                 {/* The suggestion-chip row that sat here is gone. Both halves of it
@@ -1808,6 +1805,7 @@ export function Chats({
                 <ChatHeader
                   label={runLabel(activeRun, workflowNames)}
                   isWorkflow={activeRun.workflowId != null}
+                  agentKind={activeRun.agentKind}
                   status={activeRun.status}
                   lastActivityAt={activeRun.updatedAt}
                   // The header shows the FOCUSED agent's context. For a 1:1 chat
@@ -2000,96 +1998,9 @@ export function Chats({
                         }
                       }}
                     />
-                    {/* Same single-line split as the new-run footer. */}
-                    <div className="flex items-center gap-2 p-2">
-                      <div className="flex min-w-0 flex-1 items-center gap-0.5">
-                        {/* Informational run-identity chips — static Chips carrying
-                      no chevron, never disabled Buttons: disabled kills hover
-                      (so the cwd title tooltip could never fire) and 50%
-                      opacity drops the text below AA contrast. */}
-                        <Chip>
-                          {activeRun?.workflowId ? (
-                            <>
-                              <WorkflowIcon />
-                              <span className="max-w-52 truncate">
-                                {activeRun
-                                  ? runLabel(
-                                      { ...activeRun, title: null },
-                                      workflowNames,
-                                    )
-                                  : ''}
-                              </span>
-                            </>
-                          ) : (
-                            (activeRun?.agentKind ?? 'agent')
-                          )}
-                        </Chip>
-                        {activeRun?.cwd ? (
-                          <Chip title={activeRun.cwd} className="max-w-52">
-                            <FolderOpen />
-                            <span className="truncate">
-                              {folderName(activeRun.cwd)}
-                            </span>
-                          </Chip>
-                        ) : null}
-                        {/* Branch, unlike the chips above it, is NOT run identity —
-                      it is live repo state, so it stays switchable here. */}
-                        <BranchSelect
-                          info={runGit.info}
-                          switching={runGit.switching}
-                          onSwitch={(branch) => void runGit.switchTo(branch)}
-                        />
-                        {activeRun?.workflowId &&
-                        wfNodes.triggers.length > 0 ? (
-                          <Chip>
-                            <Zap />
-                            <span className="max-w-52 truncate">
-                              {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                            </span>
-                          </Chip>
-                        ) : null}
-                        {activeRun &&
-                        activeRun.workflowId === null &&
-                        activeRun.agentKind ? (
-                          // Both interactive between turns; the daemon 409s a
-                          // mid-turn change, so they lock while streaming.
-                          // Unlike the agent and folder above, neither is run
-                          // identity: a chat can switch model mid-conversation
-                          // exactly as the CLIs themselves allow.
-                          <>
-                            <ModelSelect
-                              agentKind={activeRun.agentKind}
-                              models={agentModels}
-                              value={activeRun.model}
-                              disabled={streaming}
-                              onChange={(model) =>
-                                void changeRunSettings({ model })
-                              }
-                            />
-                            <EffortSelect
-                              efforts={agentEfforts}
-                              value={activeRun.effort}
-                              disabled={streaming}
-                              onChange={(effort) =>
-                                void changeRunSettings({ effort })
-                              }
-                            />
-                            <ApprovalModeSelect
-                              agentKind={activeRun.agentKind}
-                              value={activeRun.approval}
-                              planSupported={
-                                capabilities?.claudeModes.plan === 'pass'
-                              }
-                              disabled={streaming}
-                              onChange={(approval) =>
-                                void changeRunSettings({ approval })
-                              }
-                            />
-                          </>
-                        ) : null}
-                      </div>
-                      <span className="flex shrink-0 items-center gap-1.5">
-                        {streaming ? (
+                    <ComposerChipRow
+                      actions={
+                        streaming ? (
                           <>
                             {hasContent && activeRun?.workflowId == null ? (
                               <Button
@@ -2126,9 +2037,78 @@ export function Chats({
                             onClick={() => void sendFollowUp()}>
                             <ArrowUp className="size-4 shrink-0" />
                           </Button>
-                        )}
-                      </span>
-                    </div>
+                        )
+                      }>
+                      {/* Informational run-identity chips — static Chips carrying
+                      no chevron, never disabled Buttons: disabled kills hover
+                      (so the cwd title tooltip could never fire) and 50%
+                      opacity drops the text below AA contrast.
+
+                      The agent (and, for a workflow, its name) is NOT among
+                      them: it is fixed for the run's whole life, so it belongs
+                      to the header's identity line, not to a row of controls
+                      that change things. */}
+                      {activeRun?.cwd ? (
+                        <Chip title={activeRun.cwd} className="max-w-52">
+                          <FolderOpen />
+                          <span className="truncate">
+                            {folderName(activeRun.cwd)}
+                          </span>
+                        </Chip>
+                      ) : null}
+                      {/* Read-only: the branch is live repo state, but a run's
+                      turns are all against the tree it started on, so switching
+                      it under an open transcript would silently re-point the
+                      work. The new-run composer above is where it is chosen. */}
+                      <BranchSelect info={runGit.info} readOnly />
+                      {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
+                        <Chip>
+                          <Zap />
+                          <span className="max-w-52 truncate">
+                            {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                          </span>
+                        </Chip>
+                      ) : null}
+                      {activeRun &&
+                      activeRun.workflowId === null &&
+                      activeRun.agentKind ? (
+                        // Both interactive between turns; the daemon 409s a
+                        // mid-turn change, so they lock while streaming.
+                        // Unlike the agent and folder above, neither is run
+                        // identity: a chat can switch model mid-conversation
+                        // exactly as the CLIs themselves allow.
+                        <>
+                          <ModelSelect
+                            agentKind={activeRun.agentKind}
+                            models={agentModels}
+                            value={activeRun.model}
+                            disabled={streaming}
+                            onChange={(model) =>
+                              void changeRunSettings({ model })
+                            }
+                          />
+                          <EffortSelect
+                            efforts={agentEfforts}
+                            value={activeRun.effort}
+                            disabled={streaming}
+                            onChange={(effort) =>
+                              void changeRunSettings({ effort })
+                            }
+                          />
+                          <ApprovalModeSelect
+                            agentKind={activeRun.agentKind}
+                            value={activeRun.approval}
+                            planSupported={
+                              capabilities?.claudeModes.plan === 'pass'
+                            }
+                            disabled={streaming}
+                            onChange={(approval) =>
+                              void changeRunSettings({ approval })
+                            }
+                          />
+                        </>
+                      ) : null}
+                    </ComposerChipRow>
                   </ComposerCard>
                 </div>
               </div>
@@ -2149,7 +2129,7 @@ export function Chats({
             open={deleting !== null}
             busy={deleteBusy}
             error={deleteError}
-            title="Delete chat"
+            title={deleting?.workflowId ? 'Delete run' : 'Delete chat'}
             confirmLabel="Delete"
             busyLabel="Deleting…"
             onCancel={() => setDeleting(null)}
@@ -2161,6 +2141,9 @@ export function Chats({
               </strong>
               ? Its transcript, attachments and any live terminal go with it.
               This cannot be undone.
+              {deleting?.workflowId
+                ? ' The workflow itself stays in your library.'
+                : ''}
             </>
           </ConfirmDialog>
 

@@ -302,8 +302,14 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
-    if (input.systemPrompt) {
-      args.push('--append-system-prompt', input.systemPrompt);
+    // The call surface rides the same flag as the role. Claude's endpoint is a
+    // per-turn config file it always accepts, so — unlike ACP — there is no
+    // path where the tools are withheld and the block would have to go too.
+    const systemPrompt = [input.systemPrompt, input.callSurfacePrompt]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n');
+    if (systemPrompt) {
+      args.push('--append-system-prompt', systemPrompt);
     }
     if (input.approvalMode === 'auto') {
       args.push('--dangerously-skip-permissions');

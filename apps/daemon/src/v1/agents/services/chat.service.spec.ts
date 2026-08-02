@@ -388,10 +388,11 @@ describe('ChatService', () => {
     claude.finish();
     await drain();
 
-    expect(skillHarvest.record).toHaveBeenCalledWith(realpathSync(dir), [
-      'deploy',
-      'compact',
-    ]);
+    expect(skillHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      ['deploy', 'compact'],
+    );
     // The report never becomes a transcript row — no persisted payload
     // carries the harvested names.
     expect(
@@ -700,21 +701,31 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'plan',
     });
     expect(planRun.approval).toBe('plan');
+    // ACP gives cursor a real permission protocol, so its chats take the same
+    // default and the same modes claude's do.
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
     });
-    expect(cursorRun.approval).toBe('auto');
+    expect(cursorRun.approval).toBe('ask');
+    const cursorAcceptEdits = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+      approval: 'acceptEdits',
+    });
+    expect(cursorAcceptEdits.approval).toBe('acceptEdits');
+    // `plan` is the one exception: the mode probe is claude-only, so nothing
+    // here can confirm cursor offers a read-only mode.
     await expect(
       service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
-        approval: 'ask',
+        approval: 'plan',
       }),
-    ).rejects.toThrow("cursor chats run 'auto' only");
+    ).rejects.toThrow('no verifiable plan mode');
   });
 
-  it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a non-auto cursor mode', async () => {
+  it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     const updated = await service.updateSettings(run.id, 'acceptEdits');
@@ -730,11 +741,11 @@ describe('ChatService — approval modes (parity M1)', () => {
       agentKind: 'cursor-agent',
       cwd: dir,
     });
-    await expect(service.updateSettings(cursorRun.id, 'ask')).rejects.toThrow(
-      "cursor chats run 'auto' only",
+    await expect(service.updateSettings(cursorRun.id, 'plan')).rejects.toThrow(
+      'no verifiable plan mode',
     );
-    const pinned = await service.updateSettings(cursorRun.id, 'auto');
-    expect(pinned.approval).toBe('auto');
+    const flipped = await service.updateSettings(cursorRun.id, 'acceptEdits');
+    expect(flipped.approval).toBe('acceptEdits');
   });
 
   it('reverts and 409s a settings flip when a turn claims the run during the write — never ACKs a mode the in-flight turn cannot honor', async () => {

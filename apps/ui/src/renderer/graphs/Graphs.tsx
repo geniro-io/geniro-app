@@ -68,6 +68,7 @@ import {
 } from './node-palette';
 import type { NodeKind } from './node-schema';
 import {
+  AGENT_MODEL_OPTIONS,
   canConnect,
   connectionEdgeKind,
   flowEdgeType,
@@ -939,7 +940,11 @@ export function Graphs({
                     <Field
                       label="Model"
                       htmlFor="node-model"
-                      hint="Custom… accepts a full model id.">
+                      hint={
+                        AGENT_MODEL_OPTIONS[selected.agent].length > 0
+                          ? 'Custom… accepts a full model id.'
+                          : undefined
+                      }>
                       <ModelSelect
                         key={selected.id}
                         id="node-model"
@@ -980,7 +985,7 @@ export function Graphs({
                     <Field
                       label="Tool approvals"
                       htmlFor="node-approval"
-                      hint="“Ask in chat” pauses each tool call on an approval card; “accept edits” auto-approves file edits and asks for the rest (cursor-agent runs auto regardless).">
+                      hint="“Ask in chat” pauses each tool call on an approval card; “accept edits” auto-approves file edits and asks for the rest.">
                       <Select
                         id="node-approval"
                         value={selected.approval}

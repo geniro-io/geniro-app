@@ -103,20 +103,20 @@ describe('ApprovalModeSelect', () => {
     expect(trigger(el).textContent).toContain('cli default');
   });
 
-  it('pins cursor chats to a hinted auto-approve badge — no select at all', () => {
+  it('offers cursor chats a real approval select, minus the claude-only plan mode', () => {
     const el = render(
       <ApprovalModeSelect
         agentKind="cursor-agent"
-        value="auto"
+        value="ask"
+        // Even with the claude probe reporting plan support, cursor must not
+        // be offered it — that verdict says nothing about cursor's own modes.
         planSupported
         onChange={() => {}}
       />,
     );
-    expect(el.querySelector('[data-menu-trigger]')).toBeNull();
-    expect(el.textContent).toContain('auto-approve');
-    expect(el.firstElementChild?.getAttribute('title')).toContain(
-      'no approval callback',
-    );
+    // ACP makes session/request_permission a baseline, so these are real.
+    expect(el.querySelector('[data-menu-trigger]')).not.toBeNull();
+    expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
   });
 
   it('disables the select while a turn is running', () => {

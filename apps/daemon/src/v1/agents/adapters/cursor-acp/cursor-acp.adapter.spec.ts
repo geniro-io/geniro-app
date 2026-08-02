@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import type { AcpToolCall } from '../acp/acp.types';
@@ -494,35 +494,5 @@ describe('CursorAcpAdapter misuse', () => {
       sessionId: 'sess-b',
       prompt: [{ type: 'text', text: 'turn B' }],
     });
-  });
-
-  it('gives each concurrent turn its own protocol state', () => {
-    const adapter = new CursorAcpAdapter();
-    const first = fakeSpawn();
-    const second = fakeSpawn();
-    const eventsA: AgentEvent[] = [];
-    const eventsB: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn: first.spawn }).start(BASE, (e) =>
-      eventsA.push(e),
-    );
-    new CursorAcpAdapter({ spawn: second.spawn }).start(
-      { ...BASE, prompt: 'other' },
-      (e) => eventsB.push(e),
-    );
-    first.child.stdout.emitData(
-      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
-    );
-    first.child.stdout.emitData(
-      `${JSON.stringify({ id: 2, result: { sessionId: 'a' } })}\n`,
-    );
-    second.child.stdout.emitData(
-      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
-    );
-    second.child.stdout.emitData(
-      `${JSON.stringify({ id: 2, result: { sessionId: 'b' } })}\n`,
-    );
-    expect(eventsA).toEqual([{ type: 'session', sessionId: 'a' }]);
-    expect(eventsB).toEqual([{ type: 'session', sessionId: 'b' }]);
-    expect(adapter.kind).toBe('cursor-agent');
   });
 });

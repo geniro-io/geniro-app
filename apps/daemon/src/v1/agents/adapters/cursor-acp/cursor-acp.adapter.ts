@@ -124,7 +124,7 @@ export class CursorAcpAdapter extends AgentAdapter {
 
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
     return new AcpTurnDriver({
-      input: this.withInlinedSystemPrompt(input),
+      input,
       clientName: 'geniro',
       clientVersion: this.cursorOptions.clientVersion ?? '0.0.0',
       autoDecide: (toolCall) =>
@@ -134,23 +134,6 @@ export class CursorAcpAdapter extends AgentAdapter {
       startupNotices: this.startupNotices(input),
       logger: this.cursorOptions.logger,
     });
-  }
-
-  /**
-   * ACP has no system-prompt parameter, so a graph node's role is prepended to
-   * the prompt text — the same thing the legacy cursor adapter does, kept
-   * identical so a node's effective instructions do not change with the
-   * transport.
-   */
-  private withInlinedSystemPrompt(input: AgentTurnInput): AgentTurnInput {
-    if (!input.systemPrompt) {
-      return input;
-    }
-    return {
-      ...input,
-      prompt: `${input.systemPrompt}\n\n${input.prompt}`,
-      systemPrompt: null,
-    };
   }
 
   /**

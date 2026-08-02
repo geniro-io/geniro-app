@@ -584,10 +584,11 @@ describe('GraphExecutorService', () => {
     claude.starts[0]!.finish();
     await drain();
 
-    expect(skillHarvest.record).toHaveBeenCalledWith(realpathSync(dir), [
-      'review',
-      'compact',
-    ]);
+    expect(skillHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      ['review', 'compact'],
+    );
     // The report never becomes a transcript row.
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),
@@ -816,7 +817,9 @@ describe('GraphExecutorService', () => {
       'req-9',
       false,
     );
-    expect(approvals.listByRun('run-0')).toHaveLength(0);
+    // Keyed on the REAL run id: listByRun returns [] for any unknown key, so
+    // a hand-written one would hold even if the registry were full.
+    expect(approvals.listByRun(run.id)).toHaveLength(0);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
@@ -946,27 +949,6 @@ describe('GraphExecutorService', () => {
     expect(claude.starts[1]!.input.prompt).toContain('## Output from Coder');
   });
 
-  it('notes the ask→auto degrade for cursor-agent nodes', async () => {
-    const { service, cursor, itemDao } = setup();
-    await service.startRun({
-      slug: 'c',
-      workflow: triggered({
-        name: 'c',
-        nodes: [
-          { id: 'only', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
-        ],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'task',
-    });
-    await drain();
-    const note = itemDao.items.find((i) => i.kind === 'system');
-    expect(JSON.parse(note!.payload).message).toContain('cursor-agent');
-    completeTurn(cursor.starts[0]!, 'done');
-    await drain();
-  });
-
   it('reconciles orphaned workflow runs on boot', async () => {
     const { service, runDao, nodeDao, itemDao } = setup();
     // A run left behind by a killed daemon: running, no registry handle.
@@ -1035,16 +1017,20 @@ describe('GraphExecutorService — agent calls', () => {
     );
     // The token is per caller node: helper (a callee, not a caller) has none.
     expect(callTokens.get(run.id, 'helper')).toBeNull();
-    // Awareness: the caller's own role first, then the May-call block naming
-    // each callee and what that callee says it DOES...
-    expect(caller.input.systemPrompt).toContain('You orchestrate.');
-    expect(caller.input.systemPrompt).toContain('May call');
-    expect(caller.input.systemPrompt).toContain('Helper (agent id: helper)');
-    expect(caller.input.systemPrompt).toContain(
+    // Awareness: the caller keeps its own role, and the May-call block naming
+    // each callee — and what that callee says it DOES — rides a SEPARATE field
+    // so an adapter that withholds the call tools withholds this with them.
+    expect(caller.input.systemPrompt).toBe('You orchestrate.');
+    expect(caller.input.callSurfacePrompt).toContain('May call');
+    expect(caller.input.callSurfacePrompt).toContain(
+      'Helper (agent id: helper)',
+    );
+    expect(caller.input.callSurfacePrompt).toContain(
       'Researches a topic and reports what it found.',
     );
     // ...and never how it does it. A callee's role is private, so a caller
     // routes by description alone instead of restating its team in its role.
+    expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
     expect(caller.input.systemPrompt).not.toContain('SECRET_PLAYBOOK');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
@@ -1129,7 +1115,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(caller.input.mcpEndpoint?.token).toBe(
       callTokens.get(run.id, 'orch'),
     );
-    expect(caller.input.systemPrompt).toContain('May call');
+    expect(caller.input.callSurfacePrompt).toContain('May call');
   });
 
   it('sync call: transcript rows on the caller, per-call node_state on the callee', async () => {
@@ -1554,7 +1540,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     // its awareness block (headless claude has no AskUserQuestion under
     // --dangerously-skip-permissions).
     expect(caller.input.approvalMode).toBe('ask');
-    expect(caller.input.systemPrompt).toContain('answer_agent');
+    expect(caller.input.callSurfacePrompt).toContain('answer_agent');
 
     const sync = callBroker.callAgent(run.id, 'a', {
       agent: 'callee',
@@ -2094,36 +2080,6 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     await drain();
   });
 
-  it('warns for a cursor node under ANY non-auto approval — acceptEdits included, not just ask', async () => {
-    const { service, cursor, itemDao } = setup();
-    await service.startRun({
-      slug: 'cursor-ae',
-      workflow: triggered({
-        name: 'cursor-ae',
-        nodes: [
-          {
-            id: 'c',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'acceptEdits',
-          },
-        ],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const warn = itemDao.items.find(
-      (i) =>
-        i.kind === 'system' &&
-        i.payload.includes("approval 'acceptEdits' degrades to auto-approve"),
-    );
-    expect(warn).toBeDefined();
-    completeTurn(cursor.starts[0]!, 'done');
-    await drain();
-  });
-
   it("a cursor 'ask' node really parks on a human card, and the transcript never claims it auto-approved", async () => {
     const { service, cursor, itemDao, approvals } = setup();
     const run = await service.startRun({
@@ -2157,6 +2113,40 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
     // …so a system item telling the user their permissions were bypassed is a
     // factual lie about what this node did.
+    expect(
+      itemDao.items
+        .filter((i) => i.kind === 'system')
+        .map((i) => i.payload)
+        .filter((payload) => payload.includes('degrades to auto-approve')),
+    ).toEqual([]);
+    completeTurn(turn, 'done');
+    await drain();
+  });
+
+  it("a cursor 'acceptEdits' node reaches the CLI unrewritten and is never told it degraded", async () => {
+    const { service, cursor, itemDao } = setup();
+    await service.startRun({
+      slug: 'cursor-ae',
+      workflow: triggered({
+        name: 'cursor-ae',
+        nodes: [
+          {
+            id: 'c',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'acceptEdits',
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = cursor.starts[0]!;
+    // acceptEdits is honoured by cursorAutoDecision — edits auto-allow, and
+    // everything else parks. Nothing about it degrades.
+    expect(turn.input.approvalMode).toBe('acceptEdits');
     expect(
       itemDao.items
         .filter((i) => i.kind === 'system')

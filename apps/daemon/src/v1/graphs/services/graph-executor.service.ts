@@ -307,10 +307,11 @@ export class GraphExecutorService {
     }
   }
 
-  /** The DAG walk. Never throws — every failure becomes transcript + status. */
   /**
-   * Resolve the cursor call capability, then walk the DAG. The probe await
-   * lives HERE — off the run-start POST — so the first cursor-caller run on a
+   * The DAG walk. Never throws — every failure becomes transcript + status.
+   *
+   * Resolve the claude permission-mode verdict, then walk. The probe await
+   * lives HERE — off the run-start POST — so the first acceptEdits run on a
    * machine returns its run row instantly and only its execution waits out
    * the probe turn (~90s worst case). Cancel/shutdown during the await is
    * covered by the registry's claim→register intent window.
@@ -580,13 +581,6 @@ export class GraphExecutorService {
           status: 'running',
           ...(callId ? { callId } : {}),
         });
-        if (node.agent === 'cursor-agent' && node.approval !== 'auto') {
-          // ANY non-auto mode must warn, not just ask — a silent acceptEdits
-          // degrade would read as enforced permissions that never were.
-          await persistItem(node.id, 'system', null, {
-            message: `cursor-agent has no approval callback — node approval '${node.approval}' degrades to auto-approve for this node`,
-          });
-        }
         if (
           node.agent === 'claude' &&
           node.approval === 'acceptEdits' &&
@@ -632,7 +626,7 @@ export class GraphExecutorService {
      */
     const mcpEndpointFor = (
       node: WorkflowAgentNode,
-    ): { url: string; token: string } | null => {
+    ): { url: string; token: string; serverName: string } | null => {
       if (!isCaller(node)) {
         return null;
       }
@@ -644,20 +638,26 @@ export class GraphExecutorService {
       return {
         url: `http://127.0.0.1:${port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(node.id)}`,
         token,
+        // Per-run, so a project MCP config that happens to define a server
+        // called `geniro` cannot contend with ours on a transport that has no
+        // strict-config switch.
+        serverName: `geniro-${runId.slice(0, 8)}`,
       };
     };
 
     /**
-     * The caller's system prompt: its role plus a "May call" block naming
-     * each callee and what that callee says it does, so the agent can route
-     * work from the graph alone — its own role never has to name the team.
-     * Callee ROLES stay private (see `calleeSummary`). Non-callers keep their
-     * bare role.
+     * The caller's "May call" block, naming each callee and what that callee
+     * says it does, so the agent can route work from the graph alone — its own
+     * role never has to name the team. Callee ROLES stay private (see
+     * `calleeSummary`). Null for a non-caller.
+     *
+     * Kept out of the node's role prompt so an adapter that withholds the call
+     * endpoint can withhold this block with it — see `callSurfacePrompt`.
      */
-    const systemPromptFor = (node: WorkflowAgentNode): string | null => {
+    const callSurfaceFor = (node: WorkflowAgentNode): string | null => {
       const callees = calleesOf.get(node.id);
       if (!callees || !isCaller(node)) {
-        return node.role ?? null;
+        return null;
       }
       const lines = callees.map(
         (callee) => `- ${calleeSummary(callee, CALLEE_DESCRIPTION_MAX)}`,
@@ -669,8 +669,7 @@ export class GraphExecutorService {
         node.agent === 'claude'
           ? 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your AskUserQuestion tool and relay their answer. Then collect the final result with await_agent.'
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      const block = `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
-      return node.role ? `${node.role}\n\n${block}` : block;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
     };
 
     /**
@@ -728,7 +727,8 @@ export class GraphExecutorService {
         cwd,
         model: node.model ?? null,
         resumeSessionId: callContext?.resumeSessionId ?? null,
-        systemPrompt: systemPromptFor(node),
+        systemPrompt: node.role ?? null,
+        callSurfacePrompt: callSurfaceFor(node),
         // A questionCapable AUTO node still spawns in ask mode (the question
         // channel needs the stdio dialogue; the daemon auto-approves plain
         // permissions below). ask/acceptEdits already carry the stdio
@@ -744,9 +744,10 @@ export class GraphExecutorService {
             return;
           }
           if (event.type === 'slash_commands') {
-            // The CLI's own invokable set for this run's cwd — feeds the
-            // composer's `/` autocomplete, never the transcript.
-            this.skillHarvest.record(cwd, event.commands);
+            // This CLI's own invokable set for this run's cwd — feeds the
+            // composer's `/` autocomplete, never the transcript. Keyed by
+            // agent too: the other CLI cannot invoke these names.
+            this.skillHarvest.record(node.agent, cwd, event.commands);
             return;
           }
           if (event.type === 'text') {
@@ -1309,14 +1310,13 @@ export class GraphExecutorService {
   /**
    * Probe the run's own MCP route with a JSON-RPC initialize (3s cap) and
    * report a failure through `onFailure`. Fire-and-forget: the DAG walk never
-   * waits on it. No call-capable caller → nothing to check (a probe-failed
-   * cursor caller gets no endpoint and degrades visibly instead).
+   * waits on it. No call-capable caller → nothing to check.
    */
   private selfCheckCallEndpoint(
     claudeCaller: WorkflowAgentNode | null,
     mcpEndpointFor: (
       node: WorkflowAgentNode,
-    ) => { url: string; token: string } | null,
+    ) => { url: string; token: string; serverName: string } | null,
     onFailure: (message: string) => void,
   ): void {
     if (!claudeCaller) {

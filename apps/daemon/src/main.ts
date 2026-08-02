@@ -19,6 +19,7 @@ import type { DaemonInfo } from './utils/handshake';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { ChatService } from './v1/agents/services/chat.service';
+import { CursorMcpCleanupService } from './v1/agents/services/cursor-mcp-cleanup.service';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
 installCrashGuards();
@@ -98,6 +99,12 @@ bootstrapper.addExtension(
       // disposer only runs on a clean settle). The tokens in them are already
       // dead — this is hygiene for <userData>/tmp.
       app.get(ClaudeAdapter).sweepStaleConfigs();
+
+      // Clean `.cursor/mcp.json` merges the REMOVED legacy cursor transport
+      // stranded in the user's own worktrees. Unlike the sweep above this is
+      // an obligation, not hygiene — the file is theirs, and no other code
+      // path will ever touch it again. Remove one release after shipping.
+      app.get(CursorMcpCleanupService).reconcileStranded();
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

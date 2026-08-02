@@ -106,10 +106,19 @@ export interface AgentTurnInput {
   resumeSessionId?: string | null;
   /**
    * Role/system prompt for this turn (graph nodes). Claude appends it to the
-   * CLI system prompt (`--append-system-prompt`); Cursor has no such flag, so
-   * its adapter prepends it to the prompt text. Undefined for plain chat.
+   * CLI system prompt (`--append-system-prompt`); ACP has no such parameter,
+   * so its driver prepends it to the prompt text. Undefined for plain chat.
    */
   systemPrompt?: string | null;
+  /**
+   * The caller's "May call" awareness block, naming each callee reachable
+   * through `mcpEndpoint`'s tools. Kept SEPARATE from `systemPrompt` because
+   * it is only true while the call tools are actually registered: an adapter
+   * that ends up withholding the endpoint (an ACP agent that does not
+   * advertise HTTP MCP support) must drop this block too, or the agent is
+   * instructed to route work through tools it does not have.
+   */
+  callSurfacePrompt?: string | null;
   /**
    * Tool-approval mode. `ask` blocks each permission-gated tool call on a
    * user verdict (elicitation card); `acceptEdits` auto-approves file edits
@@ -135,6 +144,13 @@ export interface AgentTurnInput {
   mcpEndpoint?: {
     url: string;
     token: string;
+    /**
+     * MCP server name to register the endpoint under. Unique per run, because
+     * ACP has no `--strict-mcp-config` equivalent: a project config defining
+     * the same name would otherwise contend with ours on the agent side.
+     * Claude does not read this — its per-turn config file is strict.
+     */
+    serverName: string;
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
     toolTimeoutMs?: number;
   } | null;

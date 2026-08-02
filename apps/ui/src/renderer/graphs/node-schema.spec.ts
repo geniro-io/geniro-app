@@ -85,11 +85,10 @@ describe('AGENT_MODEL_OPTIONS', () => {
       'sonnet',
       'haiku',
     ]);
-    expect(AGENT_MODEL_OPTIONS['cursor-agent']).toEqual([
-      'gpt-5',
-      'sonnet-4',
-      'sonnet-4-thinking',
-    ]);
+    // Empty on purpose: cursor-agent runs over ACP, which carries no
+    // per-session model selection, so any value here would be discarded by
+    // the turn — and a non-empty list also auto-assigns one to every new node.
+    expect(AGENT_MODEL_OPTIONS['cursor-agent']).toEqual([]);
   });
 });
 

@@ -25,7 +25,7 @@ function delay(ms: number): Promise<void> {
  * The M1 shutdown path only removes the pidfile; nothing kills grandchildren,
  * and the UI's `SIGKILL` escalation bypasses Nest hooks. `OnApplicationShutdown`
  * runs on the graceful `SIGTERM` path (the normal case), so cancelling every
- * active handle here stops `claude -p` / `cursor-agent -p` orphaning mid-turn.
+ * active handle here stops `claude -p` / `cursor-agent acp` orphaning mid-turn.
  *
  * A run slot is reserved with {@link tryClaim} BEFORE the chat service does any
  * async work, then upgraded to the real handle by {@link register}. The claim

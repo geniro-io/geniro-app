@@ -103,21 +103,17 @@ describe('ModelSelect', () => {
       'haiku',
       'Custom…',
     ]);
+  });
 
-    render(
-      <ModelSelect
-        id="m"
-        agent="cursor-agent"
-        value="gpt-5"
-        onChange={() => {}}
-      />,
-    );
-    expect(modelOptions()).toEqual([
-      'gpt-5',
-      'sonnet-4',
-      'sonnet-4-thinking',
-      'Custom…',
-    ]);
+  it('renders no picker at all for an agent whose transport discards the model', () => {
+    render(<ModelSelect id="m" agent="cursor-agent" value="" onChange={spy} />);
+    // No control — offering one would invite the user to set a value that
+    // never reaches the CLI…
+    expect(container.querySelector('[data-menu-trigger]')).toBeNull();
+    expect(customInput()).toBeNull();
+    expect(container.textContent).toContain('no per-session model selection');
+    // …and nothing may auto-assign a model to a fresh cursor node either.
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('a model-less node adopts the first alias on mount', () => {

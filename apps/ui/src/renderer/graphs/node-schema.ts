@@ -93,16 +93,23 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
 };
 
 /**
- * Model choices offered per CLI agent in the inspector — the aliases each
- * CLI's own `--model` help documents (claude: aliases resolving to the latest
- * model of each tier; cursor-agent: the ids its help lists). Not exhaustive
- * by design: an empty model means the CLI's default, and any full model id
- * goes through the inspector's Custom entry, so this list never gates what
- * `--model` can receive.
+ * Model choices offered per CLI agent in the inspector — the aliases the CLI's
+ * own `--model` help documents (claude: aliases resolving to the latest model
+ * of each tier). Not exhaustive by design: an empty model means the CLI's
+ * default, and any full model id goes through the inspector's Custom entry, so
+ * this list never gates what `--model` can receive.
+ *
+ * An EMPTY list means the transport cannot select a model at all — the
+ * inspector then explains that instead of offering a picker whose value is
+ * discarded.
  */
 export const AGENT_MODEL_OPTIONS: Record<CliKind, readonly string[]> = {
   claude: ['fable', 'opus', 'sonnet', 'haiku'],
-  'cursor-agent': ['gpt-5', 'sonnet-4', 'sonnet-4-thinking'],
+  // Empty on purpose: cursor-agent runs over ACP, which carries no per-session
+  // model selection, so the daemon reports any model set here as not applied.
+  // Offering choices would auto-assign every new cursor node a model the turn
+  // then discards.
+  'cursor-agent': [],
 };
 
 /**

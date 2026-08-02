@@ -116,7 +116,11 @@ describe('SkillsService', () => {
     writeSkill(cwd, '.claude', 'deploy', 'name: deploy\ndescription: Ship it');
     // The harvest is keyed by the CANONICAL cwd — exactly what the executor
     // records (its cwd went through resolveValidCwd).
-    harvest.record(realpathSync(cwd), ['compact', 'deploy', 'review']);
+    harvest.record('claude', realpathSync(cwd), [
+      'compact',
+      'deploy',
+      'review',
+    ]);
 
     const skills = await service.list('claude', cwd);
     expect(skills).toEqual([
@@ -136,7 +140,7 @@ describe('SkillsService', () => {
   it('never applies the claude harvest to a cursor-agent listing', async () => {
     const { service, cwd, harvest } = build();
     writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
-    harvest.record(realpathSync(cwd), ['compact', 'review']);
+    harvest.record('claude', realpathSync(cwd), ['compact', 'review']);
 
     const skills = await service.list('cursor-agent', cwd);
     expect(skills.map((s) => s.name)).toEqual(['fix']);
@@ -171,7 +175,7 @@ describe('SkillsService', () => {
     if (reported?.type !== 'slash_commands') {
       throw new Error('the ACP driver reported no session commands to harvest');
     }
-    harvest.record(realpathSync(cwd), reported.commands);
+    harvest.record('cursor-agent', realpathSync(cwd), reported.commands);
 
     // claude cannot invoke a cursor-agent command; surfacing one in claude's
     // `/` autocomplete offers the user a command the CLI will reject.

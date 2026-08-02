@@ -96,19 +96,19 @@ export class SkillsService {
         byName.set(skill.name, skill);
       }
     }
-    // Merge the CLI-reported set (claude only): names the scan already found
-    // keep their scanned metadata (kind/source/description); the rest — the
-    // built-ins and plugin skills — join as bare `cli` entries.
-    if (agent === 'claude') {
-      for (const name of this.harvest.get(projectDir) ?? []) {
-        if (!byName.has(name)) {
-          byName.set(name, {
-            name,
-            description: null,
-            kind: 'command',
-            source: 'cli',
-          });
-        }
+    // Merge in what THIS agent reported for this folder: names the scan already
+    // found keep their scanned metadata (kind/source/description); the rest —
+    // the built-ins and plugin skills — join as bare `cli` entries. The harvest
+    // is per-agent because a command one CLI reports is not invokable in the
+    // other, and both routinely run in the same folder.
+    for (const name of this.harvest.get(agent, projectDir) ?? []) {
+      if (!byName.has(name)) {
+        byName.set(name, {
+          name,
+          description: null,
+          kind: 'command',
+          source: 'cli',
+        });
       }
     }
     return [...byName.values()]

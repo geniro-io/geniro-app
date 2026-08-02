@@ -152,9 +152,28 @@ describe('AcpTurnDriver MCP delivery', () => {
   const endpoint = {
     input: {
       ...BASE_INPUT,
-      mcpEndpoint: { url: 'http://127.0.0.1:1/v1/mcp/r/n', token: 'tok-1' },
+      mcpEndpoint: {
+        url: 'http://127.0.0.1:1/v1/mcp/r/n',
+        token: 'tok-1',
+        serverName: 'geniro-run12345',
+      },
     },
   };
+
+  /** A caller turn: a role, plus the awareness block naming its callees. */
+  const caller = {
+    input: {
+      ...endpoint.input,
+      systemPrompt: 'You orchestrate.',
+      callSurfacePrompt: 'May call (via the call_agent tool): - Helper',
+    },
+  };
+
+  function promptText(h: Harness): string {
+    const params = h.sentMethod('session/prompt')?.params as
+      { prompt: { text: string }[] } | undefined;
+    return params?.prompt[0]?.text ?? '';
+  }
 
   it('carries the call endpoint in session/new when the agent advertises HTTP MCP', () => {
     const h = harness(endpoint);
@@ -164,7 +183,9 @@ describe('AcpTurnDriver MCP delivery', () => {
       mcpServers: [
         {
           type: 'http',
-          name: 'geniro',
+          // Per-run, never the bare 'geniro' a project config could also
+          // define — ACP has no --strict-mcp-config to fall back on.
+          name: 'geniro-run12345',
           url: 'http://127.0.0.1:1/v1/mcp/r/n',
           headers: [{ name: 'Authorization', value: 'Bearer tok-1' }],
         },
@@ -178,12 +199,39 @@ describe('AcpTurnDriver MCP delivery', () => {
     expect(events).toContainEqual({
       type: 'notice',
       message:
-        'agent calls disabled for this turn: the agent does not advertise HTTP MCP support (mcpCapabilities.http)',
+        'agent calls disabled for this turn: the agent does not advertise HTTP MCP support (mcpCapabilities.http), so the callee list was removed from this turn’s instructions too',
     });
     expect(h.sentMethod('session/new')?.params).toEqual({
       cwd: '/work',
       mcpServers: [],
     });
+  });
+
+  it('keeps the callee list in the prompt when the call tools were registered', () => {
+    const h = harness(caller);
+    h.feed(initializeReply(1, { http: true }));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    expect(promptText(h)).toBe(
+      'You orchestrate.\n\nMay call (via the call_agent tool): - Helper\n\ndo the thing',
+    );
+  });
+
+  it('drops the callee list from the prompt when the call tools were withheld', () => {
+    const h = harness(caller);
+    h.feed(initializeReply(1, { http: false }));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    // Telling an agent to route work through `call_agent` when no such tool is
+    // registered makes its callees silently never run while the node still
+    // reports success. The role survives; only the false affordance goes.
+    expect(promptText(h)).toBe('You orchestrate.\n\ndo the thing');
+    expect(promptText(h)).not.toContain('call_agent');
+  });
+
+  it('prepends a graph node role to the prompt, ACP having no system-prompt field', () => {
+    const h = harness({ input: { ...BASE_INPUT, systemPrompt: 'Be terse.' } });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    expect(promptText(h)).toBe('Be terse.\n\ndo the thing');
   });
 
   it('sends no server list when the turn has no endpoint', () => {
@@ -231,6 +279,33 @@ describe('AcpTurnDriver session resume', () => {
     expect(h.feed(chunk('agent_message_chunk', 'a new answer'))).toEqual([
       { type: 'text', text: 'a new answer' },
     ]);
+  });
+
+  it('measures what the session/load replay cost before the prompt could be sent', () => {
+    const debug = vi.fn();
+    const h = harness({ ...resuming, logger: { warn: vi.fn(), debug } });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    h.feed(chunk('agent_message_chunk', 'an old answer'));
+    h.feed(
+      update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read' }),
+    );
+    h.feed(chunk('agent_message_chunk', 'another old answer'));
+    // Nothing is reported until the load reply lands — that is the point the
+    // prompt is unblocked, so that is what the measurement bounds.
+    expect(debug).not.toHaveBeenCalled();
+
+    h.feed({ id: 2, result: {} });
+    expect(debug).toHaveBeenCalledTimes(1);
+    expect(debug.mock.calls[0]?.[0]).toContain('replayed 3 update(s)');
+  });
+
+  it('measures nothing on a fresh session, which has no replay to pay for', () => {
+    const debug = vi.fn();
+    const h = harness({ input: BASE_INPUT, logger: { warn: vi.fn(), debug } });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    expect(debug).not.toHaveBeenCalled();
   });
 
   it('still harvests the command set and the context usage during that replay', () => {

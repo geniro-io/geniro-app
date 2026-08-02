@@ -62,7 +62,7 @@ interface ModeProbeResult {
  * init = a genuine fail; anything else (timeout, spawn error, auth failure)
  * = `unknown`, kept memory-only so an environmental hiccup can never
  * disk-poison the per-version cache. Verdicts are cached keyed by
- * `claude --version`, mirroring the cursor MCP-trust probe.
+ * `claude --version`, so a binary upgrade re-probes without a daemon restart.
  */
 @Injectable()
 export class ClaudeProbeService {

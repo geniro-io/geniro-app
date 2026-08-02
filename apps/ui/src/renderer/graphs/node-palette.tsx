@@ -76,10 +76,11 @@ const AGENT_META: Record<CliKind, TileMeta> = {
   'cursor-agent': {
     label: 'Cursor',
     command: 'cursor-agent',
-    blurb: 'cursor-agent CLI — runs its tools unattended.',
+    blurb: 'cursor-agent CLI — honours per-node tool approvals.',
     details: [
-      'Runs one turn per node via `cursor-agent -p` (stream-json).',
-      'Runs its tools unattended — approval is always auto.',
+      'Runs one turn per node via `cursor-agent acp` (Agent Client Protocol).',
+      'Tool approvals are per-node — set the node to auto, ask, or accept edits.',
+      'Runs on its configured model — ACP carries no per-session model choice.',
       'Needs a Cursor API key (set it in Settings).',
     ],
     icon: <SquareTerminal aria-hidden="true" className="size-4" />,

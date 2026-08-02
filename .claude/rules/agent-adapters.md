@@ -88,9 +88,10 @@ globs:
 - Shared adapter contract types (`AgentEvent`, `AgentUsage`, `AgentTurnInput`,
   `AgentTurnHandle`) live in `adapters/adapter.types.ts` — adapter-agnostic only;
   anything CLI-specific belongs in that adapter's subdirectory.
-- Keep mappers exported as standalone pure functions (`mapClaudeMessage`,
-  `mapCursorMessage`) so specs can drive them without spawning; the class method
-  delegates to them.
+- Keep a stream-json mapper exported as a standalone pure function
+  (`mapClaudeMessage`) so specs can drive it without spawning; the class method
+  delegates to it. An ACP adapter has no mapper — its per-turn driver is the
+  testable unit, and `adapters/acp/acp-driver.spec.ts` drives it with no process.
 - Adapters are provided in `agents.module.ts` via factory providers
   (`{ provide: ClaudeAdapter, useFactory: () => new ClaudeAdapter() }`) — their
   options bag is a test seam, not a DI token.

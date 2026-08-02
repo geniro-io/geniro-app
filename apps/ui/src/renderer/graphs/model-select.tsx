@@ -36,6 +36,7 @@ export function ModelSelect({
   const [custom, setCustom] = useState(
     () => value !== '' && !options.includes(value),
   );
+  const selectable = options.length > 0;
 
   // Adopt the first alias for a model-less node — but never while the custom
   // input is open, where a transiently empty value is just mid-typing.
@@ -44,6 +45,18 @@ export function ModelSelect({
       onChange(options[0]);
     }
   }, [value, custom, options, onChange]);
+
+  if (!selectable) {
+    // No picker at all: this agent's transport discards whatever it is given,
+    // so a control here would only invite the user to set something that never
+    // reaches the CLI.
+    return (
+      <p id={id} className="text-muted-foreground text-xs">
+        {agent} runs on its own configured model — its transport carries no
+        per-session model selection.
+      </p>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1.5">

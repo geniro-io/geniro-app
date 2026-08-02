@@ -129,12 +129,10 @@ export class ChatService {
         cwd,
         model: input.model ?? null,
         title: input.title ?? null,
-        // New chats always carry an explicit mode (claude defaults to 'ask',
-        // cursor is pinned 'auto'); only pre-selector rows stay null.
-        approval:
-          input.agentKind === 'cursor-agent'
-            ? 'auto'
-            : (input.approval ?? 'ask'),
+        // New chats always carry an explicit mode; only pre-selector rows stay
+        // null. Both CLIs default to 'ask' — cursor's permissions are real
+        // over ACP, so there is no reason to start it unattended.
+        approval: input.approval ?? 'ask',
       },
       em,
     );
@@ -144,7 +142,7 @@ export class ChatService {
   /**
    * PATCH /v1/chats/:runId/settings — flip the approval mode between turns.
    * 409 while a turn is in flight (the daemon-side contract matching the
-   * disabled selector), 400 for a non-auto mode on a cursor chat.
+   * disabled selector), 400 for a plan mode on a cursor chat.
    */
   async updateSettings(
     runId: string,
@@ -195,19 +193,21 @@ export class ChatService {
     }
   }
 
-  /** Cursor has no approval callback — cursor chats are pinned to 'auto'. */
+  /**
+   * ACP makes `session/request_permission` a baseline, so cursor chats honour
+   * auto/ask/acceptEdits like claude's. `plan` is the exception: it maps to an
+   * agent-declared session mode we cannot confirm cursor offers (the mode
+   * probe is claude-only), and a plan turn that quietly ran with write access
+   * is the one failure here that costs the user something.
+   */
   private assertApprovalSupported(
     agentKind: AgentKind | null,
     approval: ChatApprovalMode | undefined,
   ): void {
-    if (
-      agentKind === 'cursor-agent' &&
-      approval !== undefined &&
-      approval !== 'auto'
-    ) {
+    if (agentKind === 'cursor-agent' && approval === 'plan') {
       throw new BadRequestException(
         'CURSOR_APPROVAL_UNSUPPORTED',
-        "cursor-agent has no approval callback — cursor chats run 'auto' only",
+        "cursor-agent has no verifiable plan mode — cursor chats support 'auto', 'ask' and 'acceptEdits'",
       );
     }
   }
@@ -367,9 +367,10 @@ export class ChatService {
               return;
             }
             if (event.type === 'slash_commands') {
-              // The CLI's own invokable set for this cwd — feeds the
-              // composer's `/` autocomplete, never the transcript.
-              this.skillHarvest.record(cwd, event.commands);
+              // This CLI's own invokable set for this cwd — feeds the
+              // composer's `/` autocomplete, never the transcript. Keyed by
+              // agent too: the other CLI cannot invoke these names.
+              this.skillHarvest.record(agentKind, cwd, event.commands);
               return;
             }
             const mapped = mapEventToItem(event);

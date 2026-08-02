@@ -14,6 +14,7 @@ import { AgentEventBus } from './services/agent-events.bus';
 import { ApprovalRegistry } from './services/approval-registry';
 import { ChatService } from './services/chat.service';
 import { ClaudeProbeService } from './services/claude-probe.service';
+import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { ProcessRegistry } from './services/process-registry';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -33,6 +34,10 @@ import { SkillsService } from './services/skills.service';
     ChatService,
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
+    {
+      provide: CursorMcpCleanupService,
+      useFactory: () => new CursorMcpCleanupService(),
+    },
     {
       provide: SkillsService,
       useFactory: (harvest: SkillHarvestStore) => new SkillsService(harvest),
@@ -72,6 +77,7 @@ import { SkillsService } from './services/skills.service';
     ClaudeProbeService,
     ProcessRegistry,
     SkillHarvestStore,
+    CursorMcpCleanupService,
     ItemDao,
     NodeStateDao,
     RunDao,

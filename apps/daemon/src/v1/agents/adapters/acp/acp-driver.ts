@@ -57,7 +57,7 @@ export interface AcpDriverOptions {
    * driver's own notices.
    */
   startupNotices?: string[];
-  logger?: { warn(message: string): void };
+  logger?: { warn(message: string): void; debug?(message: string): void };
 }
 
 function textOf(content: unknown): string | null {
@@ -147,6 +147,14 @@ export class AcpTurnDriver implements TurnDriver {
    * updates are dropped until the load reply lands.
    */
   private replaying = false;
+  /**
+   * Replay accounting for a resumed turn. `session/load` streams the whole
+   * prior conversation back before the prompt can be sent, and nothing in the
+   * protocol bounds that volume — so the cost is measured per turn rather than
+   * assumed, which is what any decision to avoid `session/load` needs.
+   */
+  private replayStartedAt: number | null = null;
+  private replayedUpdates = 0;
   /** Mode we asked for, so the reply can report an honest failure. */
   private requestedModeId: string | null = null;
   private readonly usage: AcpUsageSnapshot = {
@@ -159,10 +167,23 @@ export class AcpTurnDriver implements TurnDriver {
   private readonly textChunks: string[] = [];
   /** Tool name by ACP toolCallId, so a later update can name its result. */
   private readonly toolNames = new Map<string, string>();
+  /**
+   * Tool kind by ACP toolCallId. `session/request_permission` may carry a
+   * toolCall stub without one, and kind is what `acceptEdits` decides on — so
+   * the kind announced on the original `tool_call` update has to survive.
+   */
+  private readonly toolKinds = new Map<string, string>();
   /** Options offered per parked permission request, keyed by encoded id. */
   private readonly parkedPermissions = new Map<string, AcpPermissionOption[]>();
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
+  /**
+   * Whether this turn's call tools were actually registered. Decided in
+   * `buildMcpServers` (which needs the negotiated capabilities) and read when
+   * the prompt is composed, so the "May call" block and the tools it names are
+   * granted or withheld together.
+   */
+  private callSurfaceGranted = false;
 
   constructor(private readonly options: AcpDriverOptions) {}
 
@@ -339,6 +360,7 @@ export class AcpTurnDriver implements TurnDriver {
     const resumeId = this.options.input.resumeSessionId?.trim();
     if (resumeId && this.capabilities.loadSession) {
       this.replaying = true;
+      this.replayStartedAt = Date.now();
       this.request(
         ACP_AGENT_METHODS.sessionLoad,
         { sessionId: resumeId, cwd: this.options.input.cwd, mcpServers },
@@ -380,17 +402,23 @@ export class AcpTurnDriver implements TurnDriver {
       return { mcpServers: [], notice: null };
     }
     if (!this.capabilities.mcpHttp) {
+      // The awareness block goes with the tools. Leaving it in would instruct
+      // the agent to route work through `call_agent` with nothing registered
+      // under that name — its callees never run and the turn still reports
+      // success, which is exactly what the pre-ACP degrade path prevented.
+      this.callSurfaceGranted = false;
       return {
         mcpServers: [],
         notice:
-          'agent calls disabled for this turn: the agent does not advertise HTTP MCP support (mcpCapabilities.http)',
+          'agent calls disabled for this turn: the agent does not advertise HTTP MCP support (mcpCapabilities.http), so the callee list was removed from this turn’s instructions too',
       };
     }
+    this.callSurfaceGranted = true;
     return {
       mcpServers: [
         {
           type: 'http',
-          name: 'geniro',
+          name: endpoint.serverName,
           url: endpoint.url,
           headers: [
             { name: 'Authorization', value: `Bearer ${endpoint.token}` },
@@ -411,6 +439,7 @@ export class AcpTurnDriver implements TurnDriver {
       this.options.input.resumeSessionId?.trim() ??
       null;
     this.replaying = false;
+    this.reportReplayCost();
 
     if (this.sessionId === null) {
       return [
@@ -431,18 +460,63 @@ export class AcpTurnDriver implements TurnDriver {
         'set_mode',
         events,
       );
+    } else if (
+      this.options.preferredModeId &&
+      !this.offersMode(root, this.options.preferredModeId)
+    ) {
+      // The turn asked for a mode the agent does not offer. It still runs —
+      // but under the agent's current mode, which for a read-only request like
+      // `plan` means write access the user believed they had turned off.
+      events.push({
+        type: 'notice',
+        message: `agent does not offer the '${this.options.preferredModeId}' mode — this turn runs under the agent's current mode instead`,
+      });
     }
 
     this.request(
       ACP_AGENT_METHODS.sessionPrompt,
       {
         sessionId: this.sessionId,
-        prompt: [{ type: 'text', text: this.options.input.prompt }],
+        prompt: [{ type: 'text', text: this.composePrompt() }],
       },
       'prompt',
       events,
     );
     return events;
+  }
+
+  /**
+   * Log what this turn's `session/load` replay actually cost. The prompt is
+   * structurally blocked behind it, so this is per-turn latency that grows
+   * with thread length — and the volume depends on the agent's own
+   * implementation, which is why it is measured rather than extrapolated.
+   */
+  private reportReplayCost(): void {
+    if (this.replayStartedAt === null) {
+      return;
+    }
+    const elapsedMs = Date.now() - this.replayStartedAt;
+    this.replayStartedAt = null;
+    this.options.logger?.debug?.(
+      `acp session/load replayed ${this.replayedUpdates} update(s) in ${elapsedMs}ms before this turn's prompt could be sent`,
+    );
+  }
+
+  /**
+   * ACP carries no system-prompt parameter, so a graph node's role is
+   * prepended to the prompt text. The caller's "May call" block joins it only
+   * when this turn's call tools were actually registered — `buildMcpServers`
+   * decides that, and it runs before the prompt is sent.
+   */
+  private composePrompt(): string {
+    const { systemPrompt, callSurfacePrompt, prompt } = this.options.input;
+    return [
+      systemPrompt,
+      this.callSurfaceGranted ? callSurfacePrompt : null,
+      prompt,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n');
   }
 
   /**
@@ -464,11 +538,25 @@ export class AcpTurnDriver implements TurnDriver {
     if (asString(modes.currentModeId) === wanted) {
       return null;
     }
-    const available = asArray(modes.availableModes).some((entry) => {
+    return this.offersMode(sessionResult, wanted) ? wanted : null;
+  }
+
+  /** Whether the session reply lists `modeId` among its available modes. */
+  private offersMode(
+    sessionResult: Record<string, unknown> | null,
+    modeId: string,
+  ): boolean {
+    const modes = sessionResult ? asRecord(sessionResult.modes) : null;
+    if (!modes) {
+      return false;
+    }
+    if (asString(modes.currentModeId) === modeId) {
+      return true;
+    }
+    return asArray(modes.availableModes).some((entry) => {
       const record = asRecord(entry);
-      return record !== null && asString(record.id) === wanted;
+      return record !== null && asString(record.id) === modeId;
     });
-    return available ? wanted : null;
   }
 
   private onPromptComplete(result: unknown): AgentEvent[] {
@@ -560,7 +648,13 @@ export class AcpTurnDriver implements TurnDriver {
   private onPermissionRequest(id: JsonRpcId, params: unknown): AgentEvent[] {
     const root = asRecord(params);
     const toolCallRecord = root ? asRecord(root.toolCall) : null;
-    const toolCall = readToolCall(toolCallRecord ?? {});
+    // The permission request's own toolCall is a stub: it may omit the kind
+    // `acceptEdits` decides on and the name the approval card shows. Both were
+    // announced on the `tool_call` update for this id, so fall back to those
+    // rather than deciding — or asking the user — on missing information.
+    const toolCall = this.withCachedToolFacts(
+      readToolCall(toolCallRecord ?? {}),
+    );
     const options = readPermissionOptions(root?.options);
 
     const decision = this.options.autoDecide(toolCall);
@@ -587,6 +681,20 @@ export class AcpTurnDriver implements TurnDriver {
     ];
   }
 
+  /** Restore the kind and name cached from this id's `tool_call` update. */
+  private withCachedToolFacts(toolCall: AcpToolCall): AcpToolCall {
+    const id = toolCall.toolCallId;
+    if (id === '') {
+      return toolCall;
+    }
+    return {
+      ...toolCall,
+      name:
+        toolCall.name === '' ? (this.toolNames.get(id) ?? '') : toolCall.name,
+      kind: toolCall.kind ?? this.toolKinds.get(id) ?? null,
+    };
+  }
+
   private onNotification(method: string, params: unknown): AgentEvent[] {
     if (method !== ACP_CLIENT_METHODS.sessionUpdate) {
       // Vendor notifications (`cursor/update_todos`, `cursor/task`, …) are
@@ -605,6 +713,9 @@ export class AcpTurnDriver implements TurnDriver {
     kind: string | null,
     update: Record<string, unknown>,
   ): AgentEvent[] {
+    if (this.replaying) {
+      this.replayedUpdates += 1;
+    }
     switch (kind) {
       case 'agent_message_chunk': {
         if (this.replaying) {
@@ -630,6 +741,9 @@ export class AcpTurnDriver implements TurnDriver {
         }
         const toolCall = readToolCall(update);
         this.toolNames.set(toolCall.toolCallId, toolCall.name);
+        if (toolCall.kind !== null) {
+          this.toolKinds.set(toolCall.toolCallId, toolCall.kind);
+        }
         return [
           {
             type: 'tool_call',

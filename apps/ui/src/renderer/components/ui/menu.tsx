@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 import * as React from 'react';
 
+import { popoverSurface } from './popover';
 import { cn } from './utils';
 
 /** One selectable row. `value` is what `onSelect` reports back. */
@@ -75,6 +76,24 @@ export function Menu({
   const [highlight, setHighlight] = React.useState(0);
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
+  /**
+   * Set when a left-aligned panel would run off the right of the window, which
+   * a chip near the composer's edge — or any chip inside the overflow popover,
+   * itself pinned right — otherwise does. Measured rather than guessed: the
+   * panel's width depends on its longest row.
+   */
+  const [flipped, setFlipped] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    if (!open) {
+      setFlipped(false);
+      return;
+    }
+    const panel = panelRef.current;
+    if (panel && panel.getBoundingClientRect().right > window.innerWidth) {
+      setFlipped(true);
+    }
+  }, [open]);
 
   // A fresh open is a fresh search — a stale filter would hide the very rows
   // the user just reopened the menu to see. Focus moves into the menu either
@@ -187,12 +206,14 @@ export function Menu({
       tabIndex={-1}
       onKeyDown={onKeyDown}
       className={cn(
-        // No vertical padding: a row's highlight runs to the panel edge, where
+        // The shared floating surface, plus this panel's own sizing. No
+        // vertical padding: a row's highlight runs to the panel edge, where
         // `overflow-hidden` lets the corner radius clip it. Padding would leave
         // a bare strip above the first row and below the last.
-        'absolute z-50 min-w-56 max-w-96 overflow-hidden rounded-xl border border-border bg-popover shadow-panel-md',
+        popoverSurface,
+        'min-w-56 max-w-96 overflow-hidden',
         side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
-        align === 'start' ? 'left-0' : 'right-0',
+        align === 'start' && !flipped ? 'left-0' : 'right-0',
       )}>
       {searchPlaceholder !== undefined ? (
         <div className="border-b border-border px-3 py-1">

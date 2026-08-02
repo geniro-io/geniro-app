@@ -24,6 +24,7 @@ import { EffortsService } from './services/efforts.service';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
+import { RunTeardownService } from './services/run-teardown.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 
@@ -77,6 +78,7 @@ import { SkillsService } from './services/skills.service';
     ApprovalRegistry,
     PartialStreamService,
     ProcessRegistry,
+    RunTeardownService,
     ItemDao,
     NodeStateDao,
     RunDao,
@@ -146,6 +148,9 @@ import { SkillsService } from './services/skills.service';
     ClaudeProbeService,
     CursorProbeService,
     ProcessRegistry,
+    // Exported for the graph executor's own run delete: one teardown serves
+    // both run kinds, so neither can drift out of clearing a store.
+    RunTeardownService,
     SkillHarvestStore,
     ItemDao,
     NodeStateDao,

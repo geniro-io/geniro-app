@@ -92,6 +92,25 @@ export class ProcessRegistry implements OnApplicationShutdown {
     return this.active.has(runId);
   }
 
+  /**
+   * Resolves once the run's registered handle has settled — the wait a delete
+   * needs when finalization rides the handle itself (the graph executor's
+   * aggregate handle resolves only after the run's LAST write; a chat turn's
+   * does NOT, which is why the chat service waits on its own finalizer map).
+   *
+   * Resolves immediately when nothing is registered — including a run that is
+   * only CLAIMED, whose writes have not started and cannot be waited on here.
+   * Callers guard that window themselves (see the `deleting` sets).
+   */
+  async settled(runId: string): Promise<void> {
+    const handle = this.active.get(runId);
+    if (!handle) {
+      return;
+    }
+    // A handle that settles by rejecting has still stopped writing.
+    await handle.done.catch(() => undefined);
+  }
+
   /** Whether a claimed operation may cross its final pre-spawn boundary. */
   canStart(runId: string): boolean {
     return !this.shuttingDown && this.active.has(runId);

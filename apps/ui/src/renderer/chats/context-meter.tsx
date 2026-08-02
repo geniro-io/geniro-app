@@ -6,7 +6,12 @@ import {
   formatUsd,
 } from './agent-activity';
 
-/** Fraction above which the ring warns, then alarms. */
+/**
+ * Fraction above which the ring warns, then alarms. Below `WARN_AT` it is
+ * GREEN — a traffic light, not a brand accent: the ring exists to say how much
+ * room is left, and `text-primary` (the app's caramel) reads as decoration
+ * beside every other primary-toned control rather than as "you are fine".
+ */
 const WARN_AT = 0.7;
 const ALARM_AT = 0.9;
 
@@ -25,7 +30,6 @@ export function ContextMeter({
   contextTokens,
   contextWindowTokens,
   spentUsd = null,
-  showPercent = false,
   className,
 }: {
   /** Prompt-side tokens of the latest request, or null when unknown. */
@@ -34,8 +38,6 @@ export function ContextMeter({
   contextWindowTokens: number | null;
   /** Total spend across the run's turns, or null to omit. */
   spentUsd?: number | null;
-  /** Draw the percentage inside the ring (the header's roomier placement). */
-  showPercent?: boolean;
   className?: string;
 }): React.JSX.Element | null {
   // The model's OWN window when its CLI named one — the same figure must scale
@@ -74,16 +76,23 @@ export function ContextMeter({
       {fraction !== null && percent !== null ? (
         <ProgressRing
           fraction={fraction}
-          size={showPercent ? 28 : 16}
+          // ONE size and ONE label everywhere. There was a `showPercent` prop
+          // that made the header's ring the only readable one; a ring the user
+          // has to hover to read is a decoration, and two variants of the same
+          // meter is exactly the drift this component exists to prevent.
+          size={22}
+          // Thinner than the primitive's default: the arc has to frame two or
+          // three glyphs at this diameter, not crowd them.
+          strokeWidth={2}
           label={`Context ${percent}% full`}
-          centerLabel={showPercent ? `${percent}` : undefined}
+          centerLabel={`${percent}%`}
           className={cn(
             'ml-auto',
             fraction >= ALARM_AT
               ? 'text-destructive'
               : fraction >= WARN_AT
                 ? 'text-warning'
-                : 'text-primary',
+                : 'text-success',
           )}
         />
       ) : null}

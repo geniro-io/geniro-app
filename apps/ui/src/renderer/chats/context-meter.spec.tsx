@@ -63,21 +63,25 @@ describe('ContextMeter', () => {
     expect(container.textContent).toContain('ctx 100k / 200k');
   });
 
-  it('warns and then alarms as the window fills', () => {
-    const tone = (): string =>
-      container.querySelector('svg[role="img"]')?.getAttribute('class') ?? '';
-    render(
-      <ContextMeter contextTokens={100_000} contextWindowTokens={200_000} />,
-    );
-    expect(tone()).toContain('text-primary');
-    render(
-      <ContextMeter contextTokens={150_000} contextWindowTokens={200_000} />,
-    );
-    expect(tone()).toContain('text-warning');
-    render(
-      <ContextMeter contextTokens={190_000} contextWindowTokens={200_000} />,
-    );
-    expect(tone()).toContain('text-destructive');
+  it('runs green, then yellow, then red — AT the 70% and 90% marks', () => {
+    // A traffic light, so the boundaries themselves are the promise: green
+    // below 70, yellow from 70 to under 90, red from 90. Sampling only 50/75/95
+    // would pass with either threshold shifted by several points.
+    const tone = (percent: number): string => {
+      render(
+        <ContextMeter
+          contextTokens={percent * 2_000}
+          contextWindowTokens={200_000}
+        />,
+      );
+      return (
+        container.querySelector('svg[role="img"]')?.getAttribute('class') ?? ''
+      );
+    };
+    expect(tone(69)).toContain('text-success');
+    expect(tone(70)).toContain('text-warning');
+    expect(tone(89)).toContain('text-warning');
+    expect(tone(90)).toContain('text-destructive');
   });
 
   it('renders nothing when there is nothing to say', () => {
@@ -85,19 +89,31 @@ describe('ContextMeter', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('draws the percent inside the ring only where asked', () => {
-    render(
-      <ContextMeter
-        contextTokens={50_000}
-        contextWindowTokens={200_000}
-        showPercent
-      />,
-    );
-    expect(container.querySelector('svg text')?.textContent).toBe('25');
+  it('draws the percentage INSIDE the ring, units and all', () => {
+    // Everywhere the meter appears, not just the header: a ring whose figure
+    // is only in its accessible name is a decoration to a sighted user, and
+    // the bare number read as an unlabelled count of something.
     render(
       <ContextMeter contextTokens={50_000} contextWindowTokens={200_000} />,
     );
-    expect(container.querySelector('svg text')).toBeNull();
+    expect(container.querySelector('svg text')?.textContent).toBe('25%');
+  });
+
+  it('shrinks the label’s type so it stays inside the ring', () => {
+    // "9%" and "100%" go through the same 22px well. A fixed ratio seats the
+    // short one and spills the long one over the arc, which is what makes this
+    // worth pinning rather than eyeballing once.
+    const fontSize = (): number =>
+      Number(container.querySelector('svg text')?.getAttribute('font-size'));
+    render(
+      <ContextMeter contextTokens={2_000} contextWindowTokens={200_000} />,
+    );
+    const short = fontSize();
+    render(
+      <ContextMeter contextTokens={200_000} contextWindowTokens={200_000} />,
+    );
+    expect(container.querySelector('svg text')?.textContent).toBe('100%');
+    expect(fontSize()).toBeLessThan(short);
   });
 });
 

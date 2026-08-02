@@ -28,6 +28,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
   answerFoldsInto,
@@ -153,6 +154,17 @@ function hasProbedApprovalMode(
 export class GraphExecutorService {
   private readonly logger = new Logger(GraphExecutorService.name);
 
+  /**
+   * Runs whose delete is in progress — the graph-side twin of ChatService's
+   * `deleting` Set, covering the same window.
+   *
+   * `startRun` claims the run, then `drive` awaits the capability probes before
+   * `driveResolved` registers the aggregate handle. A delete landing in there
+   * finds no handle to wait on, destroys the rows, and the walk would then
+   * register and write a whole run's items for a run that no longer exists.
+   */
+  private readonly deleting = new Set<string>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -169,6 +181,7 @@ export class GraphExecutorService {
     private readonly cursorMerge: CursorMcpMergeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly store: WorkflowStoreService,
+    private readonly teardown: RunTeardownService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -282,6 +295,37 @@ export class GraphExecutorService {
     // cancels converge on one registry key) + the 404 the chat siblings return.
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     return { cancelled: this.registry.cancel(runId) };
+  }
+
+  /**
+   * Delete a workflow run and everything it owns — a ONE-WAY DOOR, and the
+   * graph-side sibling of `ChatService.delete`. The chats sidebar lists both
+   * kinds of run, so without this the workflow rows in it were undeletable:
+   * the chat route refuses them (`NOT_A_CHAT_RUN`) precisely because deleting
+   * one there would skip everything below.
+   *
+   * The teardown itself is shared ({@link RunTeardownService}). What is
+   * graph-specific: the settle promise is the run's AGGREGATE handle (it
+   * resolves only after the DAG's final status + `turn_complete` writes), and
+   * the CallBroker's per-run call surface has no chat analogue.
+   */
+  async deleteRun(runId: string): Promise<{ deleted: boolean }> {
+    const em = this.em.fork();
+    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+
+    // Claimed BEFORE the cancel, so a walk still crossing the claim→register
+    // window sees the delete and abandons itself rather than registering
+    // behind our back.
+    this.deleting.add(runId);
+    try {
+      return await this.teardown.purge(em, runId, this.registry.settled(runId));
+    } finally {
+      // The call surface dies with the run even if the purge threw half-way:
+      // leaving it registered would let a child that outlived its run dispatch
+      // into rows that are already (partly) gone.
+      this.callBroker.unregisterRun(runId);
+      this.deleting.delete(runId);
+    }
   }
 
   /** Workflow runs, newest first (the Chats page's run picker). */
@@ -426,6 +470,24 @@ export class GraphExecutorService {
         // Unknown is NOT a fail — the node runs with its requested mode and
         // any real CLI rejection surfaces loudly in the transcript.
         claudeModes = this.claudeProbe.capability();
+      }
+      // A delete can have landed while those probes were awaiting, and it has
+      // TWO shapes this walk must not survive:
+      //   - one still in flight (cancelled, rows not yet gone) — `deleting`;
+      //   - one that already finished — the run row is gone, and `deleting`
+      //     has been cleared again, so only re-reading catches it.
+      // The re-read is resolved FIRST and `deleting` consulted only after, so
+      // a delete that starts during the read is still seen by the Set (the
+      // chat turn's start applies the same order for the same reason).
+      const runStillExists = (await this.runDao.getById(runId, em)) !== null;
+      if (this.deleting.has(runId) || !runStillExists) {
+        // Abandon the walk: no handle registered, no item written. The delete
+        // owns this run's rows from here — writing any would orphan them.
+        this.registry.release(runId);
+        this.logger.warn(
+          `workflow run ${runId} was deleted while starting — abandoning its walk`,
+        );
+        return;
       }
       this.driveResolved(
         em,

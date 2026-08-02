@@ -45,6 +45,7 @@ const workflowApi = vi.hoisted(() => ({
   listWorkflowRuns: vi.fn(),
   startWorkflowRun: vi.fn(),
   cancelWorkflowRun: vi.fn(),
+  deleteWorkflowRun: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // TerminalPanel is stubbed too, so opening a terminal never touches xterm or a
@@ -374,6 +375,9 @@ beforeEach(() => {
   workflowApi.cancelWorkflowRun
     .mockReset()
     .mockResolvedValue({ cancelled: true });
+  workflowApi.deleteWorkflowRun
+    .mockReset()
+    .mockResolvedValue({ deleted: true });
   // Default: nothing probed — the approval chip hides plan; tests override.
   capabilitiesApi.getCapabilities.mockReset().mockResolvedValue({
     cursorCalls: {
@@ -2423,32 +2427,31 @@ describe('Chats queued messages', () => {
     });
   });
 
-  it('lays the composer controls out on ONE line that never wraps', async () => {
-    // A crowded composer (agent + model + folder + branch + approval) used to
-    // wrap: first the send button dropped to a line of its own, then — once
-    // the button was pulled out of the wrapping box — the last chip did. Both
-    // grew the card and left a band of empty space. Nothing wraps now; the
-    // shrinkable chips give up width instead.
+  it('keeps the composer controls on ONE line — no wrap, no shrink, no overflow', async () => {
+    // Three shapes this row has had, each a defect: the send button dropping
+    // to a line of its own; the chips wrapping and growing the card; and the
+    // chips staying put but overflowing, which ran them under the send button
+    // and squeezed the folder chip to 0px (measured, at 900px). What is left
+    // is a fixed-size row whose surplus chips move into an overflow menu.
     const { client } = makeClient();
     const container = await mount(client);
 
     const send = composerButton(container, 'Send')!;
-    const chipBox = send.previousElementSibling!;
+    const actions = send.parentElement!;
+    const chipBox = actions.previousElementSibling!;
 
-    // Neither the chip box nor the row holding it may wrap…
     expect(chipBox.className).not.toContain('flex-wrap');
-    expect(send.parentElement?.className).not.toContain('flex-wrap');
-    // …the button is not inside the chip box and cannot be squeezed…
     expect(chipBox.contains(send)).toBe(false);
-    expect(classesOf(send)).toContain('shrink-0');
-    // …and the folder chip is the one that yields, so the fixed-label chips
-    // beside it keep their full text. Exact tokens, not substrings: the chip's
-    // class list also carries an `[&>svg]:shrink-0` rule for its icon.
+    expect(classesOf(actions)).toContain('shrink-0');
+
+    // No chip gives up width to make room — the row moves chips instead, and a
+    // chip that quietly shrank would report a false fit. Exact tokens, not
+    // substrings: the chip's class list carries `[&>svg]:shrink-0` for its icon.
     const folder = chipBox.querySelector<HTMLElement>(
       '[data-menu-trigger][aria-label="Folder for new chats"]',
     )!;
-    expect(classesOf(folder)).toContain('shrink');
-    expect(classesOf(folder)).not.toContain('shrink-0');
+    expect(classesOf(folder)).toContain('shrink-0');
+    expect(classesOf(folder)).toContain('max-w-52');
   });
 
   it('drops a staged image from the next message when it is removed', async () => {
@@ -2843,14 +2846,18 @@ describe('Chats run composer chips', () => {
     return [...container.querySelectorAll<HTMLElement>('[data-slot="chip"]')];
   }
 
-  it("a chat run shows its agent + folder as INACTIVE chips with the create screen's card", async () => {
+  it("a chat run shows the agent in its HEADER and the folder as an inactive chip in the create screen's card", async () => {
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
+    // The agent cannot change for the life of a run, so it states itself on
+    // the header's identity line rather than sitting among five chips that DO
+    // change things.
+    const header = container.querySelector('h2')!.parentElement!;
+    expect(header.textContent).toContain('claude');
     const labels = chips(container).map((b) => b.textContent);
-    expect(labels).toContain('claude');
     expect(labels.some((l) => l?.includes('proj'))).toBe(true);
     // No chip is rendered as a disabled button (the tooltip-blocking shape).
     expect(
@@ -2959,8 +2966,10 @@ describe('Chats run composer chips', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
+    // The run's IDENTITY (which workflow) is the header's line; the footer
+    // carries only what a run of it needs stated or changed.
+    expect(container.querySelector('h2')?.textContent).toBe('Review team');
     const labels = chips(container).map((b) => b.textContent);
-    expect(labels.some((l) => l?.includes('Review team'))).toBe(true);
     expect(labels.some((l) => l?.includes('proj'))).toBe(true);
     expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
       true,
@@ -3083,6 +3092,45 @@ describe('Chats sidebar list', () => {
     expect(
       [...container.querySelectorAll('aside li')].find((el) =>
         el.textContent?.includes('My chat'),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('deletes a WORKFLOW row through the workflow route, not the chat one', async () => {
+    // The reported defect: the sidebar lists workflow runs beside chats, but
+    // every row's delete went to the chat route — which REFUSES a workflow run
+    // (its executor owns teardown the chat path knows nothing about), so those
+    // rows could not be deleted at all.
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Delete Call Demo"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const dialog = container.querySelector('[role="dialog"]')!;
+    // The workflow ITSELF is not what is being deleted — say so on the card.
+    expect(dialog.textContent).toContain('stays in your library');
+
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete')!
+        .click();
+    });
+
+    expect(workflowApi.deleteWorkflowRun).toHaveBeenCalledWith({
+      runId: 'wf-run-1',
+    });
+    expect(api.deleteChat).not.toHaveBeenCalled();
+    expect(
+      [...container.querySelectorAll('aside li')].find((el) =>
+        el.textContent?.includes('Call Demo'),
       ),
     ).toBeUndefined();
   });

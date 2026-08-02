@@ -33,7 +33,10 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
@@ -46,10 +49,26 @@ import type { WorkflowStoreService } from './workflow-store.service';
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
   readonly runs = new Map<string, Run>();
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
+  /**
+   * When set, the run-row purge blocks on it — a test seam for the window in
+   * which a delete is IN FLIGHT: cancelled and past its own guards, but with
+   * the run row still present, which is precisely the state a re-read cannot
+   * detect and only the `deleting` Set covers.
+   */
+  purgeGate: Promise<void> | null = null;
   failNextStatus: string | null = null;
   private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
+  }
+  async hardDeleteIncludingSoftDeleted(where: { id: string }): Promise<number> {
+    this.hardDeleted.push(where);
+    if (this.purgeGate) {
+      await this.purgeGate;
+    }
+    return this.runs.delete(where.id) ? 1 : 0;
   }
   async create(data: Partial<Run>): Promise<Run> {
     const run = {
@@ -90,7 +109,22 @@ class FakeRunDao {
 
 class FakeItemDao {
   readonly items: Item[] = [];
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
+  async hardDeleteIncludingSoftDeleted(where: {
+    runId: string;
+  }): Promise<number> {
+    this.hardDeleted.push(where);
+    let removed = 0;
+    for (let i = this.items.length - 1; i >= 0; i -= 1) {
+      if (this.items[i]!.runId === where.runId) {
+        this.items.splice(i, 1);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
   async create(data: Partial<Item>): Promise<Item> {
     if (data.kind === this.failNextKind) {
       this.failNextKind = null;
@@ -129,8 +163,23 @@ interface FakeNodeRow {
 
 class FakeNodeStateDao {
   readonly rows = new Map<string, FakeNodeRow>();
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
   private key(runId: string, nodeId: string): string {
     return `${runId}:${nodeId}`;
+  }
+  async hardDeleteIncludingSoftDeleted(where: {
+    runId: string;
+  }): Promise<number> {
+    this.hardDeleted.push(where);
+    let removed = 0;
+    for (const [key, row] of this.rows) {
+      if (row.runId === where.runId) {
+        this.rows.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
   }
   row(runId: string, nodeId: string): FakeNodeRow | undefined {
     return this.rows.get(this.key(runId, nodeId));
@@ -345,6 +394,8 @@ function setup(
   claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
+  deletedRuns: string[];
+  removedAttachmentRuns: string[];
 } {
   const claude = new FakeAdapter('claude');
   const cursor = new FakeAdapter('cursor-agent');
@@ -419,6 +470,24 @@ function setup(
   bus.allStatuses().subscribe((event) => {
     statusEvents.push({ runId: event.runId, status: event.status });
   });
+  const deletedRuns: string[] = [];
+  bus.allDeleted().subscribe((runId) => deletedRuns.push(runId));
+  const removedAttachmentRuns: string[] = [];
+  const attachments = {
+    removeRun: (runId: string) => removedAttachmentRuns.push(runId),
+  } as unknown as AttachmentStoreService;
+  // The REAL teardown over the same fakes — `deleteRun` is a thin caller of
+  // it, so a stub here would leave the delete tests pinning the stub.
+  const teardown = new RunTeardownService(
+    itemDao as unknown as ItemDao,
+    nodeDao as unknown as NodeStateDao,
+    runDao as unknown as RunDao,
+    bus,
+    registry,
+    callTokens,
+    new PartialStreamService(bus),
+    attachments,
+  );
   const service = new GraphExecutorService(
     em,
     runDao as unknown as RunDao,
@@ -438,6 +507,7 @@ function setup(
     cursorMerge,
     skillHarvest,
     workflowStore,
+    teardown,
     {
       token: 'launch-token',
       version: '0.0.0-test',
@@ -463,6 +533,8 @@ function setup(
     skillHarvest,
     storeGet,
     statusEvents,
+    deletedRuns,
+    removedAttachmentRuns,
   };
 }
 
@@ -2744,5 +2816,227 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     expect(probed.claudeEnsureVerdict).toHaveBeenCalledTimes(1);
     completeTurn(probed.claude.starts[0]!, 'done');
     await drain();
+  });
+});
+
+describe('GraphExecutorService — deleting a workflow run', () => {
+  const ONE_NODE: Workflow = {
+    name: 'one',
+    nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+    edges: [],
+  };
+
+  /** An acceptEdits node is what makes a walk wait on the claude mode probe. */
+  const PROBED_NODE: Workflow = {
+    name: 'ae',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'acceptEdits' },
+    ],
+    edges: [],
+  };
+
+  /**
+   * Hold the next walk inside its capability probe until the returned fn runs
+   * — the claim→register window, where the run is claimed but has no handle a
+   * delete could wait on.
+   */
+  function stallProbe(ctx: ReturnType<typeof setup>): () => void {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    ctx.claudeEnsureVerdict.mockImplementation(async () => {
+      await gate;
+      return {
+        acceptEdits: 'pass',
+        plan: 'pass',
+        version: 'claude-test',
+        probedAt: 0,
+        reason: null,
+      };
+    });
+    return release;
+  }
+
+  /** A settled workflow run with a transcript, ready to delete. */
+  async function finishedRun(ctx: ReturnType<typeof setup>) {
+    const run = await ctx.service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(ctx.claude.starts[0]!, 'done');
+    await drain();
+    return run;
+  }
+
+  it('removes the run, its items and its node states', async () => {
+    // The reported defect: the chats sidebar lists workflow runs beside chats,
+    // but only the chat rows could be deleted — the chat route refuses a
+    // workflow run and nothing else offered a delete, so those rows were
+    // permanent.
+    const ctx = await setup();
+    const run = await finishedRun(ctx);
+    expect(ctx.itemDao.items.length).toBeGreaterThan(0);
+    expect(ctx.nodeDao.rows.size).toBeGreaterThan(0);
+
+    expect(await ctx.service.deleteRun(run.id)).toEqual({ deleted: true });
+
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.nodeDao.rows.size).toBe(0);
+  });
+
+  it('deletes with the soft-delete filter DISABLED, in all three tables', async () => {
+    const ctx = await setup();
+    const run = await finishedRun(ctx);
+    await ctx.service.deleteRun(run.id);
+
+    // The filter-disabling variant, never the plain `hardDelete` that hydrates
+    // through `deletedAt: null` and would silently skip a soft-deleted row.
+    expect(ctx.runDao.hardDeleted).toEqual([{ id: run.id }]);
+    expect(ctx.itemDao.hardDeleted).toEqual([{ runId: run.id }]);
+    expect(ctx.nodeDao.hardDeleted).toEqual([{ runId: run.id }]);
+  });
+
+  it('drops the run’s call surface, its tokens, its attachments, and announces it', async () => {
+    // None of these cascade from the `runs` row: the broker and the token
+    // registry are in memory, attachments are files, and the PTY mirror lives
+    // in a module above this one and learns only by subscription.
+    const ctx = await setup();
+    const run = await ctx.service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(ctx.callBroker.hasRun(run.id)).toBe(true);
+    expect(ctx.callTokens.get(run.id, 'a')).not.toBeNull();
+
+    await ctx.service.deleteRun(run.id);
+
+    expect(ctx.callBroker.hasRun(run.id)).toBe(false);
+    expect(ctx.callTokens.get(run.id, 'a')).toBeNull();
+    expect(ctx.removedAttachmentRuns).toEqual([run.id]);
+    expect(ctx.deletedRuns).toEqual([run.id]);
+  });
+
+  it('stops a LIVE run and waits for its final writes before destroying the rows', async () => {
+    // Cancel only SIGNALS: the DAG keeps writing (each node's terminal item,
+    // the run's status roll-up and its `turn_complete`) until the aggregate
+    // handle settles. A delete that merely cancelled and proceeded would leave
+    // those items behind for a run whose row is gone — `Item.runId` has no FK,
+    // so the inserts SUCCEED and nothing can ever read or delete them again.
+    const ctx = await setup();
+    const run = await ctx.service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(ctx.claude.starts).toHaveLength(1);
+
+    await ctx.service.deleteRun(run.id);
+
+    expect(ctx.claude.starts[0]!.cancelled).toBe(true);
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    expect(ctx.itemDao.items).toEqual([]);
+    // And nothing lands afterwards either.
+    await drain();
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.registry.has(run.id)).toBe(false);
+  });
+
+  it('a walk still crossing the claim→register window abandons itself instead of outliving the delete', async () => {
+    // `startRun` claims the run, then `drive` AWAITS the capability probes
+    // before `driveResolved` registers the aggregate handle. A delete landing
+    // in that gap has no handle to wait on, so the walk must notice the delete
+    // itself — otherwise it registers afterwards and writes a whole run's
+    // items for a run that no longer exists.
+    const ctx = setup();
+    const releaseProbe = stallProbe(ctx);
+    const run = await ctx.service.startRun({
+      slug: 'ae',
+      workflow: triggered(PROBED_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // Claimed and probing — nothing has spawned yet.
+    expect(ctx.claude.starts).toHaveLength(0);
+
+    await ctx.service.deleteRun(run.id);
+    releaseProbe();
+    await drain();
+
+    expect(ctx.claude.starts).toHaveLength(0);
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    // The claim was released, so the id is not wedged as permanently busy.
+    expect(ctx.registry.has(run.id)).toBe(false);
+  });
+
+  it('a walk resuming while a delete is IN FLIGHT abandons itself — the row is still there', async () => {
+    // The other arm of the same guard. Here the delete has cancelled the run
+    // and passed its own checks but has NOT yet purged the run row, so the
+    // walk's re-read finds it alive; only the `deleting` Set knows it is
+    // doomed. Without that arm the walk drives on and its items are orphaned
+    // by the purge a moment later.
+    const ctx = setup();
+    const releaseProbe = stallProbe(ctx);
+    const run = await ctx.service.startRun({
+      slug: 'ae',
+      workflow: triggered(PROBED_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    let releasePurge = (): void => {};
+    ctx.runDao.purgeGate = new Promise<void>((resolve) => {
+      releasePurge = resolve;
+    });
+    const deleting = ctx.service.deleteRun(run.id);
+    await drain();
+    // Mid-delete: the run row still exists, so only the Set can catch this.
+    expect(ctx.runDao.runs.get(run.id)).toBeDefined();
+
+    releaseProbe();
+    await drain();
+    releasePurge();
+    await deleting;
+
+    expect(ctx.claude.starts).toHaveLength(0);
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    expect(ctx.registry.has(run.id)).toBe(false);
+  });
+
+  it('refuses to delete a CHAT run through the workflow route', async () => {
+    // The chat service owns its own teardown (attachments, partial streams);
+    // deleting through here would skip it.
+    const { service, runDao } = setup();
+    const chatRun = await runDao.create({
+      workflowId: null,
+      status: 'completed',
+    });
+    await expect(service.deleteRun(chatRun.id)).rejects.toThrow();
+    expect(runDao.runs.get(chatRun.id)).toBeDefined();
+  });
+
+  it('404s on a run that does not exist', async () => {
+    const { service } = setup();
+    await expect(service.deleteRun('nope')).rejects.toThrow();
   });
 });

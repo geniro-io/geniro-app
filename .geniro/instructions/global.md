@@ -60,6 +60,17 @@ file at the start of each run and at every phase-boundary refresh via
   shadowed CSC_NAME/CSC_LINK — an "unsigned-safe" build would have shipped
   ad-hoc-signed WITH the auto-update feed.)
 
+- **A fix is not "verified" until you re-observed it on the new build.** `pnpm dev`
+  runs the daemon from `apps/daemon/dist/main.js`, and `DaemonSupervisor.startNow()`
+  ADOPTS an already-running healthy daemon whose `package.json` version matches
+  (`apps/ui/src/main/daemon-supervisor.ts:243-250`). That version string does not
+  change between rebuilds, so a same-version rebuild keeps serving the OLD `dist/`.
+  Rebuild, kill the pid in `<userData>/daemon.json`, relaunch, re-check — and state
+  which build you observed. When the remaining step is the user's, say
+  "waiting on <step>", never "fixed". Renderer-only edits hot-reload and are exempt.
+  (Three sessions hit this: "Why its still not sorted?", "But it still wasnt fixed",
+  "Still" — each after a fix was declared.)
+
 ## Additional Steps
 
 ### After worktree-setup

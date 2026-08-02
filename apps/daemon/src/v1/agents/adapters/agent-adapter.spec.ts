@@ -12,7 +12,7 @@ import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import type { AdapterConfig, AgentApprovalMode } from './adapter.types';
 import type { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
-import { CursorAdapter } from './cursor/cursor.adapter';
+import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
 
 /**
  * The config-driven members the base answers for EVERY adapter, driven through
@@ -21,7 +21,7 @@ import { CursorAdapter } from './cursor/cursor.adapter';
  */
 const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
   { name: 'claude', adapter: new ClaudeAdapter() },
-  { name: 'cursor-agent', adapter: new CursorAdapter() },
+  { name: 'cursor-agent', adapter: new CursorAcpAdapter() },
 ];
 
 /**
@@ -29,13 +29,19 @@ const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
  * mode being asked for — the collision the two shipped adapters never have, and
  * the only shape that can tell the two orderings apart.
  */
-class SoleModeWithProbeTableAdapter extends CursorAdapter {
+class SoleModeWithProbeTableAdapter extends CursorAcpAdapter {
   override getConfig(): AdapterConfig {
     const base = super.getConfig();
     return {
       ...base,
       approval: {
         ...base.approval,
+        // Declared, not inherited: every shipped adapter now honours several
+        // modes, so the sole-mode collapse this pins has to be stated here or
+        // the fixture stops exercising it.
+        modes: ['auto'],
+        soleModeDegradeReason: (requested) =>
+          `test CLI has no approval callback — approval '${requested}' degrades to auto-approve for this turn`,
         degradeOnProbeFail: {
           acceptEdits: { to: 'ask', reason: 'probe table won' },
         },
@@ -129,7 +135,7 @@ describe('AgentAdapter.resolveApprovalMode', () => {
 
   it('keeps the sole mode itself untouched, with nothing to report', () => {
     expect(
-      new CursorAdapter().resolveApprovalMode('auto', {
+      new CursorAcpAdapter().resolveApprovalMode('auto', {
         supported: { acceptEdits: false },
       }),
     ).toEqual({ mode: 'auto', degradeReason: null });
@@ -254,7 +260,7 @@ describe('AgentAdapter.listReportedCommands', () => {
     };
     // A usable probe root on purpose: the ONLY thing that may keep this from
     // spawning is the config gate, never a workspace that could not be made.
-    const adapter = new CursorAdapter({ spawn, probeRootDir: tempDir() });
+    const adapter = new CursorAcpAdapter({ spawn, probeRootDir: tempDir() });
 
     await expect(adapter.listReportedCommands()).resolves.toEqual([]);
     expect(spawned).toBe(0);
@@ -299,7 +305,7 @@ describe('AgentAdapter.supportsLiveStream', () => {
       cb(null, '  --include-partial-messages\n');
       return {} as ChildProcess;
     }) as unknown as typeof execFile;
-    const adapter = new CursorAdapter({ execFileFn });
+    const adapter = new CursorAcpAdapter({ execFileFn });
 
     await expect(adapter.supportsLiveStream()).resolves.toBe(false);
     expect(spawned).toBe(0);

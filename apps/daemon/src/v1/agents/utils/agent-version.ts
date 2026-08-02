@@ -16,8 +16,8 @@ export interface ResolveAgentVersionOptions {
 const VERSION_TIMEOUT_MS = 5_000;
 
 /**
- * `<binary> --version` as an opaque cache key (the cursor probe verdict is
- * cached per installed binary, re-probed only when the binary changes).
+ * `<binary> --version` as an opaque cache key (a probe verdict is cached per
+ * installed binary, re-probed only when the binary changes).
  * `null` means "version unknown" — callers must treat that as cache-miss,
  * never as "unsupported": a CLI that can't print a version can still work.
  * Never throws and never hangs (timeout kills the child).

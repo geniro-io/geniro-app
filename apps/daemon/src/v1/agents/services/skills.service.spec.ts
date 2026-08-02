@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AgentCommandOptions } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
@@ -67,7 +67,7 @@ class ScriptedClaude extends ClaudeAdapter {
   }
 }
 
-class ScriptedCursor extends CursorAdapter {
+class ScriptedCursor extends CursorAcpAdapter {
   asked = 0;
 
   override listReportedCommands(): Promise<string[]> {

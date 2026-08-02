@@ -6,6 +6,10 @@ import { Label } from './ui/label';
  * A labelled form control with an optional hint line. Wraps any input/select in
  * the standard label + control + hint stack so every form field — onboarding,
  * settings, the future graph builder — is assembled identically.
+ *
+ * `htmlFor` is optional because a field's content is not always a labelable
+ * control: a field that renders an explanation instead of an input must omit
+ * it rather than point the label at an element that cannot receive focus.
  */
 export function Field({
   label,
@@ -14,7 +18,7 @@ export function Field({
   children,
 }: {
   label: string;
-  htmlFor: string;
+  htmlFor?: string;
   hint?: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element {

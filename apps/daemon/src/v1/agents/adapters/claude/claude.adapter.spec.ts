@@ -790,6 +790,70 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     expect(captured.env?.MCP_TOOL_TIMEOUT).toBe('5000');
   });
 
+  it('withholds the "May call" block from a turn that got no MCP endpoint', () => {
+    // `callSurfacePrompt` is only true while the call tools are registered,
+    // and the tools ride `mcpEndpoint`. The executor hands out no endpoint
+    // when the run's per-node call token is already revoked or the server has
+    // no bound port yet — a turn carrying the block but no `--mcp-config` is
+    // instructed to route work through `call_agent` tools it does not have,
+    // so its callees never run while the node still reports success.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        systemPrompt: 'You are the router.',
+        callSurfacePrompt:
+          'May call (via the call_agent tool; await_agent collects async results):\n- worker',
+        mcpEndpoint: null,
+      },
+      () => {},
+    );
+    expect(captured.args!.join(' ')).not.toContain('--mcp-config');
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe('You are the router.');
+  });
+
+  it('appends the "May call" block after the role when the endpoint IS delivered', () => {
+    // The producer half of the split: before `callSurfacePrompt` existed the
+    // executor pre-joined both into `systemPrompt`, so dropping the block from
+    // this join would leave every caller silently unaware of its callees while
+    // the whole suite stayed green.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        systemPrompt: 'You are the router.',
+        callSurfacePrompt: 'May call (via the call_agent tool):\n- worker',
+        mcpEndpoint: ENDPOINT,
+      },
+      () => {},
+    );
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe(
+      'You are the router.\n\nMay call (via the call_agent tool):\n- worker',
+    );
+  });
+
+  it('sends the call block alone when a caller node has no role of its own', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        systemPrompt: null,
+        callSurfacePrompt: 'May call (via the call_agent tool):\n- worker',
+        mcpEndpoint: ENDPOINT,
+      },
+      () => {},
+    );
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe(
+      'May call (via the call_agent tool):\n- worker',
+    );
+  });
+
   it('a turn without mcpEndpoint keeps argv and env untouched', () => {
     // "Untouched" means the ADAPTER adds nothing: the daemon's own process
     // env may legitimately carry MCP_TOOL_TIMEOUT (it does under some dev

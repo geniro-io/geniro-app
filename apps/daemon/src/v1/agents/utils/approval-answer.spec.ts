@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
@@ -13,7 +13,7 @@ import {
 // that restated either would keep passing after the adapter changed the tool
 // name or the answer field.
 const claude = new ClaudeAdapter();
-const cursor = new CursorAdapter();
+const cursor = new CursorAcpAdapter();
 
 const { questionToolName } = claude.getConfig();
 if (questionToolName === null) {

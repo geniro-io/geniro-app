@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
-import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { TerminalsService } from './terminals.service';
@@ -51,7 +51,7 @@ function build(overrides: {
   // `terminalCommand`, so a double here would assert against a fake argv.
   const adapters = new AgentAdapterRegistry(
     new ClaudeAdapter(),
-    new CursorAdapter(),
+    new CursorAcpAdapter(),
   );
   const service = new TerminalsService(
     em as never,

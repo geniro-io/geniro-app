@@ -23,6 +23,7 @@ import type {
   InstalledApprovalSupport,
   InstalledCapabilities,
   TerminalCommandResult,
+  TurnDriver,
 } from './adapter.types';
 import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
 
@@ -464,6 +465,28 @@ export abstract class AgentAdapter {
   protected abstract mapMessage(obj: unknown): AgentEvent[];
 
   /**
+   * The full instruction text for one turn: the node's role, then the caller's
+   * "May call" block — but the latter ONLY when this turn actually registered
+   * the call tools.
+   *
+   * This lives on the base because getting it wrong is silent: an agent told
+   * to route work through `call_agent` with no such tool registered never runs
+   * its callees, and the node still reports success. Each adapter knows its
+   * own delivery mechanism, so it passes `granted`; nobody re-derives the
+   * join. Adapters compose the result differently — claude appends it via
+   * `--append-system-prompt`, ACP prepends it to the prompt text — but the
+   * rule about WHEN the block is included is the same for every CLI.
+   */
+  protected composeSystemPrompt(
+    input: AgentTurnInput,
+    granted: boolean,
+  ): string {
+    return [input.systemPrompt, granted ? input.callSurfacePrompt : null]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n');
+  }
+
+  /**
    * Payload written to the child's stdin before it is closed. The default —
    * no payload — closes stdin immediately, so a CLI that reads its prompt from
    * argv never blocks waiting on stdin (and an unauthenticated CLI fails fast
@@ -476,7 +499,7 @@ export abstract class AgentAdapter {
   /**
    * Extra environment merged over the stripped child env. The default passes
    * through the caller's `input.env`; an adapter whose CLI needs a secret
-   * re-injects it here for its OWN child only (see `CursorAdapter`).
+   * re-injects it here for its OWN child only (see `CursorAcpAdapter`).
    */
   protected buildEnv(
     input: AgentTurnInput,
@@ -497,6 +520,23 @@ export abstract class AgentAdapter {
    * Encode one approval verdict as the stdin line the CLI expects. Default
    * undefined — no approval protocol; `respondApproval` is then a no-op.
    */
+  /**
+   * Build this turn's protocol driver. The default is stateless — it forwards
+   * each line to {@link mapMessage} and each verdict to
+   * {@link buildApprovalResponse}, which is the whole protocol for a one-shot
+   * stream-json CLI. Override when the CLI speaks a stateful, bidirectional
+   * protocol whose state must be per-turn (see `AcpTurnDriver`): one adapter
+   * instance drives N concurrent turns under graph fan-out, so that state can
+   * never live on the adapter itself.
+   */
+  protected createTurnDriver(_input: AgentTurnInput): TurnDriver {
+    return {
+      onMessage: (obj) => this.mapMessage(obj),
+      buildApprovalResponse: (id, allow, updatedInput) =>
+        this.buildApprovalResponse(id, allow, updatedInput),
+    };
+  }
+
   protected buildApprovalResponse(
     _id: string,
     _allow: boolean,
@@ -526,6 +566,7 @@ export abstract class AgentAdapter {
     const dispose = this.prepareTurn(input);
     let handle: AgentTurnHandle;
     try {
+      const driver = this.createTurnDriver(input);
       handle = runHeadlessCli({
         command: this.command,
         args: this.buildArgs(input),
@@ -534,8 +575,9 @@ export abstract class AgentAdapter {
         stdinPayload: this.buildStdinPayload(input),
         keepStdinOpen: this.keepStdinOpen(input),
         buildApprovalResponse: (id, allow, updatedInput) =>
-          this.buildApprovalResponse(id, allow, updatedInput),
-        mapper: (obj) => this.mapMessage(obj),
+          driver.buildApprovalResponse?.(id, allow, updatedInput),
+        mapper: (obj) => driver.onMessage(obj),
+        onStdinReady: (io) => driver.onStdinReady?.(io),
         // The mappers are pure module-scope functions, so a control message
         // an adapter does not model comes back as data and is logged HERE —
         // the one caller of `mapMessage`, rather than once per consumer. It

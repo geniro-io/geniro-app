@@ -2,14 +2,10 @@ import { join } from 'node:path';
 
 import { Logger, Module } from '@nestjs/common';
 
-import { CallTokenRegistry } from '../../auth/call-token.registry';
-import { RUNTIME_TOKEN, type RuntimeInfo } from '../../auth/runtime';
 import { environment } from '../../environments';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { ClaudeProbeService } from './adapters/claude/claude-probe.service';
-import { CursorAdapter } from './adapters/cursor/cursor.adapter';
-import { CursorMcpMergeService } from './adapters/cursor/cursor-mcp-merge.service';
-import { CursorProbeService } from './adapters/cursor/cursor-probe.service';
+import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
 import { ChatController } from './controllers/chat.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { ItemDao } from './dao/item.dao';
@@ -20,6 +16,7 @@ import { AgentEventBus } from './services/agent-events.bus';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
+import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -49,6 +46,10 @@ import { SkillsService } from './services/skills.service';
     AgentAdapterRegistry,
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
+    {
+      provide: CursorMcpCleanupService,
+      useFactory: () => new CursorMcpCleanupService(),
+    },
     {
       provide: AttachmentStoreService,
       useFactory: () => new AttachmentStoreService(),
@@ -100,9 +101,9 @@ import { SkillsService } from './services/skills.service';
         }),
     },
     {
-      provide: CursorAdapter,
+      provide: CursorAcpAdapter,
       useFactory: () =>
-        new CursorAdapter({ logger: new Logger(CursorAdapter.name) }),
+        new CursorAcpAdapter({ logger: new Logger(CursorAcpAdapter.name) }),
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -111,54 +112,24 @@ import { SkillsService } from './services/skills.service';
         new ClaudeProbeService(adapter, processes),
       inject: [ClaudeAdapter, ProcessRegistry],
     },
-    {
-      // Factory because the trailing options bag is a test seam, not a DI token.
-      // Provided HERE rather than in GraphsModule, beside the adapter it drives
-      // (`CallTokenRegistry` and `RUNTIME_TOKEN` come from the global
-      // RuntimeModule, so nothing about graphs is needed to build it) and
-      // exported so the graph executor, the MCP host and the capabilities
-      // route resolve the SAME probe instance — its verdict cache is per
-      // launch, and a second instance would re-probe.
-      provide: CursorProbeService,
-      useFactory: (
-        adapter: CursorAdapter,
-        tokens: CallTokenRegistry,
-        processes: ProcessRegistry,
-        runtime: RuntimeInfo,
-      ) => new CursorProbeService(adapter, tokens, processes, runtime),
-      inject: [
-        CursorAdapter,
-        CallTokenRegistry,
-        ProcessRegistry,
-        RUNTIME_TOKEN,
-      ],
-    },
-    {
-      // Factory because the trailing options bag is a test seam, not a DI token.
-      provide: CursorMcpMergeService,
-      useFactory: (processes: ProcessRegistry) =>
-        new CursorMcpMergeService(processes),
-      inject: [ProcessRegistry],
-    },
   ],
   exports: [
     AgentEventBus,
     ApprovalRegistry,
     PartialStreamService,
     ClaudeProbeService,
-    CursorProbeService,
     ProcessRegistry,
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,
     SkillHarvestStore,
+    CursorMcpCleanupService,
     ItemDao,
     NodeStateDao,
     RunDao,
     ClaudeAdapter,
-    CursorAdapter,
+    CursorAcpAdapter,
     AgentAdapterRegistry,
-    CursorMcpMergeService,
   ],
 })
 export class AgentsModule {}

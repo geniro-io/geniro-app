@@ -4,7 +4,7 @@ import { BadRequestException } from '@packages/common';
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 
 /**
  * The ONE kind→adapter dispatch in the daemon.
@@ -25,7 +25,7 @@ import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
 export class AgentAdapterRegistry {
   private readonly byKind: ReadonlyMap<AgentKind, AgentAdapter>;
 
-  constructor(claude: ClaudeAdapter, cursor: CursorAdapter) {
+  constructor(claude: ClaudeAdapter, cursor: CursorAcpAdapter) {
     // Keyed off each adapter's OWN `config.kind` rather than a literal spelled
     // here: the kind is already declared once, in that CLI's const file, and a
     // second spelling is a place for the two to disagree — a mis-keyed entry

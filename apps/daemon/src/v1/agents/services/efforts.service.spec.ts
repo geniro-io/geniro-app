@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { EffortsService } from './efforts.service';
 
 function service(): EffortsService {
   return new EffortsService(
-    new AgentAdapterRegistry(new ClaudeAdapter(), new CursorAdapter()),
+    new AgentAdapterRegistry(new ClaudeAdapter(), new CursorAcpAdapter()),
   );
 }
 

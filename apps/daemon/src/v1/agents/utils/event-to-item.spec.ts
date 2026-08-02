@@ -169,6 +169,16 @@ describe('mapEventToItem', () => {
       payload: { message: 'boom' },
     });
   });
+
+  it('maps an adapter notice to a system item, like an executor-level degrade', () => {
+    expect(
+      mapEventToItem({ type: 'notice', message: 'agent calls disabled' }),
+    ).toEqual({
+      kind: 'system',
+      role: null,
+      payload: { message: 'agent calls disabled' },
+    });
+  });
 });
 
 describe('terminalStatus', () => {
@@ -190,6 +200,7 @@ describe('terminalStatus', () => {
       { type: 'text', text: 'hi' },
       { type: 'reasoning', text: 'hm' },
       { type: 'tool_call', id: 't1', name: 'Read', input: null },
+      { type: 'notice', message: 'a degrade, not the end of the turn' },
       {
         type: 'tool_result',
         id: 't1',

@@ -50,9 +50,9 @@ export type ClaudeModeProbeStatus = z.infer<typeof ProbeStatusSchema>;
 /**
  * The claude arm of GET /v1/capabilities — whether the installed claude CLI
  * accepts the probed `--permission-mode` values headlessly. Keyed by
- * `claude --version` like the cursor MCP-trust probe: a binary upgrade
- * re-probes without a daemon restart, and only a genuine pass/fail verdict is
- * disk-cached (`unknown` — timeout, spawn error — stays memory-only).
+ * `claude --version`: a binary upgrade re-probes without a daemon restart,
+ * and only a genuine pass/fail verdict is disk-cached (`unknown` — timeout,
+ * spawn error — stays memory-only).
  */
 export const ClaudeModesCapabilitySchema = z
   .object({

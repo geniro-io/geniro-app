@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
 import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
-import { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
 import type { CapabilitiesWire } from '../graphs.types';
 
 /**
@@ -11,15 +10,9 @@ import type { CapabilitiesWire } from '../graphs.types';
  */
 @Injectable()
 export class CapabilitiesService {
-  constructor(
-    private readonly cursorProbe: CursorProbeService,
-    private readonly claudeProbe: ClaudeProbeService,
-  ) {}
+  constructor(private readonly claudeProbe: ClaudeProbeService) {}
 
   capabilitiesWire(): CapabilitiesWire {
-    return {
-      cursorCalls: this.cursorProbe.wireCapability(),
-      claudeModes: this.claudeProbe.wireCapability(),
-    };
+    return { claudeModes: this.claudeProbe.wireCapability() };
   }
 }

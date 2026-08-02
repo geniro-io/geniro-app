@@ -139,6 +139,16 @@ export type AgentEvent =
   | { type: 'session'; sessionId: string }
   | {
       /**
+       * An adapter-level notice about THIS turn — a capability the CLI did not
+       * grant, a request that degraded. Persisted as a `system` transcript item
+       * so a degrade is visible to the user rather than silent. NOT terminal:
+       * the turn continues after one.
+       */
+      type: 'notice';
+      message: string;
+    }
+  | {
+      /**
        * The CLI reported the session's invokable slash commands (claude's
        * `system/init` `slash_commands`: built-ins + plugin skills + user and
        * project skills/commands, shadowing already resolved — verified live
@@ -343,10 +353,20 @@ export interface AgentTurnInput {
   resumeSessionId?: string | null;
   /**
    * Role/system prompt for this turn (graph nodes). Claude appends it to the
-   * CLI system prompt (`--append-system-prompt`); Cursor has no such flag, so
-   * its adapter prepends it to the prompt text. Undefined for plain chat.
+   * CLI system prompt (`--append-system-prompt`); ACP has no such parameter,
+   * so its driver prepends it to the prompt text. Undefined for plain chat.
    */
   systemPrompt?: string | null;
+  /**
+   * The caller's "May call" awareness block, naming each callee reachable
+   * through `mcpEndpoint`'s tools. Kept SEPARATE from `systemPrompt` because
+   * it is only true while the call tools are actually registered: an adapter
+   * that ends up withholding the endpoint (an ACP agent that does not
+   * advertise HTTP MCP support) must drop this block too, or the agent is
+   * instructed to route work through tools it does not have. Join the two
+   * with `AgentAdapter.composeSystemPrompt`, never by hand.
+   */
+  callSurfacePrompt?: string | null;
   /**
    * Tool-approval mode. `ask` blocks each permission-gated tool call on a
    * user verdict (elicitation card); `acceptEdits` auto-approves file edits
@@ -392,18 +412,64 @@ export interface AgentTurnInput {
    * Loopback MCP endpoint granting this turn the agent-call tools
    * (call_agent / await_agent / answer_agent). Delivery is adapter-specific —
    * claude gets a per-turn config file referenced by `--mcp-config` (the
-   * token travels IN the 0600 file, never argv); cursor delivery BYPASSES the
-   * adapter entirely: the executor merges a `geniro` entry into the run cwd's
-   * `.cursor/mcp.json` around the turn (the cursor-mcp-merge service), so a
-   * cursor turn's input carries this field only for the timeout override.
-   * Absent or null: the turn gets no call tools.
+   * token travels IN the 0600 file, never argv); the ACP adapter sends it as
+   * an HTTP header inside a `session/new` stdin frame. Absent or null: the
+   * turn gets no call tools.
    */
   mcpEndpoint?: {
     url: string;
     token: string;
+    /**
+     * MCP server name to register the endpoint under. Unique per run, because
+     * ACP has no `--strict-mcp-config` equivalent: a project config defining
+     * the same name would otherwise contend with ours on the agent side.
+     * Claude does not read this — its per-turn config file is strict.
+     */
+    serverName: string;
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
     toolTimeoutMs?: number;
   } | null;
+}
+
+export type TurnStdin = (payload: string) => boolean;
+
+/** The two channels a {@link TurnDriver} owns for the turn it is driving. */
+export interface TurnIo {
+  write: TurnStdin;
+  emit: (event: AgentEvent) => void;
+}
+
+/**
+ * Per-turn protocol state for ONE turn of one CLI.
+ *
+ * The default driver (built by `AgentAdapter.createTurnDriver`) is stateless:
+ * it just forwards each parsed stdout line to the adapter's `mapMessage`, which
+ * is all a one-shot stream-json CLI needs. An adapter whose CLI speaks a
+ * STATEFUL, bidirectional protocol — ACP's JSON-RPC handshake, where the next
+ * message to send depends on the last one received — overrides
+ * `createTurnDriver` to return an instance holding that turn's own state.
+ *
+ * A per-turn object (rather than more adapter methods) is what makes this safe
+ * under graph fan-out: one adapter instance drives N concurrent turns, so
+ * protocol state must never live on the adapter.
+ */
+export interface TurnDriver {
+  /**
+   * Called once the child's stdin is wired, before any stdout is parsed — the
+   * driver's chance to open a conversation the CLI expects the client to start.
+   */
+  onStdinReady?(io: TurnIo): void;
+  /** Map one parsed stdout line to zero or more normalized events. */
+  onMessage(obj: unknown): AgentEvent[];
+  /**
+   * Encode one approval verdict as the payload the CLI expects. Undefined =
+   * this CLI has no approval protocol and `respondApproval` is a no-op.
+   */
+  buildApprovalResponse?(
+    id: string,
+    allow: boolean,
+    updatedInput?: unknown,
+  ): string | undefined;
 }
 
 /** Handle to an in-flight turn. */

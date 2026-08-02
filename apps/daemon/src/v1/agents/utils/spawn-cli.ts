@@ -1,6 +1,10 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 
-import type { AgentEvent, AgentTurnHandle } from '../adapters/adapter.types';
+import type {
+  AgentEvent,
+  AgentTurnHandle,
+  TurnIo,
+} from '../adapters/adapter.types';
 import { buildChildEnv } from './child-env';
 import { killProcessGroup } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
@@ -74,6 +78,14 @@ export interface RunCliOptions {
   ) => string | undefined;
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
+  /**
+   * Called once the child's stdin is wired and the one-shot payload (if any)
+   * has been written — before the handle is returned, so a client-initiated
+   * protocol can send its opening message ahead of any stdout. The writer
+   * returns false once the turn has settled. Requires `keepStdinOpen` for any
+   * protocol that writes more than once.
+   */
+  onStdinReady?: (io: TurnIo) => void;
   onEvent: (event: AgentEvent) => void;
   spawn?: SpawnFn;
   logger?: { warn(message: string): void };
@@ -238,6 +250,27 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
     settle();
   });
 
+  // The one write path to the child's stdin, shared by the approval verdict
+  // round-trip and by a client-initiated protocol driver. Re-reads `child.stdin`
+  // per call so a stream torn down mid-turn is caught here rather than by a
+  // stale reference, and never throws — a closed pipe is a dropped write, and
+  // the child's own `close` handler owns the terminal event.
+  const writeStdin = (payload: string): boolean => {
+    if (settled || terminalEmitted) {
+      return false;
+    }
+    const stream = child.stdin;
+    if (!stream) {
+      return false;
+    }
+    try {
+      stream.write(payload);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const stdin = child.stdin;
   if (stdin) {
     // A stdin that errors asynchronously (EPIPE — the CLI exited before we
@@ -290,6 +323,12 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
     }
   }
 
+  // After the payload, before any stdout is parsed: a protocol whose FIRST
+  // message comes from the client (ACP's `initialize`) opens here. Runs inside
+  // the same synchronous window as the spawn, so the opening message is queued
+  // on stdin before the child can answer it.
+  opts.onStdinReady?.({ write: writeStdin, emit });
+
   return {
     done,
     respondApproval: (id, allow, updatedInput) => {
@@ -297,17 +336,10 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         return false;
       }
       const line = opts.buildApprovalResponse?.(id, allow, updatedInput);
-      const stdinStream = child.stdin;
-      if (line === undefined || !stdinStream) {
+      if (line === undefined) {
         return false;
       }
-      try {
-        stdinStream.write(line);
-        return true;
-      } catch {
-        // The child exited under us; its close handler owns the terminal event.
-        return false;
-      }
+      return writeStdin(line);
     },
     cancel: () => {
       if (settled) {

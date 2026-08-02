@@ -380,12 +380,6 @@ beforeEach(() => {
     .mockResolvedValue({ deleted: true });
   // Default: nothing probed — the approval chip hides plan; tests override.
   capabilitiesApi.getCapabilities.mockReset().mockResolvedValue({
-    cursorCalls: {
-      status: 'unknown',
-      version: null,
-      probedAt: null,
-      reason: null,
-    },
     claudeModes: {
       acceptEdits: 'unknown',
       plan: 'unknown',

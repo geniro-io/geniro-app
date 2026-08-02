@@ -20,7 +20,7 @@ import type {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import type { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ClaudeModesCapability,
   RunDeltaEvent,
@@ -239,7 +239,7 @@ function fakeAdapter(kind: AgentKind): {
   // field — a hand-mirrored copy is exactly how a config change keeps passing
   // the tests it should have broken.
   const real: AgentAdapter =
-    kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
+    kind === 'claude' ? new ClaudeAdapter() : new CursorAcpAdapter();
   return {
     adapter: {
       getConfig: () => real.getConfig(),
@@ -340,7 +340,7 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
   // adapters each.
   const adapters = new AgentAdapterRegistry(
     claude.adapter,
-    cursor.adapter as unknown as CursorAdapter,
+    cursor.adapter as unknown as CursorAcpAdapter,
   );
   const efforts = new EffortsService(adapters);
   // The REAL teardown over the same fakes: `delete` is a thin caller of it, so
@@ -870,7 +870,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     ],
   };
 
-  it("createChat defaults claude to 'ask', pins cursor to 'auto', and rejects a non-auto cursor mode", async () => {
+  it("createChat defaults both CLIs to 'ask' and rejects only a cursor plan mode", async () => {
     const { service } = setup();
     const claudeRun = await service.createChat({
       agentKind: 'claude',
@@ -883,21 +883,31 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'plan',
     });
     expect(planRun.approval).toBe('plan');
+    // ACP gives cursor a real permission protocol, so its chats take the same
+    // default and honour the same modes claude's do.
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
     });
-    expect(cursorRun.approval).toBe('auto');
+    expect(cursorRun.approval).toBe('ask');
+    const cursorAcceptEdits = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+      approval: 'acceptEdits',
+    });
+    expect(cursorAcceptEdits.approval).toBe('acceptEdits');
+    // `plan` is the exception: it maps to an agent-declared ACP session mode
+    // nothing here can confirm cursor offers.
     await expect(
       service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
-        approval: 'ask',
+        approval: 'plan',
       }),
-    ).rejects.toThrow("cursor-agent does not support the approval mode 'ask'");
+    ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
   });
 
-  it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a non-auto cursor mode', async () => {
+  it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     const updated = await service.updateSettings(run.id, {
@@ -916,12 +926,12 @@ describe('ChatService — approval modes (parity M1)', () => {
       cwd: dir,
     });
     await expect(
-      service.updateSettings(cursorRun.id, { approval: 'ask' }),
-    ).rejects.toThrow("cursor-agent does not support the approval mode 'ask'");
-    const pinned = await service.updateSettings(cursorRun.id, {
-      approval: 'auto',
+      service.updateSettings(cursorRun.id, { approval: 'plan' }),
+    ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
+    const flipped = await service.updateSettings(cursorRun.id, {
+      approval: 'acceptEdits',
     });
-    expect(pinned.approval).toBe('auto');
+    expect(flipped.approval).toBe('acceptEdits');
   });
 
   it('updateSettings changes the model mid-chat — the NEXT turn spawns with it', async () => {

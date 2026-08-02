@@ -20,9 +20,7 @@ import type {
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
-import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
-import type { CursorMcpMergeService } from '../../agents/adapters/cursor/cursor-mcp-merge.service';
-import type { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ClaudeModesCapability,
   CursorCallsCapability,
@@ -279,7 +277,8 @@ class FakeAdapter {
    */
   projectsNoQuestion = false;
   constructor(readonly kind: 'claude' | 'cursor-agent') {
-    this.real = kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
+    this.real =
+      kind === 'claude' ? new ClaudeAdapter() : new CursorAcpAdapter();
     this.getConfig = () => this.real.getConfig();
   }
   questionFrom(input: unknown): AdapterQuestion | null {
@@ -415,12 +414,6 @@ function setup(
     reason: null,
   };
   const ensureVerdict = vi.fn(async () => cursorCalls);
-  const cursorProbe = {
-    capability: () => cursorCalls,
-    ensureVerdict,
-    isProbeRun: () => false,
-    noteEchoCall: () => {},
-  } as unknown as CursorProbeService;
   // Claude mode probe defaults to all-pass — the widened modes run as
   // requested unless a test opts into a probed FAIL explicitly.
   const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
@@ -452,10 +445,6 @@ function setup(
       release,
     };
   });
-  const cursorMerge = {
-    acquire: mergeAcquire,
-    reconcileStranded: () => 0,
-  } as unknown as CursorMcpMergeService;
   const em = { fork: () => ({ clear: () => {} }) } as unknown as EntityManager;
   const skillHarvest = {
     record: vi.fn(),
@@ -498,13 +487,11 @@ function setup(
     approvals,
     new AgentAdapterRegistry(
       claude as unknown as ClaudeAdapter,
-      cursor as unknown as CursorAdapter,
+      cursor as unknown as CursorAcpAdapter,
     ),
     callTokens,
     callBroker,
-    cursorProbe,
     claudeProbe,
-    cursorMerge,
     skillHarvest,
     workflowStore,
     teardown,
@@ -1198,27 +1185,6 @@ describe('GraphExecutorService', () => {
     expect(claude.starts[1]!.input.prompt).toContain('## Output from Coder');
   });
 
-  it('notes the ask→auto degrade for cursor-agent nodes', async () => {
-    const { service, cursor, itemDao } = setup();
-    await service.startRun({
-      slug: 'c',
-      workflow: triggered({
-        name: 'c',
-        nodes: [
-          { id: 'only', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
-        ],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'task',
-    });
-    await drain();
-    const note = itemDao.items.find((i) => i.kind === 'system');
-    expect(JSON.parse(note!.payload).message).toContain('cursor-agent');
-    completeTurn(cursor.starts[0]!, 'done');
-    await drain();
-  });
-
   it('reconciles orphaned workflow runs on boot', async () => {
     const { service, runDao, nodeDao, itemDao } = setup();
     // A run left behind by a killed daemon: running, no registry handle.
@@ -1323,15 +1289,17 @@ describe('GraphExecutorService — agent calls', () => {
     expect(callTokens.get(run.id, 'helper')).toBeNull();
     // Awareness: the caller's own role first, then the May-call block naming
     // each callee and what that callee says it DOES...
-    expect(caller.input.systemPrompt).toContain('You orchestrate.');
-    expect(caller.input.systemPrompt).toContain('May call');
-    expect(caller.input.systemPrompt).toContain('Helper (agent id: helper)');
-    expect(caller.input.systemPrompt).toContain(
+    expect(caller.input.systemPrompt).toBe('You orchestrate.');
+    expect(caller.input.callSurfacePrompt).toContain('May call');
+    expect(caller.input.callSurfacePrompt).toContain(
+      'Helper (agent id: helper)',
+    );
+    expect(caller.input.callSurfacePrompt).toContain(
       'Researches a topic and reports what it found.',
     );
     // ...and never how it does it. A callee's role is private, so a caller
     // routes by description alone instead of restating its team in its role.
-    expect(caller.input.systemPrompt).not.toContain('SECRET_PLAYBOOK');
+    expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
       agent: 'helper',
@@ -1386,258 +1354,6 @@ describe('GraphExecutorService — agent calls', () => {
     for (const item of callerTurnItems) {
       expect(payloadOf(item).callId).toBeUndefined();
     }
-  });
-
-  const CURSOR_CALLER_WF: Workflow = {
-    ...CALL_WF,
-    nodes: [
-      { ...CALL_WF.nodes[0]!, agent: 'cursor-agent' as const },
-      CALL_WF.nodes[1]!,
-    ],
-  };
-
-  it('a probe-failed cursor caller is shut out of EVERY gate — no endpoint, no token, bare role — with a visible degrade item', async () => {
-    const { service, cursor, callTokens, itemDao, mergeAcquire } = setup(4870, {
-      cursorCalls: {
-        status: 'fail',
-        version: 'v1',
-        probedAt: 1,
-        reason: 'no headless MCP trust',
-      },
-    });
-    const run = await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const caller = cursor.starts[0]!;
-    expect(caller.input.mcpEndpoint ?? null).toBeNull();
-    expect(caller.input.systemPrompt).toBe('You orchestrate.');
-    expect(callTokens.get(run.id, 'orch')).toBeNull();
-    expect(mergeAcquire).not.toHaveBeenCalled();
-    const degrade = itemDao.items.find(
-      (i) =>
-        i.kind === 'system' &&
-        JSON.parse(i.payload).message.includes('agent calls disabled'),
-    );
-    expect(JSON.parse(degrade!.payload).message).toContain(
-      'no headless MCP trust',
-    );
-    completeTurn(caller, 'done');
-    await drain();
-  });
-
-  it('a probe-passed cursor caller is admitted through every gate: token, merged endpoint, awareness block; the merge is released on settle', async () => {
-    const { service, cursor, callTokens, mergeAcquire, mergeReleases } = setup(
-      4870,
-      {
-        cursorCalls: {
-          status: 'pass',
-          version: 'v1',
-          probedAt: 1,
-          reason: null,
-        },
-      },
-    );
-    const run = await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const caller = cursor.starts[0]!;
-    expect(caller.input.mcpEndpoint?.url).toBe(
-      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/orch`,
-    );
-    expect(caller.input.mcpEndpoint?.token).toBe(
-      callTokens.get(run.id, 'orch'),
-    );
-    expect(caller.input.systemPrompt).toContain('May call');
-    // The merge wrapped the turn: acquired with this cwd + endpoint…
-    expect(mergeAcquire).toHaveBeenCalledWith(dir, caller.input.mcpEndpoint);
-    expect(mergeReleases[0]).not.toHaveBeenCalled();
-    completeTurn(caller, 'done');
-    await drain();
-    // …and released exactly once when the turn settled.
-    expect(mergeReleases[0]).toHaveBeenCalledTimes(1);
-  });
-
-  it('a refused merge DEGRADES the cursor caller turn — the CLI spawns without the endpoint and a system item names the reason', async () => {
-    const { service, cursor, itemDao, runDao } = setup(4870, {
-      cursorCalls: { status: 'pass', version: 'v1', probedAt: 1, reason: null },
-      mergeOk: false,
-    });
-    const run = await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const caller = cursor.starts[0]!;
-    expect(caller.input.mcpEndpoint ?? null).toBeNull();
-    const degrade = itemDao.items.find(
-      (i) =>
-        i.kind === 'system' &&
-        JSON.parse(i.payload).message.includes('merge refused (test)'),
-    );
-    expect(degrade).toBeDefined();
-    completeTurn(caller, 'done');
-    await drain();
-    // The degrade never fails the run — the turn ran, just without call tools.
-    expect(runDao.runs.get(run.id)?.status).toBe('completed');
-  });
-
-  const PASS_VERDICT: CursorCallsCapability = {
-    status: 'pass',
-    version: 'v1',
-    probedAt: 1,
-    reason: null,
-  };
-
-  it('a run cancelled while the merge lock is pending spawns NO cursor CLI, frees the merge, and persists no degrade item', async () => {
-    let resolveAcquire!: (value: unknown) => void;
-    const { service, cursor, runDao, nodeDao, itemDao } = setup(4870, {
-      cursorCalls: PASS_VERDICT,
-      mergeImpl: () =>
-        new Promise((resolve) => {
-          resolveAcquire = resolve;
-        }),
-    });
-    const run = await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    await service.cancel(run.id);
-    await drain();
-    const release = vi.fn();
-    resolveAcquire({ ok: true, gitTracked: false, release });
-    await drain();
-
-    expect(cursor.starts).toHaveLength(0);
-    expect(release).toHaveBeenCalledTimes(1);
-    expect(nodeDao.row(run.id, 'orch')?.status).toBe('cancelled');
-    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
-    const degrade = itemDao.items.some(
-      (i) =>
-        i.kind === 'system' &&
-        JSON.parse(i.payload).message.includes('agent calls disabled'),
-    );
-    expect(degrade).toBe(false);
-  });
-
-  it('a REJECTING merge acquire settles the node as failed instead of wedging the run', async () => {
-    const { service, cursor, runDao, nodeDao, itemDao } = setup(4870, {
-      cursorCalls: PASS_VERDICT,
-      mergeImpl: () => Promise.reject(new Error('EROFS boom')),
-    });
-    const run = await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    expect(cursor.starts).toHaveLength(0);
-    expect(nodeDao.row(run.id, 'orch')?.status).toBe('failed');
-    expect(runDao.runs.get(run.id)?.status).toBe('failed');
-    const errorItem = itemDao.items.find((i) => i.kind === 'error');
-    expect(JSON.parse(errorItem!.payload).message).toContain(
-      'turn start failed: EROFS boom',
-    );
-  });
-
-  it('a git-tracked .cursor/mcp.json surfaces the do-not-commit warning item', async () => {
-    const { service, cursor, itemDao } = setup(4870, {
-      cursorCalls: PASS_VERDICT,
-      gitTracked: true,
-    });
-    await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const warning = itemDao.items.find(
-      (i) =>
-        i.kind === 'system' &&
-        JSON.parse(i.payload).message.includes('git-tracked'),
-    );
-    expect(warning).toBeDefined();
-    completeTurn(cursor.starts[0]!, 'done');
-    await drain();
-  });
-
-  it('only cursor-caller workflows consult the probe, and never on the run-start POST', async () => {
-    const claudeOnly = setup();
-    await claudeOnly.service.startRun({
-      slug: 'c',
-      workflow: triggered(CALL_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    expect(claudeOnly.ensureVerdict).not.toHaveBeenCalled();
-    completeTurn(claudeOnly.claude.starts[0]!, 'done');
-    await drain();
-
-    // F43: the first cursor-caller run on a machine used to block the HTTP
-    // POST on the ~90-180s probe turn. startRun must answer while the probe
-    // is still in flight; only the run's EXECUTION waits on the verdict.
-    const withCursor = setup(4870, { cursorCalls: PASS_VERDICT });
-    let resolveProbe!: (verdict: CursorCallsCapability) => void;
-    withCursor.ensureVerdict.mockImplementation(
-      () =>
-        new Promise<CursorCallsCapability>((resolve) => {
-          resolveProbe = resolve;
-        }),
-    );
-    const run = await withCursor.service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    expect(run.status).toBe('running');
-    // Execution is parked on the probe — no turn spawned yet.
-    expect(withCursor.cursor.starts).toHaveLength(0);
-
-    resolveProbe(PASS_VERDICT);
-    await drain();
-    expect(withCursor.ensureVerdict).toHaveBeenCalledTimes(1);
-    completeTurn(withCursor.cursor.starts[0]!, 'done');
-    await drain();
-  });
-
-  it('a refused merge strips the call-awareness block too — the degraded turn is never told it May call agents it has no tools for', async () => {
-    const { service, cursor } = setup(4870, {
-      cursorCalls: { status: 'pass', version: 'v1', probedAt: 1, reason: null },
-      mergeOk: false,
-    });
-    await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const caller = cursor.starts[0]!;
-    expect(caller.input.mcpEndpoint ?? null).toBeNull();
-    // Every degrade surface must agree: no endpoint means no awareness block —
-    // a prompt advertising call_agent on a turn without the tools sends the
-    // model chasing tools that do not exist. The role itself survives.
-    expect(caller.input.systemPrompt).toContain('You orchestrate.');
-    expect(caller.input.systemPrompt).not.toContain('May call');
-    completeTurn(caller, 'done');
-    await drain();
   });
 
   it('sync call: transcript rows on the caller, per-call node_state on the callee', async () => {
@@ -2137,7 +1853,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     // its awareness block (headless claude has no AskUserQuestion under
     // --dangerously-skip-permissions).
     expect(caller.input.approvalMode).toBe('ask');
-    expect(caller.input.systemPrompt).toContain('answer_agent');
+    expect(caller.input.callSurfacePrompt).toContain('answer_agent');
 
     const sync = callBroker.callAgent(run.id, 'a', {
       agent: 'callee',
@@ -2716,36 +2432,6 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     );
     expect(system).toBeDefined();
     completeTurn(claude.starts[0]!, 'done');
-    await drain();
-  });
-
-  it('warns for a cursor node under ANY non-auto approval — acceptEdits included, not just ask', async () => {
-    const { service, cursor, itemDao } = setup();
-    await service.startRun({
-      slug: 'cursor-ae',
-      workflow: triggered({
-        name: 'cursor-ae',
-        nodes: [
-          {
-            id: 'c',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'acceptEdits',
-          },
-        ],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    const warn = itemDao.items.find(
-      (i) =>
-        i.kind === 'system' &&
-        i.payload.includes("approval 'acceptEdits' degrades to auto-approve"),
-    );
-    expect(warn).toBeDefined();
-    completeTurn(cursor.starts[0]!, 'done');
     await drain();
   });
 

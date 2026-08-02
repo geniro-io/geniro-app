@@ -1,9 +1,6 @@
 import { z } from 'zod';
 
-import {
-  ClaudeModesCapabilitySchema,
-  CursorCallsCapabilitySchema,
-} from '../agents/chat.types';
+import { ClaudeModesCapabilitySchema } from '../agents/chat.types';
 import {
   AgentKindSchema,
   type ItemKind,
@@ -377,7 +374,6 @@ export interface ParkQuestionInput {
 
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
-  cursorCalls: CursorCallsCapabilitySchema,
   claudeModes: ClaudeModesCapabilitySchema.describe(
     'Claude permission-mode probe verdict (acceptEdits / plan support)',
   ),

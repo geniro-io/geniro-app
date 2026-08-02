@@ -77,6 +77,14 @@ export function mapEventToItem(
         role: null,
         payload: { usage: event.usage, stopReason: event.stopReason },
       };
+    case 'notice':
+      // Same shape the graph executor persists its own degrade messages in, so
+      // an adapter-level degrade renders identically to an executor-level one.
+      return {
+        kind: 'system',
+        role: null,
+        payload: { message: event.message },
+      };
     case 'turn_cancelled':
       return { kind: 'turn_cancelled', role: null, payload: {} };
     case 'error':

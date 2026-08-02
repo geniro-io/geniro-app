@@ -447,3 +447,78 @@ describe('approval seam edges', () => {
     expect(child.stdin.written).toBe('');
   });
 });
+
+describe('runHeadlessCli onStdinReady', () => {
+  it('hands a client-initiated protocol its stdin writer before any stdout is parsed', () => {
+    const { spawn, child } = fakeSpawn();
+    const seenAtOpen: string[] = [];
+
+    runHeadlessCli({
+      command: 'cursor-agent',
+      args: ['acp'],
+      cwd: '/proj',
+      keepStdinOpen: true,
+      mapper: noopMapper,
+      onStdinReady: ({ write }) => {
+        // The opening frame must be queued before the child can answer it —
+        // observing the stdout so far proves nothing has been read yet.
+        seenAtOpen.push(
+          child.stdout.listenerCount('data') > 0 ? 'wired' : 'unwired',
+        );
+        write('{"method":"initialize"}\n');
+      },
+      onEvent: () => {},
+      spawn,
+    });
+
+    expect(seenAtOpen).toEqual(['wired']);
+    expect(child.stdin.written).toBe('{"method":"initialize"}\n');
+  });
+
+  it('emits a driver event through the same one-terminal gate as the mapper', async () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+
+    const handle = runHeadlessCli({
+      command: 'cursor-agent',
+      args: ['acp'],
+      cwd: '/proj',
+      keepStdinOpen: true,
+      mapper: noopMapper,
+      onStdinReady: ({ emit }) =>
+        emit({ type: 'error', message: 'stdin gone' }),
+      onEvent: (event) => events.push(event),
+      spawn,
+    });
+    // A second terminal event from the child must not double-record the turn.
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events).toEqual([{ type: 'error', message: 'stdin gone' }]);
+  });
+
+  it('refuses writes once the turn has settled', async () => {
+    const { spawn, child } = fakeSpawn();
+    let write: ((payload: string) => boolean) | null = null;
+
+    const handle = runHeadlessCli({
+      command: 'cursor-agent',
+      args: ['acp'],
+      cwd: '/proj',
+      keepStdinOpen: true,
+      mapper: noopMapper,
+      onStdinReady: (io) => {
+        write = io.write;
+      },
+      onEvent: () => {},
+      spawn,
+    });
+    expect(write?.('{"a":1}\n')).toBe(true);
+    child.emit('close', 0, null);
+    await handle.done;
+
+    const before = child.stdin.written;
+    expect(write?.('{"b":2}\n')).toBe(false);
+    expect(child.stdin.written).toBe(before);
+  });
+});

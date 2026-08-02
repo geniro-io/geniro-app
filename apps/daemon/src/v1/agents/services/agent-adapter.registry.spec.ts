@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentKind } from '../../runs/runs.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
 function registry(): AgentAdapterRegistry {
-  return new AgentAdapterRegistry(new ClaudeAdapter(), new CursorAdapter());
+  return new AgentAdapterRegistry(new ClaudeAdapter(), new CursorAcpAdapter());
 }
 
 describe('AgentAdapterRegistry', () => {

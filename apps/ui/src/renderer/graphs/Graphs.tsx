@@ -29,7 +29,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DaemonHandle } from '../../shared/contracts';
 import type {
   ApprovalMode as WorkflowApproval,
-  CursorCallsCapability,
   WorkflowAgentNode,
   WorkflowNode,
   WorkflowSummaryDto as WorkflowSummary,
@@ -62,7 +61,6 @@ import {
   toFlow,
 } from './graph-doc';
 import { ModelSelect } from './model-select';
-import { CursorCallsContext } from './node-card';
 import {
   NODE_DND_MIME,
   NodePalette,
@@ -111,7 +109,6 @@ export function Graphs({
     [handle],
   );
   const api = apis?.workflows ?? null;
-  const capabilitiesApi = apis?.capabilities ?? null;
 
   // null = not yet loaded (the Settings `clis` pattern) — the empty state is
   // an authoritative claim reserved for a resolved-but-empty library.
@@ -147,11 +144,6 @@ export function Graphs({
   > | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // The daemon's cursor-calls probe verdict for the degrade warning on cursor
-  // caller cards. Advisory: the builder works fine while it is null.
-  const [cursorCalls, setCursorCalls] = useState<CursorCallsCapability | null>(
-    null,
-  );
   // The right inspector only exists while a node is selected; its width is
   // drag-resizable from its left edge and persists like the palette's.
   const inspector = usePanelWidth({
@@ -185,37 +177,6 @@ export function Graphs({
     const timer = window.setTimeout(() => setNotice(null), NOTICE_TTL_MS);
     return () => window.clearTimeout(timer);
   }, [notice]);
-
-  // Reading capabilities also pre-warms the daemon's probe; keep polling only
-  // while the verdict is 'unknown' (a probe turn is capped at 90s, and the
-  // daemon may run a second bare-flag attempt — worst case a few minutes).
-  useEffect(() => {
-    if (!capabilitiesApi) {
-      return;
-    }
-    let stopped = false;
-    let timer: number | undefined;
-    const load = async (): Promise<void> => {
-      try {
-        const wire = await capabilitiesApi.getCapabilities();
-        if (stopped) {
-          return;
-        }
-        setCursorCalls(wire.cursorCalls);
-        if (wire.cursorCalls.status === 'unknown') {
-          timer = window.setTimeout(() => void load(), 10_000);
-        }
-      } catch {
-        // Advisory only — an unreachable capabilities read must not break the
-        // builder; cards simply show no cursor-calls warning.
-      }
-    };
-    void load();
-    return () => {
-      stopped = true;
-      window.clearTimeout(timer);
-    };
-  }, [capabilitiesApi]);
 
   const openWorkflow = useCallback(
     async (slug: string): Promise<void> => {
@@ -832,300 +793,298 @@ export function Graphs({
 
   // Builder — a single workflow open on the canvas + node inspector.
   return (
-    <CursorCallsContext.Provider value={cursorCalls}>
-      <section className="flex h-full min-h-0 flex-col">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-          {/* No discard-confirm any more: leaving flushes pending edits
+    <section className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {/* No discard-confirm any more: leaving flushes pending edits
               instead of throwing them away. */}
+        <Button
+          type="button"
+          variant="ghost"
+          className="gap-1.5"
+          aria-label="Back to library"
+          onClick={() => void leaveToLibrary()}>
+          <ArrowLeft className="shrink-0" /> Library
+        </Button>
+        <h2 className="min-w-0 truncate font-medium">{name}</h2>
+        <div className="ml-auto flex items-center gap-2">
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             className="gap-1.5"
-            aria-label="Back to library"
-            onClick={() => void leaveToLibrary()}>
-            <ArrowLeft className="shrink-0" /> Library
+            onClick={() => void layout()}>
+            <Wand2 className="shrink-0" /> Auto-layout
           </Button>
-          <h2 className="min-w-0 truncate font-medium">{name}</h2>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="gap-1.5"
-              onClick={() => void layout()}>
-              <Wand2 className="shrink-0" /> Auto-layout
-            </Button>
-            {activeSlug ? (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="gap-1.5"
-                  onClick={() => void exportWorkflow()}>
-                  <Download className="shrink-0" /> Export
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  aria-label="Change workflow"
-                  onClick={() => setRenameOpen(true)}>
-                  <Pencil className="shrink-0" />
-                </Button>
-                <ConfirmButton
-                  variant="destructive"
-                  className="gap-1.5"
-                  aria-label="Delete workflow"
-                  confirmLabel="Delete?"
-                  onConfirm={remove}>
-                  <Trash2 className="shrink-0" />
-                </ConfirmButton>
-              </>
-            ) : null}
-          </div>
-        </div>
-
-        {error ? (
-          <ErrorText className="border-b border-border px-3 py-1.5">
-            {error}
-          </ErrorText>
-        ) : null}
-
-        <div className="flex min-h-0 flex-1">
-          <NodePalette onAdd={addNode} />
-
-          <div
-            className="relative min-w-0 flex-1 [overscroll-behavior:none]"
-            onDrop={onCanvasDrop}
-            onDragOver={onCanvasDragOver}>
-            {/* Figma-style navigation, mirroring geniro's GraphCanvas: two-finger
-              scroll PANS (free, any direction), scroll never zooms — zoom is
-              pinch or Cmd+scroll (React Flow's default zoomActivationKey). */}
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={NODE_TYPES}
-              edgeTypes={EDGE_TYPES}
-              onInit={setRfInstance}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              isValidConnection={isValidConnection}
-              onSelectionChange={onSelectionChange}
-              // Reopen where the user left off; only a never-seen workflow gets
-              // the automatic fit. Every finished pan/zoom gesture persists.
-              {...(savedViewport
-                ? { defaultViewport: savedViewport }
-                : { fitView: true })}
-              onMoveEnd={onMoveEnd}
-              deleteKeyCode={DELETE_KEY_CODES}
-              minZoom={0.1}
-              maxZoom={4}
-              panOnScroll
-              panOnScrollMode={PanOnScrollMode.Free}
-              zoomOnScroll={false}
-              proOptions={PRO_OPTIONS}>
-              <Background />
-              <Controls />
-            </ReactFlow>
-          </div>
-
-          {selected ? (
-            <aside
-              style={{ width: inspector.width }}
-              className="relative flex min-h-0 shrink-0 flex-col border-l border-border bg-muted/30">
-              <PanelResizeHandle
-                edge="left"
-                label="Resize inspector"
-                onMouseDown={inspector.startResize}
-                value={inspector.width}
-                min={inspector.minWidth}
-                max={inspector.maxWidth}
-                onResize={inspector.resizeTo}
-              />
-              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-                <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">
-                  {selected.kind === 'trigger' ? (
-                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
-                      <Zap aria-hidden="true" className="size-3.5" />
-                    </span>
-                  ) : (
-                    <AgentAvatar
-                      label={selected.name ?? selected.id}
-                      className="size-7 text-xs"
-                    />
-                  )}
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">
-                      {selected.name ?? selected.id}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {selected.kind === 'trigger'
-                        ? `${selected.trigger} trigger`
-                        : selected.agent}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-4 p-4">
-                  <Field label="Display name" htmlFor="node-name">
-                    <Input
-                      id="node-name"
-                      value={selected.name ?? ''}
-                      placeholder={selected.id}
-                      onChange={(event) =>
-                        patchSelected({
-                          name: event.target.value || undefined,
-                        })
-                      }
-                    />
-                  </Field>
-                  {selected.kind === 'trigger' ? (
-                    <NoteBox>
-                      Runs start here: firing this {selected.trigger} trigger
-                      seeds every connected agent with the prompt you submit.
-                    </NoteBox>
-                  ) : (
-                    <>
-                      <Field
-                        label="Model"
-                        htmlFor="node-model"
-                        hint="Custom… accepts a full model id.">
-                        <ModelSelect
-                          key={selected.id}
-                          id="node-model"
-                          models={agentModels}
-                          value={selected.model ?? ''}
-                          onChange={(model) => patchSelected({ model })}
-                        />
-                      </Field>
-                      <Field
-                        label="Description"
-                        htmlFor="node-description"
-                        hint="What this agent is for. Agents wired to call it see this — and nothing else about it — so they can route work here on their own.">
-                        <ExpandableTextarea
-                          id="node-description"
-                          title="Description"
-                          value={selected.description ?? ''}
-                          rows={3}
-                          placeholder="Reviews a diff or branch and reports findings by severity."
-                          onChange={(next) =>
-                            patchSelected({ description: next || undefined })
-                          }
-                        />
-                      </Field>
-                      <Field
-                        label="Role / system prompt"
-                        htmlFor="node-role"
-                        hint="Prepended to this node's turn. Private — no other agent ever reads it.">
-                        <ExpandableTextarea
-                          id="node-role"
-                          title="Role / system prompt"
-                          value={selected.role ?? ''}
-                          rows={5}
-                          onChange={(next) =>
-                            patchSelected({ role: next || undefined })
-                          }
-                        />
-                      </Field>
-                      <Field
-                        label="Tool approvals"
-                        htmlFor="node-approval"
-                        hint="“Ask in chat” pauses each tool call on an approval card; “accept edits” auto-approves file edits and asks for the rest (cursor-agent runs auto regardless).">
-                        <Select
-                          id="node-approval"
-                          value={selected.approval}
-                          side="bottom"
-                          groups={[
-                            {
-                              items: [
-                                { value: 'auto', label: 'auto-approve' },
-                                { value: 'ask', label: 'ask in chat' },
-                                {
-                                  value: 'acceptEdits',
-                                  label: 'accept edits',
-                                },
-                              ],
-                            },
-                          ]}
-                          onValueChange={(approval) =>
-                            patchSelected({
-                              approval: approval as WorkflowApproval,
-                            })
-                          }
-                        />
-                      </Field>
-                      {callInfo ? (
-                        <NoteBox aria-label="Agent calls" className="text-xs">
-                          <span className="block font-medium text-foreground">
-                            Agent calls
-                          </span>
-                          {callInfo.callees.length > 0 ? (
-                            <span className="block">
-                              May call: {callInfo.callees.join(', ')}
-                            </span>
-                          ) : null}
-                          {callInfo.callers.length > 0 ? (
-                            <span className="block">
-                              Callable by: {callInfo.callers.join(', ')}
-                            </span>
-                          ) : null}
-                          {callInfo.inCycle ? (
-                            <span className="block text-warning">
-                              Takes part in a call loop — runtime calls are
-                              depth-capped.
-                            </span>
-                          ) : null}
-                          <span className="block">
-                            Call edges let this agent invoke its callees at
-                            runtime via the call_agent tool. It is told each
-                            callee&apos;s Description — never their Role — so it
-                            routes by what they do.
-                          </span>
-                          {callInfo.undescribedCallees.length > 0 ? (
-                            <span className="block text-warning">
-                              No description on{' '}
-                              {callInfo.undescribedCallees.join(', ')} — this
-                              agent sees only their names and has nothing to
-                              route on.
-                            </span>
-                          ) : null}
-                          {callInfo.callees.length > 0 ? (
-                            <span className="block">
-                              {selected.agent === 'cursor-agent'
-                                ? 'Callee questions: this agent can answer them (answer_agent) but cannot escalate to you — an unanswered question times the call out.'
-                                : 'Callee questions reach this agent first; it answers from its role or escalates to you as a question card.'}
-                            </span>
-                          ) : null}
-                        </NoteBox>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-              </div>
-            </aside>
+          {activeSlug ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => void exportWorkflow()}>
+                <Download className="shrink-0" /> Export
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                aria-label="Change workflow"
+                onClick={() => setRenameOpen(true)}>
+                <Pencil className="shrink-0" />
+              </Button>
+              <ConfirmButton
+                variant="destructive"
+                className="gap-1.5"
+                aria-label="Delete workflow"
+                confirmLabel="Delete?"
+                onConfirm={remove}>
+                <Trash2 className="shrink-0" />
+              </ConfirmButton>
+            </>
           ) : null}
         </div>
+      </div>
 
-        <BuilderStatusBar
-          nodeCount={nodes.length}
-          edgeCount={edges.length}
-          message={error ? null : notice}
-          saveState={autosave.state}
-        />
+      {error ? (
+        <ErrorText className="border-b border-border px-3 py-1.5">
+          {error}
+        </ErrorText>
+      ) : null}
 
-        <WorkflowMetaDialog
-          open={renameOpen}
-          busy={renaming}
-          error={renameOpen ? error : null}
-          title="Change workflow"
-          submitLabel="Save"
-          busyLabel="Saving…"
-          initial={{
-            name,
-            ...(description.trim() ? { description } : {}),
-          }}
-          onClose={() => setRenameOpen(false)}
-          onSubmit={(meta) => void renameWorkflow(meta)}
-        />
-      </section>
-    </CursorCallsContext.Provider>
+      <div className="flex min-h-0 flex-1">
+        <NodePalette onAdd={addNode} />
+
+        <div
+          className="relative min-w-0 flex-1 [overscroll-behavior:none]"
+          onDrop={onCanvasDrop}
+          onDragOver={onCanvasDragOver}>
+          {/* Figma-style navigation, mirroring geniro's GraphCanvas: two-finger
+              scroll PANS (free, any direction), scroll never zooms — zoom is
+              pinch or Cmd+scroll (React Flow's default zoomActivationKey). */}
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
+            onInit={setRfInstance}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            isValidConnection={isValidConnection}
+            onSelectionChange={onSelectionChange}
+            // Reopen where the user left off; only a never-seen workflow gets
+            // the automatic fit. Every finished pan/zoom gesture persists.
+            {...(savedViewport
+              ? { defaultViewport: savedViewport }
+              : { fitView: true })}
+            onMoveEnd={onMoveEnd}
+            deleteKeyCode={DELETE_KEY_CODES}
+            minZoom={0.1}
+            maxZoom={4}
+            panOnScroll
+            panOnScrollMode={PanOnScrollMode.Free}
+            zoomOnScroll={false}
+            proOptions={PRO_OPTIONS}>
+            <Background />
+            <Controls />
+          </ReactFlow>
+        </div>
+
+        {selected ? (
+          <aside
+            style={{ width: inspector.width }}
+            className="relative flex min-h-0 shrink-0 flex-col border-l border-border bg-muted/30">
+            <PanelResizeHandle
+              edge="left"
+              label="Resize inspector"
+              onMouseDown={inspector.startResize}
+              value={inspector.width}
+              min={inspector.minWidth}
+              max={inspector.maxWidth}
+              onResize={inspector.resizeTo}
+            />
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">
+                {selected.kind === 'trigger' ? (
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
+                    <Zap aria-hidden="true" className="size-3.5" />
+                  </span>
+                ) : (
+                  <AgentAvatar
+                    label={selected.name ?? selected.id}
+                    className="size-7 text-xs"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">
+                    {selected.name ?? selected.id}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {selected.kind === 'trigger'
+                      ? `${selected.trigger} trigger`
+                      : selected.agent}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-4 p-4">
+                <Field label="Display name" htmlFor="node-name">
+                  <Input
+                    id="node-name"
+                    value={selected.name ?? ''}
+                    placeholder={selected.id}
+                    onChange={(event) =>
+                      patchSelected({
+                        name: event.target.value || undefined,
+                      })
+                    }
+                  />
+                </Field>
+                {selected.kind === 'trigger' ? (
+                  <NoteBox>
+                    Runs start here: firing this {selected.trigger} trigger
+                    seeds every connected agent with the prompt you submit.
+                  </NoteBox>
+                ) : (
+                  <>
+                    <Field
+                      label="Model"
+                      htmlFor="node-model"
+                      hint="Custom… accepts a full model id.">
+                      <ModelSelect
+                        key={selected.id}
+                        id="node-model"
+                        models={agentModels}
+                        value={selected.model ?? ''}
+                        onChange={(model) => patchSelected({ model })}
+                      />
+                    </Field>
+                    <Field
+                      label="Description"
+                      htmlFor="node-description"
+                      hint="What this agent is for. Agents wired to call it see this — and nothing else about it — so they can route work here on their own.">
+                      <ExpandableTextarea
+                        id="node-description"
+                        title="Description"
+                        value={selected.description ?? ''}
+                        rows={3}
+                        placeholder="Reviews a diff or branch and reports findings by severity."
+                        onChange={(next) =>
+                          patchSelected({ description: next || undefined })
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Role / system prompt"
+                      htmlFor="node-role"
+                      hint="Prepended to this node's turn. Private — no other agent ever reads it.">
+                      <ExpandableTextarea
+                        id="node-role"
+                        title="Role / system prompt"
+                        value={selected.role ?? ''}
+                        rows={5}
+                        onChange={(next) =>
+                          patchSelected({ role: next || undefined })
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Tool approvals"
+                      htmlFor="node-approval"
+                      hint="“Ask in chat” pauses each tool call on an approval card; “accept edits” auto-approves file edits and asks for the rest (cursor-agent runs auto regardless).">
+                      <Select
+                        id="node-approval"
+                        value={selected.approval}
+                        side="bottom"
+                        groups={[
+                          {
+                            items: [
+                              { value: 'auto', label: 'auto-approve' },
+                              { value: 'ask', label: 'ask in chat' },
+                              {
+                                value: 'acceptEdits',
+                                label: 'accept edits',
+                              },
+                            ],
+                          },
+                        ]}
+                        onValueChange={(approval) =>
+                          patchSelected({
+                            approval: approval as WorkflowApproval,
+                          })
+                        }
+                      />
+                    </Field>
+                    {callInfo ? (
+                      <NoteBox aria-label="Agent calls" className="text-xs">
+                        <span className="block font-medium text-foreground">
+                          Agent calls
+                        </span>
+                        {callInfo.callees.length > 0 ? (
+                          <span className="block">
+                            May call: {callInfo.callees.join(', ')}
+                          </span>
+                        ) : null}
+                        {callInfo.callers.length > 0 ? (
+                          <span className="block">
+                            Callable by: {callInfo.callers.join(', ')}
+                          </span>
+                        ) : null}
+                        {callInfo.inCycle ? (
+                          <span className="block text-warning">
+                            Takes part in a call loop — runtime calls are
+                            depth-capped.
+                          </span>
+                        ) : null}
+                        <span className="block">
+                          Call edges let this agent invoke its callees at
+                          runtime via the call_agent tool. It is told each
+                          callee&apos;s Description — never their Role — so it
+                          routes by what they do.
+                        </span>
+                        {callInfo.undescribedCallees.length > 0 ? (
+                          <span className="block text-warning">
+                            No description on{' '}
+                            {callInfo.undescribedCallees.join(', ')} — this
+                            agent sees only their names and has nothing to route
+                            on.
+                          </span>
+                        ) : null}
+                        {callInfo.callees.length > 0 ? (
+                          <span className="block">
+                            {selected.agent === 'cursor-agent'
+                              ? 'Callee questions: this agent can answer them (answer_agent) but cannot escalate to you — an unanswered question times the call out.'
+                              : 'Callee questions reach this agent first; it answers from its role or escalates to you as a question card.'}
+                          </span>
+                        ) : null}
+                      </NoteBox>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </div>
+          </aside>
+        ) : null}
+      </div>
+
+      <BuilderStatusBar
+        nodeCount={nodes.length}
+        edgeCount={edges.length}
+        message={error ? null : notice}
+        saveState={autosave.state}
+      />
+
+      <WorkflowMetaDialog
+        open={renameOpen}
+        busy={renaming}
+        error={renameOpen ? error : null}
+        title="Change workflow"
+        submitLabel="Save"
+        busyLabel="Saving…"
+        initial={{
+          name,
+          ...(description.trim() ? { description } : {}),
+        }}
+        onClose={() => setRenameOpen(false)}
+        onSubmit={(meta) => void renameWorkflow(meta)}
+      />
+    </section>
   );
 }

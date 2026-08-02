@@ -314,8 +314,14 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
     }
-    if (input.systemPrompt) {
-      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, input.systemPrompt);
+    // Claude's endpoint is a per-turn config file `prepareTurn` writes from
+    // this same field, so having it IS the grant.
+    const systemPrompt = this.composeSystemPrompt(
+      input,
+      Boolean(input.mcpEndpoint),
+    );
+    if (systemPrompt) {
+      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
     }
     if (input.approvalMode === 'auto' && input.allowUserQuestions) {
       // `--dangerously-skip-permissions` STRIPS AskUserQuestion, so an auto

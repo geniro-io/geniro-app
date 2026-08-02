@@ -250,7 +250,11 @@ apps/ui/src/renderer/
                              native <select>, whose OS menu ignores every token and cannot
                              render groups/icons/checkmarks/search or be asserted on),
                              md-editor (markdown + live preview; port of geniro web's md-editor).
-    logo, status-dot, field, note-box, error-text, empty-state, collapsible-card,
+    logo, status-dot, field, note-box, error-text,
+    error-banner (the dismissible error strip — an ErrorText plus a close
+    control and an optional recovery action, for a failure pinned to a screen
+    that no input the user can type would ever clear),
+    empty-state, collapsible-card,
     copy-button (the app's ONE clipboard control — every code block and any future
     copyable surface; it owns the copied-tick feedback so no caller re-implements it),
     confirm-dialog, expandable-textarea (Textarea + ⤢ → markdown-editor-dialog; use it for any

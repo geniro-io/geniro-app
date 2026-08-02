@@ -29,7 +29,12 @@ globs:
    `components/ui/md-editor.tsx`; its GitHub-Primer chrome is retinted onto our
    tokens by `.md-editor-surface` in `styles/global.css`), `utils.ts` (cn)
 3. **App-level shared component** in `components/` — composed from primitives:
-   `logo`, `status-dot`, `field`, `note-box`, `error-text`, `empty-state`,
+   `logo`, `status-dot`, `field`, `note-box`, `error-text`,
+   `error-banner` (the dismissible error STRIP: an `error-text` plus a close
+   control and an optional recovery action. `error-text` alone belongs to a
+   form field, where typing clears the message; a strip pinned to a screen
+   needs a way out, because nothing the user can type will ever clear
+   "could not load the workflow"), `empty-state`,
    `collapsible-card`, `agent-config-list`, `nav-rail`, `confirm-dialog`,
    `copy-button` (the app's ONE clipboard control — it owns the copied-tick
    feedback and the write itself, so no caller re-implements either),

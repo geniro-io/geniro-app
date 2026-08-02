@@ -64,6 +64,36 @@ function framesOn(child: FakeChild): Record<string, unknown>[] {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+/** One NDJSON line of the agent's stdout. */
+function stdoutLine(message: unknown): string {
+  return `${JSON.stringify(message)}\n`;
+}
+
+/** A `session/update` notification wrapping one update payload. */
+function sessionUpdate(payload: Record<string, unknown>): string {
+  return stdoutLine({
+    jsonrpc: '2.0',
+    method: 'session/update',
+    params: { sessionId: 's', update: payload },
+  });
+}
+
+/** The two `*_once` options every ACP permission request must offer. */
+const ONCE_OPTIONS = [
+  { optionId: 'o-allow', name: 'Allow', kind: 'allow_once' },
+  { optionId: 'o-reject', name: 'Reject', kind: 'reject_once' },
+];
+
+/** Drive the handshake so the child is inside a live prompt (request id 3). */
+function handshake(child: FakeChild): void {
+  child.stdout.emitData(
+    stdoutLine({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 1 } }),
+  );
+  child.stdout.emitData(
+    stdoutLine({ jsonrpc: '2.0', id: 2, result: { sessionId: 's' } }),
+  );
+}
+
 const BASE: AgentTurnInput = { prompt: 'ship it', cwd: '/repo' };
 
 function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
@@ -312,6 +342,92 @@ describe('cursorAutoDecision', () => {
   });
 });
 
+describe('CursorAcpAdapter permission round-trip', () => {
+  it('auto-approves an edit whose permission request omits the tool kind', () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({ spawn }).start(
+      { ...BASE, approvalMode: 'acceptEdits' },
+      (event) => events.push(event),
+    );
+    handshake(child);
+    // The agent states the call's kind once, on the tool_call update…
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        name: 'write_file',
+        kind: 'edit',
+        rawInput: { path: 'a.ts' },
+      }),
+    );
+    // …then asks permission with a ToolCallUpdate that carries only the id,
+    // which is protocol-legal — every other field on it is optional.
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 's',
+          toolCall: { toolCallId: 't-1' },
+          options: ONCE_OPTIONS,
+        },
+      }),
+    );
+
+    // acceptEdits promises unattended file edits; parking this one on a human
+    // card would stall an unattended graph node on every edit it makes.
+    expect(framesOn(child).find((frame) => frame.id === 7)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'o-allow' },
+    });
+    expect(events.filter((event) => event.type === 'approval_request')).toEqual(
+      [],
+    );
+  });
+
+  it('delivers an ask-mode verdict to the running agent as a selected option', () => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new CursorAcpAdapter({ spawn }).start(
+      { ...BASE, approvalMode: 'ask' },
+      (event) => events.push(event),
+    );
+    handshake(child);
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 's',
+          toolCall: {
+            toolCallId: 't-1',
+            name: 'write_file',
+            kind: 'edit',
+            rawInput: { path: 'a.ts' },
+          },
+          options: ONCE_OPTIONS,
+        },
+      }),
+    );
+    expect(events).toContainEqual({
+      type: 'approval_request',
+      id: 'n:7',
+      toolName: 'write_file',
+      input: { path: 'a.ts' },
+    });
+
+    // The verdict has to travel adapter → per-turn driver → child stdin. A
+    // driver assembled without an approval encoder would silently drop it and
+    // park every ask-mode cursor turn until it timed out.
+    expect(handle.respondApproval('n:7', true)).toBe(true);
+    expect(framesOn(child).find((frame) => frame.id === 7)?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'o-allow' },
+    });
+  });
+});
+
 describe('CursorAcpAdapter misuse', () => {
   it('fails loudly if the stateless mapper path is ever reached', () => {
     // ACP state cannot live on the adapter (one instance serves N concurrent
@@ -325,6 +441,59 @@ describe('CursorAcpAdapter misuse', () => {
     expect(() => new Exposed().callMapMessage()).toThrow(
       /drives ACP through its per-turn driver/,
     );
+  });
+
+  it('keeps two interleaved turns of ONE adapter instance on separate protocol state', () => {
+    // Production has exactly one CursorAcpAdapter — a default-scope Nest
+    // provider, held as a single `cursor` by the graph executor — serving
+    // every node of a fanned-out graph. State that must not cross-wire
+    // (session id, the request-id counter, the stdin writer) is only
+    // exercised when both turns come from the SAME instance.
+    const childA = new FakeChild();
+    const childB = new FakeChild();
+    const queued = [childA, childB];
+    const spawn: SpawnFn = () => queued.shift() as unknown as SpawnedProcess;
+    const adapter = new CursorAcpAdapter({ spawn });
+    const eventsA: AgentEvent[] = [];
+    const eventsB: AgentEvent[] = [];
+    adapter.start({ ...BASE, prompt: 'turn A' }, (e) => eventsA.push(e));
+    adapter.start({ ...BASE, prompt: 'turn B' }, (e) => eventsB.push(e));
+
+    // Interleaved and out of order: both turns number their requests from 1,
+    // so a shared counter or a shared pending map would route B's reply into
+    // A's state machine.
+    childA.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 1 } }),
+    );
+    childB.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 1 } }),
+    );
+    childB.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 2, result: { sessionId: 'sess-b' } }),
+    );
+    childA.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 2, result: { sessionId: 'sess-a' } }),
+    );
+
+    expect(eventsA).toEqual([{ type: 'session', sessionId: 'sess-a' }]);
+    expect(eventsB).toEqual([{ type: 'session', sessionId: 'sess-b' }]);
+    // Each child was prompted on its OWN session with its OWN prompt — a
+    // hoisted session id or stdin writer sends one turn's prompt down the
+    // other turn's pipe, or names the wrong session on it.
+    expect(
+      framesOn(childA).find((frame) => frame.method === 'session/prompt')
+        ?.params,
+    ).toEqual({
+      sessionId: 'sess-a',
+      prompt: [{ type: 'text', text: 'turn A' }],
+    });
+    expect(
+      framesOn(childB).find((frame) => frame.method === 'session/prompt')
+        ?.params,
+    ).toEqual({
+      sessionId: 'sess-b',
+      prompt: [{ type: 'text', text: 'turn B' }],
+    });
   });
 
   it('gives each concurrent turn its own protocol state', () => {

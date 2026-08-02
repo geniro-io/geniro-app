@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { AcpTurnDriver } from '../adapters/acp/acp-driver';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { SkillsService } from './skills.service';
 
@@ -139,6 +140,43 @@ describe('SkillsService', () => {
 
     const skills = await service.list('cursor-agent', cwd);
     expect(skills.map((s) => s.name)).toEqual(['fix']);
+  });
+
+  it('never offers a cursor-agent session report in a claude listing for the same folder', async () => {
+    const { service, cwd, harvest } = build();
+    writeSkill(cwd, '.claude', 'deploy', 'name: deploy\ndescription: Ship it');
+
+    // The names below are produced by the CURSOR transport, not invented here:
+    // `cursor-agent acp` reports its invokable set as an ACP
+    // available_commands_update, and BOTH harvest write sites (the chat
+    // service and the graph executor) record a `slash_commands` event for
+    // whichever agent emitted it, keyed by cwd alone.
+    const driver = new AcpTurnDriver({
+      input: { prompt: 'go', cwd },
+      clientName: 'geniro',
+      clientVersion: '0.0.0',
+      autoDecide: () => null,
+    });
+    driver.onStdinReady({ write: () => true, emit: () => {} });
+    const [reported] = driver.onMessage({
+      method: 'session/update',
+      params: {
+        sessionId: 's',
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'generate-cursor-rules' }],
+        },
+      },
+    });
+    if (reported?.type !== 'slash_commands') {
+      throw new Error('the ACP driver reported no session commands to harvest');
+    }
+    harvest.record(realpathSync(cwd), reported.commands);
+
+    // claude cannot invoke a cursor-agent command; surfacing one in claude's
+    // `/` autocomplete offers the user a command the CLI will reject.
+    const skills = await service.list('claude', cwd);
+    expect(skills.map((s) => s.name)).toEqual(['deploy']);
   });
 
   it('scans only .cursor/commands for cursor-agent — never .claude', async () => {

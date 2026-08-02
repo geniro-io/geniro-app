@@ -2123,4 +2123,47 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     completeTurn(cursor.starts[0]!, 'done');
     await drain();
   });
+
+  it("a cursor 'ask' node really parks on a human card, and the transcript never claims it auto-approved", async () => {
+    const { service, cursor, itemDao, approvals } = setup();
+    const run = await service.startRun({
+      slug: 'cursor-ask',
+      workflow: triggered({
+        name: 'cursor-ask',
+        nodes: [
+          { id: 'c', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = cursor.starts[0]!;
+    // The ACP transport carries a real permission protocol, so the requested
+    // mode reaches the CLI untouched — nothing rewrites it to 'auto'.
+    expect(turn.input.approvalMode).toBe('ask');
+
+    turn.emit({
+      type: 'approval_request',
+      id: 'n:5',
+      toolName: 'write_file',
+      input: { path: 'a.ts' },
+    });
+    await drain();
+    // The node is genuinely blocked on a user verdict…
+    expect(turn.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    // …so a system item telling the user their permissions were bypassed is a
+    // factual lie about what this node did.
+    expect(
+      itemDao.items
+        .filter((i) => i.kind === 'system')
+        .map((i) => i.payload)
+        .filter((payload) => payload.includes('degrades to auto-approve')),
+    ).toEqual([]);
+    completeTurn(turn, 'done');
+    await drain();
+  });
 });

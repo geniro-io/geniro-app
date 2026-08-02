@@ -233,6 +233,39 @@ describe('AcpTurnDriver session resume', () => {
     ]);
   });
 
+  it('still harvests the command set and the context usage during that replay', () => {
+    const h = harness(resuming);
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    // Unlike the replayed transcript, these two describe CURRENT state — the
+    // set of commands this session can invoke now, and how full its context
+    // is — so the replay window must not swallow them the way it swallows
+    // history.
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'review' }],
+        }),
+      ),
+    ).toEqual([{ type: 'slash_commands', commands: ['review'] }]);
+    h.feed(
+      update({
+        sessionUpdate: 'usage_update',
+        used: 12_345,
+        size: 200_000,
+        cost: { amount: 0.5, currency: 'USD' },
+      }),
+    );
+
+    h.feed({ id: 2, result: {} });
+    const [event] = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+    expect(event).toMatchObject({
+      type: 'turn_complete',
+      usage: { contextTokens: 12_345, costUsd: 0.5 },
+    });
+  });
+
   it('says so when resume was asked for but the agent cannot load sessions', () => {
     const h = harness(resuming);
     const events = h.feed(initializeReply(1, { loadSession: false }));
@@ -617,6 +650,39 @@ describe('AcpTurnDriver permissions', () => {
     ]);
     // Nothing was answered — the agent stays parked until a verdict arrives.
     expect(h.sent.some((frame) => frame.id === 5)).toBe(false);
+  });
+
+  it('names a parked card from the tool call it belongs to when the request omits the name', () => {
+    const h = harness();
+    // ACP's permission request carries a ToolCallUpdate, where every field
+    // except toolCallId is optional — the agent already named this call once,
+    // on the tool_call update the driver recorded.
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        name: 'write_file',
+        kind: 'edit',
+      }),
+    );
+    expect(
+      h.feed({
+        id: 5,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 's',
+          toolCall: { toolCallId: 't-1' },
+          options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'approval_request',
+        id: 'n:5',
+        toolName: 'write_file',
+        input: null,
+      },
+    ]);
   });
 
   it('answers a parked request with the id type the agent used', () => {

@@ -24,12 +24,7 @@ import type {
   AgentTurnInput,
 } from '../adapter.types';
 import { ClaudeAdapter } from './claude.adapter';
-import {
-  CLAUDE_BASE_ARGS,
-  CLAUDE_COMMANDS_PROBE_PROMPT,
-  CLAUDE_MAX_REPORTED_COMMANDS,
-  CLAUDE_RESUME_FLAG,
-} from './claude.const';
+import { CLAUDE_BASE_ARGS, CLAUDE_RESUME_FLAG } from './claude.const';
 
 // ── Minimal synchronous child-process fake (no real I/O timing) ──────────────
 class FakeReadable extends EventEmitter {
@@ -1132,6 +1127,22 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     })}\n`;
   }
 
+  /**
+   * The probe settings the adapter ACTUALLY SHIPS, read off its config rather
+   * than off a const next door: config is what `listReportedCommands` reads, so
+   * a value that stopped being wired into it fails here instead of passing
+   * against a name nothing uses.
+   */
+  function shippedReportedCommands(): NonNullable<
+    AdapterConfig['reportedCommands']
+  > {
+    const reportedCommands = new ClaudeAdapter().getConfig().reportedCommands;
+    if (!reportedCommands) {
+      throw new Error('claude must ship a reportedCommands probe config');
+    }
+    return reportedCommands;
+  }
+
   /** A killable child plus what the probe turn was spawned with. */
   function probeSpawn(): {
     spawn: SpawnFn;
@@ -1185,9 +1196,16 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     await expect(reported).resolves.toEqual(['clear', 'compact']);
   });
 
-  it('caps the reported list, however much the CLI claims', async () => {
+  it('caps the reported list at 500, however much the CLI claims', async () => {
     // A defensive bound: init reports ~60 entries today, and an autocomplete
     // is not the place to discover that a plugin registered thousands.
+    //
+    // The 500 is asserted as a LITERAL, not derived from the config: a test
+    // whose expectation comes from the same number the code reads passes for
+    // any value and would pin nothing if the bound were quietly widened.
+    const { maxCommands } = shippedReportedCommands();
+    expect(maxCommands).toBe(500);
+
     const { spawn, child } = probeSpawn();
     const reported = new ClaudeAdapter({
       spawn,
@@ -1195,15 +1213,10 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     }).listReportedCommands();
 
     child.stdout.emitData(
-      initLine(
-        Array.from(
-          { length: CLAUDE_MAX_REPORTED_COMMANDS + 100 },
-          (_, i) => `cmd-${i}`,
-        ),
-      ),
+      initLine(Array.from({ length: 600 }, (_, i) => `cmd-${i}`)),
     );
 
-    await expect(reported).resolves.toHaveLength(CLAUDE_MAX_REPORTED_COMMANDS);
+    await expect(reported).resolves.toHaveLength(500);
   });
 
   it('cancels the turn the moment the list lands, before the model runs', async () => {
@@ -1260,7 +1273,9 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: CLAUDE_COMMANDS_PROBE_PROMPT }],
+        content: [
+          { type: 'text', text: shippedReportedCommands().probePrompt },
+        ],
       },
     });
   });
@@ -1405,9 +1420,9 @@ describe('ClaudeAdapter — models', () => {
     // `config.builtinModels` is documented as THE fallback contract — "what a
     // CLI that cannot be asked answers with so the picker is never empty" — so
     // it must be what listModels actually reads. An adapter whose config
-    // carries a different floor answers with THAT floor; reaching past config
-    // to CLAUDE_BUILTIN_MODELS would leave the field write-only, and this test
-    // is the thing that fails when someone does.
+    // carries a different floor answers with THAT floor; hardcoding the alias
+    // list in listModels instead would leave the field write-only, and this
+    // test is the thing that fails when someone does.
     class ConfiguredClaudeAdapter extends ClaudeAdapter {
       override getConfig(): AdapterConfig {
         return {

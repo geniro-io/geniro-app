@@ -360,13 +360,13 @@ describe('CursorAdapter model listing', () => {
     expect(models.every((model) => model.source === 'builtin')).toBe(true);
   });
 
-  it('falls back to the set its CONFIG declares, not the shipped const', async () => {
+  it('falls back to the set its CONFIG declares, not the shipped ids', async () => {
     // `config.builtinModels` is documented as THE fallback contract — "what a
     // CLI that cannot be asked answers with so the picker is never empty" — so
     // it must be what listModels actually reads. An adapter whose config
-    // carries a different floor answers with THAT floor; reaching past config
-    // to CURSOR_BUILTIN_MODELS would leave the field write-only, and this test
-    // is the thing that fails when someone does.
+    // carries a different floor answers with THAT floor; hardcoding the
+    // documented example ids in listModels instead would leave the field
+    // write-only, and this test is the thing that fails when someone does.
     class ConfiguredCursorAdapter extends CursorAdapter {
       override getConfig(): AdapterConfig {
         return {

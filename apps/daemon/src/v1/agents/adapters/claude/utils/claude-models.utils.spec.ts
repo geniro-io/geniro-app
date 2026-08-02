@@ -5,8 +5,16 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentModel } from '../../adapter.types';
-import { CLAUDE_BUILTIN_MODELS } from '../claude.const';
+import { ClaudeAdapter } from '../claude.adapter';
 import { claudeModels, readClaudeModelCache } from './claude-models.utils';
+
+/**
+ * The alias floor the adapter ACTUALLY SHIPS. Read off `config.builtinModels`
+ * — the declared fallback surface `listModels` passes in — rather than off a
+ * const, so these cases pin what a real install's picker is floored with.
+ */
+const shippedFloor: readonly AgentModel[] = new ClaudeAdapter().getConfig()
+  .builtinModels;
 
 const withClaudeJson = (contents: string): string => {
   const home = mkdtempSync(join(tmpdir(), 'claude-home-'));
@@ -79,9 +87,12 @@ describe('claudeModels', () => {
       }),
     );
 
-    expect(
-      claudeModels(CLAUDE_BUILTIN_MODELS, home).map((model) => model.id),
-    ).toEqual(['fable-x', 'opus', 'sonnet', 'haiku']);
+    expect(claudeModels(shippedFloor, home).map((model) => model.id)).toEqual([
+      'fable-x',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
   });
 
   it('still offers the aliases when the cache is empty or unreadable', () => {
@@ -89,14 +100,14 @@ describe('claudeModels', () => {
     // has never populated the cache still gets a working picker.
     const home = mkdtempSync(join(tmpdir(), 'claude-empty-'));
 
-    expect(claudeModels(CLAUDE_BUILTIN_MODELS, home)).toEqual([
+    expect(claudeModels(shippedFloor, home)).toEqual([
       { id: 'opus', label: 'opus', source: 'builtin' },
       { id: 'sonnet', label: 'sonnet', source: 'builtin' },
       { id: 'haiku', label: 'haiku', source: 'builtin' },
     ]);
   });
 
-  it('floors the list with the set it is GIVEN, not the const next door', () => {
+  it('floors the list with the set it is GIVEN, not the shipped aliases', () => {
     // The floor is a parameter precisely so `config.builtinModels` can be the
     // one declared fallback surface: hand it a different set and NONE of the
     // shipped aliases may appear.
@@ -122,8 +133,10 @@ describe('claudeModels', () => {
       }),
     );
 
-    expect(
-      claudeModels(CLAUDE_BUILTIN_MODELS, home).map((model) => model.id),
-    ).toEqual(['opus', 'sonnet', 'haiku']);
+    expect(claudeModels(shippedFloor, home).map((model) => model.id)).toEqual([
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
   });
 });

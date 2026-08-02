@@ -74,8 +74,10 @@ export abstract class AgentAdapter {
    * A method returning an inline literal, not a field pointing at a const: the
    * adapter class is then the one place that shows what its CLI is, and the
    * annotated return type makes a missing or misspelled field a type error at
-   * the adapter instead of at some distant read site. The individual values
-   * stay named exports in `<name>.const.ts`; only their ASSEMBLY lives here.
+   * the adapter instead of at some distant read site. A value belongs wherever
+   * its readers are — a named export in `<name>.const.ts` once something
+   * BESIDES this literal reads it, so the two cannot drift apart; written
+   * inline beside the field it answers when this literal is its only reader.
    */
   abstract getConfig(): AdapterConfig;
 

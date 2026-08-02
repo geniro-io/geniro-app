@@ -1,6 +1,7 @@
 import { AgentKind } from '../../../runs/runs.types';
 import type {
   AdapterConfig,
+  AgentApprovalMode,
   AgentCommandOptions,
   AgentEvent,
   AgentModel,
@@ -10,17 +11,12 @@ import { AgentAdapter } from '../agent-adapter';
 import {
   CURSOR_API_KEY_ENV,
   CURSOR_API_KEY_SOURCE_ENV,
-  CURSOR_APPROVAL_MODES,
   CURSOR_BASE_ARGS,
-  CURSOR_BUILTIN_MODELS,
-  CURSOR_COMMANDS_SEGMENTS,
   CURSOR_MODEL_FLAG,
   CURSOR_MODELS_SUBCOMMAND,
-  CURSOR_PROBED_APPROVAL_MODES,
   CURSOR_RESUME_FLAG,
   CURSOR_SYSTEM_PROMPT_SEPARATOR,
   CURSOR_TRUST_FLAG,
-  cursorApprovalDegradeReason,
 } from './cursor.const';
 import { withImagePaths } from './utils/cursor-images.utils';
 import { mapCursorMessage } from './utils/cursor-message.utils';
@@ -49,11 +45,25 @@ export class CursorAdapter extends AgentAdapter {
        */
       questionToolName: null,
       approval: {
-        modes: CURSOR_APPROVAL_MODES,
-        probedModes: CURSOR_PROBED_APPROVAL_MODES,
+        /**
+         * `auto` is the only honest entry: `--force` plus the static allow/deny
+         * list in `~/.cursor/cli-config.json` IS this CLI's permission model,
+         * and there is no per-turn channel to hold a tool call on. Offering
+         * `ask` would be a control that changes nothing.
+         */
+        modes: ['auto'],
+        /** Nothing to probe — the one mode it has needs no binary to confirm it. */
+        probedModes: [],
         /** Nothing is probed, so nothing can degrade on a probe result. */
         degradeOnProbeFail: {},
-        soleModeDegradeReason: cursorApprovalDegradeReason,
+        /**
+         * Everything becomes `auto`, and anything else asked for is REPORTED
+         * rather than quietly ignored: a workflow node may still be authored
+         * with `ask` (the graph schema is CLI-agnostic), and a silent degrade
+         * there would read as enforced permissions that never existed.
+         */
+        soleModeDegradeReason: (requested: AgentApprovalMode): string =>
+          `cursor-agent has no approval callback — approval '${requested}' degrades to auto-approve for this turn`,
       },
       /**
        * Nothing to offer: cursor-agent has no reasoning-effort flag, because
@@ -63,11 +73,26 @@ export class CursorAdapter extends AgentAdapter {
        * the effort chip for this CLI.
        */
       efforts: [],
-      builtinModels: CURSOR_BUILTIN_MODELS,
+      /**
+       * The set offered when the CLI cannot be asked — an install too old to
+       * have the `models` subcommand, or one that is not signed in. These are
+       * the ids cursor-agent's own `--model` help gives as examples, so they
+       * are the only ones documented to work without asking the account.
+       */
+      builtinModels: [
+        { id: 'gpt-5', label: 'gpt-5', source: 'builtin' },
+        { id: 'sonnet-4', label: 'sonnet-4', source: 'builtin' },
+        {
+          id: 'sonnet-4-thinking',
+          label: 'sonnet-4-thinking',
+          source: 'builtin',
+        },
+      ],
       skillRoots: {
         /** It has no skills convention — only claude does. */
         skills: [],
-        commands: [CURSOR_COMMANDS_SEGMENTS],
+        /** `<root>/.cursor/commands/**.md`. */
+        commands: [['.cursor', 'commands']],
       },
       /**
        * cursor-agent's stream-json has no partial-output mode — its assistant

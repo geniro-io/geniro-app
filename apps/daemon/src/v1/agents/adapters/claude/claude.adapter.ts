@@ -16,20 +16,10 @@ import type {
 } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import {
-  CLAUDE_ACCEPT_EDITS_DEGRADE_REASON,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
-  CLAUDE_APPROVAL_MODES,
   CLAUDE_BASE_ARGS,
-  CLAUDE_BUILTIN_MODELS,
-  CLAUDE_COMMANDS_PROBE_PROMPT,
-  CLAUDE_COMMANDS_PROBE_TIMEOUT_MS,
-  CLAUDE_COMMANDS_SEGMENTS,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
-  CLAUDE_EFFORT_LEVELS,
-  CLAUDE_HELP_ARGS,
-  CLAUDE_INTERNAL_COMMAND_PREFIX,
-  CLAUDE_MAX_REPORTED_COMMANDS,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
@@ -40,11 +30,7 @@ import {
   CLAUDE_PERMISSION_MODE_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
-  CLAUDE_PROBED_APPROVAL_MODES,
-  CLAUDE_QUESTION_TOOL_NAME,
   CLAUDE_RESUME_FLAG,
-  CLAUDE_SESSION_ID_PATTERN,
-  CLAUDE_SKILLS_SEGMENTS,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
@@ -78,10 +64,21 @@ export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.Claude,
-      questionToolName: CLAUDE_QUESTION_TOOL_NAME,
+      /**
+       * Probe-verified: a plain chat turn under `--permission-mode default
+       * --permission-prompt-tool stdio` offers this tool, and its request
+       * arrives as `can_use_tool` with `requires_user_interaction: true`.
+       */
+      questionToolName: 'AskUserQuestion',
       approval: {
-        modes: CLAUDE_APPROVAL_MODES,
-        probedModes: CLAUDE_PROBED_APPROVAL_MODES,
+        /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
+        modes: ['auto', 'ask', 'acceptEdits', 'plan'],
+        /**
+         * The two modes headless claude has been seen to reject on some builds
+         * — so a run requesting either waits out the mode probe, and a run that
+         * never does pays nothing.
+         */
+        probedModes: ['acceptEdits', 'plan'],
         /**
          * `acceptEdits` degrades to `ask` on a probed FAIL — the turn still
          * runs, every edit just asks first.
@@ -98,27 +95,74 @@ export class ClaudeAdapter extends AgentAdapter {
         degradeOnProbeFail: {
           acceptEdits: {
             to: 'ask',
-            reason: CLAUDE_ACCEPT_EDITS_DEGRADE_REASON,
+            /** `acceptEdits` still runs on a probed FAIL — every edit just asks first. */
+            reason:
+              "installed claude does not support acceptEdits — this turn runs as 'ask'",
           },
         },
         /** Four honoured modes — the sole-mode collapse never applies to claude. */
         soleModeDegradeReason: null,
       },
-      efforts: CLAUDE_EFFORT_LEVELS,
-      builtinModels: CLAUDE_BUILTIN_MODELS,
+      /**
+       * The values `claude --effort` accepts, weakest first.
+       *
+       * WRITTEN DOWN RATHER THAN SCRAPED, because the CLI under-reports itself.
+       * Its own `--help` says "Valid values: low, medium, high, xhigh, max" and
+       * its warning line repeats that set — but `ultracode` is accepted just as
+       * silently as the five it names.
+       *
+       * Probe-verified on claude 2.1.220 (2026-07-29) by feeding each candidate
+       * and testing for the `Unknown --effort value` warning:
+       * - accepted, no warning: low, medium, high, xhigh, max, `ultracode`
+       * - rejected with the warning: `ultrathink`, and the control
+       *   `zzz-not-a-level`
+       *
+       * So a `--help` scrape would drop `ultracode` (a level the user asked for
+       * by name), and guessing would never have found it. Re-probe the same way
+       * when this list is revised; do not copy it out of help output.
+       */
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'medium', label: 'medium' },
+        { id: 'high', label: 'high' },
+        { id: 'xhigh', label: 'xhigh' },
+        { id: 'max', label: 'max' },
+        { id: 'ultracode', label: 'ultracode' },
+      ],
+      /**
+       * The aliases `claude --model` documents: each resolves to the latest
+       * model of its tier, so they stay correct across releases without an app
+       * update. This is the floor of the list, never the whole of it.
+       */
+      builtinModels: [
+        { id: 'opus', label: 'opus', source: 'builtin' },
+        { id: 'sonnet', label: 'sonnet', source: 'builtin' },
+        { id: 'haiku', label: 'haiku', source: 'builtin' },
+      ],
       skillRoots: {
-        skills: [CLAUDE_SKILLS_SEGMENTS],
-        commands: [CLAUDE_COMMANDS_SEGMENTS],
+        /** `<root>/.claude/skills/<name>/SKILL.md`. */
+        skills: [['.claude', 'skills']],
+        /** `<root>/.claude/commands/**.md`. */
+        commands: [['.claude', 'commands']],
       },
       liveStream: {
-        probeArgs: CLAUDE_HELP_ARGS,
+        /** Utility argv whose stdout is searched for {@link CLAUDE_PARTIAL_MESSAGES_FLAG}. */
+        probeArgs: ['--help'],
         flag: CLAUDE_PARTIAL_MESSAGES_FLAG,
       },
       reportedCommands: {
-        probePrompt: CLAUDE_COMMANDS_PROBE_PROMPT,
-        probeTimeoutMs: CLAUDE_COMMANDS_PROBE_TIMEOUT_MS,
-        maxCommands: CLAUDE_MAX_REPORTED_COMMANDS,
-        internalPrefix: CLAUDE_INTERNAL_COMMAND_PREFIX,
+        /** Never reached by the model: the turn is cancelled the moment init lands. */
+        probePrompt: 'Reply with exactly: ok',
+        /** A hung probe must not wedge the caller forever. */
+        probeTimeoutMs: 30_000,
+        /** Defensive bound — init reports ~60 entries today. */
+        maxCommands: 500,
+        /**
+         * `_`-prefixed names are claude's INTERNAL commands
+         * (`__remote-workflow`) — reported, but not things a user invokes.
+         * SkillHarvestStore drops them from the other report path too.
+         */
+        internalPrefix: '_',
       },
       mcp: {
         /**
@@ -131,7 +175,13 @@ export class ClaudeAdapter extends AgentAdapter {
       },
       terminal: {
         resumeFlag: CLAUDE_RESUME_FLAG,
-        sessionIdPattern: CLAUDE_SESSION_ID_PATTERN,
+        /**
+         * What a resumable claude session id looks like. A missing or
+         * foreign-shaped id is not a mirror target — opening the TUI without
+         * one would start an unrelated fresh conversation instead of showing
+         * the run's own.
+         */
+        sessionIdPattern: /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
       },
     };
   }

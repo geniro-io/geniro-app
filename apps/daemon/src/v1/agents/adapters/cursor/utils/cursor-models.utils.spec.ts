@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { CURSOR_BUILTIN_MODELS } from '../cursor.const';
+import type { AgentModel } from '../../adapter.types';
+import { CursorAdapter } from '../cursor.adapter';
 import { parseCursorModels } from './cursor-models.utils';
+
+/**
+ * The fallback set the adapter ACTUALLY SHIPS. Read off `config.builtinModels`
+ * — the declared floor `listModels` falls back to when the CLI cannot be asked
+ * — rather than off a const, so these cases pin what a real install's picker
+ * offers.
+ */
+const shippedFallback: readonly AgentModel[] = new CursorAdapter().getConfig()
+  .builtinModels;
 
 describe('parseCursorModels', () => {
   it('reads one id per line, as `cursor-agent models` prints them', () => {
@@ -64,13 +74,13 @@ describe('parseCursorModels', () => {
   it('offers the documented example ids as the fallback set', () => {
     // These are the ids cursor-agent's own `--model` help gives, so they are
     // the only ones documented to work without asking the account.
-    expect(CURSOR_BUILTIN_MODELS.map((model) => model.id)).toEqual([
+    expect(shippedFallback.map((model) => model.id)).toEqual([
       'gpt-5',
       'sonnet-4',
       'sonnet-4-thinking',
     ]);
-    expect(
-      CURSOR_BUILTIN_MODELS.every((model) => model.source === 'builtin'),
-    ).toBe(true);
+    expect(shippedFallback.every((model) => model.source === 'builtin')).toBe(
+      true,
+    );
   });
 });

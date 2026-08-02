@@ -1,18 +1,16 @@
-import type {
-  AdapterConfig,
-  AgentApprovalMode,
-  AgentModel,
-} from '../adapter.types';
-
 /**
- * Every constant the `cursor-agent` adapter needs, in one place.
+ * Every `cursor-agent` value read from anywhere except the config literal.
  *
- * Nothing about this CLI is spelled as a literal inside `cursor.adapter.ts` or
- * any `cursor/utils/**` helper — argv flags, env var names, parse patterns and
- * user-facing message templates are all named here, grouped by what they are
- * about. The static subset the base class reads is assembled from them by
- * `CursorAdapter.getConfig()`, whose `null` / `[]` members are the DECLARED
- * facts about what this CLI cannot do, not omissions.
+ * A value needed in more than one spot — an argv flag `buildArgs` pushes and a
+ * probe searches for, a path segment the merge service, the file mechanics and
+ * the git-tracked check all spell — is named here precisely so the readers
+ * cannot drift apart. Values with a single reader are named here too: the name
+ * is where the doc block lives.
+ *
+ * The ONE exception is `CursorAdapter.getConfig()`. A static fact that literal
+ * alone reads is written inline there, beside the field it answers, because a
+ * name nothing else ever says buys nothing — it only puts the value one file
+ * away from the shape that gives it meaning.
  */
 
 // ── Turn argv ─────────────────────────────────────────────────────────────
@@ -69,46 +67,7 @@ export const CURSOR_SESSION_ID_KEYS = [
   'thread_id',
 ] as const;
 
-// ── Approval policy ───────────────────────────────────────────────────────
-
-/**
- * `auto` is the only honest entry: `--force` plus the static allow/deny list
- * in `~/.cursor/cli-config.json` IS this CLI's permission model, and there is
- * no per-turn channel to hold a tool call on. Offering `ask` would be a
- * control that changes nothing.
- */
-export const CURSOR_APPROVAL_MODES = [
-  'auto',
-] as const satisfies readonly AgentApprovalMode[];
-
-/** Nothing to probe — the one mode it has needs no binary to confirm it. */
-export const CURSOR_PROBED_APPROVAL_MODES =
-  [] as const satisfies readonly AgentApprovalMode[];
-
-/**
- * Everything becomes `auto`, and anything else asked for is REPORTED rather
- * than quietly ignored: a workflow node may still be authored with `ask` (the
- * graph schema is CLI-agnostic), and a silent degrade there would read as
- * enforced permissions that never existed.
- */
-export const cursorApprovalDegradeReason = (
-  requested: AgentApprovalMode,
-): string =>
-  `cursor-agent has no approval callback — approval '${requested}' degrades to auto-approve for this turn`;
-
 // ── Models ────────────────────────────────────────────────────────────────
-
-/**
- * The set offered when the CLI cannot be asked — an install too old to have
- * the `models` subcommand, or one that is not signed in. These are the ids
- * cursor-agent's own `--model` help gives as examples, so they are the only
- * ones documented to work without asking the account.
- */
-export const CURSOR_BUILTIN_MODELS: AgentModel[] = [
-  { id: 'gpt-5', label: 'gpt-5', source: 'builtin' },
-  { id: 'sonnet-4', label: 'sonnet-4', source: 'builtin' },
-  { id: 'sonnet-4-thinking', label: 'sonnet-4-thinking', source: 'builtin' },
-];
 
 /** The unauthenticated notice the CLI prints instead of a list. */
 export const CURSOR_NO_MODELS_PATTERN = /no models available/i;
@@ -121,14 +80,6 @@ export const CURSOR_MODELS_HEADING_PATTERN = /^(available )?models:?$/i;
  * tags cursor appends — those are per-session state, not part of the id.
  */
 export const CURSOR_MODEL_ID_PATTERN = /^([A-Za-z0-9][A-Za-z0-9._/:@-]*)/;
-
-// ── Skills / commands on disk ─────────────────────────────────────────────
-
-/** `<root>/.cursor/commands/**.md`. */
-export const CURSOR_COMMANDS_SEGMENTS: readonly string[] = [
-  '.cursor',
-  'commands',
-];
 
 // ── The `.cursor/mcp.json` merge lifecycle ────────────────────────────────
 
@@ -223,5 +174,3 @@ export const CURSOR_IMAGE_BULLET = '- ';
 export const CURSOR_IMAGE_HEADER_SINGLE = 'The user attached this image file:';
 export const CURSOR_IMAGE_HEADER_PLURAL =
   'The user attached these image files:';
-
-// ── The assembled static config ───────────────────────────────────────────

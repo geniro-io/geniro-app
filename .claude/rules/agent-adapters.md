@@ -76,11 +76,15 @@ Adapter-agnostic contract types and constants live in
 
 ## Non-negotiables
 
-- **No constant outside `<name>.const.ts`.** Argv literals, flags, timeouts,
-  file names, env var names, message templates — all named exports there, under
-  section comments. The const file holds the VALUES; `getConfig()` in the
-  adapter assembles them into the `AdapterConfig` literal, so the class is the
-  one place that shows what its CLI is.
+- **Constants live in `<name>.const.ts` — except the config literal's own.**
+  Argv flags, timeouts, file names, env var names, message templates are named
+  exports there, under section comments: a name is where the doc block lives,
+  and it is what stops two readers drifting (`CLAUDE_PARTIAL_MESSAGES_FLAG` is
+  ONE string used both by `buildArgs` and by the `--help` scan, so they cannot
+  disagree about it). The exception is a static fact `getConfig()` is the only
+  reader of — write it inline in that literal, beside the field it answers. A
+  name nothing else ever says buys nothing and only puts the value one file
+  away from the shape that gives it meaning.
 - **An agent is named, never spelled.** `AgentKind.Claude` /
   `AgentKind.CursorAgent` (`v1/runs/runs.types.ts`), which also drives
   `AgentKindSchema` — a bare `'claude'` string is a typo away from a branch

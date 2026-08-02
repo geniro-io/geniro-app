@@ -9,31 +9,28 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   AgentTurnInput,
+  ApprovalResolution,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
-import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
-import {
-  optionLabelsOf,
-  questionTextOf,
-  withResponse,
-} from '../../agents/adapters/claude/question-payload';
-import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
-import {
-  type ClaudeModesCapability,
-  type ItemWire,
-  type RunWire,
+import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import type {
+  ClaudeModesCapability,
+  ItemWire,
+  RunWire,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
-import { ClaudeProbeService } from '../../agents/services/claude-probe.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
+  isUserQuestion,
 } from '../../agents/utils/approval-answer';
 import {
   mapEventToItem,
@@ -42,8 +39,13 @@ import {
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
+import { writeRunStatus } from '../../agents/utils/run-status';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
-import type { ItemKind } from '../../runs/runs.types';
+import {
+  unanswerablePayload,
+  unansweredRequests,
+} from '../../agents/utils/unanswerable';
+import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
   NodeStateWire,
@@ -94,13 +96,21 @@ export interface StartWorkflowRunInput {
   prompt: string;
 }
 
-/** True when any claude node runs under acceptEdits (needs the mode probe). */
-function hasClaudeAcceptEdits(workflow: Workflow): boolean {
+/**
+ * True when any node requests an approval mode its CLI's support for must be
+ * PROVED against the installed binary — a workflow that asks for none never
+ * pays for the probe turn.
+ */
+function hasProbedApprovalMode(
+  workflow: Workflow,
+  adapterFor: (kind: AgentKind) => AgentAdapter,
+): boolean {
   return workflow.nodes.some(
     (node) =>
       node.kind === 'agent' &&
-      node.agent === 'claude' &&
-      node.approval === 'acceptEdits',
+      adapterFor(node.agent)
+        .getConfig()
+        .approval.probedModes.includes(node.approval),
   );
 }
 
@@ -120,6 +130,17 @@ function hasClaudeAcceptEdits(workflow: Workflow): boolean {
 export class GraphExecutorService {
   private readonly logger = new Logger(GraphExecutorService.name);
 
+  /**
+   * Runs whose delete is in progress — the graph-side twin of ChatService's
+   * `deleting` Set, covering the same window.
+   *
+   * `startRun` claims the run, then `drive` awaits the capability probes before
+   * `driveResolved` registers the aggregate handle. A delete landing in there
+   * finds no handle to wait on, destroys the rows, and the walk would then
+   * register and write a whole run's items for a run that no longer exists.
+   */
+  private readonly deleting = new Set<string>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -128,19 +149,43 @@ export class GraphExecutorService {
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
     private readonly approvals: ApprovalRegistry,
-    private readonly claude: ClaudeAdapter,
-    private readonly cursor: CursorAcpAdapter,
+    private readonly adapters: AgentAdapterRegistry,
     private readonly callTokens: CallTokenRegistry,
     private readonly callBroker: CallBroker,
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly store: WorkflowStoreService,
+    private readonly teardown: RunTeardownService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
-  /** The adapter driving one agent kind. */
-  private adapterFor(agent: WorkflowAgentNode['agent']): AgentAdapter {
-    return agent === 'claude' ? this.claude : this.cursor;
+  /**
+   * The adapter driving one agent kind — the single kind→adapter dispatch in
+   * this file. Every other per-CLI decision asks the adapter it returns; an
+   * `if (agent === …)` anywhere else is a missing abstract method.
+   */
+  private adapterFor(kind: AgentKind): AgentAdapter {
+    return this.adapters.for(kind);
+  }
+
+  /**
+   * Write a workflow run's status AND announce it — the same helper the chat
+   * path uses, so the two cannot drift. The chat sidebar lists workflow runs
+   * beside chats, and a status written without the announce leaves that row's
+   * badge stale until something else forces a refetch: "still running with no
+   * active jobs", fixed for one row type and not the other.
+   */
+  private async setRunStatus(
+    em: EntityManager,
+    runId: string,
+    status: RunStatus,
+  ): Promise<void> {
+    await writeRunStatus(
+      { runDao: this.runDao, bus: this.bus },
+      em,
+      runId,
+      status,
+    );
   }
 
   /**
@@ -200,16 +245,14 @@ export class GraphExecutorService {
       // permanently busy/running (mirror of the chat turn's pre-handle catch).
       this.registry.release(run.id);
       this.callTokens.revokeRun(run.id);
-      await this.runDao
-        .updateById(run.id, { status: 'failed' }, em)
-        .catch(() => {});
+      await this.setRunStatus(em, run.id, 'failed').catch(() => {});
       throw err;
     }
 
     if (!this.registry.canStart(run.id)) {
       this.registry.release(run.id);
       this.callTokens.revokeRun(run.id);
-      await this.runDao.updateById(run.id, { status: 'failed' }, em);
+      await this.setRunStatus(em, run.id, 'failed');
       throw new ConflictException(
         'RUN_STOPPING',
         'daemon shutdown started before the workflow could launch',
@@ -226,6 +269,37 @@ export class GraphExecutorService {
     // cancels converge on one registry key) + the 404 the chat siblings return.
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     return { cancelled: this.registry.cancel(runId) };
+  }
+
+  /**
+   * Delete a workflow run and everything it owns — a ONE-WAY DOOR, and the
+   * graph-side sibling of `ChatService.delete`. The chats sidebar lists both
+   * kinds of run, so without this the workflow rows in it were undeletable:
+   * the chat route refuses them (`NOT_A_CHAT_RUN`) precisely because deleting
+   * one there would skip everything below.
+   *
+   * The teardown itself is shared ({@link RunTeardownService}). What is
+   * graph-specific: the settle promise is the run's AGGREGATE handle (it
+   * resolves only after the DAG's final status + `turn_complete` writes), and
+   * the CallBroker's per-run call surface has no chat analogue.
+   */
+  async deleteRun(runId: string): Promise<{ deleted: boolean }> {
+    const em = this.em.fork();
+    assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+
+    // Claimed BEFORE the cancel, so a walk still crossing the claim→register
+    // window sees the delete and abandons itself rather than registering
+    // behind our back.
+    this.deleting.add(runId);
+    try {
+      return await this.teardown.purge(em, runId, this.registry.settled(runId));
+    } finally {
+      // The call surface dies with the run even if the purge threw half-way:
+      // leaving it registered would let a child that outlived its run dispatch
+      // into rows that are already (partly) gone.
+      this.callBroker.unregisterRun(runId);
+      this.deleting.delete(runId);
+    }
   }
 
   /** Workflow runs, newest first (the Chats page's run picker). */
@@ -269,11 +343,29 @@ export class GraphExecutorService {
         if (this.registry.has(run.id)) {
           continue; // a live executor legitimately owns this run
         }
-        const seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
-        await this.persist(em, run.id, null, seq, 'error', null, {
+        let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
+        await this.persist(em, run.id, null, seq++, 'error', null, {
           message:
             'workflow run interrupted — the daemon stopped before it finished',
         });
+        // The kill took the in-memory registry with it, so no settle path ever
+        // swept these — without this the cards come back looking answerable.
+        for (const request of unansweredRequests(
+          await this.itemDao.getByRun(run.id, -1, em),
+        )) {
+          await this.persist(
+            em,
+            run.id,
+            request.nodeId,
+            seq++,
+            'unanswerable',
+            null,
+            {
+              ...request.payload,
+              ...(request.nodeId ? { nodeId: request.nodeId } : {}),
+            },
+          );
+        }
         for (const node of await this.nodeStateDao.listByRun(run.id, em)) {
           if (node.status === 'running') {
             await this.nodeStateDao.setStatus(
@@ -291,7 +383,7 @@ export class GraphExecutorService {
             );
           }
         }
-        await this.runDao.updateById(run.id, { status: 'failed' }, em);
+        await this.setRunStatus(em, run.id, 'failed');
         reconciled += 1;
       }
       if (reconciled > 0) {
@@ -307,11 +399,10 @@ export class GraphExecutorService {
     }
   }
 
+  /** The DAG walk. Never throws — every failure becomes transcript + status. */
   /**
-   * The DAG walk. Never throws — every failure becomes transcript + status.
-   *
-   * Resolve the claude permission-mode verdict, then walk. The probe await
-   * lives HERE — off the run-start POST — so the first acceptEdits run on a
+   * Resolve the cursor call capability, then walk the DAG. The probe await
+   * lives HERE — off the run-start POST — so the first cursor-caller run on a
    * machine returns its run row instantly and only its execution waits out
    * the probe turn (~90s worst case). Cancel/shutdown during the await is
    * covered by the registry's claim→register intent window.
@@ -326,16 +417,36 @@ export class GraphExecutorService {
     void (async () => {
       let claudeModes: ClaudeModesCapability;
       try {
-        // acceptEdits nodes wait on the claude mode probe: the verdict is
-        // cached per installed binary, so only the first such run on a machine
-        // pays the probe turn.
-        claudeModes = hasClaudeAcceptEdits(workflow)
+        // acceptEdits nodes wait on the claude mode probe the same way cursor
+        // callers wait on the MCP-trust probe: cached per installed binary,
+        // so only the first such run on a machine pays the probe turn.
+        claudeModes = hasProbedApprovalMode(workflow, (kind) =>
+          this.adapterFor(kind),
+        )
           ? await this.claudeProbe.ensureVerdict()
           : this.claudeProbe.capability();
       } catch {
         // Unknown is NOT a fail — the node runs with its requested mode and
         // any real CLI rejection surfaces loudly in the transcript.
         claudeModes = this.claudeProbe.capability();
+      }
+      // A delete can have landed while those probes were awaiting, and it has
+      // TWO shapes this walk must not survive:
+      //   - one still in flight (cancelled, rows not yet gone) — `deleting`;
+      //   - one that already finished — the run row is gone, and `deleting`
+      //     has been cleared again, so only re-reading catches it.
+      // The re-read is resolved FIRST and `deleting` consulted only after, so
+      // a delete that starts during the read is still seen by the Set (the
+      // chat turn's start applies the same order for the same reason).
+      const runStillExists = (await this.runDao.getById(runId, em)) !== null;
+      if (this.deleting.has(runId) || !runStillExists) {
+        // Abandon the walk: no handle registered, no item written. The delete
+        // owns this run's rows from here — writing any would orphan them.
+        this.registry.release(runId);
+        this.logger.warn(
+          `workflow run ${runId} was deleted while starting — abandoning its walk`,
+        );
+        return;
       }
       this.driveResolved(em, runId, workflow, cwd, seedPrompt, claudeModes);
     })();
@@ -425,6 +536,33 @@ export class GraphExecutorService {
     ): Promise<ItemWire> =>
       this.persist(em, runId, nodeId, seq++, kind, role, payload);
 
+    /**
+     * Drop one node's pending approvals NOW and hand back the work that
+     * records each as `unanswerable`.
+     *
+     * Two halves because they belong at different moments: the sweep must be
+     * synchronous at the settle point (a verdict must not slip into the gap),
+     * while the rows are written on the serialized chain like every other
+     * item. One helper for all FOUR settle paths in this method — a path that
+     * swept without writing the rows would leave a card on screen with live
+     * buttons that answer into nothing, which is precisely the reported bug.
+     */
+    const sweepApprovals = (nodeId: string): (() => Promise<void>) => {
+      const swept = this.approvals.sweepNode(runId, nodeId);
+      return async () => {
+        for (const approval of swept) {
+          await persistItem(nodeId, 'unanswerable', null, {
+            ...unanswerablePayload(approval),
+            nodeId,
+          }).catch((err: unknown) => {
+            this.logger.error(
+              `workflow run ${runId} unanswerable item write failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        }
+      };
+    };
+
     let resolveAllDone!: () => void;
     const allDone = new Promise<void>((resolve) => {
       resolveAllDone = resolve;
@@ -496,7 +634,7 @@ export class GraphExecutorService {
           : anyNotCompleted || persistenceFailed
             ? 'failed'
             : 'completed';
-        await this.runDao.updateById(runId, { status }, em);
+        await this.setRunStatus(em, runId, status);
         await persistItem(null, 'turn_complete', null, {
           usage: null,
           stopReason: `workflow_${status}`,
@@ -506,13 +644,13 @@ export class GraphExecutorService {
         this.logger.error(
           `workflow run ${runId} finalization failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-        await this.runDao
-          .updateById(runId, { status: 'failed' }, em)
-          .catch((statusErr: unknown) => {
+        await this.setRunStatus(em, runId, 'failed').catch(
+          (statusErr: unknown) => {
             this.logger.error(
               `workflow run ${runId} failure-status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
             );
-          });
+          },
+        );
         await persistItem(null, 'error', null, {
           message: 'workflow finalization persistence failed',
         }).catch((itemErr: unknown) => {
@@ -557,11 +695,27 @@ export class GraphExecutorService {
     };
 
     /**
+     * What the node's requested approval mode actually becomes, answered by
+     * the CLI's own adapter: a mode the installed binary was PROVED to reject
+     * degrades, an unprobed one rides through so a genuine rejection stays
+     * loud, and a CLI with no permission channel at all lands on auto. The
+     * degrade line is surfaced by persistTurnStart below, never silent.
+     */
+    // Assembled once per run; each adapter takes its OWN slice of it, so a CLI
+    // whose probe never ran is not judged against another CLI's verdict.
+    const capabilities = { claudeModes };
+    const resolveApproval = (node: WorkflowAgentNode): ApprovalResolution =>
+      this.adapterFor(node.agent).resolveApprovalMode(
+        node.approval,
+        this.adapterFor(node.agent).approvalSupportFrom(capabilities),
+      );
+
+    /**
      * The node's "turn is starting" bookkeeping shared by DAG launches and
      * callee sub-turns: node_state → running, the status item, and the
-     * cursor ask→auto degrade note. A callee sub-turn passes its callId so
-     * the renderer can attribute the status to ONE call even when two
-     * parallel calls target the same node.
+     * approval-degrade note. A callee sub-turn passes its callId so the
+     * renderer can attribute the status to ONE call even when two parallel
+     * calls target the same node.
      */
     const persistTurnStart = (
       node: WorkflowAgentNode,
@@ -581,48 +735,38 @@ export class GraphExecutorService {
           status: 'running',
           ...(callId ? { callId } : {}),
         });
-        if (
-          node.agent === 'claude' &&
-          node.approval === 'acceptEdits' &&
-          claudeModes.acceptEdits === 'fail'
-        ) {
+        const degradeReason = resolveApproval(node).degradeReason;
+        if (degradeReason !== null) {
+          // A degrade the user cannot see reads as enforced permissions that
+          // never were — so ANY mode the CLI could not honour says so here,
+          // not just the one that looks dangerous.
           await persistItem(node.id, 'system', null, {
-            message:
-              "installed claude does not support acceptEdits — node approval degrades to 'ask' for this node",
+            message: degradeReason,
           });
         }
       });
     };
 
     /**
-     * The approval mode a node actually runs under: acceptEdits falls back to
-     * `ask` when the installed claude rejects the mode (a probed FAIL — an
-     * unprobed `unknown` keeps the requested mode so a real rejection stays
-     * loud in the transcript). The degrade is surfaced by setRunning above,
-     * never silent.
+     * Whether this agent kind may hold the call tools in THIS run: a CLI whose
+     * tools need no machine trust always, one that does only on a probed pass
+     * (M3's cursor MCP-trust probe). The one predicate behind every admission
+     * surface — the endpoint grant, the token minting, the awareness block,
+     * and the self-check — so a change here cannot silently miss a sibling
+     * gate.
      */
-    const effectiveApproval = (
-      node: WorkflowAgentNode,
-    ): WorkflowAgentNode['approval'] =>
-      node.agent === 'claude' &&
-      node.approval === 'acceptEdits' &&
-      claudeModes.acceptEdits === 'fail'
-        ? 'ask'
-        : node.approval;
+    const callCapable = (node: WorkflowAgentNode): boolean =>
+      !this.adapterFor(node.agent).getConfig().mcp.callToolsRequireTrustProbe;
 
-    /**
-     * Nodes that hold the call tools in THIS run (callers, not callees).
-     * Every adapter hands its own CLI the MCP endpoint, so having outgoing
-     * call edges is the whole predicate — there is no longer a per-machine
-     * capability that can shut a caller out.
-     */
+    /** Nodes that hold the call tools in THIS run (callers, not callees). */
     const isCaller = (node: WorkflowAgentNode): boolean =>
-      calleesOf.has(node.id);
+      callCapable(node) && calleesOf.has(node.id);
 
     /**
-     * The caller's MCP grant: nodes with outgoing call edges get the endpoint.
-     * Null when the server has no bound port yet or the run's token is already
-     * revoked.
+     * The caller's MCP grant: call-capable nodes with outgoing call edges get
+     * the endpoint (a probe-failed cursor caller degrades — its callees still
+     * work, IT just can't call). Null when the server has no bound port
+     * yet or the run's token is already revoked.
      */
     const mcpEndpointFor = (
       node: WorkflowAgentNode,
@@ -660,12 +804,14 @@ export class GraphExecutorService {
       const lines = callees.map(
         (callee) => `- ${calleeSummary(callee, CALLEE_DESCRIPTION_MAX)}`,
       );
-      // The escalation half differs per CLI: claude callers can ask the user
-      // (AskUserQuestion reaches the run's card); cursor-agent has no
-      // question mechanism, so its only honest move is answer-or-timeout.
+      // The escalation half differs per CLI, and the tool's NAME is the
+      // adapter's to spell: a caller whose CLI has a question channel can
+      // relay to the user; one without it can only answer-or-time-out.
+      const questionTool = this.adapterFor(node.agent).getConfig()
+        .questionToolName;
       const questionLine =
-        node.agent === 'claude'
-          ? 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your AskUserQuestion tool and relay their answer. Then collect the final result with await_agent.'
+        questionTool !== null
+          ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
       return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
     };
@@ -707,19 +853,20 @@ export class GraphExecutorService {
         em,
       );
       /**
-       * Claude turns that can raise or relay a question — call-initiated
-       * callees AND caller nodes — spawn in the CLI's ask mode (stdin control
-       * protocol, stdin held open): headless claude strips the AskUserQuestion
-       * tool entirely under --dangerously-skip-permissions (probe-verified on
-       * 2.1.202), so without this an 'auto' callee could never ask and an
-       * 'auto' caller could never escalate. The daemon auto-approves the
-       * plain permission requests in onEvent below, so an 'auto' node keeps
-       * today's unattended semantics.
+       * Turns that can raise or relay a question — call-initiated callees AND
+       * caller nodes — spawn in the CLI's ask mode (stdin control protocol,
+       * stdin held open): headless claude strips its question tool entirely
+       * under --dangerously-skip-permissions (probe-verified on 2.1.202), so
+       * without this an 'auto' callee could never ask and an 'auto' caller
+       * could never escalate. The daemon auto-approves the plain permission
+       * requests in onEvent below, so an 'auto' node keeps today's unattended
+       * semantics. A CLI with no question channel is never question-capable,
+       * so it keeps its requested mode.
        */
       const questionCapable =
-        node.agent === 'claude' &&
+        adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
-      const approval = effectiveApproval(node);
+      const approval = resolveApproval(node).mode;
       const input: AgentTurnInput = {
         prompt,
         cwd,
@@ -742,9 +889,8 @@ export class GraphExecutorService {
             return;
           }
           if (event.type === 'slash_commands') {
-            // This CLI's own invokable set for this run's cwd — feeds the
-            // composer's `/` autocomplete, never the transcript. Keyed by
-            // agent too: the other CLI cannot invoke these names.
+            // The CLI's own invokable set for this run's cwd — feeds the
+            // composer's `/` autocomplete, never the transcript.
             this.skillHarvest.record(node.agent, cwd, event.commands);
             return;
           }
@@ -769,7 +915,10 @@ export class GraphExecutorService {
             // version drift. A flag-only request stays on the approval path
             // (card or daemon auto-approve per node.approval) with a warning
             // so the drift is loud, never silent.
-            const isQuestion = event.toolName === 'AskUserQuestion';
+            const isQuestion = isUserQuestion(
+              adapter.getConfig().questionToolName,
+              event.toolName,
+            );
             if (!isQuestion && event.requiresUserInteraction === true) {
               this.logger.warn(
                 `interactive control_request for unrecognized tool '${event.toolName}' on ${node.id} — kept on the approval path, not bridged to the caller`,
@@ -779,26 +928,31 @@ export class GraphExecutorService {
               // A call-initiated callee's question goes to its CALLER (the
               // M4 Q&A bridge) — never to a renderer card. The broker parks
               // it; answer_agent delivers the answer through these closures.
-              const parked = this.callBroker.parkQuestion(
-                runId,
-                callContext.callId,
-                {
-                  question: questionTextOf(event.input),
-                  options: optionLabelsOf(event.input),
+              //
+              // The payload is the CLI's own, so the ADAPTER projects it and
+              // folds the answer back in: the executor bridges the question
+              // without ever knowing which CLI's shape it is carrying.
+              const question = adapter.questionFrom(event.input);
+              const parked =
+                question !== null &&
+                this.callBroker.parkQuestion(runId, callContext.callId, {
+                  question: question.text,
+                  options: question.options,
                   payload: event.input,
                   deliver: (answer) =>
                     handle.respondApproval(
                       event.id,
                       true,
-                      withResponse(event.input, answer),
+                      adapter.withAnswer(event.input, answer),
                     ),
                   fail: () => handle.cancel(),
-                },
-              );
+                });
               if (!parked) {
                 // Unknown/settled call (or a second question raced the
                 // first) — deny so the callee continues instead of hanging
-                // on a question nobody can answer.
+                // on a question nobody can answer. An adapter that projects
+                // NO question takes this path too: parking a blank question
+                // would strand the caller on something it cannot answer.
                 handle.respondApproval(event.id, false);
               }
               return;
@@ -851,6 +1005,7 @@ export class GraphExecutorService {
                   // helper with the chat service) so the verdict channel
                   // can never mutate an arbitrary tool's input.
                   foldApprovalAnswer(
+                    adapter,
                     event.toolName,
                     event.input,
                     allow,
@@ -866,7 +1021,12 @@ export class GraphExecutorService {
                       // Recorded only when it was actually folded — the
                       // transcript must never claim an answer the agent
                       // did not receive.
-                      ...(answerFoldsInto(event.toolName, allow, answer)
+                      ...(answerFoldsInto(
+                        adapter.getConfig().questionToolName,
+                        event.toolName,
+                        allow,
+                        answer,
+                      )
                         ? { answer }
                         : {}),
                     });
@@ -878,8 +1038,6 @@ export class GraphExecutorService {
           }
         });
       };
-      // Every adapter hands its own CLI the endpoint (claude's --mcp-config
-      // file, ACP's session/new), so a caller turn is an ordinary spawn.
       const handle: AgentTurnHandle = adapter.start(input, onEvent);
 
       const finish = (): {
@@ -927,11 +1085,20 @@ export class GraphExecutorService {
       try {
         ({ handle, finish } = beginAgentTurn(node, prompt));
       } catch (err) {
-        releaseNodeTurn(node.id);
-        this.approvals.sweepNode(runId, node.id);
-        this.callBroker.drainCaller(runId, node.id);
+        // Gated like the three sibling settle paths (:1193, and the two cancel
+        // routes): a callable DAG node can hold live CALLEE turns alongside its
+        // DAG turn — which is why `liveTurnsByNode` exists at all — so sweeping
+        // unconditionally here would mark a still-answerable card unanswerable
+        // and drain a live caller's parked questions, because an unrelated
+        // turn failed to spawn.
+        const lastTurn = releaseNodeTurn(node.id);
+        const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
+        if (lastTurn) {
+          this.callBroker.drainCaller(runId, node.id);
+        }
         settled.set(node.id, 'failed');
         enqueue(async () => {
+          await recordSwept?.();
           await this.nodeStateDao
             .setStatus(
               runId,
@@ -957,10 +1124,11 @@ export class GraphExecutorService {
       void handle.done.then(() => {
         enqueue(async () => {
           if (releaseNodeTurn(node.id)) {
-            this.approvals.sweepNode(runId, node.id);
+            const recordSwept = sweepApprovals(node.id);
             // A settled caller can never answer_agent — fail its parked
             // callee questions now instead of letting the TTL grind out.
             this.callBroker.drainCaller(runId, node.id);
+            await recordSwept();
           }
           runningHandles.delete(node.id);
           const { outcome, finalText } = finish();
@@ -1088,11 +1256,13 @@ export class GraphExecutorService {
               resumeSessionId,
             }));
           } catch (err) {
+            let recordSwept: (() => Promise<void>) | null = null;
             if (releaseNodeTurn(callee.id)) {
-              this.approvals.sweepNode(runId, callee.id);
+              recordSwept = sweepApprovals(callee.id);
               this.callBroker.drainCaller(runId, callee.id);
             }
             enqueue(async () => {
+              await recordSwept?.();
               await this.nodeStateDao
                 .setStatus(
                   runId,
@@ -1137,10 +1307,11 @@ export class GraphExecutorService {
               };
               try {
                 if (releaseNodeTurn(callee.id)) {
-                  this.approvals.sweepNode(runId, callee.id);
+                  const recordSwept = sweepApprovals(callee.id);
                   // A callee can itself be a caller — its own parked
                   // sub-questions die with its last live turn.
                   this.callBroker.drainCaller(runId, callee.id);
+                  await recordSwept();
                 }
                 subTurnHandles.delete(callId);
                 const { outcome, finalText, sessionId } = finish();
@@ -1262,11 +1433,14 @@ export class GraphExecutorService {
     // The broker gets a capability only when the workflow can call at all —
     // the MCP endpoint answers RUN_NOT_ACTIVE for call-free runs.
     if (calleesOf.size > 0) {
-      // Mint one call token per caller node up front — the token must exist
-      // before the caller turn spawns and reads its config (the claude
-      // mcp-config file / the ACP session/new frame).
+      // Mint one call token per call-capable caller node up front — the token
+      // must exist before the caller turn spawns and reads its config (the
+      // claude mcp-config file / the merged .cursor/mcp.json entry). A
+      // probe-failed cursor caller gets no token: every admission surface
+      // keys on the same callCapable predicate.
       for (const callerId of calleesOf.keys()) {
-        if (nodesById.get(callerId)?.kind === 'agent') {
+        const caller = nodesById.get(callerId);
+        if (caller?.kind === 'agent' && callCapable(caller)) {
           this.callTokens.issue(runId, callerId, mintToken());
         }
       }
@@ -1288,7 +1462,10 @@ export class GraphExecutorService {
       this.selfCheckCallEndpoint(
         [...calleesOf.keys()]
           .map((id) => nodesById.get(id))
-          .find((n): n is WorkflowAgentNode => n?.kind === 'agent') ?? null,
+          .find(
+            (n): n is WorkflowAgentNode =>
+              n?.kind === 'agent' && callCapable(n),
+          ) ?? null,
         mcpEndpointFor,
         (message) => {
           enqueue(async () => {
@@ -1302,19 +1479,24 @@ export class GraphExecutorService {
     enqueue(async () => {
       await persistItem(null, 'message', 'user', { text: seedPrompt });
     });
+    // No per-machine gate can shut a caller out any more: every adapter hands
+    // its own CLI the endpoint in-protocol, so having outgoing call edges is
+    // the whole admission predicate. The M3 "probe verdict shut this caller
+    // out" system item went with the probe.
     schedule();
   }
 
   /**
    * Probe the run's own MCP route with a JSON-RPC initialize (3s cap) and
    * report a failure through `onFailure`. Fire-and-forget: the DAG walk never
-   * waits on it. No call-capable caller → nothing to check.
+   * waits on it. No call-capable caller → nothing to check (a probe-failed
+   * cursor caller gets no endpoint and degrades visibly instead).
    */
   private selfCheckCallEndpoint(
     claudeCaller: WorkflowAgentNode | null,
     mcpEndpointFor: (
       node: WorkflowAgentNode,
-    ) => { url: string; token: string; serverName: string } | null,
+    ) => { url: string; token: string } | null,
     onFailure: (message: string) => void,
   ): void {
     if (!claudeCaller) {

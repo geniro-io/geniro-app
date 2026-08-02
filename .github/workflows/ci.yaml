@@ -80,6 +80,16 @@ jobs:
         env:
           HUSKY: 0
 
+      # `@geniro/daemon` and `@packages/mikroorm` run vitest under Electron
+      # (ELECTRON_RUN_AS_NODE=1) because that is the runtime the daemon ships
+      # on, so their native better-sqlite3 must carry ELECTRON's ABI. A plain
+      # `pnpm install` builds it for the HOST Node ABI instead, which loads
+      # fine everywhere except the one suite that opens a real sqlite driver —
+      # base.dao.spec.ts — where it fails the suite and then segfaults the
+      # runner (exit 139). Same command CLAUDE.md prescribes for local dev.
+      - name: Rebuild native modules for Electron's ABI
+        run: pnpm rebuild:native
+
       - name: Build packages
         run: pnpm build:packages
 

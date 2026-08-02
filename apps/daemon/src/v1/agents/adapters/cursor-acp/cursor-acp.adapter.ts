@@ -1,7 +1,13 @@
+import { AgentKind } from '../../../runs/runs.types';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import type { AcpToolCall } from '../acp/acp.types';
 import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
-import type { AgentTurnInput, TurnDriver } from '../adapter.types';
+import type {
+  AdapterConfig,
+  AgentModel,
+  AgentTurnInput,
+  TurnDriver,
+} from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
@@ -63,7 +69,79 @@ export function cursorAutoDecision(
  * exactly as they are; a long-lived per-session process is a separate change.
  */
 export class CursorAcpAdapter extends AgentAdapter {
-  readonly kind = 'cursor-agent' as const;
+  getConfig(): AdapterConfig {
+    return {
+      kind: AgentKind.CursorAgent,
+      /**
+       * ACP has permission requests but no question channel: there is no
+       * agent→client method for asking the USER something open-ended, so a
+       * callee driven over ACP can never raise one.
+       */
+      questionToolName: null,
+      approval: {
+        /**
+         * Real, unlike the `-p` transport this replaces:
+         * `session/request_permission` is an ACP baseline, so `ask` parks on a
+         * user verdict and `acceptEdits` auto-approves `edit`-kind calls only.
+         * `plan` is absent deliberately — it maps to an agent-declared session
+         * mode we cannot confirm cursor offers, and a plan turn that quietly
+         * ran with write access is the one degrade here that costs something.
+         */
+        modes: ['auto', 'ask', 'acceptEdits'],
+        /** The protocol guarantees them; there is no binary fact to prove. */
+        probedModes: [],
+        degradeOnProbeFail: {},
+        /** Nothing degrades: every mode above is honoured as asked. */
+        soleModeDegradeReason: null,
+      },
+      /** Effort rides the model id for this CLI (`sonnet-4-thinking`). */
+      efforts: [],
+      /**
+       * Empty on purpose: ACP carries no per-session model selection, so a
+       * model chosen here would be discarded by the turn and reported as not
+       * applied. Offering choices would also auto-assign one to every new node.
+       */
+      builtinModels: [],
+      skillRoots: {
+        /** No skills convention — only claude has one. */
+        skills: [],
+        /** `<root>/.cursor/commands/**.md`. */
+        commands: [['.cursor', 'commands']],
+      },
+      /**
+       * ACP streams natively: `session/update` carries `agent_message_chunk`
+       * increments, with no flag to probe for.
+       */
+      liveStream: null,
+      /**
+       * Nothing to ask up front. Cursor reports its invokable set MID-TURN as
+       * an `available_commands_update`, which the driver harvests — a separate
+       * probe turn would buy nothing the next real turn does not.
+       */
+      reportedCommands: null,
+      mcp: {
+        /**
+         * No trust probe: the endpoint travels in `session/new` as a
+         * client-supplied server, so there is nothing planted in the user's
+         * config for the CLI to have trusted or not.
+         */
+        callToolsRequireTrustProbe: false,
+        /** ACP carries the endpoint in-protocol; no cwd config is written. */
+        endpointRequiresCwdConfig: false,
+      },
+      /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
+      terminal: null,
+    };
+  }
+
+  /**
+   * ACP cannot select a model per session, so there is no list worth offering:
+   * every turn runs on whatever the CLI is configured for. Asking
+   * `cursor-agent models` would produce a picker whose value the turn discards.
+   */
+  override listModels(): Promise<AgentModel[]> {
+    return Promise.resolve([]);
+  }
 
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {
     super(cursorOptions);

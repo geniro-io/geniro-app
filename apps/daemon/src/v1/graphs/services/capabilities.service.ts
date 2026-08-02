@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import { ClaudeProbeService } from '../../agents/services/claude-probe.service';
+import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import type { CapabilitiesWire } from '../graphs.types';
 
 /**

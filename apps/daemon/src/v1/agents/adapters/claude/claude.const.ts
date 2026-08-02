@@ -1,0 +1,132 @@
+/**
+ * Every `claude` value read from anywhere except the config literal.
+ *
+ * A value needed in more than one spot — an argv flag `buildArgs` pushes and a
+ * util searches for, a file name a writer and its sweep both spell — is named
+ * here precisely so the readers cannot drift apart. Values with a single
+ * reader are named here too: the name is where the doc block lives, and
+ * `--dangerously-skip-permissions` sitting bare in an argv array explains
+ * nothing.
+ *
+ * The ONE exception is `ClaudeAdapter.getConfig()`. A static fact that literal
+ * alone reads is written inline there, beside the field it answers, because a
+ * name nothing else ever says buys nothing — it only puts the value one file
+ * away from the shape that gives it meaning.
+ */
+
+// ── Turn argv ─────────────────────────────────────────────────────────────
+
+/**
+ * The invariant head of every turn's argv: `-p` headless, stream-json out,
+ * `--verbose` (required for stream-json output), stream-json IN so the prompt
+ * can travel as a structured user message on stdin.
+ */
+export const CLAUDE_BASE_ARGS: readonly string[] = [
+  '-p',
+  '--output-format',
+  'stream-json',
+  '--verbose',
+  '--input-format',
+  'stream-json',
+];
+
+/** The argv flag that turns whole-block output into token-level deltas. */
+export const CLAUDE_PARTIAL_MESSAGES_FLAG = '--include-partial-messages';
+
+export const CLAUDE_MODEL_FLAG = '--model';
+export const CLAUDE_EFFORT_FLAG = '--effort';
+export const CLAUDE_RESUME_FLAG = '--resume';
+export const CLAUDE_APPEND_SYSTEM_PROMPT_FLAG = '--append-system-prompt';
+export const CLAUDE_PERMISSION_MODE_FLAG = '--permission-mode';
+export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';
+
+/** The CLI's own name for the ask-the-user permission mode. */
+export const CLAUDE_PERMISSION_MODE_DEFAULT = 'default';
+
+// ── Stdin control protocol (UNDOCUMENTED — probe evidence) ────────────────
+//
+// WHERE THESE FIELD NAMES CAME FROM. The stdin control protocol these two
+// constants switch on is undocumented by the CLI: the `control_request` /
+// `control_response` envelope, the `can_use_tool` subtype, and the
+// `requires_user_interaction` flag that discriminates a genuine user question
+// from a permission check were all established by DRIVING A LIVE CLI and
+// reading what came back — never from published docs.
+//
+// Probed live on 2.1.202 (M4, the question discriminator) and re-probed on
+// 2.1.220 (2026-07-29, the approval envelope + `message.usage` shapes). The
+// protocol has held across patch releases within the 2.1 series.
+//
+// That evidence expires. A release can rename a field and every approval in
+// the app starts mis-mapping while the turn still looks healthy, so this
+// record is what tells the next reader that the names below and in
+// `utils/claude-message.utils.ts` (`mapClaudeMessage`'s `control_request`
+// arm) / `claude.adapter.ts` (`buildApprovalResponse`) are observations, not
+// a contract — RE-PROBE before trusting them on a new claude series.
+
+/** The permission-prompt transport: the stdin control dialogue. */
+export const CLAUDE_PERMISSION_PROMPT_TOOL_STDIO = 'stdio';
+
+/** Bypasses every permission check — and STRIPS the question tool with them. */
+export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
+
+export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
+
+/** ONLY our server: the user's global MCP config must not leak into a team turn. */
+export const CLAUDE_STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
+
+// ── Models ────────────────────────────────────────────────────────────────
+
+/** The CLI's own config file in `~`, which caches the account's model options. */
+export const CLAUDE_MODEL_CACHE_FILE = '.claude.json';
+
+/** The key inside it: `[{ value, label, description }]`. */
+export const CLAUDE_MODEL_CACHE_KEY = 'additionalModelOptionsCache';
+
+// ── The permission-mode probe ─────────────────────────────────────────────
+
+/** Never answered: the turn is cancelled the moment the session line lands. */
+export const CLAUDE_MODE_PROBE_PROMPT = 'Reply with exactly: ok';
+
+/** A hung probe turn must not wedge the capability read forever. */
+export const CLAUDE_MODE_PROBE_TIMEOUT_MS = 30_000;
+
+/**
+ * An argv-level rejection of `--permission-mode <value>` is the one GENUINE
+ * fail — every other pre-session exit (auth, network, missing binary) is an
+ * environmental `unknown` that must not be disk-cached against this version.
+ * Both patterns must match the SAME error line: the flag has to be named, and
+ * the CLI has to be complaining about the value it was given.
+ */
+export const CLAUDE_MODE_REJECTION_FLAG_PATTERN = /permission-mode/i;
+export const CLAUDE_MODE_REJECTION_VERDICT_PATTERN =
+  /invalid|allowed choices|unknown/i;
+
+// ── Agent-to-agent calls (MCP) ────────────────────────────────────────────
+
+/**
+ * Default `MCP_TOOL_TIMEOUT` for turns that carry the call tools: a sync
+ * call_agent legitimately runs for minutes (a full callee turn), far past the
+ * CLI's own default MCP client timeout.
+ */
+export const CLAUDE_MCP_TOOL_TIMEOUT_MS = 30 * 60_000;
+
+/** The child env var carrying {@link CLAUDE_MCP_TOOL_TIMEOUT_MS}. */
+export const CLAUDE_MCP_TOOL_TIMEOUT_ENV = 'MCP_TOOL_TIMEOUT';
+
+/** Fallback directory name under the OS tmpdir for standalone/spec use. */
+export const CLAUDE_MCP_CONFIG_DIR_NAME = 'geniro-mcp';
+
+/** Per-turn config file name: `<prefix><uuid><suffix>`, also the sweep's filter. */
+export const CLAUDE_MCP_CONFIG_PREFIX = 'mcp-';
+export const CLAUDE_MCP_CONFIG_SUFFIX = '.json';
+
+/** The token rides IN the file, so the file is the user's alone. */
+export const CLAUDE_MCP_CONFIG_FILE_MODE = 0o600;
+
+// ── Messages ──────────────────────────────────────────────────────────────
+
+/** Fallback for an error `result` line that carries no text of its own. */
+export const CLAUDE_RUN_FAILED_MESSAGE = 'claude run failed';
+
+/** What the CLI is told when the user denies a permission request. */
+export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';

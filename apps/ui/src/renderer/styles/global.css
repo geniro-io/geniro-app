@@ -46,6 +46,21 @@
   --success-foreground: #ffffff;
   --warning: #916518;
   --warning-foreground: #ffffff;
+  /* Syntax palette for highlighted code (components/ui/code-block.tsx).
+     Hue-matched to the warm cream palette and contrast-checked as TEXT on
+     --muted (#ebe5dc), the code surface: every tone below clears WCAG AA
+     (>=4.5:1) there, the same bar --primary and the status colours document
+     above. Punctuation sits at AA-large only by design — it is structural
+     noise the eye skips, never content. */
+  --code-comment: #7a6b5a;
+  --code-keyword: #96442b;
+  --code-string: #46702f;
+  --code-number: #8a5a12;
+  --code-function: #7a4a9c;
+  --code-operator: #6b5a48;
+  --code-punctuation: #8a7a67;
+  --code-variable: #2f6a86;
+
   /* Agent avatar palette — mirrors geniro web's AGENT_AVATAR_COLORS
      (tailwind 500s), hashed deterministically per node id. */
   --avatar-1: #3b82f6;
@@ -104,6 +119,14 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-code-comment: var(--code-comment);
+  --color-code-keyword: var(--code-keyword);
+  --color-code-string: var(--code-string);
+  --color-code-number: var(--code-number);
+  --color-code-function: var(--code-function);
+  --color-code-operator: var(--code-operator);
+  --color-code-punctuation: var(--code-punctuation);
+  --color-code-variable: var(--code-variable);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
@@ -242,4 +265,67 @@
 
 .md-editor-surface .w-md-editor {
   border-radius: var(--radius-md);
+}
+
+/* Prism token classes -> our design tokens.
+   Unlayered on purpose, mirroring the .md-editor-surface retint above: these
+   must win over any vendor stylesheet that ships its own Prism theme, and
+   refractor emits plain `token <type>` class names with no colours of its own.
+   Scoped to [data-slot='code-block'] so nothing else can pick them up. */
+[data-slot='code-block'] .token.comment,
+[data-slot='code-block'] .token.prolog,
+[data-slot='code-block'] .token.doctype,
+[data-slot='code-block'] .token.cdata {
+  color: var(--code-comment);
+  font-style: italic;
+}
+[data-slot='code-block'] .token.punctuation {
+  color: var(--code-punctuation);
+}
+[data-slot='code-block'] .token.keyword,
+[data-slot='code-block'] .token.atrule,
+[data-slot='code-block'] .token.rule,
+[data-slot='code-block'] .token.important,
+[data-slot='code-block'] .token.selector {
+  color: var(--code-keyword);
+}
+[data-slot='code-block'] .token.string,
+[data-slot='code-block'] .token.char,
+[data-slot='code-block'] .token.attr-value,
+[data-slot='code-block'] .token.regex {
+  color: var(--code-string);
+}
+[data-slot='code-block'] .token.number,
+[data-slot='code-block'] .token.boolean,
+[data-slot='code-block'] .token.constant,
+[data-slot='code-block'] .token.symbol {
+  color: var(--code-number);
+}
+[data-slot='code-block'] .token.function,
+[data-slot='code-block'] .token.class-name,
+[data-slot='code-block'] .token.tag {
+  color: var(--code-function);
+}
+[data-slot='code-block'] .token.operator,
+[data-slot='code-block'] .token.entity,
+[data-slot='code-block'] .token.url {
+  color: var(--code-operator);
+}
+[data-slot='code-block'] .token.property,
+[data-slot='code-block'] .token.attr-name,
+[data-slot='code-block'] .token.variable,
+[data-slot='code-block'] .token.parameter {
+  color: var(--code-variable);
+}
+[data-slot='code-block'] .token.deleted {
+  color: var(--destructive);
+}
+[data-slot='code-block'] .token.inserted {
+  color: var(--success);
+}
+[data-slot='code-block'] .token.bold {
+  font-weight: 600;
+}
+[data-slot='code-block'] .token.italic {
+  font-style: italic;
 }

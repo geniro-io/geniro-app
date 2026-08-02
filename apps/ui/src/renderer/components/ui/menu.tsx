@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 import * as React from 'react';
 
+import { popoverSurface } from './popover';
 import { cn } from './utils';
 
 /** One selectable row. `value` is what `onSelect` reports back. */
@@ -13,7 +14,6 @@ export interface MenuItem {
   hint?: string;
   /** Native tooltip — where `label` is an abbreviation of something longer. */
   title?: string;
-  disabled?: boolean;
   /**
    * An action rather than a choice — rendered without a checkmark column and
    * separated from the choices above it ("Choose folder…").
@@ -27,8 +27,14 @@ export interface MenuGroup {
   items: MenuItem[];
 }
 
+/**
+ * The rows in render order. The highlight is an index into THIS list, and the
+ * rows below are numbered by the same arithmetic — keep the two derived from
+ * one flattening so a keyboard highlight and a hovered row can never mean
+ * different things.
+ */
 const flatten = (groups: MenuGroup[]): MenuItem[] =>
-  groups.flatMap((group) => group.items).filter((item) => !item.disabled);
+  groups.flatMap((group) => group.items);
 
 /**
  * The app's dropdown: a token-styled popover list, built from scratch because
@@ -70,6 +76,24 @@ export function Menu({
   const [highlight, setHighlight] = React.useState(0);
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
+  /**
+   * Set when a left-aligned panel would run off the right of the window, which
+   * a chip near the composer's edge — or any chip inside the overflow popover,
+   * itself pinned right — otherwise does. Measured rather than guessed: the
+   * panel's width depends on its longest row.
+   */
+  const [flipped, setFlipped] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    if (!open) {
+      setFlipped(false);
+      return;
+    }
+    const panel = panelRef.current;
+    if (panel && panel.getBoundingClientRect().right > window.innerWidth) {
+      setFlipped(true);
+    }
+  }, [open]);
 
   // A fresh open is a fresh search — a stale filter would hide the very rows
   // the user just reopened the menu to see. Focus moves into the menu either
@@ -174,7 +198,6 @@ export function Menu({
     }
   };
 
-  let index = -1;
   return (
     <div
       ref={panelRef}
@@ -183,12 +206,14 @@ export function Menu({
       tabIndex={-1}
       onKeyDown={onKeyDown}
       className={cn(
-        // No vertical padding: a row's highlight runs to the panel edge, where
+        // The shared floating surface, plus this panel's own sizing. No
+        // vertical padding: a row's highlight runs to the panel edge, where
         // `overflow-hidden` lets the corner radius clip it. Padding would leave
         // a bare strip above the first row and below the last.
-        'absolute z-50 min-w-56 max-w-96 overflow-hidden rounded-xl border border-border bg-popover shadow-panel-md',
+        popoverSurface,
+        'min-w-56 max-w-96 overflow-hidden',
         side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
-        align === 'start' ? 'left-0' : 'right-0',
+        align === 'start' && !flipped ? 'left-0' : 'right-0',
       )}>
       {searchPlaceholder !== undefined ? (
         <div className="border-b border-border px-3 py-1">
@@ -211,50 +236,62 @@ export function Menu({
             {emptyLabel}
           </p>
         ) : (
-          visible.map((group, groupIndex) => (
-            <div
-              key={group.label ?? `group-${groupIndex}`}
-              className={cn(groupIndex > 0 && 'border-t border-border')}>
-              {group.label !== undefined ? (
-                <p className="px-3 pb-0.5 pt-1.5 text-xs font-medium text-muted-foreground">
-                  {group.label}
-                </p>
-              ) : null}
-              {group.items.map((item) => {
-                index += 1;
-                const active = index === highlight;
-                const selected = !item.action && item.value === value;
-                return (
-                  <button
-                    key={item.value}
-                    type="button"
-                    role="option"
-                    title={item.title}
-                    aria-selected={selected}
-                    className={cn(
-                      'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground',
-                      '[&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
-                      active && 'bg-accent text-accent-foreground',
-                    )}
-                    onMouseEnter={() => setHighlight(index)}
-                    onClick={() => commit(item)}>
-                    {item.icon}
-                    <span className="min-w-0 flex-1 truncate">
-                      {item.label}
-                    </span>
-                    {item.hint !== undefined ? (
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {item.hint}
+          visible.map((group, groupIndex) => {
+            // Where this group's first row sits in the flat list the highlight
+            // indexes into. Derived per render from the map arguments rather
+            // than carried in a counter across the whole tree: a `let` in the
+            // component body is ONE binding shared by every row's handlers, so
+            // each `onMouseEnter` closure would read its final value and hover
+            // would highlight the last row no matter which one the cursor was
+            // over.
+            const offset = visible
+              .slice(0, groupIndex)
+              .reduce((total, previous) => total + previous.items.length, 0);
+            return (
+              <div
+                key={group.label ?? `group-${groupIndex}`}
+                className={cn(groupIndex > 0 && 'border-t border-border')}>
+                {group.label !== undefined ? (
+                  <p className="px-3 pb-0.5 pt-1.5 text-xs font-medium text-muted-foreground">
+                    {group.label}
+                  </p>
+                ) : null}
+                {group.items.map((item, itemIndex) => {
+                  const index = offset + itemIndex;
+                  const active = index === highlight;
+                  const selected = !item.action && item.value === value;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      role="option"
+                      title={item.title}
+                      aria-selected={selected}
+                      className={cn(
+                        'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground',
+                        '[&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
+                        active && 'bg-accent text-accent-foreground',
+                      )}
+                      onMouseEnter={() => setHighlight(index)}
+                      onClick={() => commit(item)}>
+                      {item.icon}
+                      <span className="min-w-0 flex-1 truncate">
+                        {item.label}
                       </span>
-                    ) : null}
-                    {selected ? (
-                      <Check className="size-4 shrink-0 text-muted-foreground" />
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-          ))
+                      {item.hint !== undefined ? (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {item.hint}
+                        </span>
+                      ) : null}
+                      {selected ? (
+                        <Check className="size-4 shrink-0 text-muted-foreground" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

@@ -211,6 +211,7 @@ describe('CursorAcpAdapter spawn', () => {
           inputTokens: null,
           outputTokens: null,
           contextTokens: null,
+          contextWindowTokens: null,
           costUsd: null,
         },
         stopReason: 'end_turn',

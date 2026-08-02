@@ -676,6 +676,7 @@ describe('AcpTurnDriver turn completion', () => {
           inputTokens: null,
           outputTokens: null,
           contextTokens: null,
+          contextWindowTokens: null,
           costUsd: null,
         },
         stopReason: 'end_turn',
@@ -724,6 +725,7 @@ describe('AcpTurnDriver turn completion', () => {
         inputTokens: 100,
         outputTokens: 20,
         contextTokens: 4200,
+        contextWindowTokens: null,
         costUsd: 0.42,
       },
     });
@@ -753,7 +755,7 @@ describe('AcpTurnDriver turn completion', () => {
     );
     const [event] = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
     expect(event).toMatchObject({
-      usage: { costUsd: null, contextTokens: 10 },
+      usage: { costUsd: null, contextTokens: 10, contextWindowTokens: null },
     });
   });
 

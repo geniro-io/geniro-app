@@ -23,6 +23,8 @@ export interface AgentActivity {
   lastStatus: NodeRunStatus | null;
   /** Prompt-side tokens of the agent's LATEST settled turn (its context). */
   contextTokens: number | null;
+  /** That turn's model window as the CLI reported it; null if it reported none. */
+  contextWindowTokens: number | null;
   /** Cumulative cost across all of the agent's settled turns. */
   spentUsd: number | null;
   /**
@@ -59,6 +61,12 @@ export interface AgentDisplay {
   status: RunStatusKind;
   activeTurns: number;
   contextTokens: number | null;
+  /**
+   * The window {@link contextTokens} is measured against, as the CLI reported
+   * it for the model it ran. Null falls back to
+   * {@link DEFAULT_CONTEXT_WINDOW_TOKENS}.
+   */
+  contextWindowTokens: number | null;
   spentUsd: number | null;
   /** Every conversation the agent has run — the panel's expandable list. */
   threads: AgentThread[];
@@ -158,6 +166,7 @@ export function computeAgentActivity(
         turnStarts: 0,
         lastStatus: null,
         contextTokens: null,
+        contextWindowTokens: null,
         spentUsd: null,
         callThreads: [],
       };
@@ -233,6 +242,14 @@ export function computeAgentActivity(
       if (typeof context === 'number') {
         agent.contextTokens = context;
       }
+      // Kept only when this turn reported a USABLE one: a CLI that stops
+      // reporting must fall back to the default, not keep scaling against a
+      // stale window — and a reported 0 is not a window at all. Consumers read
+      // this as `?? DEFAULT`, which passes 0 straight through and divides by
+      // it, so the zero has to be rejected here rather than at each of them.
+      const window = usage.contextWindowTokens;
+      agent.contextWindowTokens =
+        typeof window === 'number' && window > 0 ? window : null;
       if (typeof usage.costUsd === 'number') {
         agent.spentUsd = (agent.spentUsd ?? 0) + usage.costUsd;
       }
@@ -242,11 +259,14 @@ export function computeAgentActivity(
 }
 
 /**
- * The context window an agent's fill ring is measured against. The headless
- * CLIs don't report their model's window, so v1 uses the default claude/cursor
- * window; a per-model map can replace this when the CLIs expose it.
+ * The window used when the CLI reported none — cursor-agent never does, and
+ * neither does a turn that failed before its result line.
+ *
+ * Only a fallback: claude reports the real window per model (1M for
+ * `claude-opus-5[1m]`, 200k elsewhere), and measuring one of those against a
+ * flat 200k is what pinned the fill ring full on a chat using 3% of its window.
  */
-export const CONTEXT_WINDOW_TOKENS = 200_000;
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 
 /** Compact token count: 950 → "950", 12_400 → "12.4k", 1_200_000 → "1.2M". */
 export function formatTokens(count: number): string {

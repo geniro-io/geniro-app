@@ -11,28 +11,25 @@
  * `readQuestions`) because no daemon↔renderer shared package exists — a shape
  * drift fixed here must be mirrored there, and vice versa. Mirrored rules:
  * option labels are kept only when non-empty and ≤ MAX_ANSWER_LENGTH (an
- * oversized label would offer an answer the answer channel itself rejects).
+ * oversized label would offer an answer the answer channel itself rejects);
+ * `header` is kept only when non-empty and ≤ MAX_QUESTION_HEADER_LENGTH, and
+ * `multiSelect` is true only when the payload says so literally (a truthy
+ * string would let one side offer multi-pick while the other offers one).
  */
 
-import { MAX_ANSWER_LENGTH } from '../../chat.types';
+import {
+  MAX_ANSWER_LENGTH,
+  MAX_QUESTION_HEADER_LENGTH,
+} from '../../../chat.types';
+import { asRecord } from '../../../utils/json-util';
+import type { ClaudeQuestion } from '../claude.types';
 
-interface QuestionShape {
-  question: string;
-  options: string[];
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readQuestions(input: unknown): QuestionShape[] {
+function readQuestions(input: unknown): ClaudeQuestion[] {
   const root = asRecord(input);
   if (!root || !Array.isArray(root.questions)) {
     return [];
   }
-  const shapes: QuestionShape[] = [];
+  const shapes: ClaudeQuestion[] = [];
   for (const entry of root.questions) {
     const q = asRecord(entry);
     const text = typeof q?.question === 'string' ? q.question : null;
@@ -49,15 +46,38 @@ function readQuestions(input: unknown): QuestionShape[] {
               label.length <= MAX_ANSWER_LENGTH,
           )
       : [];
-    shapes.push({ question: text, options });
+    const header =
+      typeof q.header === 'string' &&
+      q.header.length > 0 &&
+      q.header.length <= MAX_QUESTION_HEADER_LENGTH
+        ? q.header
+        : null;
+    shapes.push({
+      question: text,
+      header,
+      options,
+      multiSelect: q.multiSelect === true,
+    });
   }
   return shapes;
 }
 
-/** The question text for the caller's envelope (multi-question joins lines). */
+/**
+ * The question text for the caller's envelope (multi-question joins lines).
+ *
+ * Each line carries its `header` and, when set, the multi-pick affordance: the
+ * envelope's `options` are FLAT across questions, so without the header a
+ * caller receiving two questions cannot tell which option belongs to which —
+ * and without the multi-pick note it has no way to learn that more than one
+ * label is wanted.
+ */
 export function questionTextOf(input: unknown): string {
   return readQuestions(input)
-    .map((q) => q.question)
+    .map((q) => {
+      const head = q.header === null ? '' : `[${q.header}] `;
+      const multi = q.multiSelect ? ' (pick one or more)' : '';
+      return `${head}${q.question}${multi}`;
+    })
     .join('\n');
 }
 

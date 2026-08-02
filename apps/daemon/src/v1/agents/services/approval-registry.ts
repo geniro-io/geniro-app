@@ -57,13 +57,25 @@ export class ApprovalRegistry {
       : entry.respond(allow, answer);
   }
 
-  /** Drop every pending approval of one node's turn (turn settled or died). */
-  sweepNode(runId: string, nodeId: string): void {
+  /**
+   * Drop every pending approval of one node's turn (turn settled or died) and
+   * return what was dropped.
+   *
+   * The caller MUST record each returned entry as an `unanswerable` transcript
+   * item (`utils/unanswerable.ts`): the card is already on the user's screen
+   * with live buttons, and dropping the entry here only makes a verdict fail
+   * silently. Returning the entries rather than void is what lets every settle
+   * path close its cards from the same data the sweep acted on.
+   */
+  sweepNode(runId: string, nodeId: string): PendingApproval[] {
+    const swept: PendingApproval[] = [];
     for (const [key, entry] of this.pending) {
       if (entry.runId === runId && entry.nodeId === nodeId) {
         this.pending.delete(key);
+        swept.push(entry);
       }
     }
+    return swept;
   }
 
   /**

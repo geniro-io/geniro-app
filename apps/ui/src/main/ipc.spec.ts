@@ -7,11 +7,17 @@ type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>();
+  // Spelled out rather than spread from DEFAULT_SETTINGS: this object is
+  // built inside vi.hoisted(), which runs BEFORE module imports initialize —
+  // referencing the import there throws at load.
   const settings: Settings = {
     onboardingComplete: false,
     projectFolder: null,
     recentFolders: [],
     lastChatTarget: null,
+    lastApprovalMode: null,
+    lastModels: {},
+    lastEfforts: {},
     cliPaths: {},
     checkForUpdates: true,
   };
@@ -94,6 +100,26 @@ describe('registerIpc daemon configuration refresh', () => {
     restart.mockClear();
     await handler(IPC.updateSettings)(event, { checkForUpdates: false });
     expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('accepts the composer chips the renderer remembers, and still refuses an unknown key', async () => {
+    // The patch schema is a strictObject, so a key it does not name is DROPPED
+    // with a throw — a chip whose value silently never persists is exactly the
+    // failure this pins. Neither vocabulary is enumerated here: both belong to
+    // the CLIs.
+    await handler(IPC.updateSettings)(event, {
+      lastEfforts: { claude: 'ultracode' },
+      lastModels: { claude: 'opus' },
+    });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      lastEfforts: { claude: 'ultracode' },
+      lastModels: { claude: 'opus' },
+    });
+    expect(restart).not.toHaveBeenCalled();
+
+    await expect(
+      handler(IPC.updateSettings)(event, { notASetting: 'x' }),
+    ).rejects.toThrow();
   });
 
   it('restarts after saving or deleting the Cursor secret', async () => {

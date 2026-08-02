@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
+import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
@@ -36,7 +37,6 @@ function broker(): CallBroker {
   instance.registerRun('run-1', capability);
   return instance;
 }
-
 function service(callBroker = broker()): McpServerService {
   return new McpServerService(callBroker, {
     token: 'launch',
@@ -133,11 +133,10 @@ describe('McpServerService', () => {
     const tools = (
       json().result as { tools: { name: string; description: string }[] }
     ).tools;
-    expect(tools.map((t) => t.name)).toEqual([
-      'call_agent',
-      'await_agent',
-      'answer_agent',
-    ]);
+    // Lockstep with the cursor autoApprove mirror: the endpoint's served tool
+    // names ARE the list the cursor MCP entry auto-approves — a tool added here
+    // without updating GENIRO_MCP_CALL_TOOLS fails this assertion.
+    expect(tools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
     expect(tools[0]!.description).toContain('Helper');
     // Each callee's own description is the caller's routing signal — the
     // caller picks by what an agent says it does.

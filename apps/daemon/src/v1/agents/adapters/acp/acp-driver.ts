@@ -612,6 +612,10 @@ export class AcpTurnDriver implements TurnDriver {
       // the claude adapter there are no cache counters to sum. Fall back to the
       // plain input count when the agent never sent a usage_update.
       contextTokens: this.usage.contextUsed ?? this.usage.inputTokens,
+      // ACP never reports the model's window size — `UsageUpdate` carries only
+      // occupancy — so the consumer falls back to a default rather than this
+      // client claiming a window no agent stated.
+      contextWindowTokens: null,
       // The field is `costUsd`: report an amount only when the agent priced the
       // turn in USD, rather than silently relabelling another currency.
       costUsd:

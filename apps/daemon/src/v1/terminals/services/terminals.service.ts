@@ -1,17 +1,20 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
+import type { Subscription } from 'rxjs';
 
+import type { TerminalCommandResult } from '../../agents/adapters/adapter.types';
 import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { claudeCredentialEnv } from '../../agents/utils/child-env';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
 import type { TerminalSessionWire } from '../terminals.types';
-import { terminalCommand } from '../utils/terminal-command';
 import { PtyService } from './pty.service';
 
 /**
@@ -24,7 +27,8 @@ import { PtyService } from './pty.service';
  * can be mirrored, not just the most recent one.
  */
 @Injectable()
-export class TerminalsService {
+export class TerminalsService implements OnApplicationShutdown {
+  private readonly logger = new Logger(TerminalsService.name);
   /**
    * In-flight creates keyed by the mirror target — `runId:nodeId:sessionId`
    * (the RESOLVED session). The daemon owns the one-running-mirror-per-target
@@ -34,6 +38,8 @@ export class TerminalsService {
    * invisible to the UI until daemon shutdown.
    */
   private readonly pending = new Map<string, Promise<TerminalSessionWire>>();
+  /** Unsubscribes the run-deleted listener when the daemon shuts down. */
+  private readonly deletedSubscription: Subscription;
 
   constructor(
     private readonly em: EntityManager,
@@ -41,7 +47,26 @@ export class TerminalsService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly workflowStore: WorkflowStoreService,
     private readonly pty: PtyService,
-  ) {}
+    private readonly adapters: AgentAdapterRegistry,
+    bus: AgentEventBus,
+  ) {
+    // A mirror of a deleted run would keep a `claude --resume` child alive
+    // against a transcript that no longer exists. Subscribed HERE rather than
+    // called from the deleting service, because `TerminalsModule` imports
+    // `AgentsModule` — the dependency only runs this way.
+    this.deletedSubscription = bus.allDeleted().subscribe((runId) => {
+      const killed = this.pty.killRun(runId);
+      if (killed > 0) {
+        this.logger.log(
+          `killed ${killed} terminal mirror(s) of deleted run ${runId}`,
+        );
+      }
+    });
+  }
+
+  onApplicationShutdown(): void {
+    this.deletedSubscription.unsubscribe();
+  }
 
   /**
    * Idempotent per (run, node, session): a still-running mirror of the same
@@ -119,7 +144,7 @@ export class TerminalsService {
       );
     }
     const cwd = resolveValidCwd(run.cwd);
-    const { command, args } = terminalCommand(
+    const { command, args } = this.resolveInvocation(
       input.agentKind,
       input.resumeSessionId,
     );
@@ -132,11 +157,44 @@ export class TerminalsService {
       cwd,
       cols: input.cols,
       rows: input.rows,
-      // Terminal mirrors are claude-only in v1 (terminalCommand rejects
-      // cursor-agent), so every session gets the claude-child credential
-      // re-injection buildChildEnv otherwise strips.
+      // Terminal mirrors are claude-only in v1 (every other CLI's adapter
+      // answers `unsupported`), so every session gets the claude-child
+      // credential re-injection buildChildEnv otherwise strips.
       env: claudeCredentialEnv(),
     });
+  }
+
+  /**
+   * Ask the agent's OWN adapter for the mirror invocation and turn its refusal
+   * into the HTTP answer this module owes the caller.
+   *
+   * The two refusals are genuinely different outcomes and keep their distinct
+   * codes: `unsupported` is permanent for that CLI (no retry will help),
+   * `no-session` is a not-YET (the node has produced no resumable session).
+   * The adapter returns them as data rather than throwing, so nothing in the
+   * adapter layer has to know about HTTP — and nothing here has to know which
+   * CLI it is talking to.
+   */
+  private resolveInvocation(
+    agentKind: AgentKind,
+    resumeSessionId: string | null,
+  ): Extract<TerminalCommandResult, { ok: true }> {
+    const resolved = this.adapters
+      .for(agentKind)
+      .terminalCommand(resumeSessionId);
+    if (resolved.ok) {
+      return resolved;
+    }
+    if (resolved.reason === 'unsupported') {
+      throw new BadRequestException(
+        'TERMINAL_UNSUPPORTED',
+        `no interactive terminal support for agent kind: ${agentKind}`,
+      );
+    }
+    throw new BadRequestException(
+      'TERMINAL_SESSION_UNAVAILABLE',
+      'the agent has not produced a resumable terminal session yet',
+    );
   }
 
   /**

@@ -21,8 +21,8 @@ Everything else goes into a kind-directory:
 | `dao/`         | Data access — extend `BaseDao`, inject `EntityManager` from `@mikro-orm/sqlite` |
 | `entity/`      | MikroORM entities (extend `TimestampsEntity`, explicit column types)     |
 | `dto/`         | Zod HTTP DTOs via `createZodDto()` from `nestjs-zod`                     |
-| `utils/`       | Pure helpers with no DI (parsers, buffers, spawn plumbing)               |
-| `adapters/`    | CLI agent adapters — see `agent-adapters.md`                             |
+| `utils/`       | Pure helpers with no DI (parsers, buffers, spawn plumbing), plainly kebab-named at a module level (`json-util.ts`, `ndjson-buffer.ts`); the `*.utils.ts` suffix is used in ONE place only — an adapter's own `adapters/<name>/utils/` and `adapters/utils/` |
+| `adapters/`    | CLI agent adapters — see `agent-adapters.md`. A CLI's own probe and per-turn lifecycle services live in its adapter directory, not in `services/` (`adapters/claude/claude-probe.service.ts`, `adapters/cursor/cursor-probe.service.ts`, `adapters/cursor/cursor-mcp-merge.service.ts`) |
 | `gateways/`    | Socket.IO gateways                                                       |
 
 ## Thin controllers, fat services — and types in the types file
@@ -66,12 +66,17 @@ Rules:
   answer is a **twin parser**: an independent implementation on each side
   carrying a reciprocal `TWIN PARSER:` doc block that cross-references its twin.
   A shape drift fixed on one side MUST be mirrored on the other, and the doc
-  block is what makes that obligation discoverable. Reference twin:
-  `apps/daemon/src/v1/agents/adapters/claude/question-payload.ts` ↔
+  block is what makes that obligation discoverable. Reference twins:
+  `apps/daemon/src/v1/agents/adapters/claude/utils/claude-question.utils.ts` ↔
   `apps/ui/src/renderer/chats/approval-card.tsx` (the AskUserQuestion
-  `{questions:[{question,options:[{label}]}]}` shape, M4).
+  `{questions:[{question,options:[{label}]}]}` shape, M4), and
+  `apps/daemon/src/v1/agents/chat.types.ts` `AttachmentWireSchema` ↔
+  `apps/ui/src/renderer/chats/attachment-payload.ts` (the `{id, mediaType}`
+  image rows inside a message item's `z.unknown()` payload — the payload is
+  untyped on the wire BY DESIGN, since each item kind carries a different
+  shape, so no generated type reaches the renderer).
 - Unit tests (`*.spec.ts`) are co-located in the same directory as the file under test and move with it.
 - When adding a file to a module, place it in its kind-directory from the start; never park it at the module root "temporarily".
 - Only create the directories the module actually needs — no empty placeholder dirs.
-- The kind-directory layout mirrors the sibling Geniro repo's `apps/api` module convention (e.g. `v1/threads/`), so structure fixes can flow between the repos; the two-files-at-root constraint is a deliberate local tightening (the sibling also parks `*.listener.ts` / `*.utils.ts` at module roots — don't copy that here).
+- The kind-directory layout mirrors the sibling Geniro repo's `apps/api` module convention (e.g. `v1/threads/`), so structure fixes can flow between the repos; the two-files-at-root constraint is a deliberate local tightening (the sibling also parks `*.listener.ts` / `*.utils.ts` at module ROOTS — don't copy that: a helper never sits at a module root. The `*.utils.ts` suffix itself is used deliberately inside `adapters/<name>/utils/` and `adapters/utils/`, and nowhere else.)
 - Reference layout: `apps/daemon/src/v1/agents/`.

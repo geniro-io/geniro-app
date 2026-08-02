@@ -103,34 +103,25 @@ describe('ApprovalModeSelect', () => {
     expect(trigger(el).textContent).toContain('cli default');
   });
 
-  it('offers cursor chats a real approval select, minus the claude-only plan mode', () => {
+  it('renders nothing at all for a cursor chat', () => {
+    // cursor-agent has no per-turn approval channel — its permissions come
+    // from the `--force` flag plus the static allow/deny list the CLI reads
+    // from ~/.cursor/cli-config.json — so there is no choice to present. It
+    // used to state the pinned mode as a badge; that was chrome on a decision
+    // the user cannot make, and re-adding either the badge or a select would
+    // regress what this pins as removed.
     const el = render(
       <ApprovalModeSelect
         agentKind="cursor-agent"
-        value="ask"
-        // Even with the claude probe reporting plan support, cursor must not
-        // be offered it — that verdict says nothing about cursor's own modes.
+        value="auto"
         planSupported
         onChange={() => {}}
       />,
     );
-    // ACP makes session/request_permission a baseline, so these are real.
-    expect(el.querySelector('[data-menu-trigger]')).not.toBeNull();
-    expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
-  });
 
-  it('keeps a stored plan visible for cursor, so the select never lies', () => {
-    const el = render(
-      <ApprovalModeSelect
-        agentKind="cursor-agent"
-        value="plan"
-        planSupported={false}
-        onChange={() => {}}
-      />,
-    );
-    // The trigger shows `plan`; a menu without that row would display a value
-    // the user cannot see or re-pick.
-    expect(optionValues(el)).toContain('plan');
+    expect(el.querySelector('[data-menu-trigger]')).toBeNull();
+    expect(el.textContent).toBe('');
+    expect(el.children).toHaveLength(0);
   });
 
   it('disables the select while a turn is running', () => {

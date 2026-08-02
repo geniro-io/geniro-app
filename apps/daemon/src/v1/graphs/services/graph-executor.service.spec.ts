@@ -8,19 +8,33 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import type {
+  AdapterConfig,
+  AdapterQuestion,
+  AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
+  ApprovalResolution,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
 } from '../../agents/adapters/adapter.types';
-import type { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
-import type { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
-import type { ClaudeModesCapability } from '../../agents/chat.types';
+import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
+import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import type {
+  ClaudeModesCapability,
+  CursorCallsCapability,
+} from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
-import type { ClaudeProbeService } from '../../agents/services/claude-probe.service';
+import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
@@ -33,10 +47,26 @@ import type { WorkflowStoreService } from './workflow-store.service';
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
   readonly runs = new Map<string, Run>();
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
+  /**
+   * When set, the run-row purge blocks on it — a test seam for the window in
+   * which a delete is IN FLIGHT: cancelled and past its own guards, but with
+   * the run row still present, which is precisely the state a re-read cannot
+   * detect and only the `deleting` Set covers.
+   */
+  purgeGate: Promise<void> | null = null;
   failNextStatus: string | null = null;
   private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
+  }
+  async hardDeleteIncludingSoftDeleted(where: { id: string }): Promise<number> {
+    this.hardDeleted.push(where);
+    if (this.purgeGate) {
+      await this.purgeGate;
+    }
+    return this.runs.delete(where.id) ? 1 : 0;
   }
   async create(data: Partial<Run>): Promise<Run> {
     const run = {
@@ -77,7 +107,22 @@ class FakeRunDao {
 
 class FakeItemDao {
   readonly items: Item[] = [];
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
   failNextKind: string | null = null;
+  async hardDeleteIncludingSoftDeleted(where: {
+    runId: string;
+  }): Promise<number> {
+    this.hardDeleted.push(where);
+    let removed = 0;
+    for (let i = this.items.length - 1; i >= 0; i -= 1) {
+      if (this.items[i]!.runId === where.runId) {
+        this.items.splice(i, 1);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
   async create(data: Partial<Item>): Promise<Item> {
     if (data.kind === this.failNextKind) {
       this.failNextKind = null;
@@ -92,6 +137,11 @@ class FakeItemDao {
     } as unknown as Item;
     this.items.push(item);
     return item;
+  }
+  async getByRun(runId: string, afterSeq = -1): Promise<Item[]> {
+    return this.items
+      .filter((i) => i.runId === runId && i.seq > afterSeq)
+      .sort((a, b) => a.seq - b.seq);
   }
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
@@ -111,8 +161,23 @@ interface FakeNodeRow {
 
 class FakeNodeStateDao {
   readonly rows = new Map<string, FakeNodeRow>();
+  /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
+  readonly hardDeleted: unknown[] = [];
   private key(runId: string, nodeId: string): string {
     return `${runId}:${nodeId}`;
+  }
+  async hardDeleteIncludingSoftDeleted(where: {
+    runId: string;
+  }): Promise<number> {
+    this.hardDeleted.push(where);
+    let removed = 0;
+    for (const [key, row] of this.rows) {
+      if (row.runId === where.runId) {
+        this.rows.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
   }
   row(runId: string, nodeId: string): FakeNodeRow | undefined {
     return this.rows.get(this.key(runId, nodeId));
@@ -192,7 +257,47 @@ class FakeAdapter {
   readonly starts: FakeTurn[] = [];
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
-  constructor(readonly kind: 'claude' | 'cursor-agent') {}
+  /**
+   * The REAL adapter for this kind, delegated to for every CLI-fact
+   * declaration. The double fakes the SPAWN, never the contract: a
+   * hand-rolled copy of these would let the executor pass against an approval
+   * policy or a call-tool gate the shipped adapter does not actually have,
+   * which is precisely the drift folding them behind the adapter removes. So
+   * `config` is the SHIPPED object itself, by reference — never a restated
+   * one, which would go on passing after the real config changed.
+   */
+  private readonly real: AgentAdapter;
+  readonly config: AdapterConfig;
+  /**
+   * When true the double answers the BASE default for `questionFrom` (null),
+   * modelling a CLI that declares a question tool but whose adapter projects
+   * nothing out of the payload — the one state the shipped claude adapter
+   * cannot produce, and the reason the executor must not park a blank
+   * question on a caller.
+   */
+  projectsNoQuestion = false;
+  constructor(readonly kind: 'claude' | 'cursor-agent') {
+    this.real =
+      kind === 'claude' ? new ClaudeAdapter() : new CursorAcpAdapter();
+    this.getConfig = () => this.real.getConfig();
+  }
+  questionFrom(input: unknown): AdapterQuestion | null {
+    return this.projectsNoQuestion ? null : this.real.questionFrom(input);
+  }
+  withAnswer(input: unknown, answer: string): unknown {
+    return this.real.withAnswer(input, answer);
+  }
+  resolveApprovalMode(
+    requested: AgentApprovalMode,
+    installed: InstalledApprovalSupport,
+  ): ApprovalResolution {
+    return this.real.resolveApprovalMode(requested, installed);
+  }
+  approvalSupportFrom(
+    capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport {
+    return this.real.approvalSupportFrom(capabilities);
+  }
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
@@ -267,7 +372,11 @@ afterAll(() => {
 function setup(
   runtimePort: number | null = 4870,
   opts: {
+    cursorCalls?: CursorCallsCapability;
     claudeModes?: ClaudeModesCapability;
+    mergeOk?: boolean;
+    gitTracked?: boolean;
+    mergeImpl?: () => Promise<unknown>;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -280,6 +389,12 @@ function setup(
   approvals: ApprovalRegistry;
   callTokens: CallTokenRegistry;
   callBroker: CallBroker;
+  ensureVerdict: ReturnType<typeof vi.fn>;
+  claudeEnsureVerdict: ReturnType<typeof vi.fn>;
+  mergeAcquire: ReturnType<typeof vi.fn>;
+  mergeReleases: ReturnType<typeof vi.fn>[];
+  deletedRuns: string[];
+  removedAttachmentRuns: string[];
 } {
   const claude = new FakeAdapter('claude');
   const cursor = new FakeAdapter('cursor-agent');
@@ -290,6 +405,15 @@ function setup(
   const approvals = new ApprovalRegistry();
   const callTokens = new CallTokenRegistry();
   const callBroker = new CallBroker();
+  // Probe verdict defaults to 'unknown' — cursor callers stay shut out unless
+  // a test opts into a 'pass' explicitly (mirrors a machine never probed).
+  const cursorCalls: CursorCallsCapability = opts.cursorCalls ?? {
+    status: 'unknown',
+    version: null,
+    probedAt: null,
+    reason: null,
+  };
+  const ensureVerdict = vi.fn(async () => cursorCalls);
   // Claude mode probe defaults to all-pass — the widened modes run as
   // requested unless a test opts into a probed FAIL explicitly.
   const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
@@ -299,11 +423,28 @@ function setup(
     probedAt: 0,
     reason: null,
   };
+  const claudeEnsureVerdict = vi.fn(async () => claudeModes);
   const claudeProbe = {
     capability: () => claudeModes,
-    ensureVerdict: vi.fn(async () => claudeModes),
+    ensureVerdict: claudeEnsureVerdict,
     wireCapability: () => claudeModes,
   } as unknown as ClaudeProbeService;
+  const mergeReleases: ReturnType<typeof vi.fn>[] = [];
+  const mergeAcquire = vi.fn(async () => {
+    if (opts.mergeImpl) {
+      return opts.mergeImpl();
+    }
+    if (opts.mergeOk === false) {
+      return { ok: false as const, reason: 'merge refused (test)' };
+    }
+    const release = vi.fn();
+    mergeReleases.push(release);
+    return {
+      ok: true as const,
+      gitTracked: opts.gitTracked ?? false,
+      release,
+    };
+  });
   const em = { fork: () => ({ clear: () => {} }) } as unknown as EntityManager;
   const skillHarvest = {
     record: vi.fn(),
@@ -311,21 +452,49 @@ function setup(
   } as unknown as SkillHarvestStore;
   const storeGet = vi.fn();
   const workflowStore = { get: storeGet } as unknown as WorkflowStoreService;
+  // A real bus, tapped: run-status announcements are a wire-visible effect of
+  // every status write, so the spec observes the real stream rather than a stub.
+  const bus = new AgentEventBus();
+  const statusEvents: { runId: string; status: string }[] = [];
+  bus.allStatuses().subscribe((event) => {
+    statusEvents.push({ runId: event.runId, status: event.status });
+  });
+  const deletedRuns: string[] = [];
+  bus.allDeleted().subscribe((runId) => deletedRuns.push(runId));
+  const removedAttachmentRuns: string[] = [];
+  const attachments = {
+    removeRun: (runId: string) => removedAttachmentRuns.push(runId),
+  } as unknown as AttachmentStoreService;
+  // The REAL teardown over the same fakes — `deleteRun` is a thin caller of
+  // it, so a stub here would leave the delete tests pinning the stub.
+  const teardown = new RunTeardownService(
+    itemDao as unknown as ItemDao,
+    nodeDao as unknown as NodeStateDao,
+    runDao as unknown as RunDao,
+    bus,
+    registry,
+    callTokens,
+    new PartialStreamService(bus),
+    attachments,
+  );
   const service = new GraphExecutorService(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
-    new AgentEventBus(),
+    bus,
     registry,
     approvals,
-    claude as unknown as ClaudeAdapter,
-    cursor as unknown as CursorAcpAdapter,
+    new AgentAdapterRegistry(
+      claude as unknown as ClaudeAdapter,
+      cursor as unknown as CursorAcpAdapter,
+    ),
     callTokens,
     callBroker,
     claudeProbe,
     skillHarvest,
     workflowStore,
+    teardown,
     {
       token: 'launch-token',
       version: '0.0.0-test',
@@ -344,8 +513,15 @@ function setup(
     approvals,
     callTokens,
     callBroker,
+    ensureVerdict,
+    claudeEnsureVerdict,
+    mergeAcquire,
+    mergeReleases,
     skillHarvest,
     storeGet,
+    statusEvents,
+    deletedRuns,
+    removedAttachmentRuns,
   };
 }
 
@@ -386,6 +562,59 @@ const LINEAR: Workflow = {
 };
 
 describe('GraphExecutorService', () => {
+  it('ANNOUNCES a COMPLETED settle, so a workflow row in the sidebar goes live too', async () => {
+    // The chat sidebar lists workflow runs beside chats. The chat path writes
+    // status through a helper that also publishes; the executor wrote the
+    // column directly, so a workflow run settled in SQLite while its badge kept
+    // reading "running" until something forced a refetch — item 17 fixed for
+    // one row type and left broken for the other.
+    const { service, claude, runDao, statusEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // The terminal status reached the wire, not just the row.
+    expect(statusEvents).toContainEqual({
+      runId: run.id,
+      status: 'completed',
+    });
+  });
+
+  it('announces a FAILED settle too — the badge that lies longest', async () => {
+    // Asserting only the happy path leaves the four other setRunStatus sites
+    // unpinned, and `failed`/`cancelled` are exactly the states the stale-badge
+    // defect was reported against.
+    const { service, claude, runDao, statusEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'error', message: 'the CLI died' });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('failed');
+    expect(statusEvents).toContainEqual({ runId: run.id, status: 'failed' });
+  });
+
   it('runs a call-edge workflow: the callee is on-demand, the broker gets the run', async () => {
     // Milestone-2 replaces the M1 GRAPH_CALL_RUNTIME_UNAVAILABLE guard: a
     // call-only callee never launches with the DAG (it runs per CallBroker
@@ -595,37 +824,6 @@ describe('GraphExecutorService', () => {
     ).toEqual([]);
   });
 
-  it('files a cursor node’s report under cursor, not under claude', async () => {
-    const { service, cursor, skillHarvest } = setup();
-    await service.startRun({
-      slug: 'c',
-      workflow: triggered({
-        name: 'c',
-        nodes: [{ id: 'only', kind: 'agent', agent: 'cursor-agent' }],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'task',
-    });
-    await drain();
-
-    // cursor-agent reports its invokable set over ACP now, which the legacy
-    // transport never did. Hardcoding the agent at this call site would file
-    // these under claude and serve them to claude's `/` autocomplete.
-    cursor.starts[0]!.emit({
-      type: 'slash_commands',
-      commands: ['generate-cursor-rules'],
-    });
-    completeTurn(cursor.starts[0]!, 'done');
-    await drain();
-
-    expect(skillHarvest.record).toHaveBeenCalledWith(
-      'cursor-agent',
-      realpathSync(dir),
-      ['generate-cursor-rules'],
-    );
-  });
-
   it('fails a node on error and skips its consumers; the run rolls up failed', async () => {
     const { service, claude, runDao, nodeDao, itemDao } = setup();
     const run = await service.startRun({
@@ -823,7 +1021,7 @@ describe('GraphExecutorService', () => {
       nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
       edges: [],
     };
-    const run = await service.startRun({
+    await service.startRun({
       slug: 'ask',
       workflow: triggered(askFlow),
       cwd: dir,
@@ -848,9 +1046,7 @@ describe('GraphExecutorService', () => {
       'req-9',
       false,
     );
-    // Keyed on the REAL run id: listByRun returns [] for any unknown key, so
-    // a hand-written one would hold even if the registry were full.
-    expect(approvals.listByRun(run.id)).toHaveLength(0);
+    expect(approvals.listByRun('run-0')).toHaveLength(0);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
@@ -950,6 +1146,15 @@ describe('GraphExecutorService', () => {
     expect(
       itemDao.items.find((i) => i.kind === 'approval_verdict'),
     ).toBeUndefined();
+    // …and the transcript SAYS the card is dead. Sweeping alone left it on
+    // screen with live buttons; the renderer had to infer staleness from a
+    // later terminal item, which it could not do reliably.
+    const dead = itemDao.items.find((i) => i.kind === 'unanswerable');
+    expect(JSON.parse(dead!.payload)).toEqual({
+      id: 'req-late',
+      toolName: 'Bash',
+      nodeId: 'a',
+    });
   });
 
   it('labels upstream output with the producer display name when set', async () => {
@@ -1002,6 +1207,40 @@ describe('GraphExecutorService', () => {
     );
     expect(errorItem).toBeDefined();
   });
+
+  it('boot reconcile closes a graph card the KILLED daemon never swept, keeping its node', async () => {
+    // Same crash gap as the chat path: the approval registry died with the
+    // process, so the only surviving record of an open card is the transcript.
+    // The row must stay attributed to the node that asked, or it lands under
+    // the run and the card it closes is somewhere else entirely.
+    const { service, runDao, nodeDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      workflowId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+    await nodeDao.createPending(orphan.id, 'a');
+    await itemDao.create({
+      runId: orphan.id,
+      nodeId: 'a',
+      seq: 0,
+      kind: 'approval_request',
+      payload: JSON.stringify({ id: 'req-open', toolName: 'Bash' }),
+    });
+
+    await service.reconcileOrphanedRuns();
+
+    const dead = itemDao.items.filter(
+      (i) => i.runId === orphan.id && i.kind === 'unanswerable',
+    );
+    expect(dead).toHaveLength(1);
+    expect(dead[0]!.nodeId).toBe('a');
+    expect(JSON.parse(dead[0]!.payload)).toEqual({
+      id: 'req-open',
+      toolName: 'Bash',
+      nodeId: 'a',
+    });
+  });
 });
 
 describe('GraphExecutorService — agent calls', () => {
@@ -1048,9 +1287,8 @@ describe('GraphExecutorService — agent calls', () => {
     );
     // The token is per caller node: helper (a callee, not a caller) has none.
     expect(callTokens.get(run.id, 'helper')).toBeNull();
-    // Awareness: the caller keeps its own role, and the May-call block naming
-    // each callee — and what that callee says it DOES — rides a SEPARATE field
-    // so an adapter that withholds the call tools withholds this with them.
+    // Awareness: the caller's own role first, then the May-call block naming
+    // each callee and what that callee says it DOES...
     expect(caller.input.systemPrompt).toBe('You orchestrate.');
     expect(caller.input.callSurfacePrompt).toContain('May call');
     expect(caller.input.callSurfacePrompt).toContain(
@@ -1062,7 +1300,6 @@ describe('GraphExecutorService — agent calls', () => {
     // ...and never how it does it. A callee's role is private, so a caller
     // routes by description alone instead of restating its team in its role.
     expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
-    expect(caller.input.systemPrompt).not.toContain('SECRET_PLAYBOOK');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
       agent: 'helper',
@@ -1119,41 +1356,6 @@ describe('GraphExecutorService — agent calls', () => {
     }
   });
 
-  const CURSOR_CALLER_WF: Workflow = {
-    ...CALL_WF,
-    nodes: [
-      { ...CALL_WF.nodes[0]!, agent: 'cursor-agent' as const },
-      CALL_WF.nodes[1]!,
-    ],
-  };
-
-  it('a cursor caller is admitted through every gate: token, endpoint, awareness block', async () => {
-    // The ACP adapter carries the endpoint in `session/new` — nothing is
-    // planted in the run cwd, and no per-machine verdict can shut it out.
-    const { service, cursor, callTokens } = setup(4870);
-    const run = await service.startRun({
-      slug: 'c',
-      workflow: triggered(CURSOR_CALLER_WF),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-
-    const caller = cursor.starts[0]!;
-    expect(caller.input.mcpEndpoint?.url).toBe(
-      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/orch`,
-    );
-    expect(caller.input.mcpEndpoint?.token).toBe(
-      callTokens.get(run.id, 'orch'),
-    );
-    expect(caller.input.callSurfacePrompt).toContain('May call');
-    // Derived from the run id — see AgentTurnInput.mcpEndpoint.serverName.
-    expect(caller.input.mcpEndpoint?.serverName).toBe(
-      `geniro-${run.id.slice(0, 8)}`,
-    );
-    expect(caller.input.mcpEndpoint?.serverName).not.toBe('geniro');
-  });
-
   it('sync call: transcript rows on the caller, per-call node_state on the callee', async () => {
     const { service, claude, callBroker, itemDao, nodeDao, runDao } = setup();
     const run = await service.startRun({
@@ -1183,6 +1385,81 @@ describe('GraphExecutorService — agent calls', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it("a callee sub-turn settling does NOT kill the SAME node's still-live DAG-turn approval", async () => {
+    // The invariant the renderer's deleted inference tried to reconstruct from
+    // callIds in the transcript. A node reachable by BOTH a data edge and a
+    // call edge holds two turns at once; the daemon knows which are live, so
+    // the card dies only when the node's LAST turn does — never when a callee
+    // sub-turn happens to settle first.
+    const dualRole: Workflow = {
+      name: 'dual',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'orch', kind: 'agent', agent: 'claude', approval: 'auto' },
+        {
+          id: 'worker',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'ask',
+          role: 'I am the worker.',
+        },
+      ],
+      edges: [
+        { from: 'start', to: 'orch', kind: 'data' as const },
+        { from: 'start', to: 'worker', kind: 'data' as const },
+        { from: 'orch', to: 'worker', kind: 'call' as const },
+      ],
+    };
+    const { service, claude, callBroker, itemDao, approvals } = setup();
+    const run = await service.startRun({
+      slug: 'dual',
+      workflow: dualRole,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const dagTurn = claude.starts.find(
+      (t) => t.input.systemPrompt === 'I am the worker.',
+    )!;
+    dagTurn.emit({
+      type: 'approval_request',
+      id: 'req-dag',
+      toolName: 'Write',
+      input: { path: 'x' },
+    });
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+    // A callee sub-turn on the SAME node runs and settles…
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'worker',
+      message: 'sub-task',
+    });
+    await drain();
+    const calleeTurn = claude.starts[claude.starts.length - 1]!;
+    expect(calleeTurn.input.prompt).toBe('sub-task');
+    completeTurn(calleeTurn, 'sub-done');
+    expect((await envelope).status).toBe('ok');
+    await drain();
+
+    // …and the DAG turn's approval is untouched: still answerable, no row.
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'unanswerable')).toBe(false);
+
+    // Only the node's LAST live turn ending closes the card.
+    completeTurn(dagTurn, 'dag-done');
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(0);
+    const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
+    expect(dead).toHaveLength(1);
+    expect(JSON.parse(dead[0]!.payload)).toEqual({
+      id: 'req-dag',
+      toolName: 'Write',
+      nodeId: 'worker',
+    });
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {
@@ -1601,7 +1878,9 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
       status: 'question',
       call_id: 'call-1',
       agent: 'callee',
-      question: 'Which color?',
+      // Header-qualified: `options` is FLAT across questions, so the header is
+      // what lets a caller tell which option belongs to which question.
+      question: '[Color] Which color?',
       options: ['Red', 'Blue'],
     });
     // Bridged questions never become renderer approvals.
@@ -1889,6 +2168,46 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
     await drain();
   });
 
+  it('denies a question its adapter projects nothing out of — a blank question is never parked on the caller', async () => {
+    const ctx = setup();
+    // The adapter answers the BASE default (null): the payload carries no
+    // question this CLI can project. Parking it anyway would hand the caller
+    // an empty question it can only answer blind.
+    ctx.claude.projectsNoQuestion = true;
+    const run = await ctx.service.startRun({
+      slug: 'qa2-unprojectable',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = ctx.claude.starts[0]!;
+    const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    const callee = ctx.claude.starts[1]!;
+    callee.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect(callee.respondApproval).toHaveBeenCalledWith('q-1', false);
+    expect(ctx.itemDao.items.some((i) => i.kind === 'call_question')).toBe(
+      false,
+    );
+    completeTurn(callee, 'done');
+    // The call ran to completion instead of stalling on a question nobody
+    // could answer.
+    expect(((await sync) as { status: string }).status).toBe('ok');
+    completeTurn(caller, 'done');
+    await drain();
+  });
+
   it('run cancel reaches a parked callee: the turn dies with the run and no timeout ever fires', async () => {
     const { ctx, run, sync, callee } = await parkOne('qa2-cancel');
     expect(((await sync) as { status: string }).status).toBe('question');
@@ -2116,80 +2435,294 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     await drain();
   });
 
-  it("a cursor 'ask' node really parks on a human card, and the transcript never claims it auto-approved", async () => {
-    const { service, cursor, itemDao, approvals } = setup();
-    const run = await service.startRun({
-      slug: 'cursor-ask',
+  it("keeps a claude plan node on 'plan' even when the probe FAILED it", async () => {
+    // The graph half of the policy the adapter owns: acceptEdits degrades,
+    // plan does not — turning a no-execute mode into an executing 'ask' would
+    // invert what the author selected. Same verdict as the acceptEdits test
+    // above, opposite outcome, which is what proves the adapter is deciding
+    // rather than the executor pattern-matching a probe field.
+    const { service, claude, itemDao } = setup(4880, {
+      claudeModes: {
+        acceptEdits: 'fail',
+        plan: 'fail',
+        version: 'claude-old',
+        probedAt: 0,
+        reason: 'installed claude rejects both probed modes',
+      },
+    });
+    await service.startRun({
+      slug: 'plan-no-degrade',
       workflow: triggered({
-        name: 'cursor-ask',
-        nodes: [
-          { id: 'c', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
-        ],
+        name: 'plan-no-degrade',
+        nodes: [{ id: 'p', kind: 'agent', agent: 'claude', approval: 'plan' }],
         edges: [],
       }),
       cwd: dir,
       prompt: 'go',
     });
     await drain();
-    const turn = cursor.starts[0]!;
-    // The ACP transport carries a real permission protocol, so the requested
-    // mode reaches the CLI untouched — nothing rewrites it to 'auto'.
-    expect(turn.input.approvalMode).toBe('ask');
-
-    turn.emit({
-      type: 'approval_request',
-      id: 'n:5',
-      toolName: 'write_file',
-      input: { path: 'a.ts' },
-    });
-    await drain();
-    // The node is genuinely blocked on a user verdict…
-    expect(turn.respondApproval).not.toHaveBeenCalled();
-    expect(approvals.listByRun(run.id)).toHaveLength(1);
-    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
-    // …so a system item telling the user their permissions were bypassed is a
-    // factual lie about what this node did.
+    expect(claude.starts[0]!.input.approvalMode).toBe('plan');
     expect(
-      itemDao.items
-        .filter((i) => i.kind === 'system')
-        .map((i) => i.payload)
-        .filter((payload) => payload.includes('degrades to auto-approve')),
-    ).toEqual([]);
-    completeTurn(turn, 'done');
+      itemDao.items.some(
+        (i) => i.kind === 'system' && i.payload.includes('degrade'),
+      ),
+    ).toBe(false);
+    completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
 
-  it("a cursor 'acceptEdits' node reaches the CLI unrewritten and is never told it degraded", async () => {
-    const { service, cursor, itemDao } = setup();
-    await service.startRun({
-      slug: 'cursor-ae',
+  it('waits on the mode probe only for a workflow that asks for a probed mode', async () => {
+    // `hasProbedApprovalMode` asks each node's ADAPTER which of its modes are
+    // empirical, so an all-auto graph never pays for a probe turn. Without the
+    // predicate every run would block on it.
+    const auto = setup(4881);
+    await auto.service.startRun({
+      slug: 'auto-only',
       workflow: triggered({
-        name: 'cursor-ae',
-        nodes: [
-          {
-            id: 'c',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'acceptEdits',
-          },
-        ],
+        name: 'auto-only',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
         edges: [],
       }),
       cwd: dir,
       prompt: 'go',
     });
     await drain();
-    const turn = cursor.starts[0]!;
-    // acceptEdits is honoured by cursorAutoDecision — edits auto-allow, and
-    // everything else parks. Nothing about it degrades.
-    expect(turn.input.approvalMode).toBe('acceptEdits');
-    expect(
-      itemDao.items
-        .filter((i) => i.kind === 'system')
-        .map((i) => i.payload)
-        .filter((payload) => payload.includes('degrades to auto-approve')),
-    ).toEqual([]);
-    completeTurn(turn, 'done');
+    expect(auto.claudeEnsureVerdict).not.toHaveBeenCalled();
+    completeTurn(auto.claude.starts[0]!, 'done');
     await drain();
+
+    const probed = setup(4882);
+    await probed.service.startRun({
+      slug: 'accept-edits',
+      workflow: triggered(ACCEPT_EDITS_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(probed.claudeEnsureVerdict).toHaveBeenCalledTimes(1);
+    completeTurn(probed.claude.starts[0]!, 'done');
+    await drain();
+  });
+});
+
+describe('GraphExecutorService — deleting a workflow run', () => {
+  const ONE_NODE: Workflow = {
+    name: 'one',
+    nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+    edges: [],
+  };
+
+  /** An acceptEdits node is what makes a walk wait on the claude mode probe. */
+  const PROBED_NODE: Workflow = {
+    name: 'ae',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'acceptEdits' },
+    ],
+    edges: [],
+  };
+
+  /**
+   * Hold the next walk inside its capability probe until the returned fn runs
+   * — the claim→register window, where the run is claimed but has no handle a
+   * delete could wait on.
+   */
+  function stallProbe(ctx: ReturnType<typeof setup>): () => void {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    ctx.claudeEnsureVerdict.mockImplementation(async () => {
+      await gate;
+      return {
+        acceptEdits: 'pass',
+        plan: 'pass',
+        version: 'claude-test',
+        probedAt: 0,
+        reason: null,
+      };
+    });
+    return release;
+  }
+
+  /** A settled workflow run with a transcript, ready to delete. */
+  async function finishedRun(ctx: ReturnType<typeof setup>) {
+    const run = await ctx.service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(ctx.claude.starts[0]!, 'done');
+    await drain();
+    return run;
+  }
+
+  it('removes the run, its items and its node states', async () => {
+    // The reported defect: the chats sidebar lists workflow runs beside chats,
+    // but only the chat rows could be deleted — the chat route refuses a
+    // workflow run and nothing else offered a delete, so those rows were
+    // permanent.
+    const ctx = await setup();
+    const run = await finishedRun(ctx);
+    expect(ctx.itemDao.items.length).toBeGreaterThan(0);
+    expect(ctx.nodeDao.rows.size).toBeGreaterThan(0);
+
+    expect(await ctx.service.deleteRun(run.id)).toEqual({ deleted: true });
+
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.nodeDao.rows.size).toBe(0);
+  });
+
+  it('deletes with the soft-delete filter DISABLED, in all three tables', async () => {
+    const ctx = await setup();
+    const run = await finishedRun(ctx);
+    await ctx.service.deleteRun(run.id);
+
+    // The filter-disabling variant, never the plain `hardDelete` that hydrates
+    // through `deletedAt: null` and would silently skip a soft-deleted row.
+    expect(ctx.runDao.hardDeleted).toEqual([{ id: run.id }]);
+    expect(ctx.itemDao.hardDeleted).toEqual([{ runId: run.id }]);
+    expect(ctx.nodeDao.hardDeleted).toEqual([{ runId: run.id }]);
+  });
+
+  it('drops the run’s call surface, its tokens, its attachments, and announces it', async () => {
+    // None of these cascade from the `runs` row: the broker and the token
+    // registry are in memory, attachments are files, and the PTY mirror lives
+    // in a module above this one and learns only by subscription.
+    const ctx = await setup();
+    const run = await ctx.service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(ctx.callBroker.hasRun(run.id)).toBe(true);
+    expect(ctx.callTokens.get(run.id, 'a')).not.toBeNull();
+
+    await ctx.service.deleteRun(run.id);
+
+    expect(ctx.callBroker.hasRun(run.id)).toBe(false);
+    expect(ctx.callTokens.get(run.id, 'a')).toBeNull();
+    expect(ctx.removedAttachmentRuns).toEqual([run.id]);
+    expect(ctx.deletedRuns).toEqual([run.id]);
+  });
+
+  it('stops a LIVE run and waits for its final writes before destroying the rows', async () => {
+    // Cancel only SIGNALS: the DAG keeps writing (each node's terminal item,
+    // the run's status roll-up and its `turn_complete`) until the aggregate
+    // handle settles. A delete that merely cancelled and proceeded would leave
+    // those items behind for a run whose row is gone — `Item.runId` has no FK,
+    // so the inserts SUCCEED and nothing can ever read or delete them again.
+    const ctx = await setup();
+    const run = await ctx.service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(ctx.claude.starts).toHaveLength(1);
+
+    await ctx.service.deleteRun(run.id);
+
+    expect(ctx.claude.starts[0]!.cancelled).toBe(true);
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    expect(ctx.itemDao.items).toEqual([]);
+    // And nothing lands afterwards either.
+    await drain();
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.registry.has(run.id)).toBe(false);
+  });
+
+  it('a walk still crossing the claim→register window abandons itself instead of outliving the delete', async () => {
+    // `startRun` claims the run, then `drive` AWAITS the capability probes
+    // before `driveResolved` registers the aggregate handle. A delete landing
+    // in that gap has no handle to wait on, so the walk must notice the delete
+    // itself — otherwise it registers afterwards and writes a whole run's
+    // items for a run that no longer exists.
+    const ctx = setup();
+    const releaseProbe = stallProbe(ctx);
+    const run = await ctx.service.startRun({
+      slug: 'ae',
+      workflow: triggered(PROBED_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    // Claimed and probing — nothing has spawned yet.
+    expect(ctx.claude.starts).toHaveLength(0);
+
+    await ctx.service.deleteRun(run.id);
+    releaseProbe();
+    await drain();
+
+    expect(ctx.claude.starts).toHaveLength(0);
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    // The claim was released, so the id is not wedged as permanently busy.
+    expect(ctx.registry.has(run.id)).toBe(false);
+  });
+
+  it('a walk resuming while a delete is IN FLIGHT abandons itself — the row is still there', async () => {
+    // The other arm of the same guard. Here the delete has cancelled the run
+    // and passed its own checks but has NOT yet purged the run row, so the
+    // walk's re-read finds it alive; only the `deleting` Set knows it is
+    // doomed. Without that arm the walk drives on and its items are orphaned
+    // by the purge a moment later.
+    const ctx = setup();
+    const releaseProbe = stallProbe(ctx);
+    const run = await ctx.service.startRun({
+      slug: 'ae',
+      workflow: triggered(PROBED_NODE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    let releasePurge = (): void => {};
+    ctx.runDao.purgeGate = new Promise<void>((resolve) => {
+      releasePurge = resolve;
+    });
+    const deleting = ctx.service.deleteRun(run.id);
+    await drain();
+    // Mid-delete: the run row still exists, so only the Set can catch this.
+    expect(ctx.runDao.runs.get(run.id)).toBeDefined();
+
+    releaseProbe();
+    await drain();
+    releasePurge();
+    await deleting;
+
+    expect(ctx.claude.starts).toHaveLength(0);
+    expect(ctx.itemDao.items).toEqual([]);
+    expect(ctx.runDao.runs.get(run.id)).toBeUndefined();
+    expect(ctx.registry.has(run.id)).toBe(false);
+  });
+
+  it('refuses to delete a CHAT run through the workflow route', async () => {
+    // The chat service owns its own teardown (attachments, partial streams);
+    // deleting through here would skip it.
+    const { service, runDao } = setup();
+    const chatRun = await runDao.create({
+      workflowId: null,
+      status: 'completed',
+    });
+    await expect(service.deleteRun(chatRun.id)).rejects.toThrow();
+    expect(runDao.runs.get(chatRun.id)).toBeDefined();
+  });
+
+  it('404s on a run that does not exist', async () => {
+    const { service } = setup();
+    await expect(service.deleteRun('nope')).rejects.toThrow();
   });
 });

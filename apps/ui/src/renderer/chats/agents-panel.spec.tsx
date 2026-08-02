@@ -55,6 +55,8 @@ const agents: AgentDisplay[] = [
     status: 'running',
     activeTurns: 1,
     contextTokens: 45_200,
+    // A 1M-window model: same tokens, a fifth of the fill a 200k model shows.
+    contextWindowTokens: 1_000_000,
     spentUsd: 0.236,
     threads: [{ ...mainThread, status: 'running' }],
   },
@@ -65,6 +67,8 @@ const agents: AgentDisplay[] = [
     status: 'running',
     activeTurns: 3,
     contextTokens: 12_000,
+    // Reported nothing — measured against the 200k default.
+    contextWindowTokens: null,
     spentUsd: 0.004,
     threads: [
       {
@@ -90,6 +94,7 @@ const agents: AgentDisplay[] = [
     status: 'idle',
     activeTurns: 0,
     contextTokens: null,
+    contextWindowTokens: null,
     spentUsd: null,
     threads: [mainThread],
   },
@@ -112,11 +117,22 @@ describe('AgentsPanel', () => {
       worker.querySelector('svg[aria-label="Context 6% full"]'),
     ).not.toBeNull();
 
+    // One main thread and nothing else: the card IS that conversation, so it
+    // shows no chevron, no thread list and no "1 thread" count to expand into.
     const orchestrator = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;
-    expect(orchestrator.textContent).toContain('1 active · 1 thread');
-    expect(orchestrator.textContent).toContain('ctx 45.2k / 200k');
+    expect(orchestrator.textContent).not.toContain('1 thread');
+    // The live-turn count survives the collapse — only the thread COUNT goes.
+    expect(orchestrator.textContent).toContain('1 active');
+    expect(orchestrator.querySelector('button[aria-expanded]')).toBeNull();
+    // The CLI's own window, not the 200k default the sibling card falls to.
+    expect(orchestrator.textContent).toContain('ctx 45.2k / 1M');
+    expect(orchestrator.textContent).not.toContain('/ 200k');
+    // …and the ring is scaled by it: 45.2k of 1M is 5% full, of 200k is 23%.
+    expect(
+      orchestrator.querySelector('svg[aria-label="Context 5% full"]'),
+    ).not.toBeNull();
     expect(orchestrator.textContent).toContain('$0.24');
 
     const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
@@ -155,21 +171,35 @@ describe('AgentsPanel', () => {
     click(openCall1);
     expect(onOpenThread).toHaveBeenCalledWith(agents[1], agents[1]!.threads[0]);
 
-    // The main thread of a claude agent opens without an explicit session.
-    click(el.querySelector('button[aria-label="Orchestrator threads"]'));
-    expect(
-      el.querySelector(
-        'button[aria-label="Open terminal for Orchestrator — main"]',
-      ),
-    ).not.toBeNull();
+    // A sole-thread claude agent needs no expanding: its terminal sits right
+    // on the card and opens without an explicit session id.
+    const openMain = el.querySelector(
+      'button[aria-label="Open terminal for Orchestrator"]',
+    );
+    expect(openMain).not.toBeNull();
+    click(openMain);
+    expect(onOpenThread).toHaveBeenCalledWith(agents[0], agents[0]!.threads[0]);
 
-    // Cursor has no interactive mirror — threads list, but no terminal.
-    click(el.querySelector('button[aria-label="Reviewer threads"]'));
+    // Cursor has no interactive mirror — no terminal anywhere on its card.
     expect(
-      el.querySelector(
-        'button[aria-label="Open terminal for Reviewer — main"]',
-      ),
+      el.querySelector('button[aria-label="Open terminal for Reviewer"]'),
     ).toBeNull();
+  });
+
+  it('still expands an agent that genuinely has several threads', () => {
+    // The collapse is for a SOLE main thread only — a fan-out agent's call
+    // threads must stay reachable.
+    const el = render(
+      <AgentsPanel agents={agents} onOpenThread={vi.fn()} onClose={vi.fn()} />,
+    );
+    const worker = [...el.querySelectorAll('ul > li')].find((row) =>
+      row.textContent?.includes('Worker'),
+    )!;
+
+    expect(worker.querySelector('button[aria-expanded]')).not.toBeNull();
+    expect(worker.textContent).not.toContain('Write a haiku about rivers.');
+    click(worker.querySelector('button[aria-expanded]'));
+    expect(worker.textContent).toContain('Write a haiku about rivers.');
   });
 
   it('the fill ring escalates its tone as the context window fills', () => {
@@ -180,13 +210,14 @@ describe('AgentsPanel', () => {
       status: 'completed',
       activeTurns: 0,
       contextTokens,
+      contextWindowTokens: null,
       spentUsd: null,
       threads: [],
     });
     const el = render(
       <AgentsPanel
         agents={[
-          withContext('calm', 45_200), // 23% → accent
+          withContext('calm', 45_200), // 23% → success
           withContext('hot', 150_000), // 75% → warning
           withContext('critical', 185_000), // 92.5% → destructive
         ]}
@@ -196,7 +227,7 @@ describe('AgentsPanel', () => {
     );
     const ring = (label: string): SVGElement =>
       el.querySelector<SVGElement>(`svg[aria-label="${label}"]`)!;
-    expect(ring('Context 23% full').classList.contains('text-primary')).toBe(
+    expect(ring('Context 23% full').classList.contains('text-success')).toBe(
       true,
     );
     expect(ring('Context 75% full').classList.contains('text-warning')).toBe(

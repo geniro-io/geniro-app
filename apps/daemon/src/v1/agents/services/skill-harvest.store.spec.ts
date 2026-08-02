@@ -19,8 +19,26 @@ function cacheFile(): string {
   return join(dir, 'claude-skills.json');
 }
 
+/** How the store keys its cache file: NUL-joined agent + cwd. */
+const cacheKey = (cwd: string, agent = 'claude'): string =>
+  `${agent}\u0000${cwd}`;
+
 describe('SkillHarvestStore', () => {
-  it('records and returns an (agent, cwd)-keyed list, cleaned of junk entries', () => {
+  it('keeps each agent’s report separate in a folder both CLIs are used in', () => {
+    // A folder is routinely used by both, and their invokable sets have
+    // nothing to do with each other — claude's built-ins are not commands
+    // cursor-agent can run.
+    const store = new SkillHarvestStore({ file: cacheFile() });
+    store.record('claude', '/proj', ['compact', 'clear']);
+
+    expect(store.get('cursor-agent', '/proj')).toBeNull();
+
+    store.record('cursor-agent', '/proj', ['fix']);
+    expect(store.get('cursor-agent', '/proj')).toEqual(['fix']);
+    expect(store.get('claude', '/proj')).toEqual(['compact', 'clear']);
+  });
+
+  it('records and returns a per-agent, per-cwd list, cleaned of junk entries', () => {
     const store = new SkillHarvestStore({ file: cacheFile() });
     store.record('claude', '/proj', [
       ' review ',
@@ -68,9 +86,9 @@ describe('SkillHarvestStore', () => {
     writeFileSync(
       file,
       JSON.stringify({
-        '/good': { commands: ['deploy'], harvestedAt: 1 },
-        '/bad-shape': { commands: 'nope', harvestedAt: 1 },
-        '/bad-entries': { commands: ['ok', 42], harvestedAt: 1 },
+        [cacheKey('/good')]: { commands: ['deploy'], harvestedAt: 1 },
+        [cacheKey('/bad-shape')]: { commands: 'nope', harvestedAt: 1 },
+        [cacheKey('/bad-entries')]: { commands: ['ok', 42], harvestedAt: 1 },
       }),
       'utf8',
     );
@@ -78,33 +96,5 @@ describe('SkillHarvestStore', () => {
     expect(store.get('claude', '/good')).toEqual(['deploy']);
     expect(store.get('claude', '/bad-shape')).toBeNull();
     expect(store.get('claude', '/bad-entries')).toBeNull();
-  });
-
-  it('keeps each agent’s harvest separate for one shared folder', () => {
-    const store = new SkillHarvestStore({ file: cacheFile() });
-    store.record('claude', '/proj', ['compact']);
-    store.record('cursor-agent', '/proj', ['generate-cursor-rules']);
-
-    // A command one CLI reports is not invokable in the other, so neither
-    // listing may leak into the other's `/` autocomplete.
-    expect(store.get('claude', '/proj')).toEqual(['compact']);
-    expect(store.get('cursor-agent', '/proj')).toEqual([
-      'generate-cursor-rules',
-    ]);
-  });
-
-  it('adopts a legacy cwd-keyed cache as claude’s rather than dropping it', () => {
-    const file = cacheFile();
-    // How every cache written before the agent dimension existed looks. Only
-    // claude ever populated one — the legacy cursor transport reported no
-    // commands — so these entries are claude's, and an upgrade must keep them.
-    writeFileSync(
-      file,
-      JSON.stringify({ '/proj': { commands: ['compact'], harvestedAt: 1 } }),
-      'utf8',
-    );
-    const store = new SkillHarvestStore({ file });
-    expect(store.get('claude', '/proj')).toEqual(['compact']);
-    expect(store.get('cursor-agent', '/proj')).toBeNull();
   });
 });

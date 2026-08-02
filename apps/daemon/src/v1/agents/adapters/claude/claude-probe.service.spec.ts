@@ -4,14 +4,12 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent, AgentTurnInput } from '../adapters/adapter.types';
-import type { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import type { resolveAgentVersion } from '../utils/agent-version';
-import {
-  type ClaudeProbeOptions,
-  ClaudeProbeService,
-} from './claude-probe.service';
-import { ProcessRegistry } from './process-registry';
+import { ProcessRegistry } from '../../services/process-registry';
+import type { resolveAgentVersion } from '../../utils/agent-version';
+import type { AgentEvent, AgentTurnInput } from '../adapter.types';
+import type { ClaudeAdapter } from './claude.adapter';
+import type { ClaudeProbeOptions } from './claude.types';
+import { ClaudeProbeService } from './claude-probe.service';
 
 type Behavior = 'init' | 'reject' | 'auth-error' | 'hang';
 

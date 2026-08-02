@@ -71,6 +71,19 @@ export class WorkflowsController {
     return this.executor.cancel(runId);
   }
 
+  /**
+   * Destructive and irreversible — the workflow-run half of the chats
+   * sidebar's delete (its chat rows go to `DELETE /v1/chats/:runId`). The
+   * LIBRARY workflow is untouched: this deletes one run's history, not the
+   * graph it ran.
+   */
+  @Delete('runs/:runId')
+  @ApiOperation({ operationId: 'deleteWorkflowRun' })
+  @ZodResponse({ status: 200, type: DeletedDto })
+  deleteRun(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
+    return this.executor.deleteRun(runId);
+  }
+
   @Get()
   @ApiOperation({ operationId: 'listWorkflows' })
   @ZodResponse({ status: 200, type: [WorkflowSummaryDto] })

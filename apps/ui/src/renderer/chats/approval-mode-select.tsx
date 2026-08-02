@@ -11,15 +11,21 @@ const MODE_LABELS: readonly { value: ChatApprovalMode; label: string }[] = [
 ];
 
 /**
- * The composer's tool-approval chip. Both CLIs offer ask / accept edits /
- * auto-approve — cursor's permissions are real over ACP, where
- * `session/request_permission` is a baseline. `plan` is claude-only: its
- * availability comes from the claude mode probe, and cursor's plan mode is an
- * agent-declared session mode this client cannot confirm before the turn. Even
- * for claude it stays hidden unless the installed CLI probed pass (no dead UI)
- * — a run already stored on `plan` keeps its option visible so the select never
- * lies. A legacy run whose approval is null shows a one-way "cli default"
- * placeholder until a mode is picked.
+ * The composer's tool-approval chip — claude only.
+ *
+ * A cursor chat renders NOTHING here. cursor-agent has no per-turn approval
+ * channel to drive: its whole per-run permission surface is the `--force`
+ * boolean, and everything else comes from the static allow/deny list the CLI
+ * reads itself from `~/.cursor/cli-config.json`. There is no moment at which
+ * this app could raise a card, so a mode picker would be a control over
+ * nothing. It previously stated the pinned mode as a static badge; that is
+ * chrome on a choice the user does not have, so the row simply omits it.
+ *
+ * Claude chats offer ask / accept edits / plan / auto-approve, with `plan`
+ * hidden unless the installed CLI probed pass (no dead UI) — a run already
+ * stored on `plan` keeps its option visible so the select never lies. A legacy
+ * run whose approval is null shows a one-way "cli default" placeholder until a
+ * mode is picked.
  */
 export function ApprovalModeSelect({
   agentKind,
@@ -37,16 +43,12 @@ export function ApprovalModeSelect({
   disabled?: boolean;
   onChange: (mode: ChatApprovalMode) => void;
   className?: string;
-}): React.JSX.Element {
-  // `plan` is claude-only: `planSupported` comes from the claude mode probe,
-  // and cursor's plan mode is an agent-declared ACP session mode this client
-  // cannot confirm ahead of the turn. Everything else is honoured by both.
-  // A run already stored on `plan` keeps the option whatever its agent, so the
-  // select never shows a value absent from its own menu.
-  const planOffered =
-    (agentKind === 'claude' && planSupported) || value === 'plan';
+}): React.JSX.Element | null {
+  if (agentKind === 'cursor-agent') {
+    return null;
+  }
   const options = MODE_LABELS.filter(
-    (mode) => mode.value !== 'plan' || planOffered,
+    (mode) => mode.value !== 'plan' || planSupported || value === 'plan',
   );
   return (
     <Select

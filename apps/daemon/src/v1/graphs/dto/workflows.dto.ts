@@ -60,7 +60,7 @@ export class WorkflowSummaryDto extends createZodDto(WorkflowSummarySchema) {}
 /** Per-node execution state of one workflow run. */
 export class NodeStateDto extends createZodDto(NodeStateWireSchema) {}
 
-/** Acknowledgement of a library delete. */
+/** Acknowledgement of a delete — a library workflow, or one run's history. */
 export class DeletedDto extends createZodDto(
   z.object({ deleted: z.boolean() }),
 ) {}

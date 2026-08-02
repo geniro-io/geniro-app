@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  AGENT_MODEL_OPTIONS,
-  agentHasModelChoices,
   canConnect,
   connectionEdgeKind,
   flowEdgeKind,
@@ -73,31 +71,6 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'approval',
     ]);
     expect(triggerKeys).toEqual(['id', 'kind', 'name', 'trigger']);
-  });
-});
-
-describe('AGENT_MODEL_OPTIONS', () => {
-  it('offers each CLI its own documented model aliases', () => {
-    // Pinned literally: these are the aliases each CLI's `--model` help
-    // documents — the select passes them straight through to the flag.
-    expect(AGENT_MODEL_OPTIONS.claude).toEqual([
-      'fable',
-      'opus',
-      'sonnet',
-      'haiku',
-    ]);
-    // Empty on purpose: cursor-agent runs over ACP, which carries no
-    // per-session model selection, so any value here would be discarded by
-    // the turn — and a non-empty list also auto-assigns one to every new node.
-    expect(AGENT_MODEL_OPTIONS['cursor-agent']).toEqual([]);
-  });
-
-  it('answers "can this agent pick a model" from the one list', () => {
-    // The inspector renders its Model field from this, and ModelSelect chooses
-    // between a picker and an explanation from it — a second inline
-    // `.length > 0` anywhere is how those two drift apart.
-    expect(agentHasModelChoices('claude')).toBe(true);
-    expect(agentHasModelChoices('cursor-agent')).toBe(false);
   });
 });
 

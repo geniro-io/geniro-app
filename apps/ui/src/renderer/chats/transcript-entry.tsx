@@ -37,11 +37,18 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   entry,
   nodes,
   chatAgentName,
+  soloAgent = false,
 }: {
   entry: TranscriptEntry;
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   /** Sender name for a 1:1 chat's agent items (they carry no nodeId). */
   chatAgentName?: string | null;
+  /**
+   * The run has exactly one agent, so the agent side needs no identity: its
+   * rows render bare instead of in a {@link SenderRow}. The USER's own
+   * messages keep theirs — the conversation still has two sides.
+   */
+  soloAgent?: boolean;
 }): React.JSX.Element | null {
   const nameOf = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
@@ -50,7 +57,12 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
 
   if (entry.type === 'turn-block') {
     return (
-      <TurnBlock block={entry} nodes={nodes} chatAgentName={chatAgentName} />
+      <TurnBlock
+        block={entry}
+        nodes={nodes}
+        chatAgentName={chatAgentName}
+        soloAgent={soloAgent}
+      />
     );
   }
   if (entry.type === 'tools') {
@@ -90,6 +102,10 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
         {content}
       </SenderRow>
     );
+  }
+  if (soloAgent) {
+    // The one agent needs no identity — its rows sit bare in the flow.
+    return content;
   }
   return (
     <SenderRow

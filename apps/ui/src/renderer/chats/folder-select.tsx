@@ -1,6 +1,7 @@
 import { Folder, FolderOpen } from 'lucide-react';
 
 import { Select } from '../components/ui/select';
+import { cn } from '../components/ui/utils';
 
 /**
  * Sentinel value for the "Choose folder…" row. A path is always absolute, so
@@ -76,7 +77,13 @@ export function FolderSelect({
       aria-label="Folder for new chats"
       title={folder ?? 'Choose the folder new chats run in'}
       disabled={disabled}
-      className={className}
+      // Capped, never shrunk. The row decides what FITS by measuring these
+      // chips at their natural width and moving the rest into its overflow
+      // menu; a chip that quietly gave up width instead would report a false
+      // fit and squeeze itself down to a few letters (it reached 80px, then
+      // 0px before that) rather than move. The cap still bounds a deep path —
+      // its full text is one tooltip, or one menu row, away.
+      className={cn('max-w-52', className)}
       leadingIcon={<Folder />}
       groups={[
         ...(recents.length > 0

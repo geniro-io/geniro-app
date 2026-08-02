@@ -153,6 +153,42 @@ export abstract class BaseDao<T extends object> {
   }
 
   /**
+   * {@link hardDelete}, but reaching rows the `softDelete` filter hides.
+   *
+   * `hardDelete` hydrates through the default filter on {@link TimestampsEntity}
+   * (`deletedAt: null`), so a row that was ever soft-deleted is invisible to it
+   * and survives the "hard" delete as an orphan. When the caller's intent is
+   * "this record is gone", that is the wrong reading of the word — hence a
+   * separate method rather than a flag, so the choice is visible at the call
+   * site and a plain `hardDelete` keeps its current, filtered meaning.
+   *
+   * Returns how many rows it removed, which is the only way a caller can
+   * report what a destructive one-way operation actually did.
+   */
+  async hardDeleteIncludingSoftDeleted(
+    where: FilterQuery<T>,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    const em = txEm ?? this.em;
+    // Exactly ONE filter is disabled, by name — not `filters: false`, which
+    // turns off every registered filter. Only `softDelete` exists here today,
+    // so the two behave identically; but this package is vendored to stay
+    // upstreamable, and in a codebase with a scoping filter the blanket form is
+    // the difference between purging one tenant's rows and purging everyone's.
+    const matches = await this.getRepo(txEm).find(where, {
+      filters: { softDelete: false },
+    });
+    if (matches.length === 0) {
+      return 0;
+    }
+    for (const entity of matches) {
+      em.remove(entity);
+    }
+    await em.flush();
+    return matches.length;
+  }
+
+  /**
    * Soft-deleted entities stay in the identity map after flush, so subsequent
    * `findOne({ id })` calls hand back the cached entity and bypass the
    * `softDelete` filter — making the row look alive. Evict the cached entry

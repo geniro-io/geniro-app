@@ -31,6 +31,11 @@ globs:
 3. **App-level shared component** in `components/` — composed from primitives:
    `logo`, `status-dot`, `field`, `note-box`, `error-text`, `empty-state`,
    `collapsible-card`, `agent-config-list`, `nav-rail`, `confirm-dialog`,
+   `copy-button` (the app's ONE clipboard control — it owns the copied-tick
+   feedback and the write itself, so no caller re-implements either),
+   `nav-list-item` (an activatable sidebar row; its `suspendActivation` prop
+   drops the full-row overlay while a nested control — the chat row's inline
+   rename field — owns the row's clicks and focus),
    `expandable-textarea` (a `Textarea` whose corner ⤢ opens the field in
    `markdown-editor-dialog` — use it for any prompt-length field instead of a
    bare `Textarea`), `markdown-editor-dialog`

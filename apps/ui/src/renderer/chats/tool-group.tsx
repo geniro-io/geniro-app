@@ -1,8 +1,10 @@
 import { ChevronRight, Loader2 } from 'lucide-react';
 import { memo, useState } from 'react';
 
+import { CodeBlock } from '../components/ui/code-block';
 import { cn } from '../components/ui/utils';
-import { DiffView, editDiffOf } from './diff-view';
+import { DiffView } from './diff-view';
+import { toolInputBody, toolResultBody } from './tool-render';
 import {
   toolCallSummary,
   type ToolGroupEntry,
@@ -12,35 +14,19 @@ import {
 } from './transcript-groups';
 import { payloadString } from './transcript-item';
 
-function pretty(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2) ?? '';
-  } catch {
-    return String(value);
-  }
-}
-
-const DETAIL_BLOCK_CLASS =
-  'm-0 max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-xs';
-
 /** One expandable tool invocation inside a group. */
 function ToolRow({ pair }: { pair: ToolPair }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const name = payloadString(pair.call.payload, 'name') ?? 'tool';
   const summary = toolCallSummary(pair.call);
   const input = (pair.call.payload as { input?: unknown } | null)?.input;
-  const inputRecord =
-    input && typeof input === 'object'
-      ? (input as Record<string, unknown>)
-      : null;
-  const diff = editDiffOf(name, input);
-  const filePath =
-    inputRecord && typeof inputRecord.file_path === 'string'
-      ? inputRecord.file_path
-      : null;
+  const body = toolInputBody(name, input);
   const result = pair.result
     ? ((pair.result.payload as { result?: unknown } | null)?.result ?? null)
     : null;
+  // The CALL's input decides how its result reads (a file's contents have no
+  // hint of their own language; command output must not be painted as shell).
+  const resultBody = toolResultBody(input, toolResultText(result));
   return (
     <div className="flex flex-col">
       <button
@@ -65,24 +51,31 @@ function ToolRow({ pair }: { pair: ToolPair }): React.JSX.Element {
       </button>
       {open ? (
         <div className="flex flex-col gap-1.5 py-1 pl-6 pr-1.5">
-          {diff ? (
+          {body.kind === 'diff' ? (
             <>
-              {filePath ? (
+              {body.caption ? (
                 <div className="font-mono text-xs text-muted-foreground">
-                  {filePath}
+                  {body.caption}
                 </div>
               ) : null}
-              <DiffView oldText={diff.oldText} newText={diff.newText} />
+              <DiffView oldText={body.oldText} newText={body.newText} />
             </>
           ) : (
-            <pre className={DETAIL_BLOCK_CLASS}>{pretty(input ?? null)}</pre>
+            <CodeBlock
+              code={body.code}
+              language={body.language}
+              caption={body.caption}
+            />
           )}
           {pair.result !== null ? (
             <div className="flex flex-col gap-0.5">
               <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 result
               </span>
-              <pre className={DETAIL_BLOCK_CLASS}>{toolResultText(result)}</pre>
+              <CodeBlock
+                code={resultBody.code}
+                language={resultBody.language}
+              />
             </div>
           ) : null}
         </div>

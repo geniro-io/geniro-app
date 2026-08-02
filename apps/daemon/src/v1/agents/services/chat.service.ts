@@ -8,30 +8,47 @@ import {
 
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
-import type { AgentKind, ItemKind } from '../../runs/runs.types';
-import type { AgentAdapter } from '../adapters/agent-adapter';
-import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
+  type AgentKind,
+  isTerminalRunStatus,
+  type ItemKind,
+  type RunStatus,
+} from '../../runs/runs.types';
+import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
+import {
+  type AttachmentDataWire,
+  CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ClaudeModesCapability,
   type ItemWire,
   type RunWire,
+  type SendMessageImage,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { answerFoldsInto, foldApprovalAnswer } from '../utils/approval-answer';
+import {
+  answerFoldsInto,
+  foldApprovalAnswer,
+  isUserQuestion,
+} from '../utils/approval-answer';
 import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
+import { writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
+import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
+import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
-import { ClaudeProbeService } from './claude-probe.service';
+import { AttachmentStoreService } from './attachment-store.service';
+import { EffortsService } from './efforts.service';
+import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
 
 function parsePayload(raw: string): unknown {
@@ -53,6 +70,32 @@ function parsePayload(raw: string): unknown {
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
+  /**
+   * Each in-flight turn's FINALIZER, keyed by run — not its handle.
+   *
+   * A turn's writes do not stop when its child exits: `handle.done` resolves,
+   * and the finalizer chained onto it then drains the persist queue, sweeps
+   * pending approvals and records the terminal item. Awaiting `handle.done`
+   * would NOT wait for any of that — the finalizer is a continuation on the
+   * same promise, so it merely runs first and suspends at its own first await,
+   * letting the awaiting caller resume underneath it. `delete` therefore waits
+   * on this, or the rows it destroys get rewritten a moment later.
+   */
+  private readonly finalizing = new Map<string, Promise<void>>();
+
+  /**
+   * Runs whose delete is in progress.
+   *
+   * `finalizing` only covers a turn that reached `adapter.start()`. Between
+   * `tryClaim` and `register` a turn is CLAIMED but has no finalizer yet, and
+   * that window contains real awaits (the approval-mode probe, the
+   * live-stream `--version` check). A delete landing there would wait for
+   * nothing, destroy the rows, and let the turn register and finalize
+   * afterwards — writing exactly the orphans the wait exists to prevent. So a
+   * turn crossing that window checks here instead and gives up.
+   */
+  private readonly deleting = new Set<string>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -61,11 +104,24 @@ export class ChatService {
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
     private readonly approvals: ApprovalRegistry,
-    private readonly claude: ClaudeAdapter,
-    private readonly cursor: CursorAcpAdapter,
+    private readonly adapters: AgentAdapterRegistry,
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
+    private readonly attachments: AttachmentStoreService,
+    private readonly partials: PartialStreamService,
+    private readonly teardown: RunTeardownService,
+    private readonly efforts: EffortsService,
   ) {}
+
+  /**
+   * One attachment's bytes for the renderer, base64 in JSON — an `<img src>`
+   * cannot carry the bearer token every daemon route demands, so the transcript
+   * fetches through the generated client and builds a data URL.
+   */
+  readAttachment(runId: string, attachmentId: string): AttachmentDataWire {
+    const { mediaType, bytes } = this.attachments.read(runId, attachmentId);
+    return { id: attachmentId, mediaType, data: bytes.toString('base64') };
+  }
 
   /**
    * Reconcile chat runs left `running` by a crash / SIGKILL / daemon restart
@@ -89,12 +145,26 @@ export class ChatService {
         if (this.registry.has(run.id)) {
           continue; // an in-flight turn legitimately owns this run
         }
-        const seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
-        await this.persist(em, run.id, seq, 'error', null, {
+        let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
+        await this.persist(em, run.id, seq++, 'error', null, {
           message:
             'run interrupted — the daemon stopped before this turn finished',
         });
-        await this.runDao.updateById(run.id, { status: 'failed' }, em);
+        // The kill took the in-memory registry with it, so no settle path ever
+        // swept these — without this the cards come back looking answerable.
+        for (const request of unansweredRequests(
+          await this.itemDao.getByRun(run.id, -1, em),
+        )) {
+          await this.persist(
+            em,
+            run.id,
+            seq++,
+            'unanswerable',
+            null,
+            request.payload,
+          );
+        }
+        await this.setRunStatus(em, run.id, 'failed');
         reconciled += 1;
       }
       if (reconciled > 0) {
@@ -111,15 +181,52 @@ export class ChatService {
     }
   }
 
+  /**
+   * Write a run's status AND announce it.
+   *
+   * One helper rather than a `runDao.updateById` at each of the seven places a
+   * status is written: the announcement is what keeps a background run's badge
+   * honest, and a write that forgot to announce would go stale invisibly —
+   * exactly the failure this replaces. Announce-after-write, so no client can
+   * observe a status the database does not yet have.
+   */
+  private async setRunStatus(
+    em: EntityManager,
+    runId: string,
+    status: RunStatus,
+    activity: string | null = null,
+  ): Promise<void> {
+    await writeRunStatus(
+      { runDao: this.runDao, bus: this.bus },
+      em,
+      runId,
+      status,
+      activity,
+    );
+  }
+
+  /**
+   * Announce what a still-running run is DOING, without touching its status.
+   *
+   * "running" alone cannot tell an agent that is working from one parked on a
+   * question nobody has answered — which is the whole of the reported
+   * complaint about the badge.
+   */
+  private announceActivity(runId: string, activity: string | null): void {
+    this.bus.publishRunStatus({ runId, status: 'running', activity });
+  }
+
   async createChat(input: {
     agentKind: AgentKind;
     cwd: string;
     model?: string;
     title?: string;
     approval?: ChatApprovalMode;
+    effort?: string;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
+    this.assertEffortSupported(input.agentKind, input.effort ?? null);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -128,11 +235,11 @@ export class ChatService {
         agentKind: input.agentKind,
         cwd,
         model: input.model ?? null,
+        effort: input.effort ?? null,
         title: input.title ?? null,
-        // New chats always carry an explicit mode; only pre-selector rows stay
-        // null. Both CLIs default to 'ask' — cursor's permissions are real
-        // over ACP, so there is no reason to start it unattended.
-        approval: input.approval ?? 'ask',
+        // New chats always carry an explicit mode; only pre-selector rows
+        // stay null.
+        approval: this.initialApproval(input.agentKind, input.approval),
       },
       em,
     );
@@ -140,42 +247,66 @@ export class ChatService {
   }
 
   /**
-   * PATCH /v1/chats/:runId/settings — flip the approval mode between turns.
-   * 409 while a turn is in flight (the daemon-side contract matching the
-   * disabled selector), 400 for a plan mode on a cursor chat.
+   * PATCH /v1/chats/:runId/settings — change what the NEXT turn runs as: the
+   * approval mode, the model, the reasoning effort, or any combination. 409
+   * while a turn is in flight (the daemon-side contract matching the disabled
+   * selectors), 400 for a non-auto mode on a cursor chat or an effort level
+   * the run's CLI does not accept.
+   *
+   * `model: null` / `effort: null` are real values — they clear the run back
+   * to the CLI's own default (no `--model` / `--effort` flag), which an
+   * omitted key cannot express.
    */
   async updateSettings(
     runId: string,
-    approval: ChatApprovalMode,
+    patch: {
+      approval?: ChatApprovalMode;
+      model?: string | null;
+      effort?: string | null;
+    },
   ): Promise<RunWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
-    this.assertApprovalSupported(run.agentKind, approval);
+    if (patch.approval !== undefined) {
+      this.assertApprovalSupported(run.agentKind, patch.approval);
+    }
+    if (patch.effort !== undefined) {
+      this.assertEffortSupported(run.agentKind, patch.effort);
+    }
+    const changes = {
+      ...(patch.approval !== undefined ? { approval: patch.approval } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+    };
     // Captured before the write: BaseDao.updateById mutates this same
     // identity-mapped entity, so `run.approval` reflects the NEW value the
     // moment updateById returns — the revert path below needs the old one.
-    const previous = run.approval;
+    const previous = {
+      approval: run.approval,
+      model: run.model,
+      effort: run.effort,
+    };
     if (this.registry.has(runId)) {
       throw new ConflictException(
         'RUN_BUSY',
-        'a turn is in flight — the approval mode is locked until it settles',
+        'a turn is in flight — chat settings are locked until it settles',
       );
     }
-    await this.runDao.updateById(runId, { approval }, em);
+    await this.runDao.updateById(runId, changes, em);
     // A turn may have claimed the run DURING the write above — after our
     // pre-check but before the flush. sendMessage snapshots the run row in
     // its own fork, so that turn may already be spawning under the pre-write
-    // mode. Refuse rather than ACK a mode the in-flight turn won't honor:
-    // revert and 409. (A PATCH that fully lands BEFORE the claim is still
-    // honored — sendMessage re-reads the committed mode after it claims.)
+    // settings. Refuse rather than ACK settings the in-flight turn won't
+    // honor: revert and 409. (A PATCH that fully lands BEFORE the claim is
+    // still honored — sendMessage re-reads the committed row after it claims.)
     if (this.registry.has(runId)) {
-      await this.runDao.updateById(runId, { approval: previous }, em);
+      await this.runDao.updateById(runId, previous, em);
       throw new ConflictException(
         'RUN_BUSY',
-        'a turn started while the approval change was in flight — retry once it settles',
+        'a turn started while the settings change was in flight — retry once it settles',
       );
     }
-    run.approval = approval;
+    Object.assign(run, changes);
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
@@ -194,20 +325,79 @@ export class ChatService {
   }
 
   /**
-   * ACP makes `session/request_permission` a baseline, so cursor chats honour
-   * auto/ask/acceptEdits like claude's. `plan` is the exception: it maps to an
-   * agent-declared session mode we cannot confirm cursor offers (the mode
-   * probe is claude-only), and a plan turn that quietly ran with write access
-   * is the one failure here that costs the user something.
+   * Refuse an approval mode the run's CLI does not honour.
+   *
+   * Asked of the adapter (`config.approval.modes`) rather than branched on the agent
+   * kind, for the same reason as {@link assertEffortSupported}: which modes
+   * exist is that CLI's fact. Refusing here — where the choice is made — is
+   * deliberate and differs from a workflow node's visible degrade: a chat's
+   * mode is picked interactively, so the honest answer is "no" rather than a
+   * control that silently means something else.
    */
   private assertApprovalSupported(
     agentKind: AgentKind | null,
     approval: ChatApprovalMode | undefined,
   ): void {
-    if (agentKind === 'cursor-agent' && approval === 'plan') {
+    if (approval === undefined || agentKind === null) {
+      return;
+    }
+    const adapter = this.adapterFor(agentKind);
+    if (!adapter.getConfig().approval.modes.includes(approval)) {
       throw new BadRequestException(
-        'CURSOR_APPROVAL_UNSUPPORTED',
-        "cursor-agent has no verifiable plan mode — cursor chats support 'auto', 'ask' and 'acceptEdits'",
+        'APPROVAL_MODE_UNSUPPORTED',
+        `${agentKind} does not support the approval mode '${approval}'`,
+      );
+    }
+  }
+
+  /**
+   * The mode a NEW chat starts in: what the user picked, else the app's
+   * preferred default — narrowed to what that CLI actually honours.
+   *
+   * `auto` is the floor rather than a per-CLI default anyone has to declare:
+   * running unattended is the one thing no CLI here can refuse, so a CLI
+   * without a permission channel lands there by construction instead of by an
+   * `if` naming it.
+   */
+  private initialApproval(
+    kind: AgentKind,
+    picked: ChatApprovalMode | undefined,
+  ): ChatApprovalMode {
+    if (picked !== undefined) {
+      return picked;
+    }
+    const modes = this.adapterFor(kind).getConfig().approval.modes;
+    return modes.includes(CHAT_DEFAULT_APPROVAL)
+      ? CHAT_DEFAULT_APPROVAL
+      : 'auto';
+  }
+
+  /** The adapter driving one agent kind — the single kind→adapter dispatch. */
+  private adapterFor(kind: AgentKind): AgentAdapter {
+    return this.adapters.for(kind);
+  }
+
+  /**
+   * Refuse an effort level the run's CLI does not accept.
+   *
+   * Asked of the adapter rather than branched on the agent kind: the levels
+   * are that CLI's vocabulary, and a CLI with none lists nothing — so the same
+   * check both rejects `xhigh` on cursor (no effort control at all) and
+   * `ultrathink` on claude (a value it warns about and ignores). Without it
+   * the flag would reach the child and the turn would silently run at a
+   * different effort than the one acknowledged.
+   */
+  private assertEffortSupported(
+    agentKind: AgentKind | null,
+    effort: string | null,
+  ): void {
+    if (effort === null || agentKind === null) {
+      return;
+    }
+    if (!this.efforts.accepts(agentKind, effort)) {
+      throw new BadRequestException(
+        'EFFORT_UNSUPPORTED',
+        `${agentKind} does not accept the reasoning effort '${effort}'`,
       );
     }
   }
@@ -255,8 +445,53 @@ export class ChatService {
     // Kind-guarded like sendMessage: this cancel and the graph executor's
     // converge on the same registry key, so a wrong-endpoint call must 400
     // instead of silently cancelling the other kind's run.
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    const cancelled = this.registry.cancel(runId);
+    if (cancelled) {
+      // A live turn owns the run: its finalizer writes the terminal status
+      // when the handle settles, and writing one here would race it.
+      return { cancelled };
+    }
+    // NOTHING was in flight. Before, this returned false and wrote nothing —
+    // so a run whose row still said `running` (a daemon killed mid-turn, a
+    // handle that vanished) stayed "running" forever with no turn left to
+    // settle it, and its badge lied in every list that showed it. Cancel is
+    // the user saying "this is over": make the row say so.
+    if (!isTerminalRunStatus(run.status)) {
+      const seq = (await this.itemDao.maxSeq(runId, em)) + 1;
+      await this.persist(em, runId, seq, 'turn_cancelled', null, {
+        reason: 'cancelled with no turn in flight',
+      });
+      await this.setRunStatus(em, runId, 'cancelled');
+      this.logger.warn(
+        `cancel found no live turn for run ${runId} — reconciled its status from '${run.status}' to cancelled`,
+      );
+    }
+    return { cancelled };
+  }
+
+  /**
+   * Delete a chat and everything it owns — a ONE-WAY DOOR. The teardown itself
+   * is {@link RunTeardownService}, shared with the workflow-run delete so the
+   * two cannot drift; what this method owns is the chat-specific part: the
+   * run-kind guard, the claim→register window, and WHICH promise counts as
+   * "the run has stopped writing" (this turn's finalizer, not its handle).
+   */
+  async delete(runId: string): Promise<{ deleted: boolean }> {
+    const em = this.em.fork();
+    // Kind-guarded like cancel and sendMessage: a workflow run deleted through
+    // the chat route would skip the graph executor's own teardown.
     assertChatRun(await this.runDao.getById(runId, em), runId);
-    return { cancelled: this.registry.cancel(runId) };
+
+    // Claimed BEFORE the cancel, so a turn still crossing the claim→register
+    // window (where it has no finalizer to wait on) sees the delete and aborts
+    // rather than registering behind our back.
+    this.deleting.add(runId);
+    try {
+      return await this.teardown.purge(em, runId, this.finalizing.get(runId));
+    } finally {
+      this.deleting.delete(runId);
+    }
   }
 
   /**
@@ -265,7 +500,11 @@ export class ChatService {
    * agent's reply streams over the bus → WS while this method has already
    * resolved.
    */
-  async sendMessage(runId: string, text: string): Promise<ItemWire> {
+  async sendMessage(
+    runId: string,
+    text: string,
+    images: SendMessageImage[] = [],
+  ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
     if (!run.cwd || !run.agentKind) {
@@ -287,38 +526,61 @@ export class ChatService {
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
-      const model = run.model ?? undefined;
 
-      // Re-read the committed approval mode from a FRESH fork now that the
-      // claim is held: a settings PATCH that flushed to its own fork between
-      // the getById above and the claim never mutated `run`, so its ACKed
-      // mode would otherwise be ignored. The claim now 409s any later PATCH,
-      // and updateSettings reverts a PATCH that raced the claim, so this read
-      // reflects exactly the acknowledged mode.
-      const committed = await this.runDao.getById(runId, this.em.fork());
+      // Re-read the committed settings from a FRESH fork now that the claim is
+      // held: a settings PATCH that flushed to its own fork between the getById
+      // above and the claim never mutated `run`, so its ACKed values would
+      // otherwise be ignored. The claim now 409s any later PATCH, and
+      // updateSettings reverts a PATCH that raced the claim, so this read
+      // reflects exactly the acknowledged settings. Read as one row, not field
+      // by field: `committed.model ?? run.model` would resurrect the old model
+      // for a PATCH that deliberately cleared it back to the CLI default.
+      const settings =
+        (await this.runDao.getById(runId, this.em.fork())) ?? run;
       let approvalMode: ChatApprovalMode | undefined =
-        committed?.approval ?? run.approval ?? undefined;
+        settings.approval ?? undefined;
+      const model = settings.model ?? undefined;
+      const effort = settings.effort ?? undefined;
+
+      // Store the bytes BEFORE persisting the item: the payload records only
+      // the attachment rows, so an item written first would reference files
+      // that a failed write never created.
+      const attachments = images.map((image) =>
+        this.attachments.save(runId, image.mediaType, image.data),
+      );
 
       let seq = (await this.itemDao.maxSeq(runId, em)) + 1;
       const userWire = await this.persist(em, runId, seq++, 'message', 'user', {
         text,
+        ...(attachments.length > 0 ? { images: attachments } : {}),
       });
 
-      // acceptEdits degrades to 'ask' VISIBLY (persisted system item) when the
-      // installed claude can't accept the mode (a probed FAIL); an unprobed
-      // `unknown` keeps the requested mode so a genuine CLI rejection stays
-      // loud. `plan` is deliberately NOT degraded — converting a no-execute
-      // mode into an executing 'ask' would invert its whole promise, so an
-      // unsupported 'plan' rides through and the CLI rejects it loudly.
-      if (agentKind === 'claude' && approvalMode === 'acceptEdits') {
-        const modes = await this.claudeModesSafe();
-        if (modes.acceptEdits === 'fail') {
+      const adapter: AgentAdapter = this.adapterFor(agentKind);
+
+      // The mode this turn actually runs under is the ADAPTER's answer, and any
+      // degrade is persisted so the user sees it — the same seam the graph
+      // executor uses for a node, so a fix here cannot miss that path. The
+      // probe is awaited only for a mode whose support is empirical, so a turn
+      // that never asks for one never pays for it.
+      if (approvalMode !== undefined) {
+        const resolved = adapter.resolveApprovalMode(
+          approvalMode,
+          // The ADAPTER reads its own slice of the capability bag; this
+          // service only assembles the bag from the probes it holds. Reading
+          // claude's field here instead would judge any future CLI with a
+          // probed mode against claude's installed binary.
+          adapter.getConfig().approval.probedModes.includes(approvalMode)
+            ? adapter.approvalSupportFrom({
+                claudeModes: await this.claudeModesSafe(),
+              })
+            : { supported: {} },
+        );
+        if (resolved.degradeReason !== null) {
           await this.persist(em, runId, seq++, 'system', null, {
-            message:
-              "installed claude does not support acceptEdits — this turn runs as 'ask'",
+            message: resolved.degradeReason,
           });
-          approvalMode = 'ask';
         }
+        approvalMode = resolved.mode;
       }
 
       const node = await this.nodeStateDao.getByRunNode(
@@ -334,10 +596,8 @@ export class ChatService {
         resumeSessionId,
         em,
       );
-      await this.runDao.updateById(runId, { status: 'running' }, em);
+      await this.setRunStatus(em, runId, 'running');
 
-      const adapter: AgentAdapter =
-        agentKind === 'claude' ? this.claude : this.cursor;
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
       let eventHandlingFailed = false;
@@ -350,14 +610,59 @@ export class ChatService {
         });
       };
 
+      // Asked of the adapter, never inferred from the agent kind: the answer
+      // is per-INSTALLED-BINARY (an older claude rejects the flag on argv).
+      const streamPartials = await adapter
+        .supportsLiveStream()
+        .catch(() => false);
       if (!this.registry.canStart(runId)) {
         throw new ConflictException(
           'RUN_STOPPING',
           'daemon shutdown started before the agent could launch',
         );
       }
+      // The last check before this turn acquires a finalizer, and it covers BOTH
+      // shapes of the race the awaits above open up:
+      //   - a delete still in flight (rows not yet gone) — `deleting`;
+      //   - a delete that already FINISHED while we were probing — the run row
+      //     is gone, and `deleting` has been cleared again, so only re-reading
+      //     it catches this one.
+      // Either way, spawning now would write a whole turn's rows for a run that
+      // no longer exists, which no later delete could ever reach.
+      // The re-read is resolved FIRST, and `deleting` is consulted only after
+      // it: `||` would short-circuit, evaluating the Set BEFORE suspending on
+      // the read, so a delete that set the flag during that suspension would be
+      // missed by both halves — the flag was checked too early and the row was
+      // read too early to be gone yet. Post-await, the Set catches every
+      // in-flight delete (it is set before any row is destroyed) and the null
+      // read catches every completed one, with no await left between the check
+      // and `register`.
+      const runStillExists =
+        (await this.runDao.getById(runId, this.em.fork())) !== null;
+      if (this.deleting.has(runId) || !runStillExists) {
+        throw new ConflictException(
+          'RUN_DELETING',
+          'this chat was deleted while the turn was starting',
+        );
+      }
       const handle = adapter.start(
-        { prompt: text, cwd, model, resumeSessionId, approvalMode },
+        {
+          prompt: text,
+          cwd,
+          model,
+          effort,
+          resumeSessionId,
+          approvalMode,
+          // A human is watching a chat: let the agent ask, and stream its
+          // words as they are written. Each adapter decides what that costs —
+          // a CLI without either capability spawns exactly as before.
+          allowUserQuestions: true,
+          streamPartials,
+          images: attachments.map((attachment) => ({
+            path: this.attachments.pathOf(runId, attachment.id),
+            mediaType: attachment.mediaType,
+          })),
+        },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even
           // though onEvent is a sync callback firing as stdout arrives.
@@ -366,18 +671,101 @@ export class ChatService {
               await saveSessionId(event.sessionId);
               return;
             }
+            if (event.type === 'text_delta') {
+              // EPHEMERAL: no seq, no row, no replay — just the live tail.
+              this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
+              return;
+            }
+            if (event.type === 'thinking_progress') {
+              // EPHEMERAL, like a text delta: the only honest signal during a
+              // silent reasoning stretch, since the text itself is redacted.
+              this.partials.thinking(
+                runId,
+                SINGLE_AGENT_NODE,
+                null,
+                event.tokens,
+              );
+              return;
+            }
+            if (event.type === 'context_progress') {
+              // EPHEMERAL, like the deltas above: the durable copy is the
+              // turn_complete usage. This is what lets the meter move DURING
+              // the turn instead of only when it ends.
+              this.partials.context(
+                runId,
+                SINGLE_AGENT_NODE,
+                null,
+                event.contextTokens,
+              );
+              return;
+            }
+            if (event.type === 'turn_complete') {
+              // The ONLY line carrying the model's window. Remembered so the
+              // next turn's live context figure has something to scale
+              // against from its very first request.
+              this.partials.rememberWindow(
+                runId,
+                event.usage?.contextWindowTokens ?? null,
+              );
+            }
             if (event.type === 'slash_commands') {
-              // This CLI's own invokable set for this cwd — feeds the
-              // composer's `/` autocomplete, never the transcript. Keyed by
-              // agent too: the other CLI cannot invoke these names.
-              this.skillHarvest.record(agentKind, cwd, event.commands);
+              // The CLI's own invokable set for this cwd — feeds the
+              // composer's `/` autocomplete, never the transcript.
+              this.skillHarvest.record(
+                adapter.getConfig().kind,
+                cwd,
+                event.commands,
+              );
               return;
             }
             const mapped = mapEventToItem(event);
             if (!mapped) {
               return;
             }
+            if (event.type === 'tool_call') {
+              // What "running" actually means right now, for a badge the user
+              // is not looking at.
+              this.announceActivity(runId, `running ${event.name}`);
+            }
             if (event.type === 'approval_request') {
+              const isQuestion = isUserQuestion(
+                adapter.getConfig().questionToolName,
+                event.toolName,
+              );
+              if (!isQuestion && event.requiresUserInteraction === true) {
+                // Flag-only drift: a tool we don't recognize as THE question
+                // tool claims it needs the user. It stays on the approval path
+                // (card, or the auto-approve below) so a future interactive
+                // tool can never silently acquire a human gate it shouldn't
+                // have — but the drift is loud. Mirrors the executor's warning.
+                this.logger.warn(
+                  `interactive control_request for unrecognized tool '${event.toolName}' on run ${runId} — kept on the approval path`,
+                );
+              }
+              if (approvalMode === 'auto' && !isQuestion) {
+                // The daemon-side stand-in for --dangerously-skip-permissions.
+                // An auto chat spawns on the stdio dialogue ONLY so the
+                // question channel survives (buildArgs), so every plain
+                // permission is approved here with its input unchanged and no
+                // transcript item — auto stays exactly as unattended as before.
+                //
+                // This reply is QUEUED, unlike the user-verdict path below: it
+                // sits behind every pending DB write on the same `enqueue`
+                // chain. `delivered` is false when the turn settled underneath
+                // it, which is worth a line — a silent false here would look
+                // like the agent ignoring its own approval.
+                const delivered = handle.respondApproval(
+                  event.id,
+                  true,
+                  event.input,
+                );
+                if (!delivered) {
+                  this.logger.warn(
+                    `run ${runId} auto-approval for '${event.toolName}' was not delivered — the turn had already settled`,
+                  );
+                }
+                return;
+              }
               // The CLI is now parked waiting for a verdict. Persist the card
               // first (persist-then-emit, so the user sees it), then track it
               // under the chat's one synthetic node so the WS verdict
@@ -399,6 +787,12 @@ export class ChatService {
                 handle.respondApproval(event.id, false, undefined);
                 throw err;
               }
+              // Parked on the user. Distinguishable from working, which is
+              // the difference a bare "running" badge could never show.
+              this.announceActivity(
+                runId,
+                isQuestion ? 'waiting for your answer' : 'waiting for approval',
+              );
               this.approvals.track({
                 runId,
                 nodeId: SINGLE_AGENT_NODE,
@@ -410,6 +804,7 @@ export class ChatService {
                     event.id,
                     allow,
                     foldApprovalAnswer(
+                      adapter,
                       event.toolName,
                       event.input,
                       allow,
@@ -430,7 +825,12 @@ export class ChatService {
                           // Recorded only when it was actually folded — the
                           // transcript must never claim an answer the agent
                           // did not receive.
-                          ...(answerFoldsInto(event.toolName, allow, answer)
+                          ...(answerFoldsInto(
+                            adapter.getConfig().questionToolName,
+                            event.toolName,
+                            allow,
+                            answer,
+                          )
                             ? { answer }
                             : {}),
                         },
@@ -451,9 +851,17 @@ export class ChatService {
               mapped.role,
               mapped.payload,
             );
+            if (mapped.kind === 'message') {
+              // ONLY a message retires the tail: it is the durable copy of the
+              // very words being streamed. Retiring on any item would let a
+              // terminal one (turn_cancelled/error) erase the tail a moment
+              // before the finalizer flushes it — the text the user watched
+              // would vanish from the replayed transcript.
+              this.partials.retire(runId, SINGLE_AGENT_NODE, null);
+            }
             const status = terminalStatus(event);
             if (status) {
-              await this.runDao.updateById(runId, { status }, em);
+              await this.setRunStatus(em, runId, status);
               // Set only after the write succeeds: if it throws, the finalizer
               // still writes a synthetic completion rather than leaving 'running'.
               sawTerminal = true;
@@ -463,22 +871,56 @@ export class ChatService {
       );
       this.registry.register(runId, handle);
 
-      void handle.done
+      const finalized = handle.done
         .then(async () => {
           await chain; // drain pending persists before finalizing
           // Sweep BEFORE the branches below — the failure path early-returns,
           // and a settled turn must never leave a pending card that no
-          // verdict can ever reach.
-          this.approvals.sweepNode(runId, SINGLE_AGENT_NODE);
+          // verdict can ever reach. Each swept request is SAID so in the
+          // transcript: dropping it silently is what left the card on screen
+          // with live buttons that answer into nothing.
+          for (const approval of this.approvals.sweepNode(
+            runId,
+            SINGLE_AGENT_NODE,
+          )) {
+            await this.persist(
+              em,
+              runId,
+              seq++,
+              'unanswerable',
+              null,
+              unanswerablePayload(approval),
+            ).catch((err: unknown) => {
+              this.logger.error(
+                `run ${runId} unanswerable item write failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+          // A turn that died mid-block leaves text the user WATCHED being
+          // written but that no durable item covers. Persist it once, flagged,
+          // so an afterSeq replay shows the same transcript they saw. The only
+          // item row the live plane is ever allowed to create.
+          const tail = this.partials.takeTail(runId, SINGLE_AGENT_NODE);
+          if (tail !== null) {
+            await this.persist(em, runId, seq++, 'message', 'assistant', {
+              text: tail,
+              partial: true,
+            }).catch((err: unknown) => {
+              this.logger.error(
+                `run ${runId} partial-text flush failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+          this.partials.clearRun(runId);
           if (eventHandlingFailed) {
             const message = 'run event persistence failed';
-            await this.runDao
-              .updateById(runId, { status: 'failed' }, em)
-              .catch((err: unknown) => {
+            await this.setRunStatus(em, runId, 'failed').catch(
+              (err: unknown) => {
                 this.logger.error(
                   `run ${runId} failure-status write failed: ${err instanceof Error ? err.message : String(err)}`,
                 );
-              });
+              },
+            );
             await this.persist(em, runId, seq++, 'error', null, {
               message,
             }).catch((err: unknown) => {
@@ -496,13 +938,13 @@ export class ChatService {
               usage: null,
               stopReason: null,
             });
-            await this.runDao
-              .updateById(runId, { status: 'completed' }, em)
-              .catch((err: unknown) => {
+            await this.setRunStatus(em, runId, 'completed').catch(
+              (err: unknown) => {
                 this.logger.error(
                   `run ${runId} synthetic-completion status write failed: ${err instanceof Error ? err.message : String(err)}`,
                 );
-              });
+              },
+            );
           }
         })
         .catch((err: unknown) => {
@@ -510,18 +952,28 @@ export class ChatService {
             `run ${runId} turn finalize failed: ${String(err)}`,
           );
         });
+      // Published so `delete` can wait for this turn's LAST write rather than
+      // for its child's exit. Dropped on settle, and only if this exact turn is
+      // still the tracked one — a fast follow-up turn must not have its
+      // finalizer cleared by its predecessor's.
+      this.finalizing.set(runId, finalized);
+      void finalized.finally(() => {
+        if (this.finalizing.get(runId) === finalized) {
+          this.finalizing.delete(runId);
+        }
+      });
 
       return userWire;
     } catch (err) {
       // Failed before the handle took over the slot's lifecycle — drop the claim
       // so the run is not wedged as permanently busy.
-      await this.runDao
-        .updateById(runId, { status: 'failed' }, em)
-        .catch((statusErr: unknown) => {
+      await this.setRunStatus(em, runId, 'failed').catch(
+        (statusErr: unknown) => {
           this.logger.error(
             `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
           );
-        });
+        },
+      );
       this.registry.release(runId);
       throw err;
     }

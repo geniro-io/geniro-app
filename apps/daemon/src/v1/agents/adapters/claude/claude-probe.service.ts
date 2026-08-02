@@ -4,23 +4,23 @@ import { dirname, join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
 
-import { environment } from '../../../environments';
-import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { environment } from '../../../../environments';
+import { AgentKind } from '../../../runs/runs.types';
 import type {
   ClaudeModeProbeStatus,
   ClaudeModesCapability,
-} from '../chat.types';
-import { resolveAgentVersion } from '../utils/agent-version';
-import { childProcessHandle } from '../utils/child-handle';
-import { ProcessRegistry } from './process-registry';
-
-/** The permission modes whose headless support is empirical, not assumed. */
-type ProbedMode = 'acceptEdits' | 'plan';
-
-const PROBE_PROMPT = 'Reply with exactly: ok';
-
-/** A hung probe turn must not wedge the capability read forever. */
-const PROBE_TURN_TIMEOUT_MS = 30_000;
+} from '../../chat.types';
+import { ProcessRegistry } from '../../services/process-registry';
+import { resolveAgentVersion } from '../../utils/agent-version';
+import { childProcessHandle } from '../../utils/child-handle';
+import { ClaudeAdapter } from './claude.adapter';
+import {
+  CLAUDE_MODE_PROBE_PROMPT,
+  CLAUDE_MODE_PROBE_TIMEOUT_MS,
+  CLAUDE_MODE_REJECTION_FLAG_PATTERN,
+  CLAUDE_MODE_REJECTION_VERDICT_PATTERN,
+} from './claude.const';
+import type { ClaudeProbedMode, ClaudeProbeOptions } from './claude.types';
 
 /**
  * An argv-level rejection of `--permission-mode <value>` is the one GENUINE
@@ -29,19 +29,9 @@ const PROBE_TURN_TIMEOUT_MS = 30_000;
  */
 function isModeRejection(message: string): boolean {
   return (
-    /permission-mode/i.test(message) &&
-    /invalid|allowed choices|unknown/i.test(message)
+    CLAUDE_MODE_REJECTION_FLAG_PATTERN.test(message) &&
+    CLAUDE_MODE_REJECTION_VERDICT_PATTERN.test(message)
   );
-}
-
-export interface ClaudeProbeOptions {
-  /** Temp workspaces root (test seam); default `<userData>/claude-probe`. */
-  probeRootDir?: string;
-  /** Verdict cache file (test seam); default `<userData>/claude-probe.json`. */
-  cachePath?: string;
-  turnTimeoutMs?: number;
-  /** Replacement version resolver for tests. */
-  resolveVersionFn?: typeof resolveAgentVersion;
 }
 
 interface ModeProbeResult {
@@ -85,7 +75,7 @@ export class ClaudeProbeService {
       options.probeRootDir ?? join(environment.userDataDir, 'claude-probe');
     this.cachePath =
       options.cachePath ?? join(environment.userDataDir, 'claude-probe.json');
-    this.turnTimeoutMs = options.turnTimeoutMs ?? PROBE_TURN_TIMEOUT_MS;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? CLAUDE_MODE_PROBE_TIMEOUT_MS;
     this.resolveVersionFn = options.resolveVersionFn ?? resolveAgentVersion;
   }
 
@@ -163,7 +153,7 @@ export class ClaudeProbeService {
     return capability;
   }
 
-  private async probeMode(mode: ProbedMode): Promise<ModeProbeResult> {
+  private async probeMode(mode: ClaudeProbedMode): Promise<ModeProbeResult> {
     const cwd = join(this.probeRootDir, `${mode}-${randomUUID()}`);
     let lastError: string | null = null;
     let sawInit = false;
@@ -175,7 +165,7 @@ export class ClaudeProbeService {
         resolveInit = resolve;
       });
       const handle = this.claudeAdapter.start(
-        { prompt: PROBE_PROMPT, cwd, approvalMode: mode },
+        { prompt: CLAUDE_MODE_PROBE_PROMPT, cwd, approvalMode: mode },
         (event) => {
           if (event.type === 'session' && !sawInit) {
             // The CLI reached its session/init line — the argv (including
@@ -250,7 +240,7 @@ export class ClaudeProbeService {
   }
 
   private async readVersion(): Promise<string | null> {
-    return this.resolveVersionFn('claude', {
+    return this.resolveVersionFn(AgentKind.Claude, {
       onSpawn: (child) =>
         this.processes.register(
           `claude-probe:version:${randomUUID()}`,

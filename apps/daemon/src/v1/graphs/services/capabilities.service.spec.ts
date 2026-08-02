@@ -1,23 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ClaudeProbeService } from '../../agents/services/claude-probe.service';
+import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { CapabilitiesService } from './capabilities.service';
 
-const CLAUDE_MODES = {
-  acceptEdits: 'pass' as const,
-  plan: 'fail' as const,
-  version: 'claude 2',
-  probedAt: 2,
-  reason: 'installed claude does not support --permission-mode plan',
-};
-
 describe('CapabilitiesService', () => {
-  it('composes the wire from the claude probe, keeping its pre-warm', () => {
-    const claudeWire = vi.fn(() => CLAUDE_MODES);
+  it('composes the wire from the claude mode probe', () => {
+    const claudeModes = {
+      acceptEdits: 'pass' as const,
+      plan: 'fail' as const,
+      version: 'claude 2',
+      probedAt: 2,
+      reason: 'installed claude does not support --permission-mode plan',
+    };
+    const claudeWire = vi.fn(() => claudeModes);
     const service = new CapabilitiesService({
       wireCapability: claudeWire,
     } as unknown as ClaudeProbeService);
-    expect(service.capabilitiesWire()).toEqual({ claudeModes: CLAUDE_MODES });
+    expect(service.capabilitiesWire()).toEqual({ claudeModes });
     expect(claudeWire).toHaveBeenCalledTimes(1);
   });
 });

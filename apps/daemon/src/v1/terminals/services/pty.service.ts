@@ -323,6 +323,27 @@ export class PtyService {
   }
 
   /**
+   * Kill every live session mirroring one run, and report how many there were.
+   *
+   * Matched by FIELD SCAN because sessions are keyed by their own id — the
+   * `${runId}:${nodeId}:${sessionId}` composite in `TerminalsService` keys
+   * IN-FLIGHT CREATES, not sessions, so it cannot answer "what is open on this
+   * run". Used when the run itself is deleted: a mirror of a run that no
+   * longer exists would keep a claude child alive against a transcript nothing
+   * can read.
+   */
+  killRun(runId: string): number {
+    let killed = 0;
+    for (const session of this.sessions.values()) {
+      if (session.runId === runId && session.status !== 'exited') {
+        this.kill(session.id);
+        killed += 1;
+      }
+    }
+    return killed;
+  }
+
+  /**
    * Polite kill (SIGHUP via the pty), escalating to a process-GROUP SIGKILL
    * after the grace. Idempotent for a `closing` session (dispose already sent
    * the signal) and tolerates an unknown id: the registry handle's `cancel`

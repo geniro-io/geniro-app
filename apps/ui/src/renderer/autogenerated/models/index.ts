@@ -21,6 +21,25 @@ export interface AgentCount {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AgentEffortDto
+ */
+export interface AgentEffortDto {
+    /**
+     * Passed verbatim to the CLI as `--effort <id>`
+     * @type {string}
+     * @memberof AgentEffortDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentEffortDto
+     */
+    label: string;
+}
 
 /**
  * 
@@ -31,6 +50,42 @@ export const AgentKind = {
     CursorAgent: 'cursor-agent'
 } as const;
 export type AgentKind = typeof AgentKind[keyof typeof AgentKind];
+
+/**
+ * 
+ * @export
+ * @interface AgentModelDto
+ */
+export interface AgentModelDto {
+    /**
+     * Passed verbatim to the CLI as `--model <id>`
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    label: string;
+    /**
+     * Reported by the CLI, or our documented fallback set
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    source: AgentModelDtoSourceEnum;
+}
+
+
+/**
+ * @export
+ */
+export const AgentModelDtoSourceEnum = {
+    Cli: 'cli',
+    Builtin: 'builtin'
+} as const;
+export type AgentModelDtoSourceEnum = typeof AgentModelDtoSourceEnum[keyof typeof AgentModelDtoSourceEnum];
 
 /**
  * 
@@ -95,6 +150,46 @@ export const ApprovalMode = {
     AcceptEdits: 'acceptEdits'
 } as const;
 export type ApprovalMode = typeof ApprovalMode[keyof typeof ApprovalMode];
+
+/**
+ * 
+ * @export
+ * @interface AttachmentDataDto
+ */
+export interface AttachmentDataDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof AttachmentDataDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {AttachmentMediaType}
+     * @memberof AttachmentDataDto
+     */
+    mediaType: AttachmentMediaType;
+    /**
+     * base64-encoded image bytes
+     * @type {string}
+     * @memberof AttachmentDataDto
+     */
+    data: string;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const AttachmentMediaType = {
+    ImagePng: 'image/png',
+    ImageJpeg: 'image/jpeg',
+    ImageGif: 'image/gif',
+    ImageWebp: 'image/webp'
+} as const;
+export type AttachmentMediaType = typeof AttachmentMediaType[keyof typeof AttachmentMediaType];
 
 /**
  * 
@@ -210,6 +305,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    effort?: string;
 }
 
 
@@ -421,6 +522,7 @@ export const ItemKind = {
     Status: 'status',
     ApprovalRequest: 'approval_request',
     ApprovalVerdict: 'approval_verdict',
+    Unanswerable: 'unanswerable',
     CallStarted: 'call_started',
     CallResult: 'call_result',
     AwaitCollected: 'await_collected',
@@ -592,6 +694,12 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
+    effort: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
     createdAt: string;
     /**
      * The run's last-activity time
@@ -666,7 +774,34 @@ export interface SendMessageDto {
      * @memberof SendMessageDto
      */
     text: string;
+    /**
+     * 
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof SendMessageDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
 }
+/**
+ * 
+ * @export
+ * @interface SendMessageDtoImagesInner
+ */
+export interface SendMessageDtoImagesInner {
+    /**
+     * 
+     * @type {AttachmentMediaType}
+     * @memberof SendMessageDtoImagesInner
+     */
+    mediaType: AttachmentMediaType;
+    /**
+     * base64-encoded image bytes
+     * @type {string}
+     * @memberof SendMessageDtoImagesInner
+     */
+    data: string;
+}
+
+
 /**
  * 
  * @export
@@ -757,7 +892,19 @@ export interface UpdateChatSettingsDto {
      * @type {ChatApprovalMode}
      * @memberof UpdateChatSettingsDto
      */
-    approval: ChatApprovalMode;
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateChatSettingsDto
+     */
+    model?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateChatSettingsDto
+     */
+    effort?: string | null;
 }
 
 

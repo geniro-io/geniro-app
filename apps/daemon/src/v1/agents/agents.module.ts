@@ -3,8 +3,11 @@ import { join } from 'node:path';
 import { Module } from '@nestjs/common';
 
 import { environment } from '../../environments';
+import type { AgentAdapter } from './adapters/agent-adapter';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CursorAdapter } from './adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
+import { CURSOR_ADAPTER } from './chat.types';
 import { ChatController } from './controllers/chat.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { ItemDao } from './dao/item.dao';
@@ -56,6 +59,23 @@ import { SkillsService } from './services/skills.service';
     },
     { provide: CursorAdapter, useFactory: () => new CursorAdapter() },
     {
+      provide: CursorAcpAdapter,
+      useFactory: () =>
+        new CursorAcpAdapter({ clientVersion: environment.version }),
+    },
+    {
+      // The ONE place the cursor transport is chosen. Both implementations stay
+      // constructed (the legacy one still backs CursorProbeService, which only
+      // means anything for the `.cursor/mcp.json` path); this binding decides
+      // which one every turn actually runs through.
+      provide: CURSOR_ADAPTER,
+      useFactory: (
+        legacy: CursorAdapter,
+        acp: CursorAcpAdapter,
+      ): AgentAdapter => (environment.cursorAcp ? acp : legacy),
+      inject: [CursorAdapter, CursorAcpAdapter],
+    },
+    {
       // Factory because the trailing options bag is a test seam, not a DI token.
       provide: ClaudeProbeService,
       useFactory: (adapter: ClaudeAdapter, processes: ProcessRegistry) =>
@@ -81,6 +101,7 @@ import { SkillsService } from './services/skills.service';
     RunDao,
     ClaudeAdapter,
     CursorAdapter,
+    CURSOR_ADAPTER,
     CursorMcpMergeService,
   ],
 })

@@ -52,6 +52,16 @@ export type AgentEvent =
   | { type: 'session'; sessionId: string }
   | {
       /**
+       * An adapter-level notice about THIS turn — a capability the CLI did not
+       * grant, a request that degraded. Persisted as a `system` transcript item
+       * so a degrade is visible to the user rather than silent. NOT terminal:
+       * the turn continues after one.
+       */
+      type: 'notice';
+      message: string;
+    }
+  | {
+      /**
        * The CLI reported the session's invokable slash commands (claude's
        * `system/init` `slash_commands`: built-ins + plugin skills + user and
        * project skills/commands, shadowing already resolved — verified live
@@ -137,6 +147,52 @@ export interface AgentTurnInput {
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
     toolTimeoutMs?: number;
   } | null;
+}
+
+/**
+ * Writes one already-framed payload to the running CLI's stdin. Returns false
+ * once the turn has settled or its terminal event has been emitted (the child
+ * is gone or on its way out), so a driver drops the write instead of throwing.
+ */
+export type TurnStdin = (payload: string) => boolean;
+
+/** The two channels a {@link TurnDriver} owns for the turn it is driving. */
+export interface TurnIo {
+  write: TurnStdin;
+  emit: (event: AgentEvent) => void;
+}
+
+/**
+ * Per-turn protocol state for ONE turn of one CLI.
+ *
+ * The default driver (built by `AgentAdapter.createTurnDriver`) is stateless:
+ * it just forwards each parsed stdout line to the adapter's `mapMessage`, which
+ * is all a one-shot stream-json CLI needs. An adapter whose CLI speaks a
+ * STATEFUL, bidirectional protocol — ACP's JSON-RPC handshake, where the next
+ * message to send depends on the last one received — overrides
+ * `createTurnDriver` to return an instance holding that turn's own state.
+ *
+ * A per-turn object (rather than more adapter methods) is what makes this safe
+ * under graph fan-out: one adapter instance drives N concurrent turns, so
+ * protocol state must never live on the adapter.
+ */
+export interface TurnDriver {
+  /**
+   * Called once the child's stdin is wired, before any stdout is parsed — the
+   * driver's chance to open a conversation the CLI expects the client to start.
+   */
+  onStdinReady?(io: TurnIo): void;
+  /** Map one parsed stdout line to zero or more normalized events. */
+  onMessage(obj: unknown): AgentEvent[];
+  /**
+   * Encode one approval verdict as the payload the CLI expects. Undefined =
+   * this CLI has no approval protocol and `respondApproval` is a no-op.
+   */
+  buildApprovalResponse?(
+    id: string,
+    allow: boolean,
+    updatedInput?: unknown,
+  ): string | undefined;
 }
 
 /** Handle to an in-flight turn. */

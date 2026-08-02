@@ -207,6 +207,14 @@ export function mapCursorMessage(obj: unknown): AgentEvent[] {
 export class CursorAdapter extends AgentAdapter {
   readonly kind = 'cursor-agent' as const;
 
+  /**
+   * `cursor-agent -p` has no `--mcp-config` equivalent: it reads MCP servers
+   * only from the cwd's `.cursor/mcp.json`, so a caller turn's endpoint has to
+   * be merged into that file around the spawn by `CursorMcpMergeService`. The
+   * ACP adapter carries it in `session/new` instead and sets this back to true.
+   */
+  override readonly deliversMcpEndpoint = false;
+
   // Resolved per turn so the Settings cliPaths override (GENIRO_CURSOR_BIN on
   // the daemon env) takes effect without reconstructing the adapter.
   protected get command(): string {

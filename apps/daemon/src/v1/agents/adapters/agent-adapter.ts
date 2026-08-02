@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   AgentTurnInput,
+  TurnDriver,
 } from './adapter.types';
 
 /**
@@ -31,6 +32,18 @@ export abstract class AgentAdapter {
   abstract readonly kind: AgentKind;
   /** The CLI binary invoked for each turn. */
   protected abstract readonly command: string;
+
+  /**
+   * Whether this adapter hands `input.mcpEndpoint` to its OWN CLI. True for
+   * every adapter whose CLI takes client-supplied MCP servers (claude's
+   * per-turn `--mcp-config` file, ACP's `session/new`); false only for a CLI
+   * that reads MCP config exclusively from a well-known on-disk path, whose
+   * endpoint therefore has to be planted around the turn by an outside service
+   * (`CursorMcpMergeService`). The graph executor keys the call-runtime
+   * admission path on this rather than on the agent kind, so an adapter swap
+   * cannot leave the endpoint undelivered.
+   */
+  readonly deliversMcpEndpoint: boolean = true;
 
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
@@ -93,6 +106,23 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Build this turn's protocol driver. The default is stateless — it forwards
+   * each line to {@link mapMessage} and each verdict to
+   * {@link buildApprovalResponse}, which is the whole protocol for a one-shot
+   * stream-json CLI. Override when the CLI speaks a stateful, bidirectional
+   * protocol whose state must be per-turn (see `AcpTurnDriver`): one adapter
+   * instance drives N concurrent turns under graph fan-out, so that state can
+   * never live on the adapter itself.
+   */
+  protected createTurnDriver(_input: AgentTurnInput): TurnDriver {
+    return {
+      onMessage: (obj) => this.mapMessage(obj),
+      buildApprovalResponse: (id, allow, updatedInput) =>
+        this.buildApprovalResponse(id, allow, updatedInput),
+    };
+  }
+
+  /**
    * Start a turn. Events are delivered to `onEvent` in stream order. The
    * returned handle settles via `done` and can `cancel` the turn.
    */
@@ -103,6 +133,7 @@ export abstract class AgentAdapter {
     const dispose = this.prepareTurn(input);
     let handle: AgentTurnHandle;
     try {
+      const driver = this.createTurnDriver(input);
       handle = runHeadlessCli({
         command: this.command,
         args: this.buildArgs(input),
@@ -111,8 +142,9 @@ export abstract class AgentAdapter {
         stdinPayload: this.buildStdinPayload(input),
         keepStdinOpen: this.keepStdinOpen(input),
         buildApprovalResponse: (id, allow, updatedInput) =>
-          this.buildApprovalResponse(id, allow, updatedInput),
-        mapper: (obj) => this.mapMessage(obj),
+          driver.buildApprovalResponse?.(id, allow, updatedInput),
+        mapper: (obj) => driver.onMessage(obj),
+        onStdinReady: (io) => driver.onStdinReady?.(io),
         onEvent,
         spawn: this.options.spawn,
         logger: this.options.logger,

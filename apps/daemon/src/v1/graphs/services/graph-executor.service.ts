@@ -17,11 +17,11 @@ import {
   questionTextOf,
   withResponse,
 } from '../../agents/adapters/claude/question-payload';
-import { CursorAdapter } from '../../agents/adapters/cursor/cursor.adapter';
-import type {
-  ClaudeModesCapability,
-  ItemWire,
-  RunWire,
+import {
+  type ClaudeModesCapability,
+  CURSOR_ADAPTER,
+  type ItemWire,
+  type RunWire,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
@@ -144,7 +144,7 @@ export class GraphExecutorService {
     private readonly registry: ProcessRegistry,
     private readonly approvals: ApprovalRegistry,
     private readonly claude: ClaudeAdapter,
-    private readonly cursor: CursorAdapter,
+    @Inject(CURSOR_ADAPTER) private readonly cursor: AgentAdapter,
     private readonly callTokens: CallTokenRegistry,
     private readonly callBroker: CallBroker,
     private readonly cursorProbe: CursorProbeService,
@@ -154,6 +154,16 @@ export class GraphExecutorService {
     private readonly store: WorkflowStoreService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
+
+  /**
+   * The adapter driving one agent kind. The cursor slot is bound by DI
+   * (`CURSOR_ADAPTER`) to either the legacy stream-json adapter or the ACP one,
+   * so every executor path that needs an adapter — the turn spawn AND the
+   * call-runtime admission predicate — resolves the SAME instance.
+   */
+  private adapterFor(agent: WorkflowAgentNode['agent']): AgentAdapter {
+    return agent === 'claude' ? this.claude : this.cursor;
+  }
 
   /**
    * The run-start composition (library lookup → DAG launch) lives in the
@@ -340,9 +350,15 @@ export class GraphExecutorService {
         // Cursor callers are admitted only on a probed MCP-trust pass. The
         // verdict is cached per installed binary, so only the very first
         // cursor-caller run on a machine actually waits on the probe turn.
-        cursorCalls = hasCursorCaller(workflow)
-          ? await this.cursorProbe.ensureVerdict()
-          : this.cursorProbe.capability();
+        // The probe asks one question — "will this cursor-agent honour an MCP
+        // server we planted in .cursor/mcp.json?" — which is meaningless once
+        // the adapter hands the endpoint over in `session/new`, so an ACP
+        // cursor never pays for it.
+        cursorCalls =
+          hasCursorCaller(workflow) &&
+          !this.adapterFor('cursor-agent').deliversMcpEndpoint
+            ? await this.cursorProbe.ensureVerdict()
+            : this.cursorProbe.capability();
       } catch {
         // A probe infrastructure failure degrades to the visible no-verdict
         // path (system item per shut-out caller) — never a wedged run.
@@ -651,15 +667,18 @@ export class GraphExecutorService {
         : node.approval;
 
     /**
-     * Whether this agent kind may hold the call tools in THIS run: claude
-     * always (M2), cursor only on a probed MCP-trust pass (M3). The one
-     * predicate behind every admission surface — the endpoint grant, the
-     * token minting, the awareness block, and the self-check — so a change
+     * Whether this agent kind may hold the call tools in THIS run. An adapter
+     * that delivers the endpoint to its own CLI (claude's `--mcp-config` file,
+     * ACP's `session/new`) is always capable; one that cannot — the legacy
+     * `cursor-agent -p`, whose endpoint has to be planted in the cwd's
+     * `.cursor/mcp.json` — is admitted only on a probed MCP-trust pass (M3).
+     * The one predicate behind every admission surface: the endpoint grant,
+     * the token minting, the awareness block, and the self-check — so a change
      * here cannot silently miss a sibling gate.
      */
     const callCapable = (node: WorkflowAgentNode): boolean =>
-      node.agent === 'claude' ||
-      (node.agent === 'cursor-agent' && cursorCalls.status === 'pass');
+      this.adapterFor(node.agent).deliversMcpEndpoint ||
+      cursorCalls.status === 'pass';
 
     /** Nodes that hold the call tools in THIS run (callers, not callees). */
     const isCaller = (node: WorkflowAgentNode): boolean =>
@@ -838,8 +857,7 @@ export class GraphExecutorService {
         sessionId: string | null;
       };
     } => {
-      const adapter: AgentAdapter =
-        node.agent === 'claude' ? this.claude : this.cursor;
+      const adapter = this.adapterFor(node.agent);
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
@@ -1023,8 +1041,13 @@ export class GraphExecutorService {
           }
         });
       };
+      // The merge facade exists ONLY for an adapter that cannot hand its CLI
+      // the endpoint itself; one that can (claude's --mcp-config file, ACP's
+      // session/new) goes straight to the direct path. Keyed on the adapter's
+      // own declaration rather than the agent kind, so swapping the cursor
+      // transport cannot leave a turn planting a file it no longer reads.
       const handle: AgentTurnHandle =
-        node.agent === 'cursor-agent' && input.mcpEndpoint
+        input.mcpEndpoint && !adapter.deliversMcpEndpoint
           ? startCursorCallerTurn(
               adapter,
               node,

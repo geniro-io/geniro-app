@@ -16,6 +16,16 @@ import {
 export const SINGLE_AGENT_NODE = 'agent';
 
 /**
+ * DI token for "the adapter that drives cursor-agent". TWO implementations
+ * satisfy it — the legacy one-shot stream-json `CursorAdapter` and the
+ * `CursorAcpAdapter` that speaks `cursor-agent acp` — and which one is bound is
+ * decided once, in `agents.module.ts`, from `environment.cursorAcp`. Every
+ * consumer injects this token typed as `AgentAdapter` rather than a concrete
+ * class, so the transport swap cannot leave one call site on the old path.
+ */
+export const CURSOR_ADAPTER = 'CURSOR_ADAPTER';
+
+/**
  * Chat-level tool-approval modes. `plan` is chat-only by design decision —
  * the graph node schema stops at `acceptEdits` (graphs.types.ts
  * ApprovalModeSchema). A run row whose `approval` is null predates the mode

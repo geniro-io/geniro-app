@@ -194,7 +194,16 @@ class FakeAdapter {
   readonly starts: FakeTurn[] = [];
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
-  constructor(readonly kind: 'claude' | 'cursor-agent') {}
+  constructor(
+    readonly kind: 'claude' | 'cursor-agent',
+    /**
+     * Mirrors the real adapters: claude hands its CLI the endpoint via the
+     * per-turn `--mcp-config` file, the legacy cursor adapter cannot and needs
+     * the `.cursor/mcp.json` merge, and the ACP cursor adapter can again. The
+     * executor keys its whole call-runtime admission path on this.
+     */
+    public deliversMcpEndpoint: boolean = kind === 'claude',
+  ) {}
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
@@ -274,6 +283,8 @@ function setup(
     mergeOk?: boolean;
     gitTracked?: boolean;
     mergeImpl?: () => Promise<unknown>;
+    /** The ACP cursor adapter hands its CLI the endpoint in `session/new`. */
+    cursorDeliversMcpEndpoint?: boolean;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -291,7 +302,10 @@ function setup(
   mergeReleases: ReturnType<typeof vi.fn>[];
 } {
   const claude = new FakeAdapter('claude');
-  const cursor = new FakeAdapter('cursor-agent');
+  const cursor = new FakeAdapter(
+    'cursor-agent',
+    opts.cursorDeliversMcpEndpoint ?? false,
+  );
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
   const nodeDao = new FakeNodeStateDao();
@@ -1226,6 +1240,34 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
     // …and released exactly once when the turn settled.
     expect(mergeReleases[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it('an ACP cursor caller is admitted without the probe and bypasses the .cursor/mcp.json merge entirely', async () => {
+    // The ACP adapter carries the endpoint in `session/new`, so nothing may be
+    // planted in the run cwd — and the MCP-trust probe, which only answers
+    // whether a planted file would be honoured, must never be paid for.
+    const { service, cursor, callTokens, mergeAcquire, ensureVerdict } = setup(
+      4870,
+      { cursorDeliversMcpEndpoint: true },
+    );
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CURSOR_CALLER_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const caller = cursor.starts[0]!;
+    expect(caller.input.mcpEndpoint?.url).toBe(
+      `http://127.0.0.1:4870/v1/mcp/${encodeURIComponent(run.id)}/orch`,
+    );
+    expect(caller.input.mcpEndpoint?.token).toBe(
+      callTokens.get(run.id, 'orch'),
+    );
+    expect(caller.input.systemPrompt).toContain('May call');
+    expect(mergeAcquire).not.toHaveBeenCalled();
+    expect(ensureVerdict).not.toHaveBeenCalled();
   });
 
   it('a refused merge DEGRADES the cursor caller turn — the CLI spawns without the endpoint and a system item names the reason', async () => {

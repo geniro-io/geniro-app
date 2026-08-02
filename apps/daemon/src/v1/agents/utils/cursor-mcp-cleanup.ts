@@ -1,7 +1,5 @@
 import {
   chmodSync,
-  copyFileSync,
-  existsSync,
   lstatSync,
   readFileSync,
   renameSync,
@@ -25,26 +23,31 @@ import { join } from 'node:path';
  * no code left that removes it.
  *
  * This is the CLEANUP half only: it reads the journal the old code wrote and
- * undoes what it names. There is deliberately no merge path here — nothing in
- * the daemon writes to a user's `.cursor/mcp.json` any more, and nothing
- * should be able to again. Delete this module (and its `main.ts` call) one
- * release after it ships.
+ * undoes what it names — or DECLINES to, when what it finds is not provably
+ * ours (a `geniro` key we did not write, a symlink, content that no longer
+ * parses). There is deliberately no merge path here — nothing in the daemon
+ * writes to a user's `.cursor/mcp.json` any more, and nothing should be able
+ * to again. Delete this module (and its `main.ts` call) one release after it
+ * ships.
  */
 
 /** The server key the legacy merge wrote — the only key we may remove. */
 const GENIRO_MCP_SERVER_KEY = 'geniro';
 
-/** What a geniro-CREATED file reduces to once our key is gone. */
-const EMPTY_SHELL = JSON.stringify({ mcpServers: {} });
-
 /** One journalled merge, as the deleted transport recorded it. */
-interface CursorMergeJournalEntry {
+export interface CursorMergeJournalEntry {
   cwd: string;
   /** True when geniro created the file — cleanup may delete the empty shell. */
   created: boolean;
   /** The user's original file mode, to put back. */
   mode?: number;
   ts: number;
+  /**
+   * How many launches have tried and failed on this cwd. Absent on every
+   * entry the old transport wrote — this is cleanup's own bookkeeping, added
+   * when an entry is retained for another try.
+   */
+  attempts?: number;
 }
 
 type McpJson = { mcpServers?: Record<string, unknown> } & Record<
@@ -61,7 +64,8 @@ function isJournalEntry(value: unknown): value is CursorMergeJournalEntry {
     typeof entry.cwd === 'string' &&
     typeof entry.created === 'boolean' &&
     typeof entry.ts === 'number' &&
-    (entry.mode === undefined || typeof entry.mode === 'number')
+    (entry.mode === undefined || typeof entry.mode === 'number') &&
+    (entry.attempts === undefined || typeof entry.attempts === 'number')
   );
 }
 
@@ -120,13 +124,10 @@ function parseFile(path: string): McpJson | null {
 }
 
 /**
- * What one cleanup attempt concluded.
- *
- * `retry` is the only outcome worth another launch; `foreign` and `unresolved`
- * are decisions not to touch the file, so retrying them forever would keep
- * this module — and its boot warning — alive past the release that removes it.
+ * What one cleanup attempt concluded. Every member names a CONCLUSION; what to
+ * do about it (retry, give up, warn) is the caller's policy, not this file's.
  */
-export type CleanupOutcome = 'cleaned' | 'retry' | 'foreign' | 'unresolved';
+export type CleanupOutcome = 'cleaned' | 'failed' | 'foreign' | 'unresolved';
 
 /** Whether a `geniro` entry carries the shape the legacy merge wrote. */
 function isOurEntry(entry: unknown): boolean {
@@ -148,9 +149,17 @@ function isOurEntry(entry: unknown): boolean {
 /**
  * Undo one journalled merge. Surgical by design: it removes ONLY the `geniro`
  * key from the file as it stands now, so anything the user has changed since
- * survives. A geniro-created file is deleted only when removing that key
- * leaves exactly the shell geniro itself wrote — any other content is the
- * user's by definition.
+ * survives. A geniro-created file is deleted only when it is still exactly the
+ * shell geniro wrote — any other content is the user's by definition.
+ *
+ * @returns
+ * - `cleaned` — the residue is gone (or was already gone) for this cwd.
+ * - `foreign` — the `geniro` key is not one we wrote, so the file was left
+ *   untouched; it is the user's own server sharing the name.
+ * - `unresolved` — we will not act on what we found (a symlink, a non-file, or
+ *   content we refuse to guess at). Nothing was changed.
+ * - `failed` — an unexpected error; nothing was completed, and the caller may
+ *   choose to come back to it.
  */
 export function cleanStrandedMerge(
   cwd: string,
@@ -160,6 +169,13 @@ export function cleanStrandedMerge(
   const backup = `${path}.geniro-bak`;
   const tmp = `${path}.geniro-tmp`;
   try {
+    // An absent worktree is NOT an absent config: a repo on a volume that
+    // mounts late (or after a move) makes every lstat below return ENOENT,
+    // which would otherwise read as "the user deleted their mcp.json" and
+    // drop the entry — abandoning the residue this module exists to remove.
+    if (lstatIfExists(cwd) === null) {
+      return 'failed';
+    }
     // Never follow a symlink into somewhere else on the user's disk.
     const cursorDirStat = lstatIfExists(join(cwd, '.cursor'));
     if (
@@ -175,12 +191,17 @@ export function cleanStrandedMerge(
     // 0600, and holding a call token revoked when that daemon launch ended.
     rmSync(tmp, { force: true });
 
-    if (lstatIfExists(backup)?.isSymbolicLink()) {
+    // Full type check, not just symlink: this file gets READ below, and a FIFO
+    // here would block readFileSync forever — inside the pre-listen boot path,
+    // where no try/catch can recover from a block.
+    const backupStat = lstatIfExists(backup);
+    if (backupStat && !backupStat.isFile()) {
       return 'unresolved';
     }
     const pathStat = lstatIfExists(path);
     if (!pathStat) {
-      // The user deleted the file themselves — their call; drop the backup.
+      // The worktree is there but the config is not — the user removed it
+      // themselves. Their call; drop the backup.
       rmSync(backup, { force: true });
       return 'cleaned';
     }
@@ -209,41 +230,101 @@ export function cleanStrandedMerge(
     if (entry !== undefined && !isOurEntry(entry)) {
       return 'foreign';
     }
-    delete servers[GENIRO_MCP_SERVER_KEY];
-    const result: McpJson = { ...parsed, mcpServers: servers };
 
-    // Evaluated whether or not our key was still present: a crash between the
-    // old restore's write and its journal removal leaves the shell behind with
-    // the key already gone, and that file is the one this module exists to
-    // remove.
-    if (state.created && JSON.stringify(result) === EMPTY_SHELL) {
+    // Deleting a file geniro created is judged on what is ACTUALLY on disk,
+    // never on the post-removal projection: that projection synthesises an
+    // `mcpServers` key, so `{}` — a file the user emptied by hand and kept —
+    // would compare equal to the shell and be deleted with no backup.
+    // Evaluated whether or not our key is still there, because a crash between
+    // the old restore's write and its journal removal leaves the shell behind
+    // with the key already gone, and that file is ours to remove.
+    if (state.created && isGeniroShell(parsed, entry)) {
       rmSync(path, { force: true });
       rmSync(backup, { force: true });
       return 'cleaned';
     }
+
     if (entry !== undefined) {
-      // Byte-fidelity fast path: when the user made no mid-turn edits, the
-      // file minus our key equals the backup — put the ORIGINAL bytes back so
-      // even their formatting survives, rather than reformatting a file that
-      // is very likely tracked in their repo.
-      const original = existsSync(backup) ? parseFile(backup) : null;
+      delete servers[GENIRO_MCP_SERVER_KEY];
+      const result: McpJson = { ...parsed, mcpServers: servers };
+      // Byte-fidelity fast path: when the file minus our key is semantically
+      // identical to the backup, put the ORIGINAL bytes back so even the
+      // user's formatting survives, rather than reformatting a file that is
+      // very likely tracked in their repo. (A whitespace-only reformat they
+      // made mid-turn is reverted by this — the cost of not rewriting every
+      // untouched file.)
+      const original = backupStat ? parseFile(backup) : null;
       if (
         original !== null &&
         JSON.stringify(result) === JSON.stringify(original)
       ) {
-        copyFileSync(backup, path);
+        replaceFile(path, readFileSync(backup), state.mode);
       } else {
-        writeFileSync(path, JSON.stringify(result, null, 2), 'utf8');
+        replaceFile(
+          path,
+          Buffer.from(JSON.stringify(result, null, 2), 'utf8'),
+          state.mode,
+        );
       }
+    } else {
+      // Our key is already gone, but the mode we set for the turn may not be:
+      // the merge chmod'd the file to 0600 and journalled the user's original.
+      // Putting that back is the one piece of their state we still hold.
       restoreMode(path, state.mode);
     }
     rmSync(backup, { force: true });
     return 'cleaned';
   } catch {
-    // Best-effort: a retained journal entry is the next launch's second try,
-    // and the .geniro-bak is the user-visible breadcrumb meanwhile.
-    return 'retry';
+    // Nothing was completed. The caller decides whether this cwd is worth
+    // another launch; the .geniro-bak is the user-visible breadcrumb meanwhile.
+    return 'failed';
   }
+}
+
+/**
+ * Whether the file on disk is still exactly the shell a geniro-CREATED merge
+ * wrote — `{"mcpServers": {…}}` and nothing else at the top level, holding at
+ * most our own entry. Anything more is the user's content.
+ */
+function isGeniroShell(parsed: McpJson, ourEntry: unknown): boolean {
+  const keys = Object.keys(parsed);
+  if (keys.length !== 1 || keys[0] !== 'mcpServers') {
+    return false;
+  }
+  const servers = parsed.mcpServers;
+  if (
+    typeof servers !== 'object' ||
+    servers === null ||
+    Array.isArray(servers)
+  ) {
+    return false;
+  }
+  const serverKeys = Object.keys(servers);
+  return ourEntry === undefined
+    ? serverKeys.length === 0
+    : serverKeys.length === 1 && serverKeys[0] === GENIRO_MCP_SERVER_KEY;
+}
+
+/**
+ * Replace `path` atomically via a staging sibling. `writeFileSync` on the
+ * path itself would follow a symlink planted between the lstat above and the
+ * write, and `wx` (O_EXCL) refuses to follow one planted at the staging path —
+ * which is exactly why the merge writer this module undoes did the same.
+ */
+function replaceFile(
+  path: string,
+  bytes: Buffer,
+  mode: number | undefined,
+): void {
+  const staging = `${path}.geniro-tmp`;
+  rmSync(staging, { force: true });
+  writeFileSync(staging, bytes, { mode: 0o600, flag: 'wx' });
+  if (mode !== undefined) {
+    // Masked: the mode is journal data, and a tampered value must not widen
+    // permissions beyond what a file mode can legitimately carry.
+    chmodSync(staging, mode & 0o777);
+  }
+  renameSync(staging, path);
 }
 
 function restoreMode(path: string, mode: number | undefined): void {

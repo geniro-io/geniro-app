@@ -43,10 +43,10 @@ export function ModelSelect({
   // Adopt the first alias for a model-less node — but never while the custom
   // input is open, where a transiently empty value is just mid-typing.
   useEffect(() => {
-    if (value === '' && !custom && options.length > 0) {
+    if (value === '' && !custom && selectable) {
       onChange(options[0]);
     }
-  }, [value, custom, options, onChange]);
+  }, [value, custom, selectable, options, onChange]);
 
   if (!selectable) {
     // No picker: this agent's transport discards whatever it is given, so a

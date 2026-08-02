@@ -116,6 +116,26 @@ describe('ModelSelect', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('offers a way out for a model stored before the picker was removed', () => {
+    // A workflow saved when cursor still had model options carries e.g.
+    // `gpt-5`. Without a control the node emits "model was not applied" on
+    // every turn with nothing the user can do about it.
+    render(
+      <ModelSelect id="m" agent="cursor-agent" value="gpt-5" onChange={spy} />,
+    );
+    const clear = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('gpt-5'),
+    );
+    expect(clear).toBeDefined();
+    act(() => clear!.click());
+    expect(spy).toHaveBeenCalledWith(undefined);
+  });
+
+  it('offers no clear action when there is nothing stored to clear', () => {
+    render(<ModelSelect id="m" agent="cursor-agent" value="" onChange={spy} />);
+    expect(container.querySelector('button')).toBeNull();
+  });
+
   it('a model-less node adopts the first alias on mount', () => {
     render(<Harness />);
     expect(spy).toHaveBeenCalledWith('fable');

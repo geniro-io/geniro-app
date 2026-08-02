@@ -638,9 +638,7 @@ export class GraphExecutorService {
       return {
         url: `http://127.0.0.1:${port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(node.id)}`,
         token,
-        // Per-run, so a project MCP config that happens to define a server
-        // called `geniro` cannot contend with ours on a transport that has no
-        // strict-config switch.
+        // Per-run — see `AgentTurnInput.mcpEndpoint.serverName` for why.
         serverName: `geniro-${runId.slice(0, 8)}`,
       };
     };

@@ -51,6 +51,12 @@ export interface AcpDriverOptions {
   /** Session mode to request after the session exists, when the agent offers it. */
   preferredModeId?: string | null;
   /**
+   * The turn's instruction text, given whether the call tools were registered.
+   * Supplied by the adapter so the include-the-callee-block rule stays owned
+   * by `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
+   */
+  composeSystemPrompt: (granted: boolean) => string;
+  /**
    * Turn-level degrades the ADAPTER detected before the handshake began — a
    * requested capability ACP has no way to express. Emitted with the rest of
    * the startup events so they reach the transcript on the same path as the
@@ -184,12 +190,13 @@ export class AcpTurnDriver implements TurnDriver {
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
   /**
-   * Whether this turn's call tools were actually registered. `buildMcpServers`
-   * RETURNS this (it needs the negotiated capabilities) and the session request
-   * stores it; `composePrompt` reads it, so the "May call" block and the tools
-   * it names are granted or withheld together.
+   * The MCP servers this turn actually registered. `composePrompt` derives the
+   * call-surface grant from this rather than from a separate flag, so the
+   * "May call" block and the tools it names cannot disagree.
    */
-  private callSurfaceGranted = false;
+  private grantedMcpServers: AcpMcpServerHttp[] = [];
+  /** This turn resumed via `session/load`, whose reply reports no modes. */
+  private resumed = false;
 
   constructor(private readonly options: AcpDriverOptions) {}
 
@@ -358,8 +365,8 @@ export class AcpTurnDriver implements TurnDriver {
       });
     }
 
-    const { mcpServers, notice, callSurfaceGranted } = this.buildMcpServers();
-    this.callSurfaceGranted = callSurfaceGranted;
+    const { mcpServers, notice } = this.buildMcpServers();
+    this.grantedMcpServers = mcpServers;
     if (notice) {
       events.push({ type: 'notice', message: notice });
     }
@@ -367,6 +374,7 @@ export class AcpTurnDriver implements TurnDriver {
     const resumeId = this.options.input.resumeSessionId?.trim();
     if (resumeId && this.capabilities.loadSession) {
       this.replaying = true;
+      this.resumed = true;
       this.replayStartedAt = Date.now();
       this.request(
         ACP_AGENT_METHODS.sessionLoad,
@@ -403,12 +411,10 @@ export class AcpTurnDriver implements TurnDriver {
   private buildMcpServers(): {
     mcpServers: AcpMcpServerHttp[];
     notice: string | null;
-    /** Whether the call tools were registered — see `callSurfaceGranted`. */
-    callSurfaceGranted: boolean;
   } {
     const endpoint = this.options.input.mcpEndpoint;
     if (!endpoint) {
-      return { mcpServers: [], notice: null, callSurfaceGranted: false };
+      return { mcpServers: [], notice: null };
     }
     if (!this.capabilities.mcpHttp) {
       // The awareness block goes with the tools. Leaving it in would instruct
@@ -416,14 +422,12 @@ export class AcpTurnDriver implements TurnDriver {
       // under that name — its callees never run and the turn still reports
       // success, which is exactly what the pre-ACP degrade path prevented.
       return {
-        callSurfaceGranted: false,
         mcpServers: [],
         notice:
           'agent calls disabled for this turn: the agent does not advertise HTTP MCP support (mcpCapabilities.http), so the callee list was removed from this turn’s instructions too',
       };
     }
     return {
-      callSurfaceGranted: true,
       mcpServers: [
         {
           type: 'http',
@@ -469,20 +473,19 @@ export class AcpTurnDriver implements TurnDriver {
         'set_mode',
         events,
       );
-    } else if (
-      this.options.preferredModeId &&
-      // `session/load` replies carry no `modes` at all, so absence means "not
-      // reported", never "not offered" — claiming the latter would put a false
-      // statement about the agent in the transcript of every resumed turn.
-      asRecord(root?.modes) !== null &&
-      !this.offersMode(root, this.options.preferredModeId)
-    ) {
-      // The turn asked for a mode the agent does not offer. It still runs —
-      // but under the agent's current mode, which for a read-only request like
-      // `plan` means write access the user believed they had turned off.
+    } else if (this.options.preferredModeId) {
+      // The requested mode was NOT applied. Either way this turn runs under
+      // the agent's current mode, which for a read-only request like `plan`
+      // means write access the user believed they had turned off — so it can
+      // never be silent. WHICH message is truthful depends on what we sent:
+      // a `session/load` reply carries no `modes` block at all, so reading
+      // that absence as "not offered" would state something false about the
+      // agent on every resumed turn.
       events.push({
         type: 'notice',
-        message: `agent does not offer the '${this.options.preferredModeId}' mode — this turn runs under the agent's current mode instead`,
+        message: this.resumed
+          ? `the '${this.options.preferredModeId}' mode could not be set on a resumed session — this turn runs under the agent's current mode`
+          : `agent does not offer the '${this.options.preferredModeId}' mode — this turn runs under the agent's current mode instead`,
       });
     }
 
@@ -516,19 +519,17 @@ export class AcpTurnDriver implements TurnDriver {
   }
 
   /**
-   * ACP carries no system-prompt parameter, so a graph node's role is
-   * prepended to the prompt text. The caller's "May call" block joins it only
-   * when this turn's call tools were actually registered — `buildMcpServers`
-   * decides that, and it runs before the prompt is sent.
+   * ACP carries no system-prompt parameter, so the turn's instructions are
+   * prepended to the prompt text. WHICH instructions is the base adapter's
+   * rule, not this driver's — see `AgentAdapter.composeSystemPrompt`; this
+   * only supplies whether the call tools ended up registered.
    */
   private composePrompt(): string {
-    const { systemPrompt, callSurfacePrompt, prompt } = this.options.input;
-    return [
-      systemPrompt,
-      this.callSurfaceGranted ? callSurfacePrompt : null,
-      prompt,
-    ]
-      .filter((part): part is string => Boolean(part))
+    const instructions = this.options.composeSystemPrompt(
+      this.grantedMcpServers.length > 0,
+    );
+    return [instructions, this.options.input.prompt]
+      .filter((part) => part.length > 0)
       .join('\n\n');
   }
 

@@ -11,7 +11,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CursorMcpCleanupService } from './cursor-mcp-cleanup.service';
 
@@ -67,6 +68,14 @@ function ourEntry(): Record<string, unknown> {
     headers: { Authorization: 'Bearer tok-1' },
     autoApprove: ['call_agent', 'await_agent', 'answer_agent'],
   };
+}
+
+/** The per-entry attempt counts the service has recorded so far. */
+function attemptsIn(journalPath: string): (number | undefined)[] {
+  const entries = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+    attempts?: number;
+  }[];
+  return entries.map((e) => e.attempts);
 }
 
 function readJson(path: string): Record<string, unknown> {
@@ -185,44 +194,80 @@ describe('CursorMcpCleanupService', () => {
     expect(remaining.map((e) => e.cwd)).toEqual([transient]);
   });
 
-  it('gives up on a retry that has run out of road, so the journal converges', () => {
+  it('gives a failing cwd a bounded number of launches, then converges', () => {
     const transientRoot = tempDir('cursor-old-');
     const transient = join(transientRoot, 'a-file');
     writeFileSync(transient, 'x', 'utf8');
-    // Same failure as above, but journalled long ago. The module promises to
-    // be deletable one release after shipping; an entry that retries forever
-    // would break that promise silently.
-    const journalPath = join(tempDir('cursor-oldj-'), 'journal.json');
+    const journalPath = journalOf([{ cwd: transient, created: false }]);
+    const service = new CursorMcpCleanupService({ journalPath });
+
+    // Each launch earns one more attempt — the entry survives the first two…
+    service.reconcileStranded();
+    expect(attemptsIn(journalPath)).toEqual([1]);
+    service.reconcileStranded();
+    expect(attemptsIn(journalPath)).toEqual([2]);
+
+    // …and the third gives up, so the journal reaches empty and this module
+    // can honour its "delete one release after shipping" promise.
+    service.reconcileStranded();
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  it('converges even when the journal timestamp is nonsense', () => {
+    const transientRoot = tempDir('cursor-future-');
+    const transient = join(transientRoot, 'a-file');
+    writeFileSync(transient, 'x', 'utf8');
+    // `ts` is data read off disk: a clock that was wrong when the merge ran (a
+    // VM before its first NTP sync, a restored backup) dates the entry in the
+    // future, and an age check would read that as "always young" and retry
+    // forever. Give-up is counted, not timed, so no timestamp — future, zero
+    // or absent — can buy extra launches.
+    const journalPath = join(tempDir('cursor-futurej-'), 'journal.json');
     writeFileSync(
       journalPath,
-      JSON.stringify([{ cwd: transient, created: false, ts: 1 }]),
+      JSON.stringify([
+        {
+          cwd: transient,
+          created: false,
+          ts: Date.now() + 400 * 24 * 60 * 60 * 1000,
+        },
+      ]),
       'utf8',
     );
+    const service = new CursorMcpCleanupService({ journalPath });
 
-    new CursorMcpCleanupService({ journalPath }).reconcileStranded();
+    service.reconcileStranded();
+    service.reconcileStranded();
+    service.reconcileStranded();
 
     expect(existsSync(journalPath)).toBe(false);
   });
 
   it('never lets a write failure escape into the boot sequence', () => {
-    const cwd = strandedWorktree({ mcpServers: { geniro: ourEntry() } });
-    // The journal's own directory is gone, so removing/rewriting it throws.
-    // This runs pre-listen: an escaping error exits the process before the
-    // pidfile is written, and repeats on every launch — a one-release hygiene
-    // task must never be able to cost the user their daemon.
-    const journalDir = tempDir('cursor-gone-');
-    const journalPath = join(journalDir, 'nested', 'journal.json');
-    mkdirSync(join(journalDir, 'nested'));
-    writeFileSync(
-      journalPath,
-      JSON.stringify([{ cwd, created: false, mode: 0o644, ts: Date.now() }]),
-      'utf8',
-    );
-    rmSync(join(journalDir, 'nested'), { recursive: true, force: true });
-
+    const transientRoot = tempDir('cursor-boot-');
+    const transient = join(transientRoot, 'a-file');
+    writeFileSync(transient, 'x', 'utf8');
+    // A journal that PARSES (so the replay actually runs) and holds an entry
+    // that will be retained (so the rewrite is reached), with the staging
+    // sibling occupied by a directory — `rmSync` without `recursive` throws
+    // EISDIR there, from inside `writeMergeJournal`.
+    const journalPath = journalOf([{ cwd: transient, created: false }]);
+    mkdirSync(`${journalPath}.tmp`);
     const service = new CursorMcpCleanupService({ journalPath });
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
+
+    // This runs pre-listen: an escaping error exits the process before the
+    // pidfile is written, and repeats every launch — a one-release hygiene
+    // task must never be able to cost the user their daemon.
     expect(() => service.reconcileStranded()).not.toThrow();
-    expect(service.reconcileStranded()).toBe(0);
+    expect(
+      warn.mock.calls.some((call) =>
+        String(call[0]).includes('cursor MCP cleanup skipped'),
+      ),
+    ).toBe(true);
+    warn.mockRestore();
   });
 
   it('does nothing at all when no journal exists — the common upgrade path', () => {

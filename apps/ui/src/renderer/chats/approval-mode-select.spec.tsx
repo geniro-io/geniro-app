@@ -119,6 +119,20 @@ describe('ApprovalModeSelect', () => {
     expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
   });
 
+  it('keeps a stored plan visible for cursor, so the select never lies', () => {
+    const el = render(
+      <ApprovalModeSelect
+        agentKind="cursor-agent"
+        value="plan"
+        planSupported={false}
+        onChange={() => {}}
+      />,
+    );
+    // The trigger shows `plan`; a menu without that row would display a value
+    // the user cannot see or re-pick.
+    expect(optionValues(el)).toContain('plan');
+  });
+
   it('disables the select while a turn is running', () => {
     const el = render(
       <ApprovalModeSelect

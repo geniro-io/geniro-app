@@ -70,7 +70,15 @@ globs:
   - every adapter must be able to hand its own CLI `input.mcpEndpoint` (claude's
     per-turn `--mcp-config` file, ACP's `session/new`). The graph executor
     assumes it: a node with outgoing call edges gets the endpoint, with no
-    per-machine capability gate in between. An adapter for a CLI that can only
+    per-machine capability gate in between.
+  - **`input.callSurfacePrompt` is only true while those tools are actually
+    registered.** Build the turn's instruction text with the base class's
+    `composeSystemPrompt(input, granted)`, passing whether YOUR delivery
+    mechanism succeeded — never join the two prompt fields yourself. An agent
+    told to route work through `call_agent` with no such tool registered never
+    runs its callees and the node still reports success, which is silent by
+    construction. This is why the fields are separate: a single pre-composed
+    string could not be conditionally withheld. An adapter for a CLI that can only
     read MCP config from a well-known on-disk path would need that gate — and
     the surrounding plant/restore lifecycle — reintroduced deliberately
 - Never wire `runHeadlessCli` (or `spawn`) directly from an adapter or service —

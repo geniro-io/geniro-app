@@ -24,11 +24,18 @@ function harness(
 ): Harness {
   const sent: Record<string, unknown>[] = [];
   const emitted: AgentEvent[] = [];
+  const input = overrides.input ?? BASE_INPUT;
   const driver = new AcpTurnDriver({
     input: BASE_INPUT,
     clientName: 'geniro',
     clientVersion: '1.2.3',
     autoDecide: () => null,
+    // Mirrors AgentAdapter.composeSystemPrompt — the driver only decides
+    // whether the call tools were granted, never what the text is.
+    composeSystemPrompt: (granted) =>
+      [input.systemPrompt, granted ? input.callSurfacePrompt : null]
+        .filter((part): part is string => Boolean(part))
+        .join('\n\n'),
     ...overrides,
   });
   driver.onStdinReady({
@@ -183,8 +190,6 @@ describe('AcpTurnDriver MCP delivery', () => {
       mcpServers: [
         {
           type: 'http',
-          // Per-run, never the bare 'geniro' a project config could also
-          // define — ACP has no --strict-mcp-config to fall back on.
           name: 'geniro-run12345',
           url: 'http://127.0.0.1:1/v1/mcp/r/n',
           headers: [{ name: 'Authorization', value: 'Bearer tok-1' }],
@@ -361,6 +366,38 @@ describe('AcpTurnDriver session resume', () => {
         (e) => e.type === 'notice' && e.message.includes('does not offer'),
       ),
     ).toEqual([]);
+  });
+
+  it('shows a stubbed permission request the arguments its tool_call announced', () => {
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        name: 'write_file',
+        kind: 'edit',
+        rawInput: { path: 'a.ts', contents: 'x' },
+      }),
+    );
+
+    // The request's own toolCall is a stub: no name, no kind, no rawInput.
+    // Without the cache the user is asked to approve a blank tool with no
+    // visible arguments.
+    const events = h.feed({
+      id: 'p1',
+      method: 'session/request_permission',
+      params: { toolCall: { toolCallId: 't-1' }, options: [] },
+    });
+    expect(events).toEqual([
+      {
+        type: 'approval_request',
+        id: expect.any(String) as unknown as string,
+        toolName: 'write_file',
+        input: { path: 'a.ts', contents: 'x' },
+      },
+    ]);
   });
 
   it('measures nothing on a fresh session, which has no replay to pay for', () => {

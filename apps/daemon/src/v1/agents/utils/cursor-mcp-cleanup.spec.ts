@@ -1,9 +1,11 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -33,6 +35,15 @@ function configPath(cwd: string): string {
   return join(cwd, '.cursor', 'mcp.json');
 }
 
+/** The entry the deleted merge actually wrote — see `isOurEntry`. */
+function ourEntry(): Record<string, unknown> {
+  return {
+    url: 'http://127.0.0.1:47615/v1/mcp/run-1/orch',
+    headers: { Authorization: 'Bearer tok-1' },
+    autoApprove: ['call_agent', 'await_agent', 'answer_agent'],
+  };
+}
+
 function readJson(path: string): { mcpServers?: Record<string, unknown> } {
   return JSON.parse(readFileSync(path, 'utf8')) as {
     mcpServers?: Record<string, unknown>;
@@ -56,8 +67,12 @@ describe('cleanStrandedMerge', () => {
       'utf8',
     );
 
-    cleanStrandedMerge(cwd, { created: false, mode: 0o644 });
-
+    // `foreign` — not `failed` — is what tells the caller to stop retrying:
+    // this file will never become ours, so retrying forever would keep the
+    // module and its boot warning alive past the release that removes them.
+    expect(cleanStrandedMerge(cwd, { created: false, mode: 0o644 })).toBe(
+      'foreign',
+    );
     expect(readJson(configPath(cwd)).mcpServers).toEqual({ geniro: theirs });
   });
 
@@ -76,6 +91,61 @@ describe('cleanStrandedMerge', () => {
 
     expect(cleanStrandedMerge(cwd, { created: true })).toBe('cleaned');
     expect(existsSync(configPath(cwd))).toBe(false);
+  });
+
+  it("puts the user's file mode back even when the geniro key is already gone", () => {
+    // Same crash window as the test above — the old restore wrote the stripped
+    // file and died before chmod'ing it back. The merge left the file 0600
+    // because it carried a bearer call token; the journal records the user's
+    // own mode precisely so cleanup can put it back. Reporting `cleaned` and
+    // dropping the entry while the file stays 0600 makes geniro's permission
+    // change on a file in the user's repo permanent, with nothing left that
+    // will ever revisit it.
+    const cwd = worktree();
+    writeFileSync(
+      configPath(cwd),
+      JSON.stringify({ mcpServers: { 'their-server': { command: 'x' } } }),
+      'utf8',
+    );
+    chmodSync(configPath(cwd), 0o600);
+
+    expect(cleanStrandedMerge(cwd, { created: false, mode: 0o644 })).toBe(
+      'cleaned',
+    );
+    expect(statSync(configPath(cwd)).mode & 0o777).toBe(0o644);
+  });
+
+  it('keeps a geniro-created file the user emptied by hand rather than deleting it', () => {
+    // A created file may be deleted only when removing our key leaves exactly
+    // the shell geniro itself wrote (`{"mcpServers":{}}`) — anything else is
+    // the user's. `{}` is not that shell: the user replaced the content. The
+    // shell comparison runs on `{...parsed, mcpServers}`, which SYNTHESISES an
+    // empty `mcpServers` into any file that has none, so a file geniro never
+    // wrote passes the test — and a created file has no `.geniro-bak`, so the
+    // delete cannot be undone.
+    const cwd = worktree();
+    writeFileSync(configPath(cwd), '{}', 'utf8');
+
+    cleanStrandedMerge(cwd, { created: true });
+
+    expect(existsSync(configPath(cwd))).toBe(true);
+    expect(readFileSync(configPath(cwd), 'utf8')).toBe('{}');
+  });
+
+  it('does not call a worktree clean while the worktree itself is absent', () => {
+    // The repo lives on a volume that is not mounted at daemon boot (an
+    // external disk, a network share, a login-time race). Every lstat below
+    // the missing cwd reports ENOENT, which reads identically to "the user
+    // deleted their mcp.json" — so the entry is reported cleaned and dropped,
+    // and the residue in that repo is never touched again. A genuinely deleted
+    // repo is served just as well by retrying: those entries age out.
+    const parent = mkdtempSync(join(tmpdir(), 'cursor-unmounted-'));
+    dirs.push(parent);
+    const cwd = join(parent, 'repo-on-an-unmounted-volume');
+
+    expect(cleanStrandedMerge(cwd, { created: false, mode: 0o644 })).toBe(
+      'failed',
+    );
   });
 
   it("restores the user's original bytes when the stripped file matches the backup", () => {
@@ -112,44 +182,64 @@ describe('cleanStrandedMerge', () => {
     expect(readFileSync(configPath(cwd), 'utf8')).toBe(original);
   });
 
-  it('refuses every symlinked path rather than following it off the worktree', () => {
-    // Each of these would let a cleanup running at daemon boot write to, or
-    // delete, a file outside the directory the journal actually named.
-    const sentinelDir = mkdtempSync(join(tmpdir(), 'cursor-sentinel-'));
-    dirs.push(sentinelDir);
-    const sentinel = join(sentinelDir, 'precious.json');
-    const sentinelBytes = JSON.stringify({ mcpServers: { geniro: 'theirs' } });
-    writeFileSync(sentinel, sentinelBytes, 'utf8');
+  it.each([
+    ['.cursor is a link', 'cursorDir'],
+    ['mcp.json is a link', 'config'],
+    ['the backup is a link', 'backup'],
+  ] as const)(
+    'refuses to follow a symlink off the worktree — %s',
+    (_label, shape) => {
+      // The sentinel is a REAL geniro-shaped merge in someone else's repo, so
+      // following any of these links would genuinely rewrite or delete it —
+      // which is what makes the byte assertion below load-bearing rather than
+      // decorative.
+      const sentinelDir = mkdtempSync(join(tmpdir(), 'cursor-sentinel-'));
+      dirs.push(sentinelDir);
+      const sentinel = join(sentinelDir, 'mcp.json');
+      const sentinelBytes = JSON.stringify({
+        mcpServers: { geniro: ourEntry(), theirs: { command: 'theirs' } },
+      });
+      writeFileSync(sentinel, sentinelBytes, 'utf8');
 
-    // 1. `.cursor` itself is a link.
-    const linkedDir = mkdtempSync(join(tmpdir(), 'cursor-linkdir-'));
-    dirs.push(linkedDir);
-    symlinkSync(sentinelDir, join(linkedDir, '.cursor'));
-    expect(cleanStrandedMerge(linkedDir, { created: false })).toBe(
-      'unresolved',
-    );
+      const cwd = mkdtempSync(join(tmpdir(), 'cursor-link-'));
+      dirs.push(cwd);
+      if (shape === 'cursorDir') {
+        symlinkSync(sentinelDir, join(cwd, '.cursor'));
+      } else {
+        mkdirSync(join(cwd, '.cursor'));
+        if (shape === 'config') {
+          symlinkSync(sentinel, configPath(cwd));
+        } else {
+          writeFileSync(
+            configPath(cwd),
+            JSON.stringify({ mcpServers: { geniro: ourEntry() } }),
+            'utf8',
+          );
+          symlinkSync(sentinel, `${configPath(cwd)}.geniro-bak`);
+        }
+      }
 
-    // 2. `mcp.json` is a link into someone else's file.
-    const linkedFile = worktree();
-    symlinkSync(sentinel, configPath(linkedFile));
-    expect(cleanStrandedMerge(linkedFile, { created: true })).toBe(
-      'unresolved',
-    );
+      expect(cleanStrandedMerge(cwd, { created: false, mode: 0o644 })).toBe(
+        'unresolved',
+      );
+      expect(readFileSync(sentinel, 'utf8')).toBe(sentinelBytes);
+    },
+  );
 
-    // 3. The backup is a link — restore would copy over the target.
-    const linkedBak = worktree();
+  it('refuses a backup that is not a regular file, without reading it', () => {
+    // A FIFO here would block readFileSync forever — inside the pre-listen
+    // boot path, where no try/catch can recover from a block.
+    const cwd = worktree();
     writeFileSync(
-      configPath(linkedBak),
-      JSON.stringify({ mcpServers: {} }),
+      configPath(cwd),
+      JSON.stringify({ mcpServers: { geniro: ourEntry() } }),
       'utf8',
     );
-    symlinkSync(sentinel, `${configPath(linkedBak)}.geniro-bak`);
-    expect(cleanStrandedMerge(linkedBak, { created: false })).toBe(
+    mkdirSync(`${configPath(cwd)}.geniro-bak`);
+
+    expect(cleanStrandedMerge(cwd, { created: false, mode: 0o644 })).toBe(
       'unresolved',
     );
-
-    // Nothing outside the named worktrees was read, rewritten or removed.
-    expect(readFileSync(sentinel, 'utf8')).toBe(sentinelBytes);
   });
 
   it('leaves an unparseable file and its backup alone instead of guessing', () => {

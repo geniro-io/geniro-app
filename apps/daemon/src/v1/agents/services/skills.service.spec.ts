@@ -156,6 +156,7 @@ describe('SkillsService', () => {
     // service and the graph executor) record a `slash_commands` event for
     // whichever agent emitted it, keyed by cwd alone.
     const driver = new AcpTurnDriver({
+      composeSystemPrompt: () => '',
       input: { prompt: 'go', cwd },
       clientName: 'geniro',
       clientVersion: '0.0.0',

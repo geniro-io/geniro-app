@@ -1147,8 +1147,7 @@ describe('GraphExecutorService — agent calls', () => {
       callTokens.get(run.id, 'orch'),
     );
     expect(caller.input.callSurfacePrompt).toContain('May call');
-    // Per-run, derived from the run id — never the bare `geniro` a project's
-    // own MCP config could also define, since ACP has no --strict-mcp-config.
+    // Derived from the run id — see AgentTurnInput.mcpEndpoint.serverName.
     expect(caller.input.mcpEndpoint?.serverName).toBe(
       `geniro-${run.id.slice(0, 8)}`,
     );

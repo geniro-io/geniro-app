@@ -5,10 +5,10 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
-import { GENIRO_MCP_CALL_TOOLS } from '../../agents/utils/cursor-mcp-entry';
+import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
+import type { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
-import type { CursorProbeService } from './cursor-probe.service';
 import { McpServerService } from './mcp-server.service';
 
 const HELPER: WorkflowAgentNode = {
@@ -153,7 +153,7 @@ describe('McpServerService', () => {
       json().result as { tools: { name: string; description: string }[] }
     ).tools;
     // Lockstep with the cursor autoApprove mirror: the endpoint's served tool
-    // names ARE the list cursor-mcp-entry auto-approves — a tool added here
+    // names ARE the list the cursor MCP entry auto-approves — a tool added here
     // without updating GENIRO_MCP_CALL_TOOLS fails this assertion.
     expect(tools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
     expect(tools[0]!.description).toContain('Helper');

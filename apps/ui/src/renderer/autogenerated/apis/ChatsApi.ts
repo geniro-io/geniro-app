@@ -15,8 +15,10 @@
 
 import * as runtime from '../runtime';
 import type {
+  AttachmentDataDto,
   CancelledDto,
   CreateChatDto,
+  DeletedDto,
   ItemDto,
   RenameRunDto,
   RunDto,
@@ -32,9 +34,18 @@ export interface ChatsApiCreateChatRequest {
     createChatDto: CreateChatDto;
 }
 
+export interface ChatsApiDeleteChatRequest {
+    runId: string;
+}
+
 export interface ChatsApiListRunItemsRequest {
     runId: string;
     afterSeq?: number;
+}
+
+export interface ChatsApiReadChatAttachmentRequest {
+    runId: string;
+    attachmentId: string;
 }
 
 export interface ChatsApiRenameRunRequest {
@@ -152,6 +163,51 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async deleteChatRaw(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeletedDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling deleteChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async deleteChat(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
+        const response = await this.deleteChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async listChatsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
         const queryParameters: any = {};
 
@@ -232,6 +288,59 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async listRunItems(requestParameters: ChatsApiListRunItemsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<ItemDto>> {
         const response = await this.listRunItemsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readChatAttachmentRaw(requestParameters: ChatsApiReadChatAttachmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AttachmentDataDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readChatAttachment().'
+            );
+        }
+
+        if (requestParameters['attachmentId'] == null) {
+            throw new runtime.RequiredError(
+                'attachmentId',
+                'Required parameter "attachmentId" was null or undefined when calling readChatAttachment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/attachments/{attachmentId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"attachmentId"}}`, encodeURIComponent(String(requestParameters['attachmentId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readChatAttachment(requestParameters: ChatsApiReadChatAttachmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AttachmentDataDto> {
+        const response = await this.readChatAttachmentRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

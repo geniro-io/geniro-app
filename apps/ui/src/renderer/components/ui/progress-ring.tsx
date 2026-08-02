@@ -12,6 +12,7 @@ export function ProgressRing({
   size = 16,
   strokeWidth = 2.5,
   label,
+  centerLabel,
   className,
 }: {
   /** Fill fraction 0..1 — values outside the range are clamped. */
@@ -20,6 +21,15 @@ export function ProgressRing({
   strokeWidth?: number;
   /** Accessible name (aria-label); omit only for purely decorative rings. */
   label?: string;
+  /**
+   * Short text drawn INSIDE the ring — a percentage, typically.
+   *
+   * An SVG `<text>` rather than a `children` slot: the ring IS an `<svg>`, so
+   * arbitrary JSX cannot be nested in it, and a wrapper div positioning HTML
+   * over the circle would not scale with `size`. Keep it to a few characters;
+   * the ring has to be legible at 16px.
+   */
+  centerLabel?: string;
   className?: string;
 }): React.JSX.Element {
   const clamped = Math.min(1, Math.max(0, fraction));
@@ -53,6 +63,22 @@ export function ProgressRing({
         strokeDasharray={`${circumference * clamped} ${circumference}`}
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
       />
+      {centerLabel ? (
+        <text
+          x="50%"
+          y="50%"
+          textAnchor="middle"
+          dominantBaseline="central"
+          // `currentColor` matches the arc, and the size is derived from the
+          // ring so one prop still controls the whole component's scale.
+          fill="currentColor"
+          fontSize={size * 0.4}
+          // The ring already carries the accessible name; the glyphs would
+          // otherwise be read out a second time.
+          aria-hidden>
+          {centerLabel}
+        </text>
+      ) : null}
     </svg>
   );
 }

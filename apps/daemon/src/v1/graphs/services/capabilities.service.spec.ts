@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ClaudeProbeService } from '../../agents/services/claude-probe.service';
+import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import type { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
 import { CapabilitiesService } from './capabilities.service';
-import type { CursorProbeService } from './cursor-probe.service';
 
 describe('CapabilitiesService', () => {
   it('composes the wire from both probes (each arm keeps its own pre-warm)', () => {

@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Settings } from '../shared/contracts';
+import { DEFAULT_SETTINGS } from '../shared/contracts';
 
 const mocks = vi.hoisted(() => ({
   app: {
@@ -13,12 +14,11 @@ const mocks = vi.hoisted(() => ({
   getSecret: vi.fn((): string | null => null),
   loginShellPath: vi.fn(async () => null),
   readSettings: vi.fn((): Settings => ({
+    // Spread the real defaults: only cliPaths matters to these specs, and
+    // restating every field turns each new Settings key into a spec edit.
+    ...DEFAULT_SETTINGS,
     onboardingComplete: true,
-    projectFolder: null,
-    recentFolders: [],
-    lastChatTarget: null,
     cliPaths: { claude: '/opt/tools/claude' },
-    checkForUpdates: true,
   })),
 }));
 
@@ -135,12 +135,9 @@ function harness(opts: {
 beforeEach(() => {
   mocks.getSecret.mockReturnValue(null);
   mocks.readSettings.mockReturnValue({
+    ...DEFAULT_SETTINGS,
     onboardingComplete: true,
-    projectFolder: null,
-    recentFolders: [],
-    lastChatTarget: null,
     cliPaths: { claude: '/opt/tools/claude' },
-    checkForUpdates: true,
   });
 });
 afterEach(() => {
@@ -407,12 +404,9 @@ describe('DaemonSupervisor.restart', () => {
       await h.supervisor.start();
       mocks.getSecret.mockReturnValue('new-cursor-key');
       mocks.readSettings.mockReturnValue({
+        ...DEFAULT_SETTINGS,
         onboardingComplete: true,
-        projectFolder: null,
-        recentFolders: [],
-        lastChatTarget: null,
         cliPaths: { 'cursor-agent': '/opt/tools/cursor-agent' },
-        checkForUpdates: true,
       });
 
       const restarted = h.supervisor.restart();
@@ -496,12 +490,9 @@ describe('DaemonSupervisor.restart', () => {
       expect(h.spawned[0]?.env?.GENIRO_CLAUDE_BIN).toBe('/opt/tools/claude');
 
       mocks.readSettings.mockReturnValue({
+        ...DEFAULT_SETTINGS,
         onboardingComplete: true,
-        projectFolder: null,
-        recentFolders: [],
-        lastChatTarget: null,
         cliPaths: { claude: '/opt/tools/claude-superseding' },
-        checkForUpdates: true,
       });
       const second = h.supervisor.restart();
       // Coalesced: the overlapping restart shares the in-flight promise.

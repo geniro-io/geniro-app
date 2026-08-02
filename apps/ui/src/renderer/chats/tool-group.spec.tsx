@@ -101,7 +101,13 @@ describe('ToolGroup', () => {
 
     const rows = [...container.querySelectorAll('button[aria-expanded]')];
     click(rows[1] ?? null); // first tool row (index 0 is the group header)
-    expect(container.textContent).toContain('"command": "ls -la"');
+    // The command is shown AS a shell command, not as the raw JSON envelope
+    // it arrived in — the input keys must not be on screen at all.
+    const blocks = [...container.querySelectorAll('[data-slot="code-block"]')];
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks[0]?.getAttribute('data-language')).toBe('bash');
+    expect(blocks[0]?.textContent).toBe('ls -la');
+    expect(container.textContent).not.toContain('"command"');
     expect(container.textContent).toContain('file-list');
     expect(container.textContent).toContain('result');
   });

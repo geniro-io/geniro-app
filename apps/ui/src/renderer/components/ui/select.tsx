@@ -58,6 +58,7 @@ export function Select({
   searchPlaceholder,
   leadingIcon,
   disabled = false,
+  shrinkable = false,
   className,
   id,
   title,
@@ -81,6 +82,15 @@ export function Select({
   /** Glyph on the TRIGGER itself (the folder chip's folder icon). */
   leadingIcon?: React.ReactNode;
   disabled?: boolean;
+  /**
+   * Let this chip give up width in a tight single-line row, truncating its
+   * label. Off by default so a SHORT fixed label (an agent kind, a mode) keeps
+   * its full text: in a row of shrinkable chips flex compresses everything at
+   * once, and five half-truncated chips read worse than one elided path. Turn
+   * it on for the chips whose label is user data of unbounded length — the
+   * folder and the branch.
+   */
+  shrinkable?: boolean;
   className?: string;
   id?: string;
   title?: string;
@@ -95,7 +105,14 @@ export function Select({
   return (
     <span
       data-slot={ghost ? 'select-chip' : 'select'}
-      className={cn('relative inline-flex', ghost ? 'w-auto' : 'w-full')}>
+      className={cn(
+        'relative inline-flex',
+        ghost ? 'w-auto' : 'w-full',
+        // Both the wrapper AND the trigger have to yield, or the inner one
+        // pins the outer one's width. `min-w-0` is what lets the label
+        // truncate at all — a flex item's floor is its content by default.
+        shrinkable && 'min-w-0 shrink',
+      )}>
       <button
         type="button"
         id={id}
@@ -111,6 +128,9 @@ export function Select({
             ? cn(
                 chipVariants({ interactive: true }),
                 'focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                // Overrides the chip's own `shrink-0` — same tailwind-merge
+                // group, so the later class wins.
+                shrinkable && 'shrink',
               )
             : triggerVariants({ variant }),
           className,

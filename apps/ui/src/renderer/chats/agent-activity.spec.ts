@@ -87,6 +87,35 @@ describe('computeAgentActivity', () => {
     expect(activity.get('worker')?.spentUsd).toBeNull();
   });
 
+  it("tracks the latest turn's reported context window", () => {
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 5_000, contextWindowTokens: 200_000 },
+        stopReason: null,
+      }),
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 28_283, contextWindowTokens: 1_000_000 },
+        stopReason: null,
+      }),
+    ]);
+    expect(activity.get('worker')?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('drops a remembered window when the latest turn reports none', () => {
+    // A stale 1M window would keep a 200k model reading as 3% full.
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 5_000, contextWindowTokens: 1_000_000 },
+        stopReason: null,
+      }),
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 6_000 },
+        stopReason: null,
+      }),
+    ]);
+    expect(activity.get('worker')?.contextWindowTokens).toBeNull();
+  });
+
   it("keys a single-agent chat's null-node items under CHAT_AGENT_KEY", () => {
     const activity = computeAgentActivity([
       item('turn_complete', null, {

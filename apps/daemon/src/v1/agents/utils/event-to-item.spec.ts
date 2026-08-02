@@ -18,6 +18,19 @@ describe('mapEventToItem', () => {
     ).toBeNull();
   });
 
+  it('drops text deltas — the live plane must NEVER become a database row', () => {
+    // A turn emits hundreds of these. The durable record is the `text` event
+    // that follows; if this ever returned a row, every token would be written
+    // and replayed.
+    expect(mapEventToItem({ type: 'text_delta', text: 'The sea' })).toBeNull();
+  });
+
+  it('drops thinking progress — a turn reports it repeatedly', () => {
+    expect(
+      mapEventToItem({ type: 'thinking_progress', tokens: 300 }),
+    ).toBeNull();
+  });
+
   it('maps text to an assistant message row', () => {
     expect(mapEventToItem({ type: 'text', text: 'hello there' })).toEqual({
       kind: 'message',
@@ -119,6 +132,7 @@ describe('mapEventToItem', () => {
           inputTokens: 12,
           outputTokens: 3,
           contextTokens: 1012,
+          contextWindowTokens: 1_000_000,
           costUsd: 0.14,
         },
         stopReason: 'end_turn',
@@ -132,6 +146,7 @@ describe('mapEventToItem', () => {
           inputTokens: 12,
           outputTokens: 3,
           contextTokens: 1012,
+          contextWindowTokens: 1_000_000,
           costUsd: 0.14,
         },
         stopReason: 'end_turn',

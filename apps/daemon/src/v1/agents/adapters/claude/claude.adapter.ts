@@ -1,207 +1,52 @@
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveAgentBinary } from '../../utils/agent-binary';
+import { AgentKind } from '../../../runs/runs.types';
 import { claudeCredentialEnv } from '../../utils/child-env';
+import type {
+  AdapterConfig,
+  AdapterQuestion,
+  AgentApprovalMode,
+  AgentEvent,
+  AgentModel,
+  AgentTurnInput,
+  InstalledApprovalSupport,
+  InstalledCapabilities,
+} from '../adapter.types';
+import { AgentAdapter } from '../agent-adapter';
 import {
-  asArray,
-  asBoolean,
-  asNumber,
-  asRecord,
-  asString,
-} from '../../utils/json-util';
-import type { AgentEvent, AgentTurnInput, AgentUsage } from '../adapter.types';
-import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
-
-/**
- * Default `MCP_TOOL_TIMEOUT` for turns that carry the call tools: a sync
- * call_agent legitimately runs for minutes (a full callee turn), far past the
- * CLI's own default MCP client timeout.
- */
-const DEFAULT_MCP_TOOL_TIMEOUT_MS = 30 * 60_000;
-
-/** Claude-specific constructor options (the bag stays a test seam). */
-export interface ClaudeAdapterOptions extends AgentAdapterOptions {
-  /**
-   * Directory for the per-turn `--mcp-config` files (the daemon passes its
-   * userData tmp dir); falls back to the OS tmpdir for standalone/spec use.
-   */
-  mcpConfigDir?: string;
-}
-
-/**
- * Map one parsed line of `claude -p --output-format stream-json` to normalized
- * events. Shapes verified against a live `claude` 2.1.196 capture:
- * - `system/init` carries the `session_id` (→ resume slot).
- * - `assistant.message.content[]` blocks: `text` / `thinking` / `tool_use`.
- * - `user.message.content[]` `tool_result` blocks close a tool call.
- * - `result` carries the final text, `usage`, `total_cost_usd`, `stop_reason`.
- * - `control_request` (`can_use_tool`) is the permission pause of the stdin
- *   control protocol (`--permission-prompt-tool stdio`, `ask` approval mode);
- *   verified against a live 2.1.199 capture.
- * - Anything else (`hook_*`, `post_turn_summary`, `rate_limit_event`, …) is
- *   ignored — the stream legitimately includes event types this turn doesn't model.
- */
-export function mapClaudeMessage(obj: unknown): AgentEvent[] {
-  const root = asRecord(obj);
-  if (!root) {
-    return [];
-  }
-
-  switch (asString(root.type)) {
-    case 'system': {
-      if (asString(root.subtype) === 'init') {
-        const events: AgentEvent[] = [];
-        const sessionId = asString(root.session_id);
-        if (sessionId) {
-          events.push({ type: 'session', sessionId });
-        }
-        // init's `slash_commands` is the session's authoritative invokable
-        // set (built-ins + plugins + skills + commands) — harvested for the
-        // composer's `/` autocomplete. Verified live on 2.1.211.
-        const commands = asArray(root.slash_commands)
-          .map((entry) => asString(entry))
-          .filter((entry): entry is string => entry !== null && entry !== '');
-        if (commands.length > 0) {
-          events.push({ type: 'slash_commands', commands });
-        }
-        return events;
-      }
-      return [];
-    }
-
-    case 'assistant': {
-      const message = asRecord(root.message);
-      if (!message) {
-        return [];
-      }
-      const events: AgentEvent[] = [];
-      for (const block of asArray(message.content)) {
-        const b = asRecord(block);
-        if (!b) {
-          continue;
-        }
-        switch (asString(b.type)) {
-          case 'text': {
-            const text = asString(b.text);
-            if (text) {
-              events.push({ type: 'text', text });
-            }
-            break;
-          }
-          case 'thinking': {
-            const text = asString(b.thinking) ?? asString(b.text);
-            if (text) {
-              events.push({ type: 'reasoning', text });
-            }
-            break;
-          }
-          case 'tool_use': {
-            events.push({
-              type: 'tool_call',
-              id: asString(b.id) ?? '',
-              name: asString(b.name) ?? '',
-              input: b.input ?? null,
-            });
-            break;
-          }
-          default:
-            break;
-        }
-      }
-      return events;
-    }
-
-    case 'user': {
-      const message = asRecord(root.message);
-      if (!message) {
-        return [];
-      }
-      const events: AgentEvent[] = [];
-      for (const block of asArray(message.content)) {
-        const b = asRecord(block);
-        if (!b || asString(b.type) !== 'tool_result') {
-          continue;
-        }
-        events.push({
-          type: 'tool_result',
-          id: asString(b.tool_use_id) ?? '',
-          name: null,
-          result: b.content ?? null,
-          isError: asBoolean(b.is_error),
-        });
-      }
-      return events;
-    }
-
-    case 'control_request': {
-      const request = asRecord(root.request);
-      const id = asString(root.request_id);
-      if (!request || !id || asString(request.subtype) !== 'can_use_tool') {
-        return [];
-      }
-      return [
-        {
-          type: 'approval_request',
-          id,
-          toolName: asString(request.tool_name) ?? '',
-          input: request.input ?? null,
-          // AskUserQuestion carries requires_user_interaction: true (verified
-          // live on 2.1.202) — the M4 question-vs-permission discriminator.
-          requiresUserInteraction: asBoolean(request.requires_user_interaction)
-            ? true
-            : undefined,
-        },
-      ];
-    }
-
-    case 'result': {
-      if (asBoolean(root.is_error)) {
-        return [
-          {
-            type: 'error',
-            message:
-              asString(root.result) ??
-              asString(root.error) ??
-              'claude run failed',
-          },
-        ];
-      }
-      const usageRec = asRecord(root.usage);
-      // Context = everything on the prompt side of the window. Claude splits
-      // it across three counters; a resumed session is almost all cache-read.
-      const contextParts = usageRec
-        ? [
-            asNumber(usageRec.input_tokens),
-            asNumber(usageRec.cache_creation_input_tokens),
-            asNumber(usageRec.cache_read_input_tokens),
-          ].filter((part): part is number => part !== null)
-        : [];
-      const usage: AgentUsage = {
-        inputTokens: usageRec ? asNumber(usageRec.input_tokens) : null,
-        outputTokens: usageRec ? asNumber(usageRec.output_tokens) : null,
-        contextTokens:
-          contextParts.length > 0
-            ? contextParts.reduce((sum, part) => sum + part, 0)
-            : null,
-        costUsd: asNumber(root.total_cost_usd),
-      };
-      return [
-        {
-          type: 'turn_complete',
-          usage,
-          stopReason: asString(root.stop_reason),
-          finalText: asString(root.result) ?? null,
-        },
-      ];
-    }
-
-    default:
-      return [];
-  }
-}
+  CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
+  CLAUDE_BASE_ARGS,
+  CLAUDE_DENY_MESSAGE,
+  CLAUDE_EFFORT_FLAG,
+  CLAUDE_MCP_CONFIG_DIR_NAME,
+  CLAUDE_MCP_CONFIG_FLAG,
+  CLAUDE_MCP_TOOL_TIMEOUT_ENV,
+  CLAUDE_MCP_TOOL_TIMEOUT_MS,
+  CLAUDE_MODEL_FLAG,
+  CLAUDE_PARTIAL_MESSAGES_FLAG,
+  CLAUDE_PERMISSION_MODE_DEFAULT,
+  CLAUDE_PERMISSION_MODE_FLAG,
+  CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
+  CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+  CLAUDE_RESUME_FLAG,
+  CLAUDE_SKIP_PERMISSIONS_FLAG,
+  CLAUDE_STRICT_MCP_CONFIG_FLAG,
+} from './claude.const';
+import type { ClaudeAdapterOptions } from './claude.types';
+import { buildImageBlocks } from './utils/claude-images.utils';
+import {
+  sweepStaleTurnMcpConfigs,
+  writeTurnMcpConfig,
+} from './utils/claude-mcp-config.utils';
+import { mapClaudeMessage } from './utils/claude-message.utils';
+import { claudeModels } from './utils/claude-models.utils';
+import {
+  optionLabelsOf,
+  questionTextOf,
+  withResponse,
+} from './utils/claude-question.utils';
 
 /**
  * Drives `claude` headlessly. The prompt is sent as a stream-json user-message
@@ -216,7 +61,184 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
  * Plain chat (no `approvalMode`) keeps the M2 argv byte-for-byte.
  */
 export class ClaudeAdapter extends AgentAdapter {
-  readonly kind = 'claude' as const;
+  getConfig(): AdapterConfig {
+    return {
+      kind: AgentKind.Claude,
+      /**
+       * Probe-verified: a plain chat turn under `--permission-mode default
+       * --permission-prompt-tool stdio` offers this tool, and its request
+       * arrives as `can_use_tool` with `requires_user_interaction: true`.
+       */
+      questionToolName: 'AskUserQuestion',
+      approval: {
+        /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
+        modes: ['auto', 'ask', 'acceptEdits', 'plan'],
+        /**
+         * The two modes headless claude has been seen to reject on some builds
+         * — so a run requesting either waits out the mode probe, and a run that
+         * never does pays nothing.
+         */
+        probedModes: ['acceptEdits', 'plan'],
+        /**
+         * `acceptEdits` degrades to `ask` on a probed FAIL — the turn still
+         * runs, every edit just asks first.
+         *
+         * `plan` is deliberately ABSENT, even though it is probed the same
+         * way: turning a no-execute mode into an executing `ask` would invert
+         * the whole promise the user selected it for. An unsupported `plan`
+         * rides through and the CLI rejects it loudly, which is the honest
+         * failure. Do not add it here "for completeness".
+         *
+         * An UNPROBED mode keeps what was asked for, so a real rejection
+         * surfaces from the CLI rather than from a guess made here.
+         */
+        degradeOnProbeFail: {
+          acceptEdits: {
+            to: 'ask',
+            /** `acceptEdits` still runs on a probed FAIL — every edit just asks first. */
+            reason:
+              "installed claude does not support acceptEdits — this turn runs as 'ask'",
+          },
+        },
+        /** Four honoured modes — the sole-mode collapse never applies to claude. */
+        soleModeDegradeReason: null,
+      },
+      /**
+       * The values `claude --effort` accepts, weakest first.
+       *
+       * WRITTEN DOWN RATHER THAN SCRAPED, because the CLI under-reports itself.
+       * Its own `--help` says "Valid values: low, medium, high, xhigh, max" and
+       * its warning line repeats that set — but `ultracode` is accepted just as
+       * silently as the five it names.
+       *
+       * Probe-verified on claude 2.1.220 (2026-07-29) by feeding each candidate
+       * and testing for the `Unknown --effort value` warning:
+       * - accepted, no warning: low, medium, high, xhigh, max, `ultracode`
+       * - rejected with the warning: `ultrathink`, and the control
+       *   `zzz-not-a-level`
+       *
+       * So a `--help` scrape would drop `ultracode` (a level the user asked for
+       * by name), and guessing would never have found it. Re-probe the same way
+       * when this list is revised; do not copy it out of help output.
+       */
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'medium', label: 'medium' },
+        { id: 'high', label: 'high' },
+        { id: 'xhigh', label: 'xhigh' },
+        { id: 'max', label: 'max' },
+        { id: 'ultracode', label: 'ultracode' },
+      ],
+      /**
+       * The aliases `claude --model` documents: each resolves to the latest
+       * model of its tier, so they stay correct across releases without an app
+       * update. This is the floor of the list, never the whole of it.
+       */
+      builtinModels: [
+        { id: 'opus', label: 'opus', source: 'builtin' },
+        { id: 'sonnet', label: 'sonnet', source: 'builtin' },
+        { id: 'haiku', label: 'haiku', source: 'builtin' },
+      ],
+      skillRoots: {
+        /** `<root>/.claude/skills/<name>/SKILL.md`. */
+        skills: [['.claude', 'skills']],
+        /** `<root>/.claude/commands/**.md`. */
+        commands: [['.claude', 'commands']],
+      },
+      liveStream: {
+        /** Utility argv whose stdout is searched for {@link CLAUDE_PARTIAL_MESSAGES_FLAG}. */
+        probeArgs: ['--help'],
+        flag: CLAUDE_PARTIAL_MESSAGES_FLAG,
+      },
+      reportedCommands: {
+        /** Never reached by the model: the turn is cancelled the moment init lands. */
+        probePrompt: 'Reply with exactly: ok',
+        /** A hung probe must not wedge the caller forever. */
+        probeTimeoutMs: 30_000,
+        /** Defensive bound — init reports ~60 entries today. */
+        maxCommands: 500,
+        /**
+         * `_`-prefixed names are claude's INTERNAL commands
+         * (`__remote-workflow`) — reported, but not things a user invokes.
+         * SkillHarvestStore drops them from the other report path too.
+         */
+        internalPrefix: '_',
+      },
+      mcp: {
+        /**
+         * The endpoint is handed to claude per turn, so nothing about the
+         * machine has to be trusted in advance.
+         */
+        callToolsRequireTrustProbe: false,
+        /** `--mcp-config` carries the endpoint for one turn; no cwd file is touched. */
+        endpointRequiresCwdConfig: false,
+      },
+      terminal: {
+        resumeFlag: CLAUDE_RESUME_FLAG,
+        /**
+         * What a resumable claude session id looks like. A missing or
+         * foreign-shaped id is not a mirror target — opening the TUI without
+         * one would start an unrelated fresh conversation instead of showing
+         * the run's own.
+         */
+        sessionIdPattern: /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+      },
+    };
+  }
+
+  /**
+   * Claude's own slice of the capability bag: the permission-mode probe's
+   * verdict, translated into the adapter-agnostic tri-state.
+   *
+   * The ONE thing config cannot express, and the whole reason this override
+   * survives: `config.approval.probedModes` declares WHICH modes are probed,
+   * but only this adapter knows the verdict arrives under the bag's
+   * CLI-NAMED `claudeModes` field. There is exactly one approval probe in the
+   * daemon and it is claude's, so the bag is handed to whichever adapter runs
+   * a turn and each takes only its own slice — an adapter that declared no
+   * probed mode keeps the base's empty answer.
+   *
+   * `unknown` maps to ABSENT, never to `false`. The distinction is the whole
+   * point: an unprobed mode keeps what the caller asked for, so a genuine
+   * rejection surfaces loudly from the CLI itself instead of being pre-empted
+   * by a degrade nobody proved was needed.
+   */
+  override approvalSupportFrom(
+    capabilities: InstalledCapabilities,
+  ): InstalledApprovalSupport {
+    const { claudeModes } = capabilities;
+    const supported: Partial<Record<AgentApprovalMode, boolean>> = {};
+    if (claudeModes.acceptEdits !== 'unknown') {
+      supported.acceptEdits = claudeModes.acceptEdits === 'pass';
+    }
+    if (claudeModes.plan !== 'unknown') {
+      supported.plan = claudeModes.plan === 'pass';
+    }
+    return { supported };
+  }
+
+  /**
+   * claude's question channel is the AskUserQuestion tool
+   * (`config.questionToolName`), whose input carries the questions, their
+   * headers and their option labels. Projecting it is the adapter's job, so
+   * the graph executor can bridge a callee's question to its caller without
+   * ever holding claude's payload shape.
+   *
+   * Never null: a request that reached here IS the question tool's, and a
+   * malformed or version-drifted payload degrades to empty projections rather
+   * than claiming there was no question (see `utils/claude-question.utils`).
+   */
+  override questionFrom(input: unknown): AdapterQuestion {
+    return { text: questionTextOf(input), options: optionLabelsOf(input) };
+  }
+
+  /**
+   * The answer rides back as AskUserQuestion's `response` field — the
+   * probe-verified free-text channel claude surfaces to the model.
+   */
+  override withAnswer(input: unknown, answer: string): unknown {
+    return withResponse(input, answer);
+  }
 
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
@@ -225,32 +247,15 @@ export class ClaudeAdapter extends AgentAdapter {
     super(claudeOptions);
   }
 
-  // Resolved per turn so the Settings cliPaths override (GENIRO_CLAUDE_BIN on
-  // the daemon env) takes effect without reconstructing the adapter.
-  protected get command(): string {
-    return resolveAgentBinary('claude');
-  }
-
   /**
-   * Delete any `mcp-*.json` files a prior daemon launch left in the config dir
-   * (a crash/SIGKILL skips the per-turn disposer). Called once at boot — the
-   * tokens inside are already dead (the registry is in-memory), so this is
-   * hygiene, not a security fix. Best-effort: a missing dir or a busy file
-   * never blocks boot.
+   * Drop the per-turn config files a prior daemon launch left behind. Called
+   * once at boot; a no-op when the daemon named no config dir, since the OS
+   * tmpdir fallback is only ever used standalone.
    */
   sweepStaleConfigs(): void {
     const dir = this.claudeOptions.mcpConfigDir;
-    if (!dir) {
-      return;
-    }
-    try {
-      for (const name of readdirSync(dir)) {
-        if (name.startsWith('mcp-') && name.endsWith('.json')) {
-          rmSync(join(dir, name), { force: true });
-        }
-      }
-    } catch {
-      // No dir yet, or an unreadable entry — nothing to sweep.
+    if (dir) {
+      sweepStaleTurnMcpConfigs(dir);
     }
   }
 
@@ -264,22 +269,10 @@ export class ClaudeAdapter extends AgentAdapter {
     if (!input.mcpEndpoint) {
       return undefined;
     }
-    const dir = this.claudeOptions.mcpConfigDir ?? join(tmpdir(), 'geniro-mcp');
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, `mcp-${randomUUID()}.json`);
-    writeFileSync(
-      path,
-      JSON.stringify({
-        mcpServers: {
-          geniro: {
-            type: 'http',
-            url: input.mcpEndpoint.url,
-            headers: { Authorization: `Bearer ${input.mcpEndpoint.token}` },
-          },
-        },
-      }),
-      { encoding: 'utf8', mode: 0o600 },
-    );
+    const dir =
+      this.claudeOptions.mcpConfigDir ??
+      join(tmpdir(), CLAUDE_MCP_CONFIG_DIR_NAME);
+    const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
     this.mcpConfigPaths.set(input, path);
     return () => {
       this.mcpConfigPaths.delete(input);
@@ -287,40 +280,80 @@ export class ClaudeAdapter extends AgentAdapter {
     };
   }
 
+  /**
+   * claude has no list-models subcommand to run, so nothing is spawned: the
+   * list is the documented tier aliases plus the account-specific models the
+   * CLI caches in `~/.claude.json` for its own picker. Synchronous work behind
+   * an async signature — the contract is shared with cursor, which really does
+   * shell out.
+   *
+   * The alias floor comes from `config.builtinModels` — the declared fallback
+   * surface — never from the const behind it, so config stays the one place a
+   * CLI's static values are read.
+   */
+  override listModels(): Promise<AgentModel[]> {
+    return Promise.resolve(
+      claudeModels(this.getConfig().builtinModels, this.claudeOptions.homeDir),
+    );
+  }
+
   protected buildArgs(input: AgentTurnInput): string[] {
-    const args = [
-      '-p',
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      '--input-format',
-      'stream-json',
-    ];
+    const args = [...CLAUDE_BASE_ARGS];
+    if (input.streamPartials) {
+      args.push(CLAUDE_PARTIAL_MESSAGES_FLAG);
+    }
     if (input.model) {
-      args.push('--model', input.model);
+      args.push(CLAUDE_MODEL_FLAG, input.model);
+    }
+    if (input.effort) {
+      // An unknown value here is not fatal — the CLI warns and runs on its own
+      // default — but the caller has already refused anything outside
+      // `listEfforts()`, so the flag only carries a level claude accepts.
+      args.push(CLAUDE_EFFORT_FLAG, input.effort);
     }
     if (input.resumeSessionId) {
-      args.push('--resume', input.resumeSessionId);
+      args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
     }
     if (input.systemPrompt) {
-      args.push('--append-system-prompt', input.systemPrompt);
+      args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, input.systemPrompt);
     }
-    if (input.approvalMode === 'auto') {
-      args.push('--dangerously-skip-permissions');
+    if (input.approvalMode === 'auto' && input.allowUserQuestions) {
+      // `--dangerously-skip-permissions` STRIPS AskUserQuestion, so an auto
+      // turn that must be able to ask spawns on the stdio dialogue instead
+      // (`default` is the CLI's name for ask). Unattended semantics are not
+      // lost — the DAEMON becomes the bypass, auto-approving every plain
+      // permission request at its approval seam and reserving the human card
+      // for genuine questions.
+      args.push(CLAUDE_PERMISSION_MODE_FLAG, CLAUDE_PERMISSION_MODE_DEFAULT);
+      args.push(
+        CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
+        CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+      );
+    } else if (input.approvalMode === 'auto') {
+      args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
     } else if (input.approvalMode) {
       // ask/acceptEdits/plan all hold the stdio approval dialogue; `ask` is
       // the CLI's `default` permission mode, the other modes map by name.
       args.push(
-        '--permission-mode',
-        input.approvalMode === 'ask' ? 'default' : input.approvalMode,
+        CLAUDE_PERMISSION_MODE_FLAG,
+        input.approvalMode === 'ask'
+          ? CLAUDE_PERMISSION_MODE_DEFAULT
+          : input.approvalMode,
       );
-      args.push('--permission-prompt-tool', 'stdio');
+      args.push(
+        CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
+        CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+      );
     }
     const mcpConfigPath = this.mcpConfigPaths.get(input);
     if (mcpConfigPath) {
       // --strict-mcp-config: ONLY our server — the user's global MCP config
       // must not leak into a headless team turn.
-      args.push('--mcp-config', mcpConfigPath, '--strict-mcp-config');
+      args.push(
+        CLAUDE_MCP_CONFIG_FLAG,
+        mcpConfigPath,
+        CLAUDE_STRICT_MCP_CONFIG_FLAG,
+      );
     }
     return args;
   }
@@ -337,8 +370,8 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     return {
       ...env,
-      MCP_TOOL_TIMEOUT: String(
-        input.mcpEndpoint.toolTimeoutMs ?? DEFAULT_MCP_TOOL_TIMEOUT_MS,
+      [CLAUDE_MCP_TOOL_TIMEOUT_ENV]: String(
+        input.mcpEndpoint.toolTimeoutMs ?? CLAUDE_MCP_TOOL_TIMEOUT_MS,
       ),
     };
   }
@@ -348,7 +381,15 @@ export class ClaudeAdapter extends AgentAdapter {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: input.prompt }],
+        // Attached images ride as real base64 content blocks — the CLI's
+        // stream-json input accepts the Messages-API block shape, so the model
+        // SEES the image directly (probe-verified on claude 2.1.220, in either
+        // block order). Handing over a path instead would cost a Read
+        // round-trip and put an image behind the permission gate.
+        content: [
+          ...buildImageBlocks(input.images),
+          { type: 'text', text: input.prompt },
+        ],
       },
     })}\n`;
   }
@@ -356,8 +397,13 @@ export class ClaudeAdapter extends AgentAdapter {
   protected override keepStdinOpen(input: AgentTurnInput): boolean {
     // Every stdio-dialogue mode (ask/acceptEdits/plan) can raise a mid-turn
     // control_request; only auto (and plain chat) closes stdin after the
-    // prompt payload.
-    return input.approvalMode !== undefined && input.approvalMode !== 'auto';
+    // prompt payload — UNLESS that auto turn was spawned on the dialogue to
+    // keep its question channel, in which case the verdict has to have a way
+    // back in (see buildArgs).
+    if (input.approvalMode === undefined) {
+      return false;
+    }
+    return input.approvalMode !== 'auto' || input.allowUserQuestions === true;
   }
 
   protected override buildApprovalResponse(
@@ -372,7 +418,7 @@ export class ClaudeAdapter extends AgentAdapter {
         request_id: id,
         response: allow
           ? { behavior: 'allow', updatedInput: updatedInput ?? {} }
-          : { behavior: 'deny', message: 'Denied by the user in Geniro' },
+          : { behavior: 'deny', message: CLAUDE_DENY_MESSAGE },
       },
     })}\n`;
   }

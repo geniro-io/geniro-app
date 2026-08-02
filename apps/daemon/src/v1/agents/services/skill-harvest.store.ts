@@ -4,14 +4,24 @@ import { dirname, join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { environment } from '../../../environments';
+import type { AgentKind } from '../../runs/runs.types';
 
-/** Defensive bound per cwd — init reports ~60 entries today. */
+/** Defensive bound per key — init reports ~60 entries today. */
 const MAX_HARVESTED = 500;
 
-/** One cwd's harvested list, as cached on disk. */
+/** One (agent, cwd) pair's harvested list, as cached on disk. */
 interface HarvestRecord {
   commands: string[];
   harvestedAt: number;
+}
+
+/**
+ * The cache key: an agent's report says nothing about the other CLI's, so the
+ * two are kept apart per folder. NUL-joined because it is the one byte a path
+ * cannot contain — the same key shape the renderer's own skills cache uses.
+ */
+function keyOf(agent: AgentKind, cwd: string): string {
+  return `${agent}\u0000${cwd}`;
 }
 
 interface SkillHarvestStoreOptions {
@@ -20,11 +30,14 @@ interface SkillHarvestStoreOptions {
 }
 
 /**
- * The CLI-reported slash-command lists, harvested from claude `system/init`
- * events as turns run (the `slash_commands` AgentEvent) and keyed by the
- * turn's canonical cwd. This is the session's authoritative invokable set —
- * it includes built-ins and plugin skills the disk scan can never see — and
- * the SkillsService merges it over the scan for the composer autocomplete.
+ * The CLI-reported slash-command lists, harvested from the `slash_commands`
+ * AgentEvent as turns run and keyed by the reporting agent plus the turn's
+ * canonical cwd.
+ *
+ * This is a session's authoritative invokable set for one folder — it includes
+ * the built-ins, plugin skills, and anything project-scoped that neither the
+ * disk scan nor a generic probe can see — so `SkillsService` ranks it ahead of
+ * the adapter's own catalog when composing the composer autocomplete.
  *
  * Cached to `<userData>/claude-skills.json` (cursor-probe.json precedent) so
  * a daemon restart keeps the enriched list; the cache is a non-critical
@@ -47,7 +60,7 @@ export class SkillHarvestStore {
    * and internal (`_`-prefixed) entries dropped; an effectively-empty report
    * is a no-op rather than an eraser of a previous good harvest.
    */
-  record(cwd: string, commands: string[]): void {
+  record(agent: AgentKind, cwd: string, commands: string[]): void {
     const cleaned: string[] = [];
     const seen = new Set<string>();
     for (const raw of commands) {
@@ -64,13 +77,20 @@ export class SkillHarvestStore {
     if (cleaned.length === 0) {
       return;
     }
-    this.load().set(cwd, { commands: cleaned, harvestedAt: Date.now() });
+    this.load().set(keyOf(agent, cwd), {
+      commands: cleaned,
+      harvestedAt: Date.now(),
+    });
     this.save();
   }
 
-  /** The last harvested list for a cwd, or null when never harvested. */
-  get(cwd: string): string[] | null {
-    return this.load().get(cwd)?.commands ?? null;
+  /**
+   * The last list this agent reported in this cwd, or null when it never has.
+   * Keyed by BOTH, because one folder is routinely used by both CLIs and their
+   * invokable sets have nothing to do with each other.
+   */
+  get(agent: AgentKind, cwd: string): string[] | null {
+    return this.load().get(keyOf(agent, cwd))?.commands ?? null;
   }
 
   private load(): Map<string, HarvestRecord> {

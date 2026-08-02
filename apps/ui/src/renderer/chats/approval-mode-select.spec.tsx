@@ -103,7 +103,13 @@ describe('ApprovalModeSelect', () => {
     expect(trigger(el).textContent).toContain('cli default');
   });
 
-  it('pins cursor chats to a hinted auto-approve badge — no select at all', () => {
+  it('renders nothing at all for a cursor chat', () => {
+    // cursor-agent has no per-turn approval channel — its permissions come
+    // from the `--force` flag plus the static allow/deny list the CLI reads
+    // from ~/.cursor/cli-config.json — so there is no choice to present. It
+    // used to state the pinned mode as a badge; that was chrome on a decision
+    // the user cannot make, and re-adding either the badge or a select would
+    // regress what this pins as removed.
     const el = render(
       <ApprovalModeSelect
         agentKind="cursor-agent"
@@ -112,11 +118,10 @@ describe('ApprovalModeSelect', () => {
         onChange={() => {}}
       />,
     );
+
     expect(el.querySelector('[data-menu-trigger]')).toBeNull();
-    expect(el.textContent).toContain('auto-approve');
-    expect(el.firstElementChild?.getAttribute('title')).toContain(
-      'no approval callback',
-    );
+    expect(el.textContent).toBe('');
+    expect(el.children).toHaveLength(0);
   });
 
   it('disables the select while a turn is running', () => {

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -10,10 +11,12 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { ItemWire, RunWire } from '../chat.types';
+import type { AttachmentDataWire, ItemWire, RunWire } from '../chat.types';
 import {
+  AttachmentDataDto,
   CancelledDto,
   CreateChatDto,
+  DeletedDto,
   HistoryQueryDto,
   ItemDto,
   RenameRunDto,
@@ -68,7 +71,7 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: UpdateChatSettingsDto,
   ): Promise<RunWire> {
-    return this.chatService.updateSettings(runId, dto.approval);
+    return this.chatService.updateSettings(runId, dto);
   }
 
   @Get(':runId/items')
@@ -88,7 +91,17 @@ export class ChatController {
     @Param('runId') runId: string,
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
-    return this.chatService.sendMessage(runId, dto.text);
+    return this.chatService.sendMessage(runId, dto.text, dto.images);
+  }
+
+  @Get(':runId/attachments/:attachmentId')
+  @ApiOperation({ operationId: 'readChatAttachment' })
+  @ZodResponse({ status: 200, type: AttachmentDataDto })
+  readAttachment(
+    @Param('runId') runId: string,
+    @Param('attachmentId') attachmentId: string,
+  ): AttachmentDataWire {
+    return this.chatService.readAttachment(runId, attachmentId);
   }
 
   @Post(':runId/cancel')
@@ -96,5 +109,12 @@ export class ChatController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancel(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.chatService.cancel(runId);
+  }
+
+  @Delete(':runId')
+  @ApiOperation({ operationId: 'deleteChat' })
+  @ZodResponse({ status: 200, type: DeletedDto })
+  delete(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
+    return this.chatService.delete(runId);
   }
 }

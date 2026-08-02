@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 
-import { ClaudeProbeService } from '../../agents/services/claude-probe.service';
+import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
+import { CursorProbeService } from '../../agents/adapters/cursor/cursor-probe.service';
 import type { CapabilitiesWire } from '../graphs.types';
-import { CursorProbeService } from './cursor-probe.service';
 
 /**
  * Composes GET /v1/capabilities from the per-CLI probes. Each probe owns its

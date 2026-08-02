@@ -1,10 +1,14 @@
+import type { execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
-import type { AgentEvent } from '../adapter.types';
-import { CursorAdapter, mapCursorMessage } from './cursor.adapter';
+import type { AdapterConfig, AgentEvent } from '../adapter.types';
+import { CursorAdapter } from './cursor.adapter';
 
 class FakeReadable extends EventEmitter {
   setEncoding(): this {
@@ -48,101 +52,85 @@ function fakeSpawn(): {
   return { spawn, child, captured };
 }
 
-describe('mapCursorMessage', () => {
-  it('reads the session id from a system event under any known key', () => {
-    expect(mapCursorMessage({ type: 'system', chatId: 'c-9' })).toEqual([
-      { type: 'session', sessionId: 'c-9' },
-    ]);
-    expect(mapCursorMessage({ type: 'system', session_id: 's-9' })).toEqual([
-      { type: 'session', sessionId: 's-9' },
-    ]);
-  });
-
-  it('maps assistant nested content blocks', () => {
-    expect(
-      mapCursorMessage({
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'hi' }] },
-      }),
-    ).toEqual([{ type: 'text', text: 'hi' }]);
-  });
-
-  it('maps a flat assistant text shape', () => {
-    expect(mapCursorMessage({ type: 'assistant', text: 'flat hi' })).toEqual([
-      { type: 'text', text: 'flat hi' },
-    ]);
-  });
-
-  it('surfaces a session id riding on a non-system event, then the payload', () => {
-    expect(
-      mapCursorMessage({ type: 'assistant', chat_id: 'c-1', text: 'yo' }),
-    ).toEqual([
-      { type: 'session', sessionId: 'c-1' },
-      { type: 'text', text: 'yo' },
-    ]);
-  });
-
-  it('maps a top-level tool_call', () => {
-    expect(
-      mapCursorMessage({
-        type: 'tool_call',
-        id: 't1',
-        name: 'Bash',
-        input: { cmd: 'ls' },
-      }),
-    ).toEqual([
-      { type: 'tool_call', id: 't1', name: 'Bash', input: { cmd: 'ls' } },
-    ]);
-  });
-
-  it('maps a successful result with a cost_usd variant', () => {
-    expect(
-      mapCursorMessage({
-        type: 'result',
-        is_error: false,
-        cost_usd: 0.02,
-        stop_reason: 'end_turn',
-        usage: { inputTokens: 5, outputTokens: 1 },
-      }),
-    ).toEqual([
-      {
-        type: 'turn_complete',
-        usage: {
-          inputTokens: 5,
-          outputTokens: 1,
-          contextTokens: 5,
-          costUsd: 0.02,
-        },
-        stopReason: 'end_turn',
-        finalText: null,
-      },
-    ]);
-  });
-
-  it('maps an error result', () => {
-    expect(
-      mapCursorMessage({
-        type: 'result',
-        is_error: true,
-        error: 'rate limited',
-      }),
-    ).toEqual([{ type: 'error', message: 'rate limited' }]);
-  });
-
-  it('ignores unknown types and non-objects', () => {
-    expect(mapCursorMessage({ type: 'heartbeat' })).toEqual([]);
-    expect(mapCursorMessage(null)).toEqual([]);
-    expect(mapCursorMessage([1, 2, 3])).toEqual([]);
-  });
-
-  it('degrades to a fresh session when a system event carries no recognized key', () => {
-    // No session/chat/thread id under any known key → no session event, so the
-    // turn starts fresh instead of resuming a bogus id.
-    expect(mapCursorMessage({ type: 'system', subtype: 'init' })).toEqual([]);
-  });
-});
-
 describe('CursorAdapter', () => {
+  it('has no way to ask the user anything, and ignores a turn that wants one', () => {
+    // The adapter rule at work: the caller asks uniformly for the question
+    // channel and THIS CLI answers "I have none" — so no service ever needs to
+    // know which agent it is talking to. cursor-agent has no per-turn approval
+    // channel at all, so allowUserQuestions must not change a single flag.
+    expect(new CursorAdapter().getConfig().questionToolName).toBeNull();
+
+    const plain = fakeSpawn();
+    new CursorAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'auto' },
+      () => {},
+    );
+    const asking = fakeSpawn();
+    new CursorAdapter({ spawn: asking.spawn }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        approvalMode: 'auto',
+        allowUserQuestions: true,
+      },
+      () => {},
+    );
+
+    expect(asking.captured.args).toEqual(plain.captured.args);
+  });
+
+  it('honours only auto, and REPORTS anything else rather than ignoring it', () => {
+    // The same rule again: a workflow node may be authored 'ask' (the graph
+    // schema is CLI-agnostic), and this CLI's honest answer is "that becomes
+    // auto, and here is the line to show the user" — never a silent swap.
+    const adapter = new CursorAdapter();
+    expect(adapter.getConfig().approval.modes).toEqual(['auto']);
+    expect(adapter.getConfig().approval.probedModes).toEqual([]);
+
+    expect(adapter.resolveApprovalMode('auto', { supported: {} })).toEqual({
+      mode: 'auto',
+      degradeReason: null,
+    });
+    for (const requested of ['ask', 'acceptEdits', 'plan'] as const) {
+      const resolved = adapter.resolveApprovalMode(requested, {
+        supported: {},
+      });
+      expect(resolved.mode).toBe('auto');
+      expect(resolved.degradeReason).toContain(
+        `approval '${requested}' degrades to auto-approve`,
+      );
+    }
+  });
+
+  it('needs a machine trust probe and a cwd config file before it can call', () => {
+    // Both true because of how cursor-agent takes an MCP server at all: a
+    // persistent trust store to satisfy, and no per-turn --mcp-config flag.
+    const adapter = new CursorAdapter();
+    expect(adapter.getConfig().mcp.callToolsRequireTrustProbe).toBe(true);
+    expect(adapter.getConfig().mcp.endpointRequiresCwdConfig).toBe(true);
+  });
+
+  it('has no reasoning-effort control, and a turn carrying one adds no flag', () => {
+    // Same rule as config.questionToolName above: the caller asks uniformly
+    // and this CLI answers "none" — effort is folded into its model ids
+    // instead.
+    expect(new CursorAdapter().listEfforts()).toEqual([]);
+
+    const plain = fakeSpawn();
+    new CursorAdapter({ spawn: plain.spawn }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
+    const withEffort = fakeSpawn();
+    new CursorAdapter({ spawn: withEffort.spawn }).start(
+      { prompt: 'p', cwd: '/proj', effort: 'high' },
+      () => {},
+    );
+
+    expect(withEffort.captured.args).toEqual(plain.captured.args);
+    expect(withEffort.captured.args).not.toContain('--effort');
+  });
+
   it('delivers the prompt on stdin — never on ps-visible argv — and streams a turn', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];
@@ -179,6 +167,7 @@ describe('CursorAdapter', () => {
           inputTokens: null,
           outputTokens: null,
           contextTokens: null,
+          contextWindowTokens: null,
           costUsd: null,
         },
         stopReason: null,
@@ -249,6 +238,29 @@ describe('CursorAdapter graph-node extras', () => {
     expect(captured.args).toEqual(expect.arrayContaining(['--force']));
   });
 
+  it('names attached image paths in the prompt, keeping the role prefix outermost', () => {
+    // cursor's stdin is a plain prompt string with no content-block channel,
+    // so a path is the only way to hand it an image. The role must still come
+    // first — it frames everything after it, attachments included.
+    const { spawn, child, captured } = fakeSpawn();
+    new CursorAdapter({ spawn }).start(
+      {
+        prompt: 'what is wrong here?',
+        cwd: '/proj',
+        systemPrompt: 'You are the reviewer.',
+        images: [{ path: '/data/att/run/a.png', mediaType: 'image/png' }],
+      },
+      () => {},
+    );
+
+    expect(child.stdin.written).toBe(
+      'You are the reviewer.\n\nThe user attached this image file:\n' +
+        '- /data/att/run/a.png\n\nwhat is wrong here?',
+    );
+    // The path rides stdin like the rest of the prompt — never argv.
+    expect(captured.args!.some((a) => a.includes('a.png'))).toBe(false);
+  });
+
   it('degrades every non-auto approval mode to --force (no approval callback)', () => {
     for (const mode of ['ask', 'acceptEdits', 'plan'] as const) {
       const { spawn, captured } = fakeSpawn();
@@ -295,5 +307,213 @@ describe('CursorAdapter binary override', () => {
     const { spawn, captured } = fakeSpawn();
     new CursorAdapter({ spawn }).start({ prompt: 'p', cwd: '/proj' }, () => {});
     expect(captured.command).toBe('/opt/tools/cursor-agent');
+  });
+});
+
+describe('CursorAdapter model listing', () => {
+  /** Capture the utility command and answer it with canned stdout. */
+  function fakeExec(stdout: string | null): {
+    execFileFn: typeof execFile;
+    captured: { args?: string[] };
+  } {
+    const captured: { args?: string[] } = {};
+    const execFileFn = ((
+      _cmd: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      captured.args = args;
+      cb(stdout === null ? new Error('spawn failed') : null, stdout ?? '');
+      return { on: () => {} };
+    }) as unknown as typeof execFile;
+    return { execFileFn, captured };
+  }
+
+  it('asks the CLI and returns exactly what it reported', async () => {
+    // `cursor-agent models` is the ONE CLI here that can be asked, so the list
+    // is live — a model the account gains shows up with no app change.
+    const { execFileFn, captured } = fakeExec('gpt-5.2-high\nsonnet-4.6\n');
+
+    const models = await new CursorAdapter({ execFileFn }).listModels();
+
+    expect(captured.args).toEqual(['models']);
+    expect(models.map((model) => model.id)).toEqual([
+      'gpt-5.2-high',
+      'sonnet-4.6',
+    ]);
+    expect(models.every((model) => model.source === 'cli')).toBe(true);
+  });
+
+  it('falls back to the documented ids when the CLI cannot answer', async () => {
+    // An install predating the `models` subcommand treats it as a prompt and
+    // drops into sign-in; the picker must still offer something usable.
+    const { execFileFn } = fakeExec(null);
+
+    const models = await new CursorAdapter({ execFileFn }).listModels();
+
+    expect(models.map((model) => model.id)).toEqual([
+      'gpt-5',
+      'sonnet-4',
+      'sonnet-4-thinking',
+    ]);
+    expect(models.every((model) => model.source === 'builtin')).toBe(true);
+  });
+
+  it('falls back to the set its CONFIG declares, not the shipped ids', async () => {
+    // `config.builtinModels` is documented as THE fallback contract — "what a
+    // CLI that cannot be asked answers with so the picker is never empty" — so
+    // it must be what listModels actually reads. An adapter whose config
+    // carries a different floor answers with THAT floor; hardcoding the
+    // documented example ids in listModels instead would leave the field
+    // write-only, and this test is the thing that fails when someone does.
+    class ConfiguredCursorAdapter extends CursorAdapter {
+      override getConfig(): AdapterConfig {
+        return {
+          ...super.getConfig(),
+          builtinModels: [
+            {
+              id: 'pinned-floor-model',
+              label: 'Pinned floor',
+              source: 'builtin',
+            },
+          ],
+        };
+      }
+    }
+    const { execFileFn } = fakeExec(null);
+
+    const models = await new ConfiguredCursorAdapter({
+      execFileFn,
+    }).listModels();
+
+    expect(models).toEqual([
+      { id: 'pinned-floor-model', label: 'Pinned floor', source: 'builtin' },
+    ]);
+  });
+
+  it('falls back when the CLI says the account has no models', async () => {
+    const { execFileFn } = fakeExec('No models available for this account.');
+
+    const models = await new CursorAdapter({ execFileFn }).listModels();
+
+    expect(models.every((model) => model.source === 'builtin')).toBe(true);
+  });
+});
+
+describe('CursorAdapter — installed approval support', () => {
+  it('reads NOTHING from the capability bag, whatever claude probed', () => {
+    // The fold's whole point: the bag is shared, but each adapter takes only
+    // its own slice. Handing cursor a bag in which claude's probe FAILED must
+    // not make cursor report a mode as unsupported — it has no probed mode at
+    // all, and an absent verdict is not a negative one.
+    expect(
+      new CursorAdapter().approvalSupportFrom({
+        claudeModes: {
+          acceptEdits: 'fail',
+          plan: 'fail',
+          reason: 'claude rejected both',
+        },
+      }),
+    ).toEqual({ supported: {} });
+  });
+});
+
+describe('CursorAdapter — commands on disk', () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function tempDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    dirs.push(dir);
+    return dir;
+  }
+
+  function writeCommand(
+    root: string,
+    agentDir: string,
+    relPath: string,
+    content: string,
+  ): void {
+    const path = join(root, agentDir, 'commands', relPath);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
+
+  function build(): { cwd: string; homeDir: string } {
+    return { cwd: tempDir('cursor-cwd-'), homeDir: tempDir('cursor-home-') };
+  }
+
+  it('scans .cursor/commands from the project folder and from ~', async () => {
+    const { cwd, homeDir } = build();
+    writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
+    writeCommand(homeDir, '.cursor', 'home-cmd.md', 'From home.');
+
+    expect(await new CursorAdapter().listSkills({ cwd, homeDir })).toEqual([
+      {
+        name: 'fix',
+        description: 'Fix the thing.',
+        kind: 'command',
+        source: 'project',
+      },
+      {
+        name: 'home-cmd',
+        description: 'From home.',
+        kind: 'command',
+        source: 'user',
+      },
+    ]);
+  });
+
+  it('never reads claude roots — .claude belongs to the other CLI', async () => {
+    const { cwd, homeDir } = build();
+    const skillDir = join(cwd, '.claude', 'skills', 'deploy');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: deploy\n---\n');
+    writeCommand(cwd, '.claude', 'review.md', 'Review.');
+    writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
+
+    const found = await new CursorAdapter().listSkills({ cwd, homeDir });
+    expect(found.map((entry) => entry.name)).toEqual(['fix']);
+  });
+
+  it('has no skills convention — every entry is a command', async () => {
+    // `config.skillRoots.skills: []` is the declared fact, so the base scans
+    // no skills root for this CLI at all.
+    const { cwd, homeDir } = build();
+    writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
+    // A cursor "skills" directory is not a thing the CLI reads.
+    const skillDir = join(cwd, '.cursor', 'skills', 'deploy');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: deploy\n---\n');
+
+    const found = await new CursorAdapter().listSkills({ cwd, homeDir });
+    expect(found.map((entry) => entry.name)).toEqual(['fix']);
+    expect(found.every((entry) => entry.kind === 'command')).toBe(true);
+  });
+
+  it('returns [] when the folder has no .cursor/commands at all', async () => {
+    const { cwd, homeDir } = build();
+    await expect(
+      new CursorAdapter().listSkills({ cwd, homeDir }),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe('CursorAdapter — the interactive terminal mirror', () => {
+  it('refuses a mirror outright — cursor-agent has no resumable TUI (deferred scope)', () => {
+    // `terminal: null` in cursor.const.ts IS the deferred-scope statement. It
+    // must answer `unsupported` even WITH a well-shaped session id: handing
+    // cursor claude's resume argv would open a broken (or unrelated) TUI, and
+    // the consumer's HTTP code for "never" differs from "not yet".
+    expect(new CursorAdapter().terminalCommand('sess-42')).toEqual({
+      ok: false,
+      reason: 'unsupported',
+    });
   });
 });

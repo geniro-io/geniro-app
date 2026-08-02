@@ -58,6 +58,20 @@ const type = (el: HTMLElement, text: string): void => {
   });
 };
 
+const hover = (el: HTMLElement, label: string): HTMLElement => {
+  const row = rows(el).find((r) => r.textContent === label)!;
+  act(() => {
+    row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  });
+  return row;
+};
+
+/** The highlighted row — the one painted with the accent background. */
+const highlighted = (el: HTMLElement): (string | null)[] =>
+  rows(el)
+    .filter((r) => r.classList.contains('bg-accent'))
+    .map((r) => r.textContent);
+
 const press = (el: HTMLElement, key: string): void => {
   act(() => {
     el.querySelector('[role="listbox"]')!.dispatchEvent(
@@ -154,6 +168,59 @@ describe('Menu', () => {
     type(el, 'zzz');
 
     expect(labels(el)).toEqual(['Choose folder…']);
+  });
+
+  it('highlights the row the cursor is over — not a different one', () => {
+    // The regression pin for the hover handler's captured index. A counter
+    // mutated across the render is a single binding every row's handler shares,
+    // so each closure reads its FINAL value: hovering any row would highlight
+    // the last one, and hovering the last would look like nothing happening.
+    const el = open();
+
+    expect(highlighted(el)).toEqual(['main']);
+
+    hover(el, 'feat/chips');
+
+    expect(highlighted(el)).toEqual(['feat/chips']);
+  });
+
+  it('numbers rows continuously across groups when hovering', () => {
+    // A group's rows are offset by every row above it. Numbering per group
+    // instead would make a hover in the second group highlight a row in the
+    // first — and the offset is exactly what the removed counter used to do.
+    // The second row of EACH group, so numbering per group would light up both.
+    const el = open([
+      {
+        label: 'Agents',
+        items: [
+          { value: 'claude', label: 'claude' },
+          { value: 'cursor', label: 'cursor' },
+        ],
+      },
+      {
+        label: 'Workflows',
+        items: [
+          { value: 'wf:review', label: 'Review team' },
+          { value: 'wf:ship', label: 'Ship team' },
+        ],
+      },
+    ]);
+
+    hover(el, 'Ship team');
+
+    expect(highlighted(el)).toEqual(['Ship team']);
+  });
+
+  it('commits the hovered row on Enter', () => {
+    // Hover and the arrow keys drive ONE highlight, so a mis-set hover index
+    // silently redirects the keyboard commit too.
+    const onSelect = vi.fn();
+    const el = open(BRANCHES, { onSelect });
+
+    hover(el, 'feat/chips');
+    press(el, 'Enter');
+
+    expect(onSelect).toHaveBeenCalledWith('feat/chips');
   });
 
   it('moves the highlight with the arrow keys and commits with Enter', () => {

@@ -2,6 +2,7 @@ import { GitBranch } from 'lucide-react';
 
 import type { GitInfo } from '../../shared/contracts';
 import { Select } from '../components/ui/select';
+import { cn } from '../components/ui/utils';
 
 /**
  * The composer's git-branch chip — rendered only when the working folder is a
@@ -41,7 +42,14 @@ export function BranchSelect({
           : 'Git branch'
       }
       disabled={switching}
-      className={className}
+      // Capped rather than shrinkable. Flex sheds width in PROPORTION to each
+      // item's natural size, so making this shrink too would elide a short
+      // "develop" alongside the folder instead of after it. Not shrinking
+      // leaves the folder — the label that tolerates elision best, its full
+      // path one tooltip away — to absorb the whole squeeze, while the cap
+      // still bounds a genuinely long branch name (the label truncates inside
+      // it) so one can't push the row wider than the card.
+      className={cn('max-w-40', className)}
       leadingIcon={<GitBranch />}
       groups={[{ items: info.branches.map((b) => ({ value: b, label: b })) }]}
       onValueChange={onSwitch}

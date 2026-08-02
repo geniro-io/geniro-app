@@ -18,8 +18,8 @@ import { installCrashGuards } from './utils/crash-guards';
 import type { DaemonInfo } from './utils/handshake';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
+import { CursorMcpMergeService } from './v1/agents/adapters/cursor/cursor-mcp-merge.service';
 import { ChatService } from './v1/agents/services/chat.service';
-import { CursorMcpMergeService } from './v1/agents/services/cursor-mcp-merge.service';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
 installCrashGuards();

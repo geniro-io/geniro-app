@@ -140,8 +140,9 @@ after shipping.)
 
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol
-client (`acp.types.ts` wire shapes, `acp-jsonrpc.ts` framing, `acp-driver.ts`
-the per-turn state machine) and knows nothing about cursor.
+client (`acp.types.ts` wire shapes, `acp-jsonrpc.ts` framing, `acp-content.ts`
+attachment blocks, `acp-driver.ts` the per-turn state machine) and knows
+nothing about cursor.
 
 Adapter-agnostic contract types and constants live in
 `adapters/adapter.types.ts`; a helper the base uses for every adapter lives in

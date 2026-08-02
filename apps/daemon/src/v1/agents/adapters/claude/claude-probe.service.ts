@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { environment } from '../../../../environments';
+import { AgentKind } from '../../../runs/runs.types';
 import type {
   ClaudeModeProbeStatus,
   ClaudeModesCapability,
@@ -239,7 +240,7 @@ export class ClaudeProbeService {
   }
 
   private async readVersion(): Promise<string | null> {
-    return this.resolveVersionFn('claude', {
+    return this.resolveVersionFn(AgentKind.Claude, {
       onSpawn: (child) =>
         this.processes.register(
           `claude-probe:version:${randomUUID()}`,

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 
+import { AgentKind } from '../../../../runs/runs.types';
 import { resolveAgentBinary } from '../../../utils/agent-binary';
 import { buildChildEnv } from '../../../utils/child-env';
 import { GENIRO_MCP_SERVER_KEY } from '../../adapter.types';
@@ -25,7 +26,7 @@ export function enableGeniroMcpServer(
   return new Promise((resolve) => {
     try {
       const child = run(
-        resolveAgentBinary('cursor-agent'),
+        resolveAgentBinary(AgentKind.CursorAgent),
         [...CURSOR_MCP_ENABLE_SUBCOMMAND, GENIRO_MCP_SERVER_KEY],
         {
           cwd,

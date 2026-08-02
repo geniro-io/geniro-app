@@ -9,6 +9,7 @@ import { CallTokenRegistry } from '../../../../auth/call-token.registry';
 import { mintToken } from '../../../../auth/mint-token';
 import type { RuntimeInfo } from '../../../../auth/runtime';
 import { environment } from '../../../../environments';
+import { AgentKind } from '../../../runs/runs.types';
 import type { CursorCallsCapability } from '../../chat.types';
 import { ProcessRegistry } from '../../services/process-registry';
 import { resolveAgentVersion } from '../../utils/agent-version';
@@ -312,7 +313,7 @@ export class CursorProbeService {
   }
 
   private async readVersion(): Promise<string | null> {
-    return this.resolveVersionFn('cursor-agent', {
+    return this.resolveVersionFn(AgentKind.CursorAgent, {
       onSpawn: (child) =>
         this.processes.register(
           `cursor-probe:version:${randomUUID()}`,

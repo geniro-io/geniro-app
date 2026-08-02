@@ -1,4 +1,4 @@
-import type { AgentKind } from '../../runs/runs.types';
+import { AgentKind } from '../../runs/runs.types';
 
 /**
  * Env var carrying the user's Settings "cliPaths" override for each agent
@@ -9,8 +9,8 @@ import type { AgentKind } from '../../runs/runs.types';
  * extracted, never mirrored.
  */
 const OVERRIDE_ENV: Record<AgentKind, string> = {
-  claude: 'GENIRO_CLAUDE_BIN',
-  'cursor-agent': 'GENIRO_CURSOR_BIN',
+  [AgentKind.Claude]: 'GENIRO_CLAUDE_BIN',
+  [AgentKind.CursorAgent]: 'GENIRO_CURSOR_BIN',
 };
 
 /** The binary to spawn for an agent kind: the override path, else PATH lookup. */

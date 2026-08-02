@@ -41,8 +41,10 @@ export function ApprovalModeSelect({
   // `plan` is claude-only: `planSupported` comes from the claude mode probe,
   // and cursor's plan mode is an agent-declared ACP session mode this client
   // cannot confirm ahead of the turn. Everything else is honoured by both.
+  // A run already stored on `plan` keeps the option whatever its agent, so the
+  // select never shows a value absent from its own menu.
   const planOffered =
-    agentKind === 'claude' && (planSupported || value === 'plan');
+    (agentKind === 'claude' && planSupported) || value === 'plan';
   const options = MODE_LABELS.filter(
     (mode) => mode.value !== 'plan' || planOffered,
   );

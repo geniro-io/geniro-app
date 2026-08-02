@@ -7,8 +7,15 @@ import { environment } from '../../../environments';
 import {
   cleanStrandedMerge,
   readMergeJournal,
-  writeMergeJournal as writeJournal,
+  writeMergeJournal,
 } from '../utils/cursor-mcp-cleanup';
+
+/**
+ * How long a transient failure keeps earning another launch. Past this the
+ * entry is reported and dropped: the journal has to reach empty for the
+ * "delete one release after shipping" promise to be honourable.
+ */
+const GIVE_UP_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface CursorMcpCleanupOptions {
   /** Test seam — the journal file the deleted transport wrote. */
@@ -42,24 +49,53 @@ export class CursorMcpCleanupService {
    * so the next launch tries again. Returns how many were cleaned.
    */
   reconcileStranded(): number {
+    try {
+      return this.replayJournal();
+    } catch (err) {
+      // Boot-critical: this runs pre-listen, so an escaping error would exit
+      // the process before the pidfile is written and repeat on every launch.
+      // A read-only or full userData dir must not cost the user their daemon
+      // over a one-release hygiene task.
+      this.logger.warn(
+        `cursor MCP cleanup skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
+    }
+  }
+
+  private replayJournal(): number {
     const entries = readMergeJournal(this.journalPath);
     if (entries.length === 0) {
       return 0;
     }
-    const unfinished = entries.filter((entry) => {
-      if (cleanStrandedMerge(entry.cwd, entry)) {
-        return false;
+    const now = Date.now();
+    const retry: typeof entries = [];
+    let cleaned = 0;
+    for (const entry of entries) {
+      const outcome = cleanStrandedMerge(entry.cwd, entry);
+      if (outcome === 'cleaned') {
+        // Counted separately from "not retried": a file we deliberately left
+        // alone is not one we cleaned, and reporting it as such would claim
+        // work that did not happen.
+        cleaned += 1;
+        continue;
       }
+      if (outcome === 'retry' && now - entry.ts < GIVE_UP_AFTER_MS) {
+        retry.push(entry);
+        continue;
+      }
+      // Everything else is a decision not to touch the file — a foreign
+      // `geniro` key, a symlink, content we will not guess at — or a retry
+      // that has run out of road. Name the residue once and drop the entry,
+      // so the journal converges and this module stays deletable.
       this.logger.warn(
-        `could not clean the stranded .cursor/mcp.json merge in ${entry.cwd} — keeping its journal entry to retry on the next launch`,
+        `leaving the .cursor/mcp.json residue in ${entry.cwd} for you to resolve (${outcome}) — look for a .geniro-bak sibling; nothing else will touch this file`,
       );
-      return true;
-    });
-    const cleaned = entries.length - unfinished.length;
-    if (unfinished.length === 0) {
+    }
+    if (retry.length === 0) {
       rmSync(this.journalPath, { force: true });
     } else {
-      writeJournal(this.journalPath, unfinished);
+      writeMergeJournal(this.journalPath, retry);
     }
     if (cleaned > 0) {
       this.logger.log(

@@ -302,10 +302,15 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push('--resume', input.resumeSessionId);
     }
-    // The call surface rides the same flag as the role. Claude's endpoint is a
-    // per-turn config file it always accepts, so — unlike ACP — there is no
-    // path where the tools are withheld and the block would have to go too.
-    const systemPrompt = [input.systemPrompt, input.callSurfacePrompt]
+    // The call surface rides the same flag as the role, but ONLY when this
+    // turn actually got an endpoint: `prepareTurn` writes `--mcp-config` from
+    // the same field, and a caller whose token or port was unavailable gets
+    // none. Keeping the block then would tell the agent to route work through
+    // `call_agent` tools that were never registered.
+    const systemPrompt = [
+      input.systemPrompt,
+      input.mcpEndpoint ? input.callSurfacePrompt : null,
+    ]
       .filter((part): part is string => Boolean(part))
       .join('\n\n');
     if (systemPrompt) {

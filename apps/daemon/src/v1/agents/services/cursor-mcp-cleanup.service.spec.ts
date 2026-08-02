@@ -43,16 +43,30 @@ function strandedWorktree(
   return cwd;
 }
 
+/** Journalled just now, so the age cutoff never fires unless a test wants it. */
 function journalOf(
   entries: { cwd: string; created: boolean; mode?: number }[],
 ): string {
   const path = join(tempDir('cursor-journal-'), 'cursor-mcp-journal.json');
   writeFileSync(
     path,
-    JSON.stringify(entries.map((e) => ({ ...e, ts: 1 }))),
+    JSON.stringify(entries.map((e) => ({ ...e, ts: Date.now() }))),
     'utf8',
   );
   return path;
+}
+
+/**
+ * The entry the deleted merge actually wrote (`buildCursorMcpServerEntry`).
+ * Cleanup only strips a `geniro` key carrying this shape — anything else is
+ * the user's own server that happens to share the name.
+ */
+function ourEntry(): Record<string, unknown> {
+  return {
+    url: 'http://127.0.0.1:47615/v1/mcp/run-1/orch',
+    headers: { Authorization: 'Bearer tok-1' },
+    autoApprove: ['call_agent', 'await_agent', 'answer_agent'],
+  };
 }
 
 function readJson(path: string): Record<string, unknown> {
@@ -63,7 +77,7 @@ describe('CursorMcpCleanupService', () => {
   it('strips the geniro entry from a user file while keeping their own servers', () => {
     const cwd = strandedWorktree({
       mcpServers: {
-        geniro: { type: 'http', url: 'http://127.0.0.1:1/v1/mcp/r/n' },
+        geniro: ourEntry(),
         'their-server': { command: 'their-mcp' },
       },
       someOtherKey: true,
@@ -98,9 +112,7 @@ describe('CursorMcpCleanupService', () => {
   });
 
   it('deletes a file geniro created once its own entry is gone', () => {
-    const cwd = strandedWorktree({
-      mcpServers: { geniro: { type: 'http', url: 'http://127.0.0.1:1/x' } },
-    });
+    const cwd = strandedWorktree({ mcpServers: { geniro: ourEntry() } });
     const journalPath = journalOf([{ cwd, created: true }]);
 
     expect(
@@ -115,7 +127,7 @@ describe('CursorMcpCleanupService', () => {
   it('keeps a geniro-created file the user has since added their own server to', () => {
     const cwd = strandedWorktree({
       mcpServers: {
-        geniro: { type: 'http', url: 'http://127.0.0.1:1/x' },
+        geniro: ourEntry(),
         mine: { command: 'mine' },
       },
     });
@@ -143,17 +155,23 @@ describe('CursorMcpCleanupService', () => {
     expect(existsSync(tmp)).toBe(false);
   });
 
-  it('retains the journal entry for a cwd it could not clean, and only that one', () => {
-    const good = strandedWorktree({
-      mcpServers: { geniro: { type: 'http', url: 'http://127.0.0.1:1/x' } },
-    });
-    // A cwd whose .cursor is a FILE, not a directory: cleanup refuses to
-    // guess rather than touching something it does not understand.
-    const bad = tempDir('cursor-bad-');
-    writeFileSync(join(bad, '.cursor'), 'not a directory', 'utf8');
+  it('retries a transient failure but reports and drops a settled refusal', () => {
+    const good = strandedWorktree({ mcpServers: { geniro: ourEntry() } });
+    // `.cursor` is a FILE, not a directory: cleanup will never resolve this,
+    // so retrying forever would keep this module alive past its removal
+    // release. It is reported once and dropped.
+    const settled = tempDir('cursor-settled-');
+    writeFileSync(join(settled, '.cursor'), 'not a directory', 'utf8');
+    // A cwd that is itself a regular file makes the very first lstat throw —
+    // a transient shape worth another launch.
+    const transientRoot = tempDir('cursor-transient-');
+    const transient = join(transientRoot, 'a-file');
+    writeFileSync(transient, 'x', 'utf8');
+
     const journalPath = journalOf([
       { cwd: good, created: false, mode: 0o644 },
-      { cwd: bad, created: false },
+      { cwd: settled, created: false },
+      { cwd: transient, created: false },
     ]);
 
     const cleaned = new CursorMcpCleanupService({
@@ -161,12 +179,50 @@ describe('CursorMcpCleanupService', () => {
     }).reconcileStranded();
 
     expect(cleaned).toBe(1);
-    // The journal survives carrying ONLY the unfinished cwd, so the next
-    // launch retries it and never re-walks the one already done.
     const remaining = JSON.parse(readFileSync(journalPath, 'utf8')) as {
       cwd: string;
     }[];
-    expect(remaining.map((e) => e.cwd)).toEqual([bad]);
+    expect(remaining.map((e) => e.cwd)).toEqual([transient]);
+  });
+
+  it('gives up on a retry that has run out of road, so the journal converges', () => {
+    const transientRoot = tempDir('cursor-old-');
+    const transient = join(transientRoot, 'a-file');
+    writeFileSync(transient, 'x', 'utf8');
+    // Same failure as above, but journalled long ago. The module promises to
+    // be deletable one release after shipping; an entry that retries forever
+    // would break that promise silently.
+    const journalPath = join(tempDir('cursor-oldj-'), 'journal.json');
+    writeFileSync(
+      journalPath,
+      JSON.stringify([{ cwd: transient, created: false, ts: 1 }]),
+      'utf8',
+    );
+
+    new CursorMcpCleanupService({ journalPath }).reconcileStranded();
+
+    expect(existsSync(journalPath)).toBe(false);
+  });
+
+  it('never lets a write failure escape into the boot sequence', () => {
+    const cwd = strandedWorktree({ mcpServers: { geniro: ourEntry() } });
+    // The journal's own directory is gone, so removing/rewriting it throws.
+    // This runs pre-listen: an escaping error exits the process before the
+    // pidfile is written, and repeats on every launch — a one-release hygiene
+    // task must never be able to cost the user their daemon.
+    const journalDir = tempDir('cursor-gone-');
+    const journalPath = join(journalDir, 'nested', 'journal.json');
+    mkdirSync(join(journalDir, 'nested'));
+    writeFileSync(
+      journalPath,
+      JSON.stringify([{ cwd, created: false, mode: 0o644, ts: Date.now() }]),
+      'utf8',
+    );
+    rmSync(join(journalDir, 'nested'), { recursive: true, force: true });
+
+    const service = new CursorMcpCleanupService({ journalPath });
+    expect(() => service.reconcileStranded()).not.toThrow();
+    expect(service.reconcileStranded()).toBe(0);
   });
 
   it('does nothing at all when no journal exists — the common upgrade path', () => {

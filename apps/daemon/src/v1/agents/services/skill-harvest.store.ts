@@ -6,13 +6,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
 
-/** Defensive bound per cwd — init reports ~60 entries today. */
+/** Defensive bound per (agent, cwd) — init reports ~60 entries today. */
 const MAX_HARVESTED = 500;
 
 /**
  * Cache-key separator. NUL terminates a POSIX pathname, so it cannot occur
  * inside one — a composed `<kind>\0<cwd>` key can never collide with a bare
  * cwd, which is what lets a legacy cwd-keyed cache entry be spotted on load.
+ * It survives into the persisted JSON as a `\u0000` escape in the key.
  */
 const KEY_SEP = '\u0000';
 
@@ -141,6 +142,9 @@ function keyOf(agent: AgentKind, cwd: string): string {
 }
 
 /**
+ * One-time migration, removable one release after shipping (by then every
+ * install has loaded and re-saved its cache in the new format).
+ *
  * A cache written before the agent dimension existed is keyed by cwd alone.
  * Only claude ever populated one — the legacy cursor transport reported no
  * commands — so adopting those entries as claude's keeps the enriched list

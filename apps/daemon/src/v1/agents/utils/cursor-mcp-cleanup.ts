@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
+  renameSync,
   rmSync,
   type Stats,
   writeFileSync,
@@ -69,10 +70,17 @@ export function writeMergeJournal(
   path: string,
   entries: CursorMergeJournalEntry[],
 ): void {
-  writeFileSync(path, JSON.stringify(entries), {
+  // tmp + rename, matching the writer this replaces: an in-place truncate that
+  // tears leaves an unparseable journal, and `readMergeJournal` reads that as
+  // "nothing stranded" — silently abandoning every cwd still listed.
+  const tmp = `${path}.tmp`;
+  rmSync(tmp, { force: true });
+  writeFileSync(tmp, JSON.stringify(entries), {
     encoding: 'utf8',
     mode: 0o600,
+    flag: 'wx',
   });
+  renameSync(tmp, path);
 }
 
 export function readMergeJournal(path: string): CursorMergeJournalEntry[] {
@@ -112,17 +120,42 @@ function parseFile(path: string): McpJson | null {
 }
 
 /**
+ * What one cleanup attempt concluded.
+ *
+ * `retry` is the only outcome worth another launch; `foreign` and `unresolved`
+ * are decisions not to touch the file, so retrying them forever would keep
+ * this module — and its boot warning — alive past the release that removes it.
+ */
+export type CleanupOutcome = 'cleaned' | 'retry' | 'foreign' | 'unresolved';
+
+/** Whether a `geniro` entry carries the shape the legacy merge wrote. */
+function isOurEntry(entry: unknown): boolean {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const record = entry as {
+    url?: unknown;
+    headers?: { Authorization?: unknown };
+  };
+  return (
+    typeof record.url === 'string' &&
+    /^http:\/\/127\.0\.0\.1:\d+\/v1\/mcp\//.test(record.url) &&
+    typeof record.headers?.Authorization === 'string' &&
+    record.headers.Authorization.startsWith('Bearer ')
+  );
+}
+
+/**
  * Undo one journalled merge. Surgical by design: it removes ONLY the `geniro`
  * key from the file as it stands now, so anything the user has changed since
  * survives. A geniro-created file is deleted only when removing that key
  * leaves exactly the shell geniro itself wrote — any other content is the
- * user's by definition. Returns false when it could not finish, so the
- * journal entry is kept for another try.
+ * user's by definition.
  */
 export function cleanStrandedMerge(
   cwd: string,
   state: { created: boolean; mode?: number },
-): boolean {
+): CleanupOutcome {
   const path = configPathOf(cwd);
   const backup = `${path}.geniro-bak`;
   const tmp = `${path}.geniro-tmp`;
@@ -133,60 +166,83 @@ export function cleanStrandedMerge(
       cursorDirStat?.isSymbolicLink() ||
       (cursorDirStat && !cursorDirStat.isDirectory())
     ) {
-      return false;
+      return 'unresolved';
     }
     if (lstatIfExists(tmp)?.isSymbolicLink()) {
-      return false;
+      return 'unresolved';
     }
     // A staging file orphaned between the old merge's write and its rename —
     // 0600, and holding a call token revoked when that daemon launch ended.
     rmSync(tmp, { force: true });
 
     if (lstatIfExists(backup)?.isSymbolicLink()) {
-      return false;
+      return 'unresolved';
     }
     const pathStat = lstatIfExists(path);
     if (!pathStat) {
       // The user deleted the file themselves — their call; drop the backup.
       rmSync(backup, { force: true });
-      return true;
+      return 'cleaned';
     }
     if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
-      return false;
+      return 'unresolved';
     }
 
     const parsed = parseFile(path);
     if (parsed === null) {
-      // The file no longer parses. Byte-restore if we have a backup; a
-      // geniro-created file has none, and unparseable content is the user's
-      // now, so leave it alone rather than guess.
-      if (existsSync(backup)) {
-        copyFileSync(backup, path);
-        restoreMode(path, state.mode);
-        rmSync(backup, { force: true });
-        return true;
-      }
-      return false;
+      // The file no longer parses, and by the time this runs the journal entry
+      // may be weeks old — the backup is a stale snapshot, and the likeliest
+      // reason for the parse failure is the user's own edit (a JSONC comment,
+      // a trailing comma). Copying the backup over it would silently discard
+      // whatever they added since. Leave BOTH files exactly where they are:
+      // the content is theirs, and `.geniro-bak` is the breadcrumb they need
+      // to finish by hand.
+      return 'unresolved';
     }
 
-    if (parsed.mcpServers?.[GENIRO_MCP_SERVER_KEY] !== undefined) {
-      const servers = { ...parsed.mcpServers };
-      delete servers[GENIRO_MCP_SERVER_KEY];
-      const result: McpJson = { ...parsed, mcpServers: servers };
-      if (state.created && JSON.stringify(result) === EMPTY_SHELL) {
-        rmSync(path, { force: true });
-        rmSync(backup, { force: true });
-        return true;
-      }
-      writeFileSync(path, JSON.stringify(result, null, 2), 'utf8');
+    const servers = { ...parsed.mcpServers };
+    const entry = servers[GENIRO_MCP_SERVER_KEY];
+    // A `geniro` key we cannot recognise as ours is the user's own server that
+    // happens to share the name. The merge this undoes refused to overwrite
+    // exactly that case; deleting it here would be an unrecoverable loss (no
+    // backup is written for a foreign key), so leave the file untouched.
+    if (entry !== undefined && !isOurEntry(entry)) {
+      return 'foreign';
     }
-    restoreMode(path, state.mode);
+    delete servers[GENIRO_MCP_SERVER_KEY];
+    const result: McpJson = { ...parsed, mcpServers: servers };
+
+    // Evaluated whether or not our key was still present: a crash between the
+    // old restore's write and its journal removal leaves the shell behind with
+    // the key already gone, and that file is the one this module exists to
+    // remove.
+    if (state.created && JSON.stringify(result) === EMPTY_SHELL) {
+      rmSync(path, { force: true });
+      rmSync(backup, { force: true });
+      return 'cleaned';
+    }
+    if (entry !== undefined) {
+      // Byte-fidelity fast path: when the user made no mid-turn edits, the
+      // file minus our key equals the backup — put the ORIGINAL bytes back so
+      // even their formatting survives, rather than reformatting a file that
+      // is very likely tracked in their repo.
+      const original = existsSync(backup) ? parseFile(backup) : null;
+      if (
+        original !== null &&
+        JSON.stringify(result) === JSON.stringify(original)
+      ) {
+        copyFileSync(backup, path);
+      } else {
+        writeFileSync(path, JSON.stringify(result, null, 2), 'utf8');
+      }
+      restoreMode(path, state.mode);
+    }
     rmSync(backup, { force: true });
-    return true;
+    return 'cleaned';
   } catch {
     // Best-effort: a retained journal entry is the next launch's second try,
     // and the .geniro-bak is the user-visible breadcrumb meanwhile.
-    return false;
+    return 'retry';
   }
 }
 

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
+import { NoteBox } from '../components/note-box';
+import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
-import { AGENT_MODEL_OPTIONS } from './node-schema';
+import { AGENT_MODEL_OPTIONS, agentHasModelChoices } from './node-schema';
 
 /** Sentinel option value that switches the field to free-text entry. */
 const CUSTOM = '__custom__';
@@ -36,7 +38,7 @@ export function ModelSelect({
   const [custom, setCustom] = useState(
     () => value !== '' && !options.includes(value),
   );
-  const selectable = options.length > 0;
+  const selectable = agentHasModelChoices(agent);
 
   // Adopt the first alias for a model-less node — but never while the custom
   // input is open, where a transiently empty value is just mid-typing.
@@ -47,14 +49,27 @@ export function ModelSelect({
   }, [value, custom, options, onChange]);
 
   if (!selectable) {
-    // No picker at all: this agent's transport discards whatever it is given,
-    // so a control here would only invite the user to set something that never
-    // reaches the CLI.
+    // No picker: this agent's transport discards whatever it is given, so a
+    // control here would only invite the user to set something that never
+    // reaches the CLI. A value stored before that was true still needs a way
+    // out, though — otherwise the node emits a "model was not applied" notice
+    // on every turn with nothing the user can do about it.
     return (
-      <p id={id} className="text-muted-foreground text-xs">
-        {agent} runs on its own configured model — its transport carries no
-        per-session model selection.
-      </p>
+      <NoteBox className="flex items-center justify-between gap-2 text-xs">
+        <span>
+          {agent} runs on its own configured model — its transport carries no
+          per-session model selection.
+        </span>
+        {value === '' ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onChange(undefined)}>
+            Clear “{value}”
+          </Button>
+        )}
+      </NoteBox>
     );
   }
 

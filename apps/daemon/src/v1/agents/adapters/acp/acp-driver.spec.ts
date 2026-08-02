@@ -300,6 +300,69 @@ describe('AcpTurnDriver session resume', () => {
     expect(debug.mock.calls[0]?.[0]).toContain('replayed 3 update(s)');
   });
 
+  it('notices when the agent does not offer the mode this turn asked for', () => {
+    const h = harness({ preferredModeId: 'plan' });
+    h.feed(initializeReply(1));
+    const events = h.feed({
+      id: 2,
+      result: {
+        sessionId: 's',
+        modes: { currentModeId: 'normal', availableModes: [{ id: 'normal' }] },
+      },
+    });
+
+    // A `plan` turn that quietly ran under the agent's normal mode has write
+    // access the user believed they had turned off — the one degrade here that
+    // costs something, so it must not be silent.
+    expect(events).toContainEqual({
+      type: 'notice',
+      message:
+        "agent does not offer the 'plan' mode — this turn runs under the agent's current mode instead",
+    });
+    // The turn still runs; the notice reports, it does not abort.
+    expect(h.sentMethod('session/prompt')).toBeDefined();
+    expect(h.sentMethod('session/set_mode')).toBeUndefined();
+  });
+
+  it('sets the mode without a notice when the agent does offer it', () => {
+    const h = harness({ preferredModeId: 'plan' });
+    h.feed(initializeReply(1));
+    const events = h.feed({
+      id: 2,
+      result: {
+        sessionId: 's',
+        modes: {
+          currentModeId: 'normal',
+          availableModes: [{ id: 'normal' }, { id: 'plan' }],
+        },
+      },
+    });
+
+    expect(h.sentMethod('session/set_mode')?.params).toEqual({
+      sessionId: 's',
+      modeId: 'plan',
+    });
+    expect(events.filter((e) => e.type === 'notice')).toEqual([]);
+  });
+
+  it('never claims a resumed turn’s agent lacks the mode — session/load reports none', () => {
+    const h = harness({
+      input: { ...BASE_INPUT, resumeSessionId: 'prior-7' },
+      preferredModeId: 'plan',
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+    // A `session/load` reply carries no `modes` block at all. Reading that
+    // absence as "not offered" would put a false statement about the agent
+    // into the transcript of every resumed turn.
+    const events = h.feed({ id: 2, result: {} });
+
+    expect(
+      events.filter(
+        (e) => e.type === 'notice' && e.message.includes('does not offer'),
+      ),
+    ).toEqual([]);
+  });
+
   it('measures nothing on a fresh session, which has no replay to pay for', () => {
     const debug = vi.fn();
     const h = harness({ input: BASE_INPUT, logger: { warn: vi.fn(), debug } });

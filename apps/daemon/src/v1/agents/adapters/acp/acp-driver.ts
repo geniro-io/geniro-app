@@ -173,15 +173,21 @@ export class AcpTurnDriver implements TurnDriver {
    * the kind announced on the original `tool_call` update has to survive.
    */
   private readonly toolKinds = new Map<string, string>();
+  /**
+   * Tool arguments by ACP toolCallId. Same stub problem: a permission request
+   * that omits the name and kind usually omits these too, and an approval card
+   * showing no arguments asks the user to approve something they cannot see.
+   */
+  private readonly toolInputs = new Map<string, unknown>();
   /** Options offered per parked permission request, keyed by encoded id. */
   private readonly parkedPermissions = new Map<string, AcpPermissionOption[]>();
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
   /**
-   * Whether this turn's call tools were actually registered. Decided in
-   * `buildMcpServers` (which needs the negotiated capabilities) and read when
-   * the prompt is composed, so the "May call" block and the tools it names are
-   * granted or withheld together.
+   * Whether this turn's call tools were actually registered. `buildMcpServers`
+   * RETURNS this (it needs the negotiated capabilities) and the session request
+   * stores it; `composePrompt` reads it, so the "May call" block and the tools
+   * it names are granted or withheld together.
    */
   private callSurfaceGranted = false;
 
@@ -352,7 +358,8 @@ export class AcpTurnDriver implements TurnDriver {
       });
     }
 
-    const { mcpServers, notice } = this.buildMcpServers();
+    const { mcpServers, notice, callSurfaceGranted } = this.buildMcpServers();
+    this.callSurfaceGranted = callSurfaceGranted;
     if (notice) {
       events.push({ type: 'notice', message: notice });
     }
@@ -396,25 +403,27 @@ export class AcpTurnDriver implements TurnDriver {
   private buildMcpServers(): {
     mcpServers: AcpMcpServerHttp[];
     notice: string | null;
+    /** Whether the call tools were registered — see `callSurfaceGranted`. */
+    callSurfaceGranted: boolean;
   } {
     const endpoint = this.options.input.mcpEndpoint;
     if (!endpoint) {
-      return { mcpServers: [], notice: null };
+      return { mcpServers: [], notice: null, callSurfaceGranted: false };
     }
     if (!this.capabilities.mcpHttp) {
       // The awareness block goes with the tools. Leaving it in would instruct
       // the agent to route work through `call_agent` with nothing registered
       // under that name — its callees never run and the turn still reports
       // success, which is exactly what the pre-ACP degrade path prevented.
-      this.callSurfaceGranted = false;
       return {
+        callSurfaceGranted: false,
         mcpServers: [],
         notice:
           'agent calls disabled for this turn: the agent does not advertise HTTP MCP support (mcpCapabilities.http), so the callee list was removed from this turn’s instructions too',
       };
     }
-    this.callSurfaceGranted = true;
     return {
+      callSurfaceGranted: true,
       mcpServers: [
         {
           type: 'http',
@@ -462,6 +471,10 @@ export class AcpTurnDriver implements TurnDriver {
       );
     } else if (
       this.options.preferredModeId &&
+      // `session/load` replies carry no `modes` at all, so absence means "not
+      // reported", never "not offered" — claiming the latter would put a false
+      // statement about the agent in the transcript of every resumed turn.
+      asRecord(root?.modes) !== null &&
       !this.offersMode(root, this.options.preferredModeId)
     ) {
       // The turn asked for a mode the agent does not offer. It still runs —
@@ -692,6 +705,7 @@ export class AcpTurnDriver implements TurnDriver {
       name:
         toolCall.name === '' ? (this.toolNames.get(id) ?? '') : toolCall.name,
       kind: toolCall.kind ?? this.toolKinds.get(id) ?? null,
+      rawInput: toolCall.rawInput ?? this.toolInputs.get(id) ?? null,
     };
   }
 
@@ -743,6 +757,9 @@ export class AcpTurnDriver implements TurnDriver {
         this.toolNames.set(toolCall.toolCallId, toolCall.name);
         if (toolCall.kind !== null) {
           this.toolKinds.set(toolCall.toolCallId, toolCall.kind);
+        }
+        if (toolCall.rawInput !== null) {
+          this.toolInputs.set(toolCall.toolCallId, toolCall.rawInput);
         }
         return [
           {

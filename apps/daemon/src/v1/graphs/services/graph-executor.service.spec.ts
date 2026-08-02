@@ -595,6 +595,37 @@ describe('GraphExecutorService', () => {
     ).toEqual([]);
   });
 
+  it('files a cursor node’s report under cursor, not under claude', async () => {
+    const { service, cursor, skillHarvest } = setup();
+    await service.startRun({
+      slug: 'c',
+      workflow: triggered({
+        name: 'c',
+        nodes: [{ id: 'only', kind: 'agent', agent: 'cursor-agent' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+
+    // cursor-agent reports its invokable set over ACP now, which the legacy
+    // transport never did. Hardcoding the agent at this call site would file
+    // these under claude and serve them to claude's `/` autocomplete.
+    cursor.starts[0]!.emit({
+      type: 'slash_commands',
+      commands: ['generate-cursor-rules'],
+    });
+    completeTurn(cursor.starts[0]!, 'done');
+    await drain();
+
+    expect(skillHarvest.record).toHaveBeenCalledWith(
+      'cursor-agent',
+      realpathSync(dir),
+      ['generate-cursor-rules'],
+    );
+  });
+
   it('fails a node on error and skips its consumers; the run rolls up failed', async () => {
     const { service, claude, runDao, nodeDao, itemDao } = setup();
     const run = await service.startRun({
@@ -1116,6 +1147,12 @@ describe('GraphExecutorService — agent calls', () => {
       callTokens.get(run.id, 'orch'),
     );
     expect(caller.input.callSurfacePrompt).toContain('May call');
+    // Per-run, derived from the run id — never the bare `geniro` a project's
+    // own MCP config could also define, since ACP has no --strict-mcp-config.
+    expect(caller.input.mcpEndpoint?.serverName).toBe(
+      `geniro-${run.id.slice(0, 8)}`,
+    );
+    expect(caller.input.mcpEndpoint?.serverName).not.toBe('geniro');
   });
 
   it('sync call: transcript rows on the caller, per-call node_state on the callee', async () => {

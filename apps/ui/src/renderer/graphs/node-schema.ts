@@ -113,6 +113,15 @@ export const AGENT_MODEL_OPTIONS: Record<CliKind, readonly string[]> = {
 };
 
 /**
+ * Whether this agent's transport can select a model at all. The single owner
+ * of that rule — the inspector renders its Model field from it, and
+ * `ModelSelect` decides between a picker and an explanation from it.
+ */
+export function agentHasModelChoices(agent: CliKind): boolean {
+  return AGENT_MODEL_OPTIONS[agent].length > 0;
+}
+
+/**
  * One typed connection rule (mirrors the daemon's `ConnectionRule` in
  * graphs.types.ts, plus a `description` for the info popup): "this side of a
  * node of some kind accepts/produces edges to nodes of `kind`". `required` =

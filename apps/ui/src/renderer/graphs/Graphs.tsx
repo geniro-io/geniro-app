@@ -68,7 +68,7 @@ import {
 } from './node-palette';
 import type { NodeKind } from './node-schema';
 import {
-  AGENT_MODEL_OPTIONS,
+  agentHasModelChoices,
   canConnect,
   connectionEdgeKind,
   flowEdgeType,
@@ -939,9 +939,15 @@ export function Graphs({
                   <>
                     <Field
                       label="Model"
-                      htmlFor="node-model"
+                      // A label points at the picker only when there IS one;
+                      // the no-choices branch renders a note, not a control.
+                      htmlFor={
+                        agentHasModelChoices(selected.agent)
+                          ? 'node-model'
+                          : undefined
+                      }
                       hint={
-                        AGENT_MODEL_OPTIONS[selected.agent].length > 0
+                        agentHasModelChoices(selected.agent)
                           ? 'Custom… accepts a full model id.'
                           : undefined
                       }>

@@ -232,16 +232,6 @@ describe('CursorAcpAdapter turn shaping', () => {
     });
   });
 
-  it('says so when workspace trust cannot be carried', () => {
-    const { spawn } = fakeSpawn();
-    const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, trustWorkspace: true },
-      (event) => events.push(event),
-    );
-    expect(events.some((event) => event.type === 'notice')).toBe(true);
-  });
-
   it('stays silent when every turn parameter has an ACP home', () => {
     const { spawn } = fakeSpawn();
     const events: AgentEvent[] = [];
@@ -280,12 +270,6 @@ describe('CursorAcpAdapter turn shaping', () => {
       )?.params as { modeId: string } | undefined;
       expect(setMode?.modeId).toBe(expected);
     }
-  });
-
-  it('declares that it delivers the MCP endpoint itself', () => {
-    // The executor's whole call-runtime admission path keys on this: a false
-    // here would route the turn through the .cursor/mcp.json merge facade.
-    expect(new CursorAcpAdapter().deliversMcpEndpoint).toBe(true);
   });
 });
 

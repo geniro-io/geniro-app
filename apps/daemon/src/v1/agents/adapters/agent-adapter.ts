@@ -33,18 +33,6 @@ export abstract class AgentAdapter {
   /** The CLI binary invoked for each turn. */
   protected abstract readonly command: string;
 
-  /**
-   * Whether this adapter hands `input.mcpEndpoint` to its OWN CLI. True for
-   * every adapter whose CLI takes client-supplied MCP servers (claude's
-   * per-turn `--mcp-config` file, ACP's `session/new`); false only for a CLI
-   * that reads MCP config exclusively from a well-known on-disk path, whose
-   * endpoint therefore has to be planted around the turn by an outside service
-   * (`CursorMcpMergeService`). The graph executor keys the call-runtime
-   * admission path on this rather than on the agent kind, so an adapter swap
-   * cannot leave the endpoint undelivered.
-   */
-  readonly deliversMcpEndpoint: boolean = true;
-
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
@@ -66,7 +54,7 @@ export abstract class AgentAdapter {
   /**
    * Extra environment merged over the stripped child env. The default passes
    * through the caller's `input.env`; an adapter whose CLI needs a secret
-   * re-injects it here for its OWN child only (see `CursorAdapter`).
+   * re-injects it here for its OWN child only (see `CursorAcpAdapter`).
    */
   protected buildEnv(
     input: AgentTurnInput,

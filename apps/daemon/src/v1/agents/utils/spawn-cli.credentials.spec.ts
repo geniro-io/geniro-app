@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type { SpawnedProcess, SpawnFn } from './spawn-cli';
 
 // ── Child fake that captures the env the spawn was given ──────────────────────
@@ -68,12 +68,12 @@ describe('inherited Anthropic credential scoping', () => {
     }
   });
 
-  it("CursorAdapter's child never receives an inherited Anthropic credential", async () => {
+  it("CursorAcpAdapter's child never receives an inherited Anthropic credential", async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant';
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-tok';
     const { spawn, child, captured } = fakeSpawn();
 
-    const handle = new CursorAdapter({ spawn }).start(
+    const handle = new CursorAcpAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );

@@ -38,17 +38,6 @@ export function readDaemonVersion(
 
 export const DAEMON_VERSION = readDaemonVersion();
 
-/**
- * Read a boolean feature flag off the environment. Only the explicit
- * affirmative spellings enable it — anything else (unset, `0`, `false`, a typo)
- * leaves the flag off, so a malformed value can never silently switch a
- * transport.
- */
-export function isEnabled(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === '1' || normalized === 'true' || normalized === 'yes';
-}
-
 export interface DaemonEnvironment {
   /** Deployment env name (`production` | `development` | `test`). */
   env: string;
@@ -67,15 +56,6 @@ export interface DaemonEnvironment {
   pidfilePath: string;
   logLevel: LogLevel;
   prettyLog: boolean;
-  /**
-   * Drive `cursor-agent` over its first-party ACP server (`cursor-agent acp`)
-   * instead of the one-shot `-p --output-format stream-json` stream. Opt-in
-   * (`GENIRO_CURSOR_ACP=1`) while the ACP path is verified against installed
-   * cursor-agent builds: it changes the transport, the permission semantics
-   * (real prompts instead of `--force`), and how a caller node's MCP endpoint
-   * is delivered (`session/new` instead of a merged `.cursor/mcp.json`).
-   */
-  cursorAcp: boolean;
 }
 
 /**
@@ -102,6 +82,5 @@ export const environment = (): DaemonEnvironment => {
     pidfilePath: join(userDataDir, DAEMON_PIDFILE_NAME),
     logLevel: 'info' as LogLevel,
     prettyLog: false,
-    cursorAcp: isEnabled(process.env.GENIRO_CURSOR_ACP),
   };
 };

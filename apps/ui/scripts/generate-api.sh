@@ -12,7 +12,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-SPEC="$(mktemp -t geniro-openapi)"
+# The XXXXXX suffix is required by GNU coreutils' mktemp and accepted by BSD's,
+# so this resolves on Linux as well as macOS (`mktemp -t geniro-openapi` alone
+# fails with "too few X's in template" under coreutils).
+SPEC="$(mktemp -t geniro-openapi.XXXXXX)"
 trap 'rm -f "$SPEC"' EXIT
 
 node ./scripts/openapi-spec.mjs "$SPEC"

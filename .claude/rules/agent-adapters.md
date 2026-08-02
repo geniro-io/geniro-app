@@ -6,6 +6,36 @@ globs:
 
 # Agent adapters
 
+## ACP first — the default transport for any new agent
+
+- **When adding an agent, check whether its CLI speaks ACP (the Agent Client
+  Protocol) and prefer that transport if it does.** Most coding CLIs now ship
+  one (`cursor-agent acp`, Gemini CLI, Copilot CLI, Goose, Cline, OpenHands,
+  Amp…), and an ACP adapter is a thin wrapper over the existing
+  `adapters/acp/` client rather than a new bespoke integration.
+- Reach for a CLI's proprietary headless mode (`-p --output-format
+  stream-json`) only when ACP is genuinely unavailable, and say so in the
+  adapter's doc block so the choice is revisited when the CLI catches up.
+- Why ACP wins for this codebase, concretely — each of these was a hand-rolled
+  subsystem on the legacy cursor path, and all of them were deleted with it:
+  - **Permissions.** `session/request_permission` is an ACP baseline, so
+    `ask`/`acceptEdits` are real. A CLI without a permission protocol forces
+    every mode to degrade to auto-approve.
+  - **MCP delivery.** Client-supplied `mcpServers` in `session/new` carries a
+    caller node's call endpoint in-protocol, with the token on an HTTP header
+    inside a stdin frame. The alternative is planting the endpoint in a
+    well-known config file in the user's own worktree — which cost a per-cwd
+    mutex, a write journal, backup/surgical-restore, boot reconciliation, and
+    a one-shot trust probe gating the whole call runtime.
+  - **A typed event stream.** `session/update` has a published schema;
+    proprietary NDJSON is version-volatile and needs a deliberately liberal
+    mapper that guesses across CLI releases.
+- What ACP does NOT change: one turn is still one process, so `ProcessRegistry`,
+  cancel, and the executor's fan-out are untouched either way.
+- A second ACP-capable CLI composes `adapters/acp/` — it never copies the
+  protocol. Compare `adapters/cursor-acp/cursor-acp.adapter.ts`: ~150 lines of
+  binary name, env re-injection, an approval policy, and the mode mapping.
+
 - Every CLI agent adapter **extends the abstract `AgentAdapter` base class**
   (`apps/daemon/src/v1/agents/adapters/agent-adapter.ts`). The base owns the one
   shared turn flow (spawn via `runHeadlessCli`, NDJSON reassembly, normalized
@@ -37,18 +67,17 @@ globs:
     turns under graph fan-out, so an adapter field would cross-wire them. A
     driver may also open the conversation (`onStdinReady(io)`) and encode
     approval verdicts (`buildApprovalResponse`)
-  - set `deliversMcpEndpoint = false` only when the CLI CANNOT be handed
-    `input.mcpEndpoint` directly and needs an outside service to plant it
-    (legacy `cursor-agent -p`, whose only MCP source is the cwd's
-    `.cursor/mcp.json`). The graph executor keys the whole call-runtime
-    admission path — the endpoint grant, the merge facade, the trust probe, and
-    `GET /v1/capabilities` — on this property rather than on the agent kind, so
-    swapping an adapter cannot leave one gate on the old assumption
+  - every adapter must be able to hand its own CLI `input.mcpEndpoint` (claude's
+    per-turn `--mcp-config` file, ACP's `session/new`). The graph executor
+    assumes it: a node with outgoing call edges gets the endpoint, with no
+    per-machine capability gate in between. An adapter for a CLI that can only
+    read MCP config from a well-known on-disk path would need that gate — and
+    the surrounding plant/restore lifecycle — reintroduced deliberately
 - Never wire `runHeadlessCli` (or `spawn`) directly from an adapter or service —
   the base class's `start()` is the single spawn path.
 - **Each adapter gets its own subdirectory** `adapters/<name>/` holding ALL of its
   classes, mapper functions, adapter-specific types, and specs
-  (e.g. `adapters/claude/claude.adapter.ts`, `adapters/cursor/cursor.adapter.ts`,
+  (e.g. `adapters/claude/claude.adapter.ts`,
   `adapters/cursor-acp/cursor-acp.adapter.ts`).
 - **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
   directory**, agent-agnostic, and each adapter composes it: `adapters/acp/`
@@ -67,5 +96,5 @@ globs:
   options bag is a test seam, not a DI token.
 - Env scoping is non-negotiable: `runHeadlessCli` strips every `GENIRO_`-prefixed
   var from the child env; an adapter re-injects only the ONE secret its own CLI
-  needs (see `CursorAdapter.buildEnv` → `CURSOR_API_KEY`). No adapter may leak a
+  needs (see `CursorAcpAdapter.buildEnv` → `CURSOR_API_KEY`). No adapter may leak a
   credential into another agent's child process.

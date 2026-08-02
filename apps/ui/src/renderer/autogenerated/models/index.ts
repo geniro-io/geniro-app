@@ -116,12 +116,6 @@ export interface CancelledDto {
  */
 export interface CapabilitiesDto {
     /**
-     * 
-     * @type {CursorCallsCapability}
-     * @memberof CapabilitiesDto
-     */
-    cursorCalls: CursorCallsCapability;
-    /**
      * Claude permission-mode probe verdict (acceptEdits / plan support)
      * @type {ClaudeModesCapability}
      * @memberof CapabilitiesDto
@@ -275,39 +269,6 @@ export interface CreateWorkflowDto {
      */
     workflow: Workflow;
 }
-/**
- * 
- * @export
- * @interface CursorCallsCapability
- */
-export interface CursorCallsCapability {
-    /**
-     * 
-     * @type {ProbeStatus}
-     * @memberof CursorCallsCapability
-     */
-    status: ProbeStatus;
-    /**
-     * 
-     * @type {string}
-     * @memberof CursorCallsCapability
-     */
-    version: string | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof CursorCallsCapability
-     */
-    probedAt: number | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof CursorCallsCapability
-     */
-    reason: string | null;
-}
-
-
 /**
  * 
  * @export

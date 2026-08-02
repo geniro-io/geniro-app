@@ -125,21 +125,12 @@ export interface AgentTurnInput {
    */
   env?: Record<string, string>;
   /**
-   * Trust the turn's cwd without prompting (cursor `--trust`, headless-only).
-   * Needed when the cwd is a daemon-created directory the user never opened —
-   * the MCP-trust probe's temp workspace. User-project turns never set it:
-   * trusting the user's own worktree is the user's decision, not the daemon's.
-   */
-  trustWorkspace?: boolean;
-  /**
    * Loopback MCP endpoint granting this turn the agent-call tools
-   * (call_agent / await_agent / answer_agent). Delivery is adapter-specific —
-   * claude gets a per-turn config file referenced by `--mcp-config` (the
-   * token travels IN the 0600 file, never argv); cursor delivery BYPASSES the
-   * adapter entirely: the executor merges a `geniro` entry into the run cwd's
-   * `.cursor/mcp.json` around the turn (the cursor-mcp-merge service), so a
-   * cursor turn's input carries this field only for the timeout override.
-   * Absent or null: the turn gets no call tools.
+   * (call_agent / await_agent / answer_agent). Every adapter delivers it to
+   * its own CLI, and each keeps the token off argv: claude writes a per-turn
+   * 0600 config file referenced by `--mcp-config`, the ACP adapter sends it as
+   * an HTTP header inside a `session/new` stdin frame. Absent or null: the
+   * turn gets no call tools.
    */
   mcpEndpoint?: {
     url: string;

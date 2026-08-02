@@ -65,9 +65,6 @@ export function cursorAutoDecision(
 export class CursorAcpAdapter extends AgentAdapter {
   readonly kind = 'cursor-agent' as const;
 
-  /** `session/new` carries the endpoint — no outside file merge required. */
-  override readonly deliversMcpEndpoint = true;
-
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {
     super(cursorOptions);
   }
@@ -157,20 +154,15 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * Turn parameters ACP cannot carry. Both are reported rather than dropped:
-   * a node that silently ran on the wrong model — or in a directory it was
-   * never granted — is exactly the kind of degrade this codebase makes visible.
+   * Turn parameters ACP cannot carry — reported rather than dropped, because a
+   * node that silently ran on the wrong model is exactly the kind of degrade
+   * this codebase makes visible.
    */
   private startupNotices(input: AgentTurnInput): string[] {
     const notices: string[] = [];
     if (input.model) {
       notices.push(
         `model '${input.model}' was not applied: ACP carries no per-session model selection, so this turn runs on the agent's configured default`,
-      );
-    }
-    if (input.trustWorkspace) {
-      notices.push(
-        'workspace trust was requested but ACP has no equivalent of the CLI --trust flag; the agent applies its own trust rules to this directory',
       );
     }
     return notices;

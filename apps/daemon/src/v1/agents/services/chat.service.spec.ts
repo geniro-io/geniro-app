@@ -11,7 +11,7 @@ import { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentEvent, AgentTurnInput } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type { ClaudeModesCapability, RunItemEvent } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -225,7 +225,7 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     registry,
     approvals,
     claude.adapter,
-    cursor.adapter as unknown as CursorAdapter,
+    cursor.adapter as unknown as CursorAcpAdapter,
     claudeProbe,
     skillHarvest,
   );

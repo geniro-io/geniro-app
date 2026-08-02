@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { CursorAdapter } from '../adapters/cursor/cursor.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type { SpawnedProcess, SpawnFn } from './spawn-cli';
 import { runHeadlessCli } from './spawn-cli';
 
@@ -96,11 +96,11 @@ describe('spawned-agent env scoping', () => {
     expect('GENIRO_SECRET' in (captured.env ?? {})).toBe(false);
   });
 
-  it('CursorAdapter re-injects GENIRO_CURSOR_API_KEY as CURSOR_API_KEY for its child only', async () => {
+  it('CursorAcpAdapter re-injects GENIRO_CURSOR_API_KEY as CURSOR_API_KEY for its child only', async () => {
     process.env.GENIRO_CURSOR_API_KEY = 'sk-cursor';
     const { spawn, child, captured } = fakeSpawn();
 
-    const handle = new CursorAdapter({ spawn }).start(
+    const handle = new CursorAcpAdapter({ spawn }).start(
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );

@@ -6,12 +6,6 @@ import { CapabilitiesController } from './capabilities.controller';
 describe('CapabilitiesController', () => {
   it('GET delegates to CapabilitiesService.capabilitiesWire', () => {
     const wire = {
-      cursorCalls: {
-        status: 'pass' as const,
-        version: 'v1',
-        probedAt: 1,
-        reason: null,
-      },
       claudeModes: {
         acceptEdits: 'pass' as const,
         plan: 'pass' as const,

@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -11,10 +11,10 @@ import { Run } from '../../runs/entity/run.entity';
 import type { AgentKind, ItemKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
   type ChatApprovalMode,
   type ClaudeModesCapability,
-  CURSOR_ADAPTER,
   type ItemWire,
   type RunWire,
   SINGLE_AGENT_NODE,
@@ -62,7 +62,7 @@ export class ChatService {
     private readonly registry: ProcessRegistry,
     private readonly approvals: ApprovalRegistry,
     private readonly claude: ClaudeAdapter,
-    @Inject(CURSOR_ADAPTER) private readonly cursor: AgentAdapter,
+    private readonly cursor: CursorAcpAdapter,
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
   ) {}

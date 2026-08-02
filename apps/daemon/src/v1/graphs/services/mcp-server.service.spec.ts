@@ -5,10 +5,8 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
-import { GENIRO_MCP_CALL_TOOLS } from '../../agents/utils/cursor-mcp-entry';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
-import type { CursorProbeService } from './cursor-probe.service';
 import { McpServerService } from './mcp-server.service';
 
 const HELPER: WorkflowAgentNode = {
@@ -39,25 +37,8 @@ function broker(): CallBroker {
   return instance;
 }
 
-function probeStub(probeRunId?: string): {
-  service: CursorProbeService;
-  noteEchoCall: ReturnType<typeof vi.fn>;
-} {
-  const noteEchoCall = vi.fn();
-  return {
-    service: {
-      isProbeRun: (runId: string) => runId === probeRunId,
-      noteEchoCall,
-    } as unknown as CursorProbeService,
-    noteEchoCall,
-  };
-}
-
-function service(
-  callBroker = broker(),
-  cursorProbe = probeStub().service,
-): McpServerService {
-  return new McpServerService(callBroker, cursorProbe, {
+function service(callBroker = broker()): McpServerService {
+  return new McpServerService(callBroker, {
     token: 'launch',
     version: '9.9.9',
     startedAt: 0,
@@ -152,10 +133,11 @@ describe('McpServerService', () => {
     const tools = (
       json().result as { tools: { name: string; description: string }[] }
     ).tools;
-    // Lockstep with the cursor autoApprove mirror: the endpoint's served tool
-    // names ARE the list cursor-mcp-entry auto-approves — a tool added here
-    // without updating GENIRO_MCP_CALL_TOOLS fails this assertion.
-    expect(tools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
+    expect(tools.map((t) => t.name)).toEqual([
+      'call_agent',
+      'await_agent',
+      'answer_agent',
+    ]);
     expect(tools[0]!.description).toContain('Helper');
     // Each callee's own description is the caller's routing signal — the
     // caller picks by what an agent says it does.
@@ -280,45 +262,6 @@ describe('McpServerService', () => {
     expect(parsed.jsonrpc).toBe('2.0');
     expect(parsed.error).toBeDefined();
     expect(parsed).not.toHaveProperty('statusCode');
-  });
-
-  it('a probe run serves ONE echo tool and reports the call to the probe service', async () => {
-    const probe = probeStub('probe-abc');
-    const target = service(new CallBroker(), probe.service);
-
-    const listed = await post(
-      target,
-      'probe-abc',
-      'probe',
-      rpc('tools/list', {}),
-    );
-    const tools = (listed.json().result as { tools: { name: string }[] }).tools;
-    expect(tools.map((t) => t.name)).toEqual(['echo']);
-
-    const called = await post(
-      target,
-      'probe-abc',
-      'probe',
-      rpc('tools/call', { name: 'echo', arguments: { text: 'geniro-probe' } }),
-    );
-    const result = called.json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(false);
-    expect(result.content[0]!.text).toBe('geniro-probe');
-    expect(probe.noteEchoCall).toHaveBeenCalledWith('probe-abc');
-
-    // A non-probe run is untouched by the probe branch (still the call tools).
-    const normal = await post(
-      service(broker(), probe.service),
-      'run-1',
-      'orch',
-      rpc('tools/list', {}),
-    );
-    const normalTools = (normal.json().result as { tools: { name: string }[] })
-      .tools;
-    expect(normalTools.map((t) => t.name)).toEqual([...GENIRO_MCP_CALL_TOOLS]);
   });
 
   it('a parked question is a NON-error question envelope; answer_agent settles it over the endpoint (M4)', async () => {

@@ -17,9 +17,9 @@ import {
   questionTextOf,
   withResponse,
 } from '../../agents/adapters/claude/question-payload';
+import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import {
   type ClaudeModesCapability,
-  CURSOR_ADAPTER,
   type ItemWire,
   type RunWire,
 } from '../../agents/chat.types';
@@ -29,7 +29,6 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ClaudeProbeService } from '../../agents/services/claude-probe.service';
-import { CursorMcpMergeService } from '../../agents/services/cursor-mcp-merge.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
@@ -47,7 +46,6 @@ import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import type { ItemKind } from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
-  CursorCallsCapability,
   NodeStateWire,
   Workflow,
   WorkflowAgentNode,
@@ -65,7 +63,6 @@ import {
 } from '../utils/graph-validate';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
-import { CursorProbeService } from './cursor-probe.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
@@ -95,18 +92,6 @@ export interface StartWorkflowRunInput {
   cwd: string;
   /** The user's task — seeds every node's prompt. */
   prompt: string;
-}
-
-/** True when any call edge originates from a cursor-agent node. */
-function hasCursorCaller(workflow: Workflow): boolean {
-  const byId = new Map(workflow.nodes.map((n) => [n.id, n]));
-  return workflow.edges.some((edge) => {
-    if (edge.kind !== 'call') {
-      return false;
-    }
-    const from = byId.get(edge.from);
-    return from?.kind === 'agent' && from.agent === 'cursor-agent';
-  });
 }
 
 /** True when any claude node runs under acceptEdits (needs the mode probe). */
@@ -144,23 +129,16 @@ export class GraphExecutorService {
     private readonly registry: ProcessRegistry,
     private readonly approvals: ApprovalRegistry,
     private readonly claude: ClaudeAdapter,
-    @Inject(CURSOR_ADAPTER) private readonly cursor: AgentAdapter,
+    private readonly cursor: CursorAcpAdapter,
     private readonly callTokens: CallTokenRegistry,
     private readonly callBroker: CallBroker,
-    private readonly cursorProbe: CursorProbeService,
     private readonly claudeProbe: ClaudeProbeService,
-    private readonly cursorMerge: CursorMcpMergeService,
     private readonly skillHarvest: SkillHarvestStore,
     private readonly store: WorkflowStoreService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
-  /**
-   * The adapter driving one agent kind. The cursor slot is bound by DI
-   * (`CURSOR_ADAPTER`) to either the legacy stream-json adapter or the ACP one,
-   * so every executor path that needs an adapter — the turn spawn AND the
-   * call-runtime admission predicate — resolves the SAME instance.
-   */
+  /** The adapter driving one agent kind. */
   private adapterFor(agent: WorkflowAgentNode['agent']): AgentAdapter {
     return agent === 'claude' ? this.claude : this.cursor;
   }
@@ -345,30 +323,11 @@ export class GraphExecutorService {
     seedPrompt: string,
   ): void {
     void (async () => {
-      let cursorCalls: CursorCallsCapability;
-      try {
-        // Cursor callers are admitted only on a probed MCP-trust pass. The
-        // verdict is cached per installed binary, so only the very first
-        // cursor-caller run on a machine actually waits on the probe turn.
-        // The probe asks one question — "will this cursor-agent honour an MCP
-        // server we planted in .cursor/mcp.json?" — which is meaningless once
-        // the adapter hands the endpoint over in `session/new`, so an ACP
-        // cursor never pays for it.
-        cursorCalls =
-          hasCursorCaller(workflow) &&
-          !this.adapterFor('cursor-agent').deliversMcpEndpoint
-            ? await this.cursorProbe.ensureVerdict()
-            : this.cursorProbe.capability();
-      } catch {
-        // A probe infrastructure failure degrades to the visible no-verdict
-        // path (system item per shut-out caller) — never a wedged run.
-        cursorCalls = this.cursorProbe.capability();
-      }
       let claudeModes: ClaudeModesCapability;
       try {
-        // acceptEdits nodes wait on the claude mode probe the same way cursor
-        // callers wait on the MCP-trust probe: cached per installed binary,
-        // so only the first such run on a machine pays the probe turn.
+        // acceptEdits nodes wait on the claude mode probe: the verdict is
+        // cached per installed binary, so only the first such run on a machine
+        // pays the probe turn.
         claudeModes = hasClaudeAcceptEdits(workflow)
           ? await this.claudeProbe.ensureVerdict()
           : this.claudeProbe.capability();
@@ -377,15 +336,7 @@ export class GraphExecutorService {
         // any real CLI rejection surfaces loudly in the transcript.
         claudeModes = this.claudeProbe.capability();
       }
-      this.driveResolved(
-        em,
-        runId,
-        workflow,
-        cwd,
-        seedPrompt,
-        cursorCalls,
-        claudeModes,
-      );
+      this.driveResolved(em, runId, workflow, cwd, seedPrompt, claudeModes);
     })();
   }
 
@@ -395,7 +346,6 @@ export class GraphExecutorService {
     workflow: Workflow,
     cwd: string,
     seedPrompt: string,
-    cursorCalls: CursorCallsCapability,
     claudeModes: ClaudeModesCapability,
   ): void {
     const nodes = workflow.nodes;
@@ -667,28 +617,18 @@ export class GraphExecutorService {
         : node.approval;
 
     /**
-     * Whether this agent kind may hold the call tools in THIS run. An adapter
-     * that delivers the endpoint to its own CLI (claude's `--mcp-config` file,
-     * ACP's `session/new`) is always capable; one that cannot — the legacy
-     * `cursor-agent -p`, whose endpoint has to be planted in the cwd's
-     * `.cursor/mcp.json` — is admitted only on a probed MCP-trust pass (M3).
-     * The one predicate behind every admission surface: the endpoint grant,
-     * the token minting, the awareness block, and the self-check — so a change
-     * here cannot silently miss a sibling gate.
+     * Nodes that hold the call tools in THIS run (callers, not callees).
+     * Every adapter hands its own CLI the MCP endpoint, so having outgoing
+     * call edges is the whole predicate — there is no longer a per-machine
+     * capability that can shut a caller out.
      */
-    const callCapable = (node: WorkflowAgentNode): boolean =>
-      this.adapterFor(node.agent).deliversMcpEndpoint ||
-      cursorCalls.status === 'pass';
-
-    /** Nodes that hold the call tools in THIS run (callers, not callees). */
     const isCaller = (node: WorkflowAgentNode): boolean =>
-      callCapable(node) && calleesOf.has(node.id);
+      calleesOf.has(node.id);
 
     /**
-     * The caller's MCP grant: call-capable nodes with outgoing call edges get
-     * the endpoint (a probe-failed cursor caller degrades — its callees still
-     * work, IT just can't call). Null when the server has no bound port
-     * yet or the run's token is already revoked.
+     * The caller's MCP grant: nodes with outgoing call edges get the endpoint.
+     * Null when the server has no bound port yet or the run's token is already
+     * revoked.
      */
     const mcpEndpointFor = (
       node: WorkflowAgentNode,
@@ -731,108 +671,6 @@ export class GraphExecutorService {
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
       const block = `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
       return node.role ? `${node.role}\n\n${block}` : block;
-    };
-
-    /**
-     * A cursor CALLER turn needs its endpoint merged into the cwd's
-     * `.cursor/mcp.json` BEFORE the CLI spawns (cursor has no `--mcp-config`
-     * flag), and acquiring that merge is asynchronous (the per-cwd lock may
-     * wait). The facade handle below starts the turn lazily behind the merge
-     * while honoring the AgentTurnHandle contract on every path: cancel works
-     * pre-spawn, `done` never rejects, and a refused merge DEGRADES the turn
-     * (it runs without call tools + a visible system item) instead of failing
-     * it. The merge is released on exactly one settle path.
-     */
-    const startCursorCallerTurn = (
-      adapter: AgentAdapter,
-      node: WorkflowAgentNode,
-      input: AgentTurnInput,
-      endpoint: { url: string; token: string },
-      onEvent: (event: AgentEvent) => void,
-    ): AgentTurnHandle => {
-      let real: AgentTurnHandle | null = null;
-      let cancelled = false;
-      let resolveDone!: () => void;
-      const done = new Promise<void>((resolve) => {
-        resolveDone = resolve;
-      });
-      void (async () => {
-        let release: (() => void) | null = null;
-        // `done` must settle no matter what release does — a throw out of the
-        // restore path would otherwise wedge the node (and the run) forever.
-        const releaseSafely = (): void => {
-          try {
-            release?.();
-          } catch (err) {
-            this.logger.warn(
-              `cursor mcp.json release failed for ${node.id}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        };
-        try {
-          const merge = await this.cursorMerge.acquire(cwd, endpoint);
-          if (merge.ok) {
-            release = merge.release;
-          }
-          // Cancel first: a run cancelled while we waited on the lock must not
-          // spawn a CLI or persist a misleading degrade item.
-          if (cancelled) {
-            releaseSafely();
-            onEvent({ type: 'turn_cancelled' });
-            resolveDone();
-            return;
-          }
-          let effective = input;
-          if (!merge.ok) {
-            // Degrade strips the WHOLE call surface — the endpoint AND the
-            // "May call" awareness block, or the model is told to use a tool
-            // it cannot see.
-            effective = {
-              ...input,
-              mcpEndpoint: null,
-              systemPrompt: node.role ?? null,
-            };
-            enqueue(async () => {
-              await persistItem(node.id, 'system', null, {
-                message: `agent calls disabled for this turn: ${merge.reason}`,
-              });
-            });
-          } else if (merge.gitTracked) {
-            enqueue(async () => {
-              await persistItem(node.id, 'system', null, {
-                message:
-                  '.cursor/mcp.json is git-tracked — it temporarily holds a run-scoped geniro entry; do not commit it while this run is active',
-              });
-            });
-          }
-          real = adapter.start(effective, onEvent);
-          if (cancelled) {
-            real.cancel();
-          }
-          void real.done.then(() => {
-            releaseSafely();
-            resolveDone();
-          });
-        } catch (err) {
-          // Mirrors the sync-throw contract of the direct path: the failure
-          // becomes an error event (→ failed outcome) and the handle settles.
-          releaseSafely();
-          onEvent({
-            type: 'error',
-            message: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-          resolveDone();
-        }
-      })();
-      return {
-        done,
-        cancel: () => {
-          cancelled = true;
-          real?.cancel();
-        },
-        respondApproval: (id, allow, updatedInput) =>
-          real?.respondApproval(id, allow, updatedInput) ?? false,
-      };
     };
 
     /**
@@ -1041,21 +879,9 @@ export class GraphExecutorService {
           }
         });
       };
-      // The merge facade exists ONLY for an adapter that cannot hand its CLI
-      // the endpoint itself; one that can (claude's --mcp-config file, ACP's
-      // session/new) goes straight to the direct path. Keyed on the adapter's
-      // own declaration rather than the agent kind, so swapping the cursor
-      // transport cannot leave a turn planting a file it no longer reads.
-      const handle: AgentTurnHandle =
-        input.mcpEndpoint && !adapter.deliversMcpEndpoint
-          ? startCursorCallerTurn(
-              adapter,
-              node,
-              input,
-              input.mcpEndpoint,
-              onEvent,
-            )
-          : adapter.start(input, onEvent);
+      // Every adapter hands its own CLI the endpoint (claude's --mcp-config
+      // file, ACP's session/new), so a caller turn is an ordinary spawn.
+      const handle: AgentTurnHandle = adapter.start(input, onEvent);
 
       const finish = (): {
         outcome: NodeOutcome;
@@ -1437,14 +1263,11 @@ export class GraphExecutorService {
     // The broker gets a capability only when the workflow can call at all —
     // the MCP endpoint answers RUN_NOT_ACTIVE for call-free runs.
     if (calleesOf.size > 0) {
-      // Mint one call token per call-capable caller node up front — the token
-      // must exist before the caller turn spawns and reads its config (the
-      // claude mcp-config file / the merged .cursor/mcp.json entry). A
-      // probe-failed cursor caller gets no token: every admission surface
-      // keys on the same callCapable predicate.
+      // Mint one call token per caller node up front — the token must exist
+      // before the caller turn spawns and reads its config (the claude
+      // mcp-config file / the ACP session/new frame).
       for (const callerId of calleesOf.keys()) {
-        const caller = nodesById.get(callerId);
-        if (caller?.kind === 'agent' && callCapable(caller)) {
+        if (nodesById.get(callerId)?.kind === 'agent') {
           this.callTokens.issue(runId, callerId, mintToken());
         }
       }
@@ -1466,10 +1289,7 @@ export class GraphExecutorService {
       this.selfCheckCallEndpoint(
         [...calleesOf.keys()]
           .map((id) => nodesById.get(id))
-          .find(
-            (n): n is WorkflowAgentNode =>
-              n?.kind === 'agent' && callCapable(n),
-          ) ?? null,
+          .find((n): n is WorkflowAgentNode => n?.kind === 'agent') ?? null,
         mcpEndpointFor,
         (message) => {
           enqueue(async () => {
@@ -1483,22 +1303,6 @@ export class GraphExecutorService {
     enqueue(async () => {
       await persistItem(null, 'message', 'user', { text: seedPrompt });
     });
-    // The visible degrade (M3): each caller the probe verdict shut out gets a
-    // system item naming the reason — never a silent no-tools turn.
-    for (const callerId of calleesOf.keys()) {
-      const caller = nodesById.get(callerId);
-      if (caller?.kind !== 'agent' || callCapable(caller)) {
-        continue;
-      }
-      const reason =
-        cursorCalls.reason ??
-        'cursor-agent did not pass the MCP-trust probe on this machine';
-      enqueue(async () => {
-        await persistItem(callerId, 'system', null, {
-          message: `agent calls disabled for '${caller.name ?? callerId}': ${reason}`,
-        });
-      });
-    }
     schedule();
   }
 

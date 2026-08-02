@@ -22,7 +22,7 @@ Everything else goes into a kind-directory:
 | `entity/`      | MikroORM entities (extend `TimestampsEntity`, explicit column types)     |
 | `dto/`         | Zod HTTP DTOs via `createZodDto()` from `nestjs-zod`                     |
 | `utils/`       | Pure helpers with no DI (parsers, buffers, spawn plumbing), plainly kebab-named at a module level (`json-util.ts`, `ndjson-buffer.ts`); the `*.utils.ts` suffix is used in ONE place only — an adapter's own `adapters/<name>/utils/` and `adapters/utils/` |
-| `adapters/`    | CLI agent adapters — see `agent-adapters.md`. A CLI's own probe and per-turn lifecycle services live in its adapter directory, not in `services/` (`adapters/claude/claude-probe.service.ts`, `adapters/cursor/cursor-probe.service.ts`, `adapters/cursor/cursor-mcp-merge.service.ts`) |
+| `adapters/`    | CLI agent adapters — see `agent-adapters.md`. A CLI's own probe and per-turn lifecycle services live in its adapter directory, not in `services/` (`adapters/claude/claude-probe.service.ts`); so does a protocol several CLIs could speak, in its own agent-agnostic directory (`adapters/acp/`) |
 | `gateways/`    | Socket.IO gateways                                                       |
 
 ## Thin controllers, fat services — and types in the types file

@@ -61,7 +61,35 @@ export interface AcpInitializeParams {
 export interface AcpAgentCapabilities {
   loadSession: boolean;
   mcpHttp: boolean;
+  /**
+   * `promptCapabilities.image` — whether `session/prompt` accepts `image`
+   * content blocks. The protocol REQUIRES a client to check this before
+   * sending one, and an agent that has not advertised it answers a prompt
+   * carrying one with an error reply, which would fail the whole turn over an
+   * attachment. Absent means false: attaching capability to silence is how a
+   * turn ends up sending content the agent never claimed to read.
+   */
+  promptImage: boolean;
 }
+
+/** A `text` block — every prompt has exactly one, carrying the turn's text. */
+export interface AcpTextBlock {
+  type: 'text';
+  text: string;
+}
+
+/** An `image` block: base64 bytes plus their media type, as ACP names them. */
+export interface AcpImageBlock {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * The `ContentBlock` variants this client SENDS. ACP defines more (audio,
+ * resource, resource_link); we send what a geniro turn actually carries.
+ */
+export type AcpContentBlock = AcpTextBlock | AcpImageBlock;
 
 /** `session/new` params. */
 export interface AcpNewSessionParams {
@@ -74,10 +102,13 @@ export interface AcpLoadSessionParams extends AcpNewSessionParams {
   sessionId: string;
 }
 
-/** `session/prompt` params. Text-only: geniro turns carry no attachments. */
+/**
+ * `session/prompt` params. The block array carries the turn's text and, when
+ * the agent advertised `promptCapabilities.image`, the images attached to it.
+ */
 export interface AcpPromptParams {
   sessionId: string;
-  prompt: { type: 'text'; text: string }[];
+  prompt: AcpContentBlock[];
 }
 
 /** `session/set_mode` params. */

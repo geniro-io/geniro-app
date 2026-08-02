@@ -12,6 +12,8 @@ import {
   ACP_PROTOCOL_VERSION,
   ACP_STOP_REASONS,
   type AcpAgentCapabilities,
+  type AcpContentBlock,
+  type AcpImageBlock,
   type AcpMcpServerHttp,
   type AcpPermissionOption,
   type AcpPermissionOptionKind,
@@ -19,6 +21,7 @@ import {
   type AcpToolCall,
   type AcpUsageSnapshot,
 } from './acp.types';
+import { buildAcpImageBlocks } from './acp-content';
 import {
   classifyMessage,
   decodeRequestId,
@@ -143,7 +146,14 @@ export class AcpTurnDriver implements TurnDriver {
   private capabilities: AcpAgentCapabilities = {
     loadSession: false,
     mcpHttp: false,
+    promptImage: false,
   };
+  /**
+   * The turn's attachments, read off disk at construction — inside
+   * `AgentAdapter.start`'s synchronous try, so an unreadable file fails the
+   * turn there instead of throwing out of the message pump mid-handshake.
+   */
+  private readonly imageBlocks: AcpImageBlock[];
   private sessionId: string | null = null;
   /**
    * `session/load` makes the agent REPLAY the whole prior conversation as
@@ -198,7 +208,9 @@ export class AcpTurnDriver implements TurnDriver {
   /** This turn resumed via `session/load`, whose reply reports no modes. */
   private resumed = false;
 
-  constructor(private readonly options: AcpDriverOptions) {}
+  constructor(private readonly options: AcpDriverOptions) {
+    this.imageBlocks = buildAcpImageBlocks(options.input.images);
+  }
 
   onStdinReady(io: TurnIo): void {
     this.io = io;
@@ -349,9 +361,13 @@ export class AcpTurnDriver implements TurnDriver {
     const mcpCapabilities = agentCapabilities
       ? asRecord(agentCapabilities.mcpCapabilities)
       : null;
+    const promptCapabilities = agentCapabilities
+      ? asRecord(agentCapabilities.promptCapabilities)
+      : null;
     this.capabilities = {
       loadSession: agentCapabilities?.loadSession === true,
       mcpHttp: mcpCapabilities?.http === true,
+      promptImage: promptCapabilities?.image === true,
     };
 
     const version = root ? asNumber(root.protocolVersion) : null;
@@ -493,12 +509,41 @@ export class AcpTurnDriver implements TurnDriver {
       ACP_AGENT_METHODS.sessionPrompt,
       {
         sessionId: this.sessionId,
-        prompt: [{ type: 'text', text: this.composePrompt() }],
+        prompt: this.composePromptBlocks(events),
       },
       'prompt',
       events,
     );
     return events;
+  }
+
+  /**
+   * The turn's `session/prompt` blocks: its attachments first, then its text —
+   * the order the claude path sends, and the one that reads as "here is the
+   * picture, here is what I'm asking about it".
+   *
+   * The images go ONLY to an agent that advertised `promptCapabilities.image`.
+   * One that did not gets the text alone plus a `notice`, because the two
+   * silent alternatives are both worse: sending anyway earns an error reply
+   * that fails the whole turn over an attachment, and dropping them quietly
+   * leaves the user watching the agent answer about a screenshot it never
+   * received. This is the same class of gap as an unavailable session mode,
+   * and it is reported the same way.
+   */
+  private composePromptBlocks(events: AgentEvent[]): AcpContentBlock[] {
+    const text: AcpContentBlock = { type: 'text', text: this.composePrompt() };
+    if (this.imageBlocks.length === 0) {
+      return [text];
+    }
+    if (!this.capabilities.promptImage) {
+      const count = this.imageBlocks.length;
+      events.push({
+        type: 'notice',
+        message: `agent does not accept image prompts — ${count} attached image${count === 1 ? ' was' : 's were'} not sent with this turn`,
+      });
+      return [text];
+    }
+    return [...this.imageBlocks, text];
   }
 
   /**

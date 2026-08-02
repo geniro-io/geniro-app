@@ -55,7 +55,12 @@ const terminalApi = vi.hoisted(() => ({
   listTerminals: vi.fn(),
   disposeTerminal: vi.fn(),
 }));
-vi.mock('../daemon-api', () => ({
+vi.mock('../daemon-api', async (importOriginal) => ({
+  // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
+  // so a test that hands the component a daemon error proves the component
+  // reads it the way the transport writes it — a stub here would let the two
+  // drift and still pass.
+  ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
     chats: api,
     agents: agentsApi,
@@ -3565,5 +3570,118 @@ describe('Chats follow-up send failure', () => {
     expect(container.querySelector('textarea')!.value).toBe(
       'precious follow-up',
     );
+  });
+});
+
+describe('Chats error strip', () => {
+  const wfRun = {
+    id: 'w1',
+    status: 'completed' as const,
+    title: null,
+    agentKind: null,
+    workflowId: 'review-team',
+    cwd: '/proj',
+    model: null,
+    createdAt: 'later',
+    updatedAt: 'later',
+    lastMessage: null,
+  };
+
+  function dismissButton(container: HTMLElement): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Dismiss error"]',
+    );
+  }
+
+  function deleteRunButton(container: HTMLElement): HTMLButtonElement | null {
+    return (
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Delete this run',
+      ) ?? null
+    );
+  }
+
+  it('closes a failure the user cannot otherwise clear', async () => {
+    // The strip has no self-clearing input behind it: without this control the
+    // message stays on screen for the rest of the session.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    api.sendChatMessage.mockRejectedValue(new Error('daemon down'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'anything');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')?.click();
+    });
+    expect(container.textContent).toContain('daemon down');
+
+    await act(async () => {
+      dismissButton(container)?.click();
+    });
+    expect(container.textContent).not.toContain('daemon down');
+  });
+
+  it('offers to delete a run whose workflow is gone, and confirms first', async () => {
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    workflowApi.listWorkflows.mockResolvedValue([]);
+    // What the transport actually throws for a deleted workflow — the
+    // component reads the status out of THIS text.
+    workflowApi.getWorkflow.mockRejectedValue(
+      new Error('daemon GET /v1/workflows/review-team failed (404): Not Found'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'review-team');
+
+    expect(container.textContent).toContain('no longer in your library');
+    // Not the raw 404 line: that is the message this replaces.
+    expect(container.textContent).not.toContain(
+      'Could not load workflow terminal targets',
+    );
+
+    await act(async () => {
+      deleteRunButton(container)?.click();
+    });
+    // Deleting is irreversible, so the shortcut goes through the same confirm
+    // as the sidebar's own delete — it does not fire the request itself.
+    expect(workflowApi.deleteWorkflowRun).not.toHaveBeenCalled();
+    const confirm = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent === 'Delete');
+    await act(async () => {
+      confirm?.click();
+    });
+    expect(workflowApi.deleteWorkflowRun).toHaveBeenCalledWith({
+      runId: 'w1',
+    });
+  });
+
+  it('keeps a real workflow-load failure a failure — no delete suggestion', async () => {
+    // A 500 says the request broke, not that the workflow is gone: suggesting
+    // the user destroy their run over a transient daemon fault would be wrong.
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    workflowApi.listWorkflows.mockResolvedValue([]);
+    workflowApi.getWorkflow.mockRejectedValue(
+      new Error('daemon GET /v1/workflows/review-team failed (500): boom'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'review-team');
+
+    expect(container.textContent).toContain(
+      'Could not load workflow terminal targets',
+    );
+    expect(deleteRunButton(container)).toBeNull();
+    // Still closeable — every failure is.
+    expect(dismissButton(container)).not.toBeNull();
   });
 });

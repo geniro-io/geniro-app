@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../shared/contracts';
-import { createDaemonApis, REQUEST_TIMEOUT_MS } from './daemon-api';
+import {
+  createDaemonApis,
+  daemonErrorStatus,
+  REQUEST_TIMEOUT_MS,
+} from './daemon-api';
 
 const handle: DaemonHandle = {
   host: '127.0.0.1',
@@ -127,5 +131,34 @@ describe('createDaemonApis', () => {
     // cold route, far below the old forever.
     expect(REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
     expect(REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
+  });
+});
+
+describe('daemonErrorStatus', () => {
+  it('reads the status out of an error the transport itself produced', async () => {
+    // Not a hand-written string: the parser is pinned against the real
+    // middleware's output, so a change to that format fails HERE rather than
+    // silently turning every 404 into "unknown" in the UI.
+    stubFetch({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('WORKFLOW_NOT_FOUND'),
+    });
+
+    const err = await createDaemonApis(handle)
+      .workflows.getWorkflow({ slug: 'gone' })
+      .catch((caught: unknown) => caught);
+
+    expect(daemonErrorStatus(err)).toBe(404);
+  });
+
+  it('is null for anything that is not a daemon response error', async () => {
+    // A timeout, an abort, a thrown string — none of them carry a status, and
+    // reporting one would let a caller act on a failure it never diagnosed.
+    expect(
+      daemonErrorStatus(new Error('The operation was aborted')),
+    ).toBeNull();
+    expect(daemonErrorStatus('failed (404)')).toBeNull();
+    expect(daemonErrorStatus(undefined)).toBeNull();
   });
 });

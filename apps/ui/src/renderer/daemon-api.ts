@@ -46,6 +46,18 @@ const uniformErrors: Middleware = {
   },
 };
 
+/**
+ * The `(status)` segment of the message {@link uniformErrors} produces, or null
+ * for anything else (a timeout, an abort, a thrown non-Error). Lives HERE, next
+ * to the only code that writes that text, so a caller that needs to tell a
+ * 404 from a real failure cannot drift from the format it is parsing.
+ */
+export function daemonErrorStatus(err: unknown): number | null {
+  const message = err instanceof Error ? err.message : String(err);
+  const match = /^daemon .* failed \((\d{3})\)/.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
 /** The generated API clients, all bound to one daemon launch. */
 export interface DaemonApis {
   chats: ChatsApi;

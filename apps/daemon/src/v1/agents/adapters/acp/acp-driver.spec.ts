@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
@@ -60,7 +64,7 @@ function harness(
 /** The reply the agent sends to `initialize`, with the capabilities under test. */
 function initializeReply(
   id: number,
-  capabilities: { loadSession?: boolean; http?: boolean } = {},
+  capabilities: { loadSession?: boolean; http?: boolean; image?: boolean } = {},
 ): unknown {
   return {
     id,
@@ -69,6 +73,7 @@ function initializeReply(
       agentCapabilities: {
         loadSession: capabilities.loadSession ?? false,
         mcpCapabilities: { http: capabilities.http ?? false },
+        promptCapabilities: { image: capabilities.image ?? false },
       },
     },
   };
@@ -980,5 +985,98 @@ describe('AcpTurnDriver unsupported requests', () => {
     expect(warn).toHaveBeenCalledWith(
       'acp: dropped the error reply to fs/read_text_file — stdin is closed',
     );
+  });
+});
+
+describe('AcpTurnDriver image attachments', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+  /** A real file on disk — the driver reads bytes, not a fixture string. */
+  function imageInput(): AgentTurnInput {
+    const path = join(
+      mkdtempSync(join(tmpdir(), 'acp-driver-images-')),
+      'a.png',
+    );
+    writeFileSync(path, PNG);
+    return {
+      ...BASE_INPUT,
+      images: [{ path, mediaType: 'image/png' }],
+    };
+  }
+
+  /**
+   * Drive the handshake to the point where `session/prompt` has been sent,
+   * keeping the events the session reply produced — that is the channel the
+   * prompt-time notice rides, not the `onStdinReady` one.
+   */
+  function promptedWith(image: boolean): {
+    h: Harness;
+    events: AgentEvent[];
+  } {
+    const h = harness({ input: imageInput() });
+    h.feed(initializeReply(1, { image }));
+    return { h, events: h.feed({ id: 2, result: { sessionId: 'sess-1' } }) };
+  }
+
+  it('sends the attached image to an agent that accepts image prompts', () => {
+    const { h } = promptedWith(true);
+
+    expect(h.sentMethod('session/prompt')?.params).toEqual({
+      sessionId: 'sess-1',
+      // Images first, then the text — the order the claude path sends.
+      prompt: [
+        { type: 'image', mimeType: 'image/png', data: PNG.toString('base64') },
+        { type: 'text', text: 'do the thing' },
+      ],
+    });
+  });
+
+  it('withholds the image from an agent that never advertised the capability, and says so', () => {
+    // Sending anyway earns an error reply that fails the whole turn over an
+    // attachment; dropping it quietly leaves the user watching the agent
+    // answer about a screenshot it never got. Neither is acceptable, so the
+    // turn runs text-only WITH a notice.
+    const { h, events } = promptedWith(false);
+
+    expect(h.sentMethod('session/prompt')?.params).toEqual({
+      sessionId: 'sess-1',
+      prompt: [{ type: 'text', text: 'do the thing' }],
+    });
+    expect(events).toContainEqual({
+      type: 'notice',
+      message:
+        'agent does not accept image prompts — 1 attached image was not sent with this turn',
+    });
+  });
+
+  it('says nothing about images on a turn that has none', () => {
+    // The notice is about a real loss; a text-only turn must not carry it.
+    const h = harness();
+    h.feed(initializeReply(1, { image: false }));
+    const events = h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+
+    expect(
+      [...events, ...h.emitted].filter(
+        (event) => event.type === 'notice' && event.message.includes('image'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('fails the turn on an unreadable attachment instead of prompting without it', () => {
+    // Constructed inside AgentAdapter.start's synchronous try, so this is the
+    // seam where a broken attachment stops the turn.
+    expect(
+      () =>
+        new AcpTurnDriver({
+          input: {
+            ...BASE_INPUT,
+            images: [{ path: '/nope/missing.png', mediaType: 'image/png' }],
+          },
+          clientName: 'geniro',
+          clientVersion: '1.2.3',
+          autoDecide: () => null,
+          composeSystemPrompt: () => '',
+        }),
+    ).toThrow();
   });
 });

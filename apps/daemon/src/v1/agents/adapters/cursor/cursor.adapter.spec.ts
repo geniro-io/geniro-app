@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import type { AdapterConfig, AgentEvent } from '../adapter.types';
 import { CursorAdapter } from './cursor.adapter';
-import { CURSOR_CONFIG } from './cursor.const';
 
 class FakeReadable extends EventEmitter {
   setEncoding(): this {
@@ -59,7 +58,7 @@ describe('CursorAdapter', () => {
     // channel and THIS CLI answers "I have none" — so no service ever needs to
     // know which agent it is talking to. cursor-agent has no per-turn approval
     // channel at all, so allowUserQuestions must not change a single flag.
-    expect(new CursorAdapter().config.questionToolName).toBeNull();
+    expect(new CursorAdapter().getConfig().questionToolName).toBeNull();
 
     const plain = fakeSpawn();
     new CursorAdapter({ spawn: plain.spawn }).start(
@@ -85,8 +84,8 @@ describe('CursorAdapter', () => {
     // schema is CLI-agnostic), and this CLI's honest answer is "that becomes
     // auto, and here is the line to show the user" — never a silent swap.
     const adapter = new CursorAdapter();
-    expect(adapter.config.approval.modes).toEqual(['auto']);
-    expect(adapter.config.approval.probedModes).toEqual([]);
+    expect(adapter.getConfig().approval.modes).toEqual(['auto']);
+    expect(adapter.getConfig().approval.probedModes).toEqual([]);
 
     expect(adapter.resolveApprovalMode('auto', { supported: {} })).toEqual({
       mode: 'auto',
@@ -107,8 +106,8 @@ describe('CursorAdapter', () => {
     // Both true because of how cursor-agent takes an MCP server at all: a
     // persistent trust store to satisfy, and no per-turn --mcp-config flag.
     const adapter = new CursorAdapter();
-    expect(adapter.config.mcp.callToolsRequireTrustProbe).toBe(true);
-    expect(adapter.config.mcp.endpointRequiresCwdConfig).toBe(true);
+    expect(adapter.getConfig().mcp.callToolsRequireTrustProbe).toBe(true);
+    expect(adapter.getConfig().mcp.endpointRequiresCwdConfig).toBe(true);
   });
 
   it('has no reasoning-effort control, and a turn carrying one adds no flag', () => {
@@ -369,16 +368,18 @@ describe('CursorAdapter model listing', () => {
     // to CURSOR_BUILTIN_MODELS would leave the field write-only, and this test
     // is the thing that fails when someone does.
     class ConfiguredCursorAdapter extends CursorAdapter {
-      override readonly config: AdapterConfig = {
-        ...CURSOR_CONFIG,
-        builtinModels: [
-          {
-            id: 'pinned-floor-model',
-            label: 'Pinned floor',
-            source: 'builtin',
-          },
-        ],
-      };
+      override getConfig(): AdapterConfig {
+        return {
+          ...super.getConfig(),
+          builtinModels: [
+            {
+              id: 'pinned-floor-model',
+              label: 'Pinned floor',
+              source: 'builtin',
+            },
+          ],
+        };
+      }
     }
     const { execFileFn } = fakeExec(null);
 

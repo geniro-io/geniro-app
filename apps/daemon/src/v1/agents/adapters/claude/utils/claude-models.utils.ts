@@ -63,7 +63,7 @@ export function readClaudeModelCache(homeDir = homedir()): AgentModel[] {
  * The floor is a PARAMETER, not an import: `config.builtinModels` is the one
  * declared source of a CLI's fallback set, and reaching past config to the raw
  * const here would make that field write-only — a new adapter author would set
- * it and get nothing. The adapter passes `this.config.builtinModels`; staying a
+ * it and get nothing. The adapter passes `this.getConfig().builtinModels`; staying a
  * pure function keeps the spec able to drive it without an adapter.
  */
 export function claudeModels(

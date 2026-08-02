@@ -10,9 +10,9 @@ import type {
  * Nothing about this CLI is spelled as a literal inside `cursor.adapter.ts` or
  * any `cursor/utils/**` helper — argv flags, env var names, parse patterns and
  * user-facing message templates are all named here, grouped by what they are
- * about, and {@link CURSOR_CONFIG} at the bottom assembles the static subset
- * the base class reads. Its `null` / `[]` members are the DECLARED facts about
- * what this CLI cannot do, not omissions.
+ * about. The static subset the base class reads is assembled from them by
+ * `CursorAdapter.getConfig()`, whose `null` / `[]` members are the DECLARED
+ * facts about what this CLI cannot do, not omissions.
  */
 
 // ── Turn argv ─────────────────────────────────────────────────────────────
@@ -225,65 +225,3 @@ export const CURSOR_IMAGE_HEADER_PLURAL =
   'The user attached these image files:';
 
 // ── The assembled static config ───────────────────────────────────────────
-
-/** Everything static about `cursor-agent`, as the base class reads it. */
-export const CURSOR_CONFIG: AdapterConfig = {
-  kind: 'cursor-agent',
-  /**
-   * cursor-agent has no per-turn approval channel at all (its permissions are
-   * the `--force` flag plus the static allow/deny list in
-   * `~/.cursor/cli-config.json`), so it has no way to ask the user anything
-   * mid-turn either.
-   */
-  questionToolName: null,
-  approval: {
-    modes: CURSOR_APPROVAL_MODES,
-    probedModes: CURSOR_PROBED_APPROVAL_MODES,
-    /** Nothing is probed, so nothing can degrade on a probe result. */
-    degradeOnProbeFail: {},
-    soleModeDegradeReason: cursorApprovalDegradeReason,
-  },
-  /**
-   * Nothing to offer: cursor-agent has no reasoning-effort flag, because it
-   * folds effort INTO the model id instead — `sonnet-4-thinking`,
-   * `gpt-5.2-high`. A level here would be a second control over the same
-   * thing, and the CLI would reject the flag; the model chip already IS the
-   * effort chip for this CLI.
-   */
-  efforts: [],
-  builtinModels: CURSOR_BUILTIN_MODELS,
-  skillRoots: {
-    /** It has no skills convention — only claude does. */
-    skills: [],
-    commands: [CURSOR_COMMANDS_SEGMENTS],
-  },
-  /**
-   * cursor-agent's stream-json has no partial-output mode — its assistant
-   * lines arrive whole — so a turn never streams increments.
-   */
-  liveStream: null,
-  /**
-   * Nothing to report: cursor-agent has no built-in slash commands and no
-   * equivalent of claude's `system/init` list — `.cursor/commands` on disk is
-   * the whole of what it can be invoked with.
-   */
-  reportedCommands: null,
-  mcp: {
-    /**
-     * cursor-agent keeps its own persistent MCP trust store, and a server it
-     * has not trusted is silently unavailable to the model — so the daemon
-     * must PROVE the endpoint is reachable on this machine before a run admits
-     * a cursor caller, rather than launch a turn whose call tools quietly do
-     * nothing.
-     */
-    callToolsRequireTrustProbe: true,
-    /**
-     * There is no `--mcp-config` flag: the only way in is a `geniro` entry
-     * merged into the run cwd's `.cursor/mcp.json` for the turn and removed
-     * after it.
-     */
-    endpointRequiresCwdConfig: true,
-  },
-  /** Cursor's subscription TUI is an explicit M4 scope exclusion (deferred). */
-  terminal: null,
-};

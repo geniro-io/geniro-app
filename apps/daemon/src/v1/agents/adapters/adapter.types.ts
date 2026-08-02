@@ -445,7 +445,7 @@ export type TerminalCommandResult =
  * runs, and knowable without asking it anything.
  *
  * One object per adapter, declared in that adapter's `<name>.const.ts` and
- * returned by `AgentAdapter.config`, so every question whose only per-CLI input
+ * returned by `AgentAdapter.getConfig()`, so every question whose only per-CLI input
  * is a VALUE is answered once, concretely, on the base class. A field here is
  * the reason a `listEfforts` / `listSkills` / `resolveApprovalMode` override no
  * longer exists on either adapter.

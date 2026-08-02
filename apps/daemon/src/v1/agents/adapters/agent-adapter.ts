@@ -67,11 +67,17 @@ export interface AgentAdapterOptions {
  */
 export abstract class AgentAdapter {
   /**
-   * Everything STATIC about the CLI this adapter drives, declared once in its
-   * `<name>.const.ts`. It is the single source of every per-CLI VALUE, so the
-   * members below are concrete here rather than restated per adapter.
+   * Everything STATIC about the CLI this adapter drives — the single source of
+   * every per-CLI VALUE, which is why the members below are concrete here
+   * rather than restated per adapter.
+   *
+   * A method returning an inline literal, not a field pointing at a const: the
+   * adapter class is then the one place that shows what its CLI is, and the
+   * annotated return type makes a missing or misspelled field a type error at
+   * the adapter instead of at some distant read site. The individual values
+   * stay named exports in `<name>.const.ts`; only their ASSEMBLY lives here.
    */
-  abstract readonly config: AdapterConfig;
+  abstract getConfig(): AdapterConfig;
 
   /**
    * The CLI binary invoked for each turn. Resolved per access so the Settings
@@ -79,7 +85,7 @@ export abstract class AgentAdapter {
    * without reconstructing the adapter.
    */
   protected get command(): string {
-    return resolveAgentBinary(this.config.kind);
+    return resolveAgentBinary(this.getConfig().kind);
   }
 
   /**
@@ -142,7 +148,7 @@ export abstract class AgentAdapter {
     installed: InstalledApprovalSupport,
   ): ApprovalResolution {
     const { modes, degradeOnProbeFail, soleModeDegradeReason } =
-      this.config.approval;
+      this.getConfig().approval;
     const [soleMode] = modes;
     if (modes.length === 1 && soleMode && soleMode !== requested) {
       return {
@@ -211,7 +217,7 @@ export abstract class AgentAdapter {
    * fresh conversation while claiming to mirror the run.
    */
   terminalCommand(sessionId: string | null): TerminalCommandResult {
-    const terminal = this.config.terminal;
+    const terminal = this.getConfig().terminal;
     if (!terminal) {
       return { ok: false, reason: 'unsupported' };
     }
@@ -257,7 +263,7 @@ export abstract class AgentAdapter {
    * picker, without anything outside this layer knowing which CLI it is.
    */
   listEfforts(): AgentEffort[] {
-    return [...this.config.efforts];
+    return [...this.getConfig().efforts];
   }
 
   /**
@@ -283,10 +289,10 @@ export abstract class AgentAdapter {
     ];
     const found: AgentSkillEntry[] = [];
     for (const { source, dir } of roots) {
-      for (const segments of this.config.skillRoots.skills) {
+      for (const segments of this.getConfig().skillRoots.skills) {
         found.push(...(await scanSkillDirs(join(dir, ...segments), source)));
       }
-      for (const segments of this.config.skillRoots.commands) {
+      for (const segments of this.getConfig().skillRoots.commands) {
         found.push(...(await scanCommandFiles(join(dir, ...segments), source)));
       }
     }
@@ -321,7 +327,7 @@ export abstract class AgentAdapter {
   async listReportedCommands(
     options: AgentCommandOptions = {},
   ): Promise<string[]> {
-    const probe = this.config.reportedCommands;
+    const probe = this.getConfig().reportedCommands;
     if (!probe) {
       return [];
     }
@@ -404,7 +410,7 @@ export abstract class AgentAdapter {
    * which degrades to block streaming rather than failing turns.
    */
   supportsLiveStream(options: AgentCommandOptions = {}): Promise<boolean> {
-    const liveStream = this.config.liveStream;
+    const liveStream = this.getConfig().liveStream;
     if (!liveStream) {
       return Promise.resolve(false);
     }
@@ -535,7 +541,7 @@ export abstract class AgentAdapter {
         onEvent: (event) => {
           if (event.type === 'unhandled_control') {
             this.options.logger?.warn(
-              `${this.config.kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
+              `${this.getConfig().kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
             );
             return;
           }

@@ -6,7 +6,7 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
  *
  * None of these helpers knows a CLI's tool names or payload shapes: the caller
  * passes the question tool its adapter declares
- * (`AgentAdapter.config.questionToolName`), which is `null` for a CLI with no
+ * (`AgentAdapter.getConfig().questionToolName`), which is `null` for a CLI with no
  * question channel, and the fold itself is handed back to that adapter
  * (`AgentAdapter.withAnswer`). That keeps every CLI-specific fact in the
  * adapter layer while the seam itself stays shared, so the recording condition
@@ -64,7 +64,7 @@ export function foldApprovalAnswer(
   answer: string | undefined,
 ): unknown {
   return answerFoldsInto(
-    adapter.config.questionToolName,
+    adapter.getConfig().questionToolName,
     toolName,
     allow,
     answer,

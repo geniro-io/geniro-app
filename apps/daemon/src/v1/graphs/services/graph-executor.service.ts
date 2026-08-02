@@ -114,7 +114,7 @@ function hasTrustProbedCaller(
     const from = byId.get(edge.from);
     return (
       from?.kind === 'agent' &&
-      adapterFor(from.agent).config.mcp.callToolsRequireTrustProbe
+      adapterFor(from.agent).getConfig().mcp.callToolsRequireTrustProbe
     );
   });
 }
@@ -131,9 +131,9 @@ function hasProbedApprovalMode(
   return workflow.nodes.some(
     (node) =>
       node.kind === 'agent' &&
-      adapterFor(node.agent).config.approval.probedModes.includes(
-        node.approval,
-      ),
+      adapterFor(node.agent)
+        .getConfig()
+        .approval.probedModes.includes(node.approval),
   );
 }
 
@@ -744,7 +744,7 @@ export class GraphExecutorService {
      * gate.
      */
     const callCapable = (node: WorkflowAgentNode): boolean =>
-      !this.adapterFor(node.agent).config.mcp.callToolsRequireTrustProbe ||
+      !this.adapterFor(node.agent).getConfig().mcp.callToolsRequireTrustProbe ||
       cursorCalls.status === 'pass';
 
     /** Nodes that hold the call tools in THIS run (callers, not callees). */
@@ -792,7 +792,8 @@ export class GraphExecutorService {
       // The escalation half differs per CLI, and the tool's NAME is the
       // adapter's to spell: a caller whose CLI has a question channel can
       // relay to the user; one without it can only answer-or-time-out.
-      const questionTool = this.adapterFor(node.agent).config.questionToolName;
+      const questionTool = this.adapterFor(node.agent).getConfig()
+        .questionToolName;
       const questionLine =
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
@@ -951,7 +952,7 @@ export class GraphExecutorService {
        * so it keeps its requested mode.
        */
       const questionCapable =
-        adapter.config.questionToolName !== null &&
+        adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
       const input: AgentTurnInput = {
@@ -1002,7 +1003,7 @@ export class GraphExecutorService {
             // (card or daemon auto-approve per node.approval) with a warning
             // so the drift is loud, never silent.
             const isQuestion = isUserQuestion(
-              adapter.config.questionToolName,
+              adapter.getConfig().questionToolName,
               event.toolName,
             );
             if (!isQuestion && event.requiresUserInteraction === true) {
@@ -1108,7 +1109,7 @@ export class GraphExecutorService {
                       // transcript must never claim an answer the agent
                       // did not receive.
                       ...(answerFoldsInto(
-                        adapter.config.questionToolName,
+                        adapter.getConfig().questionToolName,
                         event.toolName,
                         allow,
                         answer,
@@ -1125,7 +1126,7 @@ export class GraphExecutorService {
         });
       };
       const handle: AgentTurnHandle =
-        adapter.config.mcp.endpointRequiresCwdConfig && input.mcpEndpoint
+        adapter.getConfig().mcp.endpointRequiresCwdConfig && input.mcpEndpoint
           ? startCursorCallerTurn(
               adapter,
               node,

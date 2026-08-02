@@ -350,7 +350,7 @@ export class ChatService {
       return;
     }
     const adapter = this.adapterFor(agentKind);
-    if (!adapter.config.approval.modes.includes(approval)) {
+    if (!adapter.getConfig().approval.modes.includes(approval)) {
       throw new BadRequestException(
         'APPROVAL_MODE_UNSUPPORTED',
         `${agentKind} does not support the approval mode '${approval}'`,
@@ -374,7 +374,7 @@ export class ChatService {
     if (picked !== undefined) {
       return picked;
     }
-    const modes = this.adapterFor(kind).config.approval.modes;
+    const modes = this.adapterFor(kind).getConfig().approval.modes;
     return modes.includes(CHAT_DEFAULT_APPROVAL)
       ? CHAT_DEFAULT_APPROVAL
       : 'auto';
@@ -622,7 +622,7 @@ export class ChatService {
           // service only assembles the bag from the probes it holds. Reading
           // claude's field here instead would judge any future CLI with a
           // probed mode against claude's installed binary.
-          adapter.config.approval.probedModes.includes(approvalMode)
+          adapter.getConfig().approval.probedModes.includes(approvalMode)
             ? adapter.approvalSupportFrom({
                 claudeModes: await this.claudeModesSafe(),
               })
@@ -765,7 +765,7 @@ export class ChatService {
               // The CLI's own invokable set for this cwd — feeds the
               // composer's `/` autocomplete, never the transcript.
               this.skillHarvest.record(
-                adapter.config.kind,
+                adapter.getConfig().kind,
                 cwd,
                 event.commands,
               );
@@ -782,7 +782,7 @@ export class ChatService {
             }
             if (event.type === 'approval_request') {
               const isQuestion = isUserQuestion(
-                adapter.config.questionToolName,
+                adapter.getConfig().questionToolName,
                 event.toolName,
               );
               if (!isQuestion && event.requiresUserInteraction === true) {
@@ -879,7 +879,7 @@ export class ChatService {
                           // transcript must never claim an answer the agent
                           // did not receive.
                           ...(answerFoldsInto(
-                            adapter.config.questionToolName,
+                            adapter.getConfig().questionToolName,
                             event.toolName,
                             allow,
                             answer,

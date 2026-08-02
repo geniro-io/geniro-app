@@ -12,9 +12,7 @@ import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import type { AdapterConfig, AgentApprovalMode } from './adapter.types';
 import type { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
-import { CLAUDE_CONFIG } from './claude/claude.const';
 import { CursorAdapter } from './cursor/cursor.adapter';
-import { CURSOR_CONFIG } from './cursor/cursor.const';
 
 /**
  * The config-driven members the base answers for EVERY adapter, driven through
@@ -32,15 +30,18 @@ const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
  * the only shape that can tell the two orderings apart.
  */
 class SoleModeWithProbeTableAdapter extends CursorAdapter {
-  override readonly config: AdapterConfig = {
-    ...CURSOR_CONFIG,
-    approval: {
-      ...CURSOR_CONFIG.approval,
-      degradeOnProbeFail: {
-        acceptEdits: { to: 'ask', reason: 'probe table won' },
+  override getConfig(): AdapterConfig {
+    const base = super.getConfig();
+    return {
+      ...base,
+      approval: {
+        ...base.approval,
+        degradeOnProbeFail: {
+          acceptEdits: { to: 'ask', reason: 'probe table won' },
+        },
       },
-    },
-  };
+    };
+  }
 }
 
 /**
@@ -63,16 +64,19 @@ function reportedCommandsOf(
  * makes no report at all).
  */
 class NoInternalPrefixAdapter extends ClaudeAdapter {
-  override readonly config: AdapterConfig = {
-    ...CLAUDE_CONFIG,
-    reportedCommands: {
-      // Track the SHIPPED config and override the one field under test —
-      // hand-retyping the other values here is how a fixture starts asserting
-      // against a claude that no longer exists.
-      ...reportedCommandsOf(CLAUDE_CONFIG),
-      internalPrefix: null,
-    },
-  };
+  override getConfig(): AdapterConfig {
+    const base = super.getConfig();
+    return {
+      ...base,
+      reportedCommands: {
+        // Track the SHIPPED config and override the one field under test —
+        // hand-retyping the other values here is how a fixture starts
+        // asserting against a claude that no longer exists.
+        ...reportedCommandsOf(base),
+        internalPrefix: null,
+      },
+    };
+  }
 }
 
 /**
@@ -184,12 +188,12 @@ describe('AgentAdapter.approvalSupportFrom', () => {
       // come back absent instead of false — every degrade silently stops.
       const support = adapter.approvalSupportFrom({ claudeModes: failingBag });
 
-      for (const mode of adapter.config.approval.probedModes) {
+      for (const mode of adapter.getConfig().approval.probedModes) {
         expect(support.supported[mode]).toBe(false);
       }
       // Nothing is invented for a mode the adapter never declared probed.
       const probed: readonly AgentApprovalMode[] =
-        adapter.config.approval.probedModes;
+        adapter.getConfig().approval.probedModes;
       expect(
         Object.keys(support.supported).every((mode) =>
           probed.includes(mode as AgentApprovalMode),
@@ -202,9 +206,9 @@ describe('AgentAdapter.approvalSupportFrom', () => {
 describe('AgentAdapter.listEfforts', () => {
   for (const { name, adapter } of ADAPTERS) {
     it(`hands back ${name}'s declared effort vocabulary, as a copy`, () => {
-      expect(adapter.listEfforts()).toEqual([...adapter.config.efforts]);
+      expect(adapter.listEfforts()).toEqual([...adapter.getConfig().efforts]);
       // A caller must not be able to mutate the shared config through it.
-      expect(adapter.listEfforts()).not.toBe(adapter.config.efforts);
+      expect(adapter.listEfforts()).not.toBe(adapter.getConfig().efforts);
     });
   }
 });
@@ -227,7 +231,7 @@ describe('AgentAdapter question channel', () => {
       // answers null and echoes the input BY REFERENCE (nothing to fold into);
       // a CLI that declares one must override both, or a callee's question
       // reaches its caller blank and the answer never reaches the CLI.
-      const hasChannel = adapter.config.questionToolName !== null;
+      const hasChannel = adapter.getConfig().questionToolName !== null;
 
       expect(adapter.questionFrom(QUESTION_INPUT) !== null).toBe(hasChannel);
       expect(adapter.withAnswer(QUESTION_INPUT, 'Red') === QUESTION_INPUT).toBe(

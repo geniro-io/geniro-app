@@ -241,7 +241,7 @@ function fakeAdapter(kind: AgentKind): {
     kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
   return {
     adapter: {
-      config: real.config,
+      getConfig: () => real.getConfig(),
       start,
       resolveApprovalMode: (
         requested: AgentApprovalMode,

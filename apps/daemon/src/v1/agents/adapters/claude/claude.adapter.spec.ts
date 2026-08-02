@@ -27,7 +27,6 @@ import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
   CLAUDE_COMMANDS_PROBE_PROMPT,
-  CLAUDE_CONFIG,
   CLAUDE_MAX_REPORTED_COMMANDS,
   CLAUDE_RESUME_FLAG,
 } from './claude.const';
@@ -414,7 +413,9 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   });
 
   it('reports the tool it asks the user with, so no service spells the name', () => {
-    expect(new ClaudeAdapter().config.questionToolName).toBe('AskUserQuestion');
+    expect(new ClaudeAdapter().getConfig().questionToolName).toBe(
+      'AskUserQuestion',
+    );
   });
 
   it('degrades a PROVEN-unsupported acceptEdits to ask, and says so', () => {
@@ -445,7 +446,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
   it('declares the modes it honours, which of them are empirical, and how calls reach it', () => {
     const adapter = new ClaudeAdapter();
-    expect(adapter.config.approval.modes).toEqual([
+    expect(adapter.getConfig().approval.modes).toEqual([
       'auto',
       'ask',
       'acceptEdits',
@@ -453,14 +454,14 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     ]);
     // Only these two cost a run a probe turn — the pair `approvalSupportFrom`
     // translates out of the capability bag.
-    expect(adapter.config.approval.probedModes).toEqual([
+    expect(adapter.getConfig().approval.probedModes).toEqual([
       'acceptEdits',
       'plan',
     ]);
     // The endpoint rides --mcp-config per turn: no machine trust to establish,
     // and nothing written into the user's cwd.
-    expect(adapter.config.mcp.callToolsRequireTrustProbe).toBe(false);
-    expect(adapter.config.mcp.endpointRequiresCwdConfig).toBe(false);
+    expect(adapter.getConfig().mcp.callToolsRequireTrustProbe).toBe(false);
+    expect(adapter.getConfig().mcp.endpointRequiresCwdConfig).toBe(false);
   });
 
   it('asks for token-level output only when the turn wants it', () => {
@@ -1408,16 +1409,18 @@ describe('ClaudeAdapter — models', () => {
     // to CLAUDE_BUILTIN_MODELS would leave the field write-only, and this test
     // is the thing that fails when someone does.
     class ConfiguredClaudeAdapter extends ClaudeAdapter {
-      override readonly config: AdapterConfig = {
-        ...CLAUDE_CONFIG,
-        builtinModels: [
-          {
-            id: 'pinned-floor-model',
-            label: 'Pinned floor',
-            source: 'builtin',
-          },
-        ],
-      };
+      override getConfig(): AdapterConfig {
+        return {
+          ...super.getConfig(),
+          builtinModels: [
+            {
+              id: 'pinned-floor-model',
+              label: 'Pinned floor',
+              source: 'builtin',
+            },
+          ],
+        };
+      }
     }
 
     const models = await new ConfiguredClaudeAdapter({

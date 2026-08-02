@@ -2,8 +2,10 @@ import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { AgentKind } from '../../../runs/runs.types';
 import { claudeCredentialEnv } from '../../utils/child-env';
 import type {
+  AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
   AgentEvent,
@@ -14,11 +16,20 @@ import type {
 } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import {
+  CLAUDE_ACCEPT_EDITS_DEGRADE_REASON,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
+  CLAUDE_APPROVAL_MODES,
   CLAUDE_BASE_ARGS,
-  CLAUDE_CONFIG,
+  CLAUDE_BUILTIN_MODELS,
+  CLAUDE_COMMANDS_PROBE_PROMPT,
+  CLAUDE_COMMANDS_PROBE_TIMEOUT_MS,
+  CLAUDE_COMMANDS_SEGMENTS,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
+  CLAUDE_EFFORT_LEVELS,
+  CLAUDE_HELP_ARGS,
+  CLAUDE_INTERNAL_COMMAND_PREFIX,
+  CLAUDE_MAX_REPORTED_COMMANDS,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
@@ -29,7 +40,11 @@ import {
   CLAUDE_PERMISSION_MODE_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+  CLAUDE_PROBED_APPROVAL_MODES,
+  CLAUDE_QUESTION_TOOL_NAME,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SESSION_ID_PATTERN,
+  CLAUDE_SKILLS_SEGMENTS,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
@@ -60,7 +75,66 @@ import {
  * Plain chat (no `approvalMode`) keeps the M2 argv byte-for-byte.
  */
 export class ClaudeAdapter extends AgentAdapter {
-  readonly config = CLAUDE_CONFIG;
+  getConfig(): AdapterConfig {
+    return {
+      kind: AgentKind.Claude,
+      questionToolName: CLAUDE_QUESTION_TOOL_NAME,
+      approval: {
+        modes: CLAUDE_APPROVAL_MODES,
+        probedModes: CLAUDE_PROBED_APPROVAL_MODES,
+        /**
+         * `acceptEdits` degrades to `ask` on a probed FAIL — the turn still
+         * runs, every edit just asks first.
+         *
+         * `plan` is deliberately ABSENT, even though it is probed the same
+         * way: turning a no-execute mode into an executing `ask` would invert
+         * the whole promise the user selected it for. An unsupported `plan`
+         * rides through and the CLI rejects it loudly, which is the honest
+         * failure. Do not add it here "for completeness".
+         *
+         * An UNPROBED mode keeps what was asked for, so a real rejection
+         * surfaces from the CLI rather than from a guess made here.
+         */
+        degradeOnProbeFail: {
+          acceptEdits: {
+            to: 'ask',
+            reason: CLAUDE_ACCEPT_EDITS_DEGRADE_REASON,
+          },
+        },
+        /** Four honoured modes — the sole-mode collapse never applies to claude. */
+        soleModeDegradeReason: null,
+      },
+      efforts: CLAUDE_EFFORT_LEVELS,
+      builtinModels: CLAUDE_BUILTIN_MODELS,
+      skillRoots: {
+        skills: [CLAUDE_SKILLS_SEGMENTS],
+        commands: [CLAUDE_COMMANDS_SEGMENTS],
+      },
+      liveStream: {
+        probeArgs: CLAUDE_HELP_ARGS,
+        flag: CLAUDE_PARTIAL_MESSAGES_FLAG,
+      },
+      reportedCommands: {
+        probePrompt: CLAUDE_COMMANDS_PROBE_PROMPT,
+        probeTimeoutMs: CLAUDE_COMMANDS_PROBE_TIMEOUT_MS,
+        maxCommands: CLAUDE_MAX_REPORTED_COMMANDS,
+        internalPrefix: CLAUDE_INTERNAL_COMMAND_PREFIX,
+      },
+      mcp: {
+        /**
+         * The endpoint is handed to claude per turn, so nothing about the
+         * machine has to be trusted in advance.
+         */
+        callToolsRequireTrustProbe: false,
+        /** `--mcp-config` carries the endpoint for one turn; no cwd file is touched. */
+        endpointRequiresCwdConfig: false,
+      },
+      terminal: {
+        resumeFlag: CLAUDE_RESUME_FLAG,
+        sessionIdPattern: CLAUDE_SESSION_ID_PATTERN,
+      },
+    };
+  }
 
   /**
    * Claude's own slice of the capability bag: the permission-mode probe's
@@ -169,7 +243,7 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   override listModels(): Promise<AgentModel[]> {
     return Promise.resolve(
-      claudeModels(this.config.builtinModels, this.claudeOptions.homeDir),
+      claudeModels(this.getConfig().builtinModels, this.claudeOptions.homeDir),
     );
   }
 

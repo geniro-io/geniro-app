@@ -31,7 +31,7 @@ export class AgentAdapterRegistry {
     // second spelling is a place for the two to disagree — a mis-keyed entry
     // would route every turn of one CLI to the other's binary, silently.
     this.byKind = new Map<AgentKind, AgentAdapter>(
-      [claude, cursor].map((adapter) => [adapter.config.kind, adapter]),
+      [claude, cursor].map((adapter) => [adapter.getConfig().kind, adapter]),
     );
   }
 

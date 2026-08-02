@@ -231,7 +231,7 @@ class FakeAdapter {
   projectsNoQuestion = false;
   constructor(readonly kind: 'claude' | 'cursor-agent') {
     this.real = kind === 'claude' ? new ClaudeAdapter() : new CursorAdapter();
-    this.config = this.real.config;
+    this.getConfig = () => this.real.getConfig();
   }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);

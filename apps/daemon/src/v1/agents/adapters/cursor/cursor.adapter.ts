@@ -1,4 +1,6 @@
+import { AgentKind } from '../../../runs/runs.types';
 import type {
+  AdapterConfig,
   AgentCommandOptions,
   AgentEvent,
   AgentModel,
@@ -8,13 +10,17 @@ import { AgentAdapter } from '../agent-adapter';
 import {
   CURSOR_API_KEY_ENV,
   CURSOR_API_KEY_SOURCE_ENV,
+  CURSOR_APPROVAL_MODES,
   CURSOR_BASE_ARGS,
-  CURSOR_CONFIG,
+  CURSOR_BUILTIN_MODELS,
+  CURSOR_COMMANDS_SEGMENTS,
   CURSOR_MODEL_FLAG,
   CURSOR_MODELS_SUBCOMMAND,
+  CURSOR_PROBED_APPROVAL_MODES,
   CURSOR_RESUME_FLAG,
   CURSOR_SYSTEM_PROMPT_SEPARATOR,
   CURSOR_TRUST_FLAG,
+  cursorApprovalDegradeReason,
 } from './cursor.const';
 import { withImagePaths } from './utils/cursor-images.utils';
 import { mapCursorMessage } from './utils/cursor-message.utils';
@@ -32,7 +38,68 @@ import { parseCursorModels } from './utils/cursor-models.utils';
  * {@link CursorAdapter.buildEnv}).
  */
 export class CursorAdapter extends AgentAdapter {
-  readonly config = CURSOR_CONFIG;
+  getConfig(): AdapterConfig {
+    return {
+      kind: AgentKind.CursorAgent,
+      /**
+       * cursor-agent has no per-turn approval channel at all (its permissions
+       * are the `--force` flag plus the static allow/deny list in
+       * `~/.cursor/cli-config.json`), so it has no way to ask the user
+       * anything mid-turn either.
+       */
+      questionToolName: null,
+      approval: {
+        modes: CURSOR_APPROVAL_MODES,
+        probedModes: CURSOR_PROBED_APPROVAL_MODES,
+        /** Nothing is probed, so nothing can degrade on a probe result. */
+        degradeOnProbeFail: {},
+        soleModeDegradeReason: cursorApprovalDegradeReason,
+      },
+      /**
+       * Nothing to offer: cursor-agent has no reasoning-effort flag, because
+       * it folds effort INTO the model id instead — `sonnet-4-thinking`,
+       * `gpt-5.2-high`. A level here would be a second control over the same
+       * thing, and the CLI would reject the flag; the model chip already IS
+       * the effort chip for this CLI.
+       */
+      efforts: [],
+      builtinModels: CURSOR_BUILTIN_MODELS,
+      skillRoots: {
+        /** It has no skills convention — only claude does. */
+        skills: [],
+        commands: [CURSOR_COMMANDS_SEGMENTS],
+      },
+      /**
+       * cursor-agent's stream-json has no partial-output mode — its assistant
+       * lines arrive whole — so a turn never streams increments.
+       */
+      liveStream: null,
+      /**
+       * Nothing to report: cursor-agent has no built-in slash commands and no
+       * equivalent of claude's `system/init` list — `.cursor/commands` on disk
+       * is the whole of what it can be invoked with.
+       */
+      reportedCommands: null,
+      mcp: {
+        /**
+         * cursor-agent keeps its own persistent MCP trust store, and a server
+         * it has not trusted is silently unavailable to the model — so the
+         * daemon must PROVE the endpoint is reachable on this machine before a
+         * run admits a cursor caller, rather than launch a turn whose call
+         * tools quietly do nothing.
+         */
+        callToolsRequireTrustProbe: true,
+        /**
+         * There is no `--mcp-config` flag: the only way in is a `geniro` entry
+         * merged into the run cwd's `.cursor/mcp.json` for the turn and
+         * removed after it.
+         */
+        endpointRequiresCwdConfig: true,
+      },
+      /** Cursor's subscription TUI is an explicit M4 scope exclusion (deferred). */
+      terminal: null,
+    };
+  }
 
   /**
    * `cursor-agent models` (== `--list-models`) — "List available models for
@@ -54,7 +121,7 @@ export class CursorAdapter extends AgentAdapter {
       [...CURSOR_MODELS_SUBCOMMAND],
       options,
     );
-    return parseCursorModels(stdout) ?? [...this.config.builtinModels];
+    return parseCursorModels(stdout) ?? [...this.getConfig().builtinModels];
   }
 
   protected buildArgs(input: AgentTurnInput): string[] {

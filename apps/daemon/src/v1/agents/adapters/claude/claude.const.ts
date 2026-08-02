@@ -11,8 +11,9 @@ import type {
  * Nothing about this CLI is spelled as a literal inside `claude.adapter.ts` or
  * any `claude/utils/**` helper — argv flags, timeouts, file names, env var
  * names and user-facing message templates are all named here, grouped by what
- * they are about, and {@link CLAUDE_CONFIG} at the bottom assembles the static
- * subset the base class reads.
+ * they are about. The static subset the base class reads is assembled from
+ * them by `ClaudeAdapter.getConfig()` — this file holds the VALUES, the
+ * adapter holds their shape.
  */
 
 // ── Turn argv ─────────────────────────────────────────────────────────────
@@ -246,60 +247,3 @@ export const CLAUDE_RUN_FAILED_MESSAGE = 'claude run failed';
 export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';
 
 // ── The assembled static config ───────────────────────────────────────────
-
-/** Everything static about `claude`, as the base class reads it. */
-export const CLAUDE_CONFIG: AdapterConfig = {
-  kind: 'claude',
-  questionToolName: CLAUDE_QUESTION_TOOL_NAME,
-  approval: {
-    modes: CLAUDE_APPROVAL_MODES,
-    probedModes: CLAUDE_PROBED_APPROVAL_MODES,
-    /**
-     * `acceptEdits` degrades to `ask` on a probed FAIL — the turn still runs,
-     * every edit just asks first.
-     *
-     * `plan` is deliberately ABSENT, even though it is probed the same way:
-     * turning a no-execute mode into an executing `ask` would invert the whole
-     * promise the user selected it for. An unsupported `plan` rides through
-     * and the CLI rejects it loudly, which is the honest failure. Do not add
-     * it here "for completeness".
-     *
-     * An UNPROBED mode keeps what was asked for, so a real rejection surfaces
-     * from the CLI rather than from a guess made here.
-     */
-    degradeOnProbeFail: {
-      acceptEdits: { to: 'ask', reason: CLAUDE_ACCEPT_EDITS_DEGRADE_REASON },
-    },
-    /** Four honoured modes — the sole-mode collapse never applies to claude. */
-    soleModeDegradeReason: null,
-  },
-  efforts: CLAUDE_EFFORT_LEVELS,
-  builtinModels: CLAUDE_BUILTIN_MODELS,
-  skillRoots: {
-    skills: [CLAUDE_SKILLS_SEGMENTS],
-    commands: [CLAUDE_COMMANDS_SEGMENTS],
-  },
-  liveStream: {
-    probeArgs: CLAUDE_HELP_ARGS,
-    flag: CLAUDE_PARTIAL_MESSAGES_FLAG,
-  },
-  reportedCommands: {
-    probePrompt: CLAUDE_COMMANDS_PROBE_PROMPT,
-    probeTimeoutMs: CLAUDE_COMMANDS_PROBE_TIMEOUT_MS,
-    maxCommands: CLAUDE_MAX_REPORTED_COMMANDS,
-    internalPrefix: CLAUDE_INTERNAL_COMMAND_PREFIX,
-  },
-  mcp: {
-    /**
-     * The endpoint is handed to claude per turn, so nothing about the machine
-     * has to be trusted in advance.
-     */
-    callToolsRequireTrustProbe: false,
-    /** `--mcp-config` carries the endpoint for one turn; no cwd file is touched. */
-    endpointRequiresCwdConfig: false,
-  },
-  terminal: {
-    resumeFlag: CLAUDE_RESUME_FLAG,
-    sessionIdPattern: CLAUDE_SESSION_ID_PATTERN,
-  },
-};

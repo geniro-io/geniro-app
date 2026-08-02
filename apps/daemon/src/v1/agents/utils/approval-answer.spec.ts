@@ -15,12 +15,12 @@ import {
 const claude = new ClaudeAdapter();
 const cursor = new CursorAdapter();
 
-const { questionToolName } = claude.config;
+const { questionToolName } = claude.getConfig();
 if (questionToolName === null) {
   // Loud, not skipped: every case below is about the tool claude declares.
   throw new Error('ClaudeAdapter declares no question tool');
 }
-/** What ClaudeAdapter.config.questionToolName reports. */
+/** What ClaudeAdapter.getConfig().questionToolName reports. */
 const QUESTION_TOOL: string = questionToolName;
 
 const QUESTION_INPUT = {
@@ -80,9 +80,9 @@ describe('isUserQuestion', () => {
   it('finds no question at all for a CLI with no question channel', () => {
     // cursor-agent reports null: every request it could raise is a permission
     // check, so nothing may ever be treated as a user question.
-    expect(cursor.config.questionToolName).toBeNull();
-    expect(isUserQuestion(cursor.config.questionToolName, QUESTION_TOOL)).toBe(
-      false,
-    );
+    expect(cursor.getConfig().questionToolName).toBeNull();
+    expect(
+      isUserQuestion(cursor.getConfig().questionToolName, QUESTION_TOOL),
+    ).toBe(false);
   });
 });

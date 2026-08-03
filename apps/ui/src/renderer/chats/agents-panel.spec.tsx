@@ -415,6 +415,10 @@ describe('AgentsPanel — MCP servers', () => {
       'button[aria-label="Refresh MCP servers"]',
     );
     expect(refresh?.disabled).toBe(true);
+    // Observed, not inferred from the attribute: the click must not reach the
+    // handler while a read is in flight.
+    click(refresh);
+    expect(onRefreshMcp).toHaveBeenCalledOnce();
   });
 
   it('offers no refresh control when the owner supplies no handler', () => {

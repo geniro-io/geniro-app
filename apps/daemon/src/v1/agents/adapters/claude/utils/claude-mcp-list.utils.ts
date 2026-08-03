@@ -2,10 +2,12 @@ import type { AgentMcpServer, AgentMcpServerStatus } from '../../adapter.types';
 import {
   CLAUDE_MCP_CONNECTED_MARKER,
   CLAUDE_MCP_DETAIL_SEPARATOR,
-  CLAUDE_MCP_EMPTY_MARKER,
   CLAUDE_MCP_FAILED_MARKER,
   CLAUDE_MCP_PENDING_MARKER,
 } from '../claude.const';
+
+/** Separates a row's target from its status: `<name>: <target> - <status>`. */
+const TARGET_STATUS_SEPARATOR = ' - ';
 
 /** The transport suffixes the CLI appends to a non-stdio target. */
 const TRANSPORT_SUFFIXES: readonly {
@@ -25,24 +27,36 @@ const STATUS_MARKERS: readonly {
   { marker: CLAUDE_MCP_PENDING_MARKER, status: 'pending' },
 ];
 
-/** Split `<target> - <status …>` at the LAST separator before the status. */
+/**
+ * Split `<target> - <status …>` at the separator in front of the status.
+ *
+ * Anchors on the status marker and walks BACK to the separator, because a
+ * server's own command may carry ` - ` as an argument and a naive split would
+ * then cut the row in the wrong place. When no marker is recognised — the
+ * version-drift case — it falls back to the last separator, so the target
+ * stays the target and the unrecognised wording becomes the detail rather than
+ * being glued onto the command.
+ */
 function splitAtStatus(rest: string): { target: string; statusText: string } {
   for (const { marker } of STATUS_MARKERS) {
     const at = rest.indexOf(marker);
     if (at < 0) {
       continue;
     }
-    // Anchor on the marker, then walk back to the separator in front of it. A
-    // naive split on ' - ' would cut the row in the wrong place whenever the
-    // server's own command carries one as an argument.
     const before = rest.slice(0, at);
-    const sep = before.lastIndexOf(' - ');
+    const sep = before.lastIndexOf(TARGET_STATUS_SEPARATOR);
     return {
       target: (sep < 0 ? before : before.slice(0, sep)).trim(),
       statusText: rest.slice(at),
     };
   }
-  return { target: rest.trim(), statusText: '' };
+  const sep = rest.lastIndexOf(TARGET_STATUS_SEPARATOR);
+  return sep < 0
+    ? { target: rest.trim(), statusText: '' }
+    : {
+        target: rest.slice(0, sep).trim(),
+        statusText: rest.slice(sep + TARGET_STATUS_SEPARATOR.length).trim(),
+      };
 }
 
 /** Peel ` (HTTP)` / ` (SSE)` off the target; anything else is stdio. */
@@ -73,7 +87,13 @@ function readStatus(statusText: string): {
       : tail;
     return { status, detail: detail.length > 0 ? detail : null };
   }
-  return { status: 'unknown', detail: null };
+  // Unrecognised wording is still shown to the user — it is the CLI's own
+  // description of a real server's health, and hiding it would leave the row
+  // saying nothing at all.
+  return {
+    status: 'unknown',
+    detail: statusText.length > 0 ? statusText : null,
+  };
 }
 
 /**
@@ -84,11 +104,16 @@ function readStatus(statusText: string): {
  * construction. Every degradation is therefore deliberate and non-fatal:
  *
  * - A row whose status wording is not recognised still yields a server, with
- *   `status: 'unknown'`. A CLI that renames "Connected" must cost the user a
- *   health badge, never the server itself.
- * - A line with no `<name>: ` at all is dropped — there is nothing to name.
- * - The `No MCP servers configured` sentence yields `[]`, not a bogus row, and
- *   so does empty/absent output (the caller's spawn-failure signal).
+ *   `status: 'unknown'` and the wording kept as its detail. A CLI that renames
+ *   "Connected" must cost the user a health badge, never the server itself.
+ * - A line that is not shaped like a row — no `<name>: `, or no ` - ` before a
+ *   status — is dropped. That shape check is what keeps the CLI's own prose out
+ *   of the list: claude prints update banners on stdout (`agent-version.ts`
+ *   works around the same thing), and `Note: a new version is available` would
+ *   otherwise be listed as a server named "Note" in the one surface whose job
+ *   is to say what the user has configured. The empty-folder sentence is
+ *   rejected by the same check.
+ * - Empty/absent output yields `[]`.
  *
  * Never throws.
  */
@@ -99,9 +124,6 @@ export function parseMcpList(stdout: string | null): AgentMcpServer[] {
   const servers: AgentMcpServer[] = [];
   for (const rawLine of stdout.split('\n')) {
     const line = rawLine.trim();
-    if (line.length === 0 || line.startsWith(CLAUDE_MCP_EMPTY_MARKER)) {
-      continue;
-    }
     // The name is everything before the first `': '`. A URL's `https://` has no
     // space after the colon, so it cannot be mistaken for the delimiter — and
     // this also skips the `Checking MCP server health…` header, which has none.
@@ -109,13 +131,14 @@ export function parseMcpList(stdout: string | null): AgentMcpServer[] {
     if (delimiter <= 0) {
       continue;
     }
-    const name = line.slice(0, delimiter).trim();
-    if (name.length === 0) {
+    const rest = line.slice(delimiter + 2);
+    // A row always separates its target from its status. Prose does not, which
+    // is what keeps a banner line from being listed as a server.
+    if (!rest.includes(TARGET_STATUS_SEPARATOR)) {
       continue;
     }
-    const { target: rawTarget, statusText } = splitAtStatus(
-      line.slice(delimiter + 2),
-    );
+    const name = line.slice(0, delimiter).trim();
+    const { target: rawTarget, statusText } = splitAtStatus(rest);
     const { target, transport } = splitTransport(rawTarget);
     const { status, detail } = readStatus(statusText);
     servers.push({ name, target, transport, status, detail });

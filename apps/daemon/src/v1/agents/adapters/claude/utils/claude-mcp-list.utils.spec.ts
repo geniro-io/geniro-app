@@ -95,8 +95,9 @@ describe('parseMcpList', () => {
   });
 
   it('returns nothing for the empty-folder sentence', () => {
-    // The sentence is prose, not a row — parsing it as one would show the user
-    // a server called "No MCP servers configured".
+    // Prose, not a row — listing it would show a server called "No MCP servers
+    // configured". Rejected by the row-shape check, the same one that rejects
+    // the update banners above.
     expect(parseMcpList(REAL_EMPTY_OUTPUT)).toEqual([]);
   });
 
@@ -109,18 +110,48 @@ describe('parseMcpList', () => {
   it('keeps a server whose status wording it does not recognise, as unknown', () => {
     // The version-drift guard. A future release rewording "Connected" must
     // cost the health badge, never the row — a server the user cannot see is
-    // worse than one whose health is unreadable.
+    // worse than one whose health is unreadable. The target must still be the
+    // target: gluing the unknown wording onto the command would contradict
+    // what the wire schema says that field is, and the panel shows it as the
+    // server's command line.
     const servers = parseMcpList('future-srv: node server.js - ✅ Online now');
 
     expect(servers).toEqual([
       {
         name: 'future-srv',
-        target: 'node server.js - ✅ Online now',
+        target: 'node server.js',
         transport: 'stdio',
         status: 'unknown',
-        detail: null,
+        detail: '✅ Online now',
       },
     ]);
+  });
+
+  it('does NOT list the CLI’s own prose as servers', () => {
+    // claude prints update banners on stdout — `agent-version.ts` works around
+    // the same thing. Without the row-shape check these become servers named
+    // "Note" and "Tip" in the one surface whose job is to state what the user
+    // actually configured.
+    const servers = parseMcpList(
+      [
+        'Checking MCP server health…',
+        '',
+        'sentry: node s.js - √ Connected',
+        'Note: a new version is available: 2.2.0',
+        'Tip: run `claude update` to upgrade',
+      ].join('\n'),
+    );
+
+    expect(servers.map((server) => server.name)).toEqual(['sentry']);
+  });
+
+  it('keeps a row whose command contains the separator AND an unknown status', () => {
+    // The two forgiving paths crossing: walk-back must not fire (no marker),
+    // and the last-separator fallback must not eat the command's own ` - `.
+    const [server] = parseMcpList('srv: /bin/x --a - --b - ✅ Fine');
+
+    expect(server?.target).toBe('/bin/x --a - --b');
+    expect(server?.detail).toBe('✅ Fine');
   });
 
   it('does not split the row on a separator inside the server’s own command', () => {
@@ -137,6 +168,15 @@ describe('parseMcpList', () => {
   it('skips a line that names nothing', () => {
     expect(parseMcpList('just some banner text\n\n   \n')).toEqual([]);
     expect(parseMcpList(': orphaned value - √ Connected')).toEqual([]);
+  });
+
+  it('keeps a row whose command contains the separator AND an unknown status', () => {
+    // The two forgiving paths crossing: walk-back must not fire (no marker),
+    // and the last-separator fallback must not eat the command's own ` - `.
+    const [server] = parseMcpList('srv: /bin/x --a - --b - ✅ Fine');
+
+    expect(server?.target).toBe('/bin/x --a - --b');
+    expect(server?.detail).toBe('✅ Fine');
   });
 
   it('never throws on hostile input', () => {

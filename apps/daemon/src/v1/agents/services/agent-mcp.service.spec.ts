@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,14 +8,18 @@ import { AgentKind } from '../../runs/runs.types';
 import type { AgentMcpServer } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
-import { McpService } from './mcp.service';
+import { AgentMcpService } from './agent-mcp.service';
 import { ProcessRegistry } from './process-registry';
 
 const dirs: string[] = [];
 
-/** A real directory, because `resolveValidCwd` stats and canonicalizes it. */
+/**
+ * A real directory, CANONICALIZED — `resolveValidCwd` runs `realpathSync`, and
+ * on macOS `os.tmpdir()` sits under the `/var` → `/private/var` symlink, so an
+ * un-resolved fixture path never equals what the service actually passes down.
+ */
 function realDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mcp-svc-'));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mcp-svc-')));
   dirs.push(dir);
   return dir;
 }
@@ -25,6 +29,17 @@ afterEach(() => {
     rmSync(dirs.pop() as string, { recursive: true, force: true });
   }
 });
+
+/**
+ * Let the service reach its adapter call. It defers that call by a microtask
+ * (the synchronous-throw guard), so a single `await Promise.resolve()` lands
+ * before the fixture's deferred resolver has been assigned.
+ */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 function server(name: string): AgentMcpServer {
   return {
@@ -37,7 +52,7 @@ function server(name: string): AgentMcpServer {
 }
 
 interface Harness {
-  service: McpService;
+  service: AgentMcpService;
   listMcpServers: ReturnType<typeof vi.fn>;
   setNow: (ms: number) => void;
 }
@@ -46,7 +61,11 @@ function harness(
   impl: (input: { cwd: string }) => Promise<AgentMcpServer[]>,
   version: string | null = '2.1.220',
 ): Harness {
-  const listMcpServers = vi.fn(impl);
+  // The fixtures speak in plain server arrays; the adapter contract is the
+  // discriminated result, so wrap here rather than in every case.
+  const listMcpServers = vi.fn((input: { cwd: string }) =>
+    impl(input).then((servers) => ({ ok: true as const, servers })),
+  );
   const adapter = {
     listMcpServers,
     getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
@@ -55,7 +74,7 @@ function harness(
     for: () => adapter,
   } as unknown as AgentAdapterRegistry;
   let now = 1_000;
-  const service = new McpService(registry, new ProcessRegistry(), {
+  const service = new AgentMcpService(registry, new ProcessRegistry(), {
     now: () => now,
     resolveVersionFn: () => Promise.resolve(version),
   });
@@ -68,7 +87,7 @@ function harness(
   };
 }
 
-describe('McpService.list', () => {
+describe('AgentMcpService.list', () => {
   it('serves a second read of the same folder from cache', async () => {
     const cwd = realDir();
     const { service, listMcpServers } = harness(() =>
@@ -102,7 +121,9 @@ describe('McpService.list', () => {
   it('does NOT serve one agent’s rows for another agent', async () => {
     const cwd = realDir();
     const seen: AgentKind[] = [];
-    const listMcpServers = vi.fn(() => Promise.resolve([server('x')]));
+    const listMcpServers = vi.fn(() =>
+      Promise.resolve({ ok: true as const, servers: [server('x')] }),
+    );
     const registry = {
       for: (kind: AgentKind) => {
         seen.push(kind);
@@ -112,7 +133,7 @@ describe('McpService.list', () => {
         } as unknown as AgentAdapter;
       },
     } as unknown as AgentAdapterRegistry;
-    const service = new McpService(registry, new ProcessRegistry(), {
+    const service = new AgentMcpService(registry, new ProcessRegistry(), {
       resolveVersionFn: () => Promise.resolve('1'),
     });
 
@@ -127,7 +148,9 @@ describe('McpService.list', () => {
     // A CLI upgrade can reword the output the parser reads, so a listing is
     // only reusable while the binary that produced it is.
     const cwd = realDir();
-    const listMcpServers = vi.fn(() => Promise.resolve([server('a')]));
+    const listMcpServers = vi.fn(() =>
+      Promise.resolve({ ok: true as const, servers: [server('a')] }),
+    );
     const registry = {
       for: () =>
         ({
@@ -136,7 +159,7 @@ describe('McpService.list', () => {
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
     let version = '2.1.220';
-    const service = new McpService(registry, new ProcessRegistry(), {
+    const service = new AgentMcpService(registry, new ProcessRegistry(), {
       resolveVersionFn: () => Promise.resolve(version),
     });
 
@@ -188,7 +211,7 @@ describe('McpService.list', () => {
 
     const first = service.list(AgentKind.Claude, cwd);
     const second = service.list(AgentKind.Claude, cwd);
-    await Promise.resolve();
+    await flush();
     release([server('a')]);
 
     expect(await first).toEqual(await second);
@@ -208,22 +231,24 @@ describe('McpService.list', () => {
 
     const first = service.list(AgentKind.Claude, cwd, true);
     const second = service.list(AgentKind.Claude, cwd, true);
-    await Promise.resolve();
+    await flush();
     release([server('a')]);
     await Promise.all([first, second]);
 
     expect(listMcpServers).toHaveBeenCalledTimes(1);
   });
 
-  it('degrades to an empty list when the adapter throws', async () => {
+  it('degrades to a stated failure when the adapter rejects', async () => {
     // This feeds a panel — a broken CLI must cost the list, not the request.
+    // It must NOT come back as a bare empty list either: that is the shape the
+    // panel renders as "No servers", i.e. a claim about the user's config.
     const cwd = realDir();
     const { service } = harness(() => Promise.reject(new Error('boom')));
 
-    await expect(service.list(AgentKind.Claude, cwd)).resolves.toEqual({
-      servers: [],
-      unavailableReason: null,
-    });
+    const result = await service.list(AgentKind.Claude, cwd);
+
+    expect(result.servers).toEqual([]);
+    expect(result.unavailableReason).not.toBeNull();
   });
 
   it('releases the in-flight slot after a failure, so the next read retries', async () => {
@@ -245,13 +270,52 @@ describe('McpService.list', () => {
     expect(after.servers.map((s) => s.name)).toEqual(['recovered']);
   });
 
+  it('does not remember a failed listing as “this folder has no servers”', async () => {
+    // The failure degrades the RESPONSE, but it must not be written into the
+    // freshness cache: "no servers" is a claim about the user's configuration,
+    // and caching it turns one transient failure into five minutes of a panel
+    // asserting something untrue with no automatic path back.
+    const cwd = realDir();
+    let attempt = 0;
+    const { service, listMcpServers } = harness(() => {
+      attempt += 1;
+      return attempt === 1
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve([server('sentry')]);
+    });
+
+    await service.list(AgentKind.Claude, cwd);
+    const second = await service.list(AgentKind.Claude, cwd);
+
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+    expect(second.servers.map((s) => s.name)).toEqual(['sentry']);
+  });
+
+  it('survives an adapter that throws before returning a promise', async () => {
+    // Same contract as the rejected-promise case, and the same reason: this
+    // read feeds a panel, so a misbehaving adapter must cost the list and
+    // never the request. A synchronous throw walks straight past a bare
+    // `.catch` on the call's result.
+    const cwd = realDir();
+    const { service } = harness(() => {
+      throw new Error('boom');
+    });
+
+    const result = await service.list(AgentKind.Claude, cwd);
+
+    expect(result.servers).toEqual([]);
+    expect(result.unavailableReason).not.toBeNull();
+  });
+
   it('carries an adapter’s declared absence through instead of asking it', async () => {
     // "This folder has no servers" and "this CLI cannot tell us" are both an
     // empty list. The reason is what keeps them distinguishable WITHOUT any
     // reader branching on which CLI it is holding — and a CLI that cannot
     // answer must not be spawned to prove it.
     const cwd = realDir();
-    const listMcpServers = vi.fn(() => Promise.resolve([]));
+    const listMcpServers = vi.fn(() =>
+      Promise.resolve({ ok: true as const, servers: [] }),
+    );
     const registry = {
       for: () =>
         ({
@@ -261,7 +325,7 @@ describe('McpService.list', () => {
           }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
-    const service = new McpService(registry, new ProcessRegistry(), {
+    const service = new AgentMcpService(registry, new ProcessRegistry(), {
       resolveVersionFn: () => Promise.resolve('1'),
     });
 
@@ -293,6 +357,11 @@ describe('McpService.list', () => {
     await expect(
       service.list(AgentKind.Claude, 'relative/path'),
     ).rejects.toThrow(/absolute/);
+    // The name says "existing directory" too, so assert that arm rather than
+    // leaving it to the reader to assume `resolveValidCwd` covers it.
+    await expect(
+      service.list(AgentKind.Claude, '/definitely/not/here/at/all'),
+    ).rejects.toThrow(/does not exist/);
   });
 
   it('registers the listing child so shutdown can reap its process group', async () => {
@@ -305,13 +374,21 @@ describe('McpService.list', () => {
       getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
       listMcpServers: (
         _input: { cwd: string },
-        options: { onSpawn?: (child: unknown) => void },
+        options: {
+          onSpawn?: (
+            child: unknown,
+            spawnInfo: { processGroup: boolean },
+          ) => void;
+        },
       ) => {
-        options.onSpawn?.({ pid: 7, kill: () => true, once: () => undefined });
-        return Promise.resolve([server('a')]);
+        options.onSpawn?.(
+          { pid: 7, kill: () => true, once: () => undefined },
+          { processGroup: true },
+        );
+        return Promise.resolve({ ok: true as const, servers: [server('a')] });
       },
     } as unknown as AgentAdapter;
-    const service = new McpService(
+    const service = new AgentMcpService(
       { for: () => adapter } as unknown as AgentAdapterRegistry,
       processes,
       { resolveVersionFn: () => Promise.resolve('1') },
@@ -319,8 +396,22 @@ describe('McpService.list', () => {
 
     await service.list(AgentKind.Claude, cwd);
 
-    expect(
-      registerSpy.mock.calls.some(([id]) => String(id).startsWith('mcp:list:')),
-    ).toBe(true);
+    const listing = registerSpy.mock.calls.find(([id]) =>
+      String(id).startsWith('mcp:list:'),
+    );
+    expect(listing).toBeDefined();
+
+    // Registering is not enough — the handle must reap the GROUP. The listing
+    // health-checks, so the user's own MCP servers run one generation below
+    // it, and a single-PID cancel leaves them running. Asserting only the id
+    // keeps passing with the group wiring deleted, which is the pin that
+    // actually matters here.
+    const kill = vi.spyOn(process, 'kill').mockImplementation((): true => true);
+    try {
+      (listing?.[1] as { cancel: () => void }).cancel();
+      expect(kill).toHaveBeenCalledWith(-7, 'SIGKILL');
+    } finally {
+      kill.mockRestore();
+    }
   });
 });

@@ -157,8 +157,13 @@ export const CLAUDE_MCP_PENDING_MARKER = '⏸ Pending approval';
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */
 export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';
 
-/** Printed instead of any rows when nothing is configured for the folder. */
-export const CLAUDE_MCP_EMPTY_MARKER = 'No MCP servers configured';
+/**
+ * Shown to the user when the listing command could not be run at all — a
+ * missing binary, a non-zero exit, or the deadline. Deliberately distinct from
+ * an empty listing: only one of the two is a fact about their configuration.
+ */
+export const CLAUDE_MCP_LIST_FAILED_MESSAGE =
+  'could not read MCP servers — claude did not answer';
 
 // ── Messages ──────────────────────────────────────────────────────────────
 

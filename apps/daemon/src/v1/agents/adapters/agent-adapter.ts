@@ -15,7 +15,7 @@ import type {
   AgentCommandOptions,
   AgentEffort,
   AgentEvent,
-  AgentMcpServer,
+  AgentMcpListingResult,
   AgentMcpServersInput,
   AgentModel,
   AgentSkillEntry,
@@ -258,25 +258,37 @@ export abstract class AgentAdapter {
    * The MCP servers this CLI loads in a given folder, with the health it
    * reports for each.
    *
-   * A METHOD rather than a config field because what differs per CLI is a
-   * mechanism, not a value — one has a subcommand whose prose must be parsed,
-   * another has no listing at all — which is the same split `listModels`
-   * makes. A CLI that cannot be asked answers `[]` in its own override, and
-   * that empty answer IS the declaration: nothing outside this layer ever
-   * checks which agent it is holding.
+   * CONCRETE over config, like `listSkills` and `listEfforts`: whether a CLI
+   * can be listed at all is a per-CLI VALUE
+   * (`config.mcp.listingUnavailableReason`), so an adapter that cannot be
+   * asked declares that string and writes no code — no override, and so no
+   * unreachable branch that could drift from the declaration. A CLI that CAN
+   * be listed overrides this with its own mechanism.
    *
-   * `input.cwd` is required and load-bearing: the answer is folder-scoped
-   * (project `.mcp.json` servers, and local-scope servers keyed to that
-   * directory), so a listing taken from the wrong place is confidently wrong
-   * rather than empty.
+   * The default refuses rather than answering `{ ok: true, servers: [] }`,
+   * because a future adapter that declares no reason and forgets to override
+   * must degrade to a visible "not implemented", never to a confident "this
+   * folder has no MCP servers".
    *
-   * Must NEVER throw or hang — this feeds a panel, and a CLI that is missing,
-   * unauthenticated or hung must cost the user a list, not the request.
+   * `input.cwd` is load-bearing: the answer is folder-scoped (project
+   * `.mcp.json` servers, and local-scope servers keyed to that directory), so
+   * a listing taken from the wrong place is confidently wrong rather than empty.
+   *
+   * Must NEVER throw or hang — this feeds a panel, so a CLI that is missing,
+   * unauthenticated or hung costs the user a list, not the request.
    */
-  abstract listMcpServers(
-    input: AgentMcpServersInput,
-    options?: AgentCommandOptions,
-  ): Promise<AgentMcpServer[]>;
+  listMcpServers(
+    _input: AgentMcpServersInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentMcpListingResult> {
+    const config = this.getConfig();
+    return Promise.resolve({
+      ok: false,
+      reason:
+        config.mcp.listingUnavailableReason ??
+        `${config.kind} does not implement MCP listing`,
+    });
+  }
 
   /**
    * The reasoning-effort levels this CLI accepts for one turn, weakest first,
@@ -461,11 +473,14 @@ export abstract class AgentAdapter {
    * turn does, and hands the child to `onSpawn` so the caller can register it
    * for shutdown. Never rejects.
    *
-   * `options.processGroup` changes HOW the timeout kills, not whether there is
-   * one: node's `execFile` timeout signals the direct child only, so a command
-   * that forks (a health check launching the user's MCP servers) would leave
-   * the grandchildren behind. For those the child is spawned as a group leader
-   * and the deadline is enforced by our own timer through `killProcessGroup`.
+   * `options.processGroup` changes HOW the deadline kills — see that option's
+   * doc block, which is the canonical statement. The three rules it imposes
+   * here: the deadline is ours rather than `execFile`'s, it SETTLES the promise
+   * as well as killing (a grandchild holding the inherited stdout pipe open
+   * means `execFile`'s callback never fires at all), and every abnormal exit
+   * reaps the group — including `execFile`'s own `maxBuffer` path, which kills
+   * the direct pid only and would otherwise leave the grandchildren with
+   * nothing left to reap them.
    */
   protected runCommand(
     args: string[],
@@ -475,16 +490,48 @@ export abstract class AgentAdapter {
       const run = this.options.execFileFn ?? execFile;
       const timeoutMs = options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS;
       const group = options.processGroup === true;
-      let timer: NodeJS.Timeout | undefined;
-      let child: ChildProcess;
+      let child: ChildProcess | undefined;
+      let settled = false;
+      // A reap asked for before `run()` has returned — the child exists, but
+      // this scope has not been handed it yet. Deferring rather than dropping
+      // it keeps the reap independent of whether the exec callback happens to
+      // be async (node's is; an injected one need not be).
+      let reapWhenSpawned = false;
+      const reapGroup = (): void => {
+        if (!child) {
+          reapWhenSpawned = true;
+          return;
+        }
+        const target = child;
+        killProcessGroup(target.pid, 'SIGKILL', () => target.kill('SIGKILL'));
+      };
+      // Armed BEFORE the spawn: an `execFileFn` that calls back synchronously
+      // (the spec seam) would otherwise leave a live timer no callback can
+      // clear, and it would fire `killProcessGroup` on a pid the test invented.
+      const timer = group
+        ? setTimeout(() => {
+            reapGroup();
+            settle(null);
+          }, timeoutMs)
+        : undefined;
+      timer?.unref?.();
+      function settle(value: string | null): void {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        resolve(value);
+      }
       try {
         child = run(
           this.command,
           args,
           {
-            // A group spawn owns its own deadline below — leaving execFile's
-            // in place too would fire a single-PID kill first and orphan
-            // exactly the grandchildren the group spawn exists to reap.
+            // A group spawn owns its own deadline above — leaving execFile's
+            // in place too would fire a single-PID kill first.
             ...(group ? {} : { timeout: timeoutMs }),
             ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
             ...(group ? { detached: true } : {}),
@@ -492,24 +539,23 @@ export abstract class AgentAdapter {
             env: buildChildEnv(),
           },
           (err, stdout) => {
-            if (timer) {
-              clearTimeout(timer);
+            if (group && err) {
+              // execFile killed the direct pid (maxBuffer, its own signal) —
+              // the group it led is still standing.
+              reapGroup();
             }
-            resolve(err ? null : String(stdout));
+            settle(err ? null : String(stdout));
           },
         );
       } catch {
         // A missing binary throws synchronously on some platforms.
-        resolve(null);
+        settle(null);
         return;
       }
-      if (group) {
-        timer = setTimeout(() => {
-          killProcessGroup(child.pid, 'SIGKILL', () => child.kill('SIGKILL'));
-        }, timeoutMs);
-        timer.unref?.();
+      if (reapWhenSpawned) {
+        reapGroup();
       }
-      options.onSpawn?.(child);
+      options.onSpawn?.(child, { processGroup: group });
     });
   }
 

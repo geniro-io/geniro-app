@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentKind } from '../../runs/runs.types';
-import type { AgentMcpServer } from '../adapters/adapter.types';
+import type {
+  AgentMcpListingResult,
+  AgentMcpServer,
+} from '../adapters/adapter.types';
 import type { AgentMcpListingWire } from '../chat.types';
 import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
@@ -20,6 +23,9 @@ import { ProcessRegistry } from './process-registry';
  * what re-reads health, per this feature's design.
  */
 const DEFAULT_MCP_TTL_MS = 5 * 60_000;
+
+/** Shown when the adapter itself misbehaved rather than the CLI refusing. */
+const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
 
 /**
  * The cache key. Three dimensions, and dropping any one of them serves a
@@ -39,7 +45,7 @@ function keyOf(agent: AgentKind, cwd: string, version: string | null): string {
 }
 
 /** Constructor options — test seams, not user config. */
-export interface McpServiceOptions {
+export interface AgentMcpServiceOptions {
   /** How long a cached listing stays fresh. */
   ttlMs?: number;
   /** Clock (test seam). */
@@ -57,6 +63,11 @@ interface CacheEntry {
  * The MCP servers each agent loads in a folder, as the CLI itself reports
  * them.
  *
+ * `Agent`-prefixed deliberately: `v1/graphs` owns `McpServerService`, which is
+ * the daemon's OWN MCP endpoint that agents call INTO. This one is the
+ * opposite direction — the user's own servers that an agent loads — and a bare
+ * `McpService` next to it reads as the same subsystem.
+ *
  * Every CLI-specific detail lives in that CLI's adapter — whether it can be
  * asked at all, what to run, and how to read the answer
  * (`AgentAdapter.listMcpServers`). This service only decides WHEN to ask: it
@@ -69,18 +80,18 @@ interface CacheEntry {
  * of that.
  */
 @Injectable()
-export class McpService {
-  private readonly logger = new Logger(McpService.name);
+export class AgentMcpService {
+  private readonly logger = new Logger(AgentMcpService.name);
   private readonly ttlMs: number;
   private readonly now: () => number;
   private readonly resolveVersionFn: typeof resolveAgentVersion;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<string, Promise<AgentMcpServer[]>>();
+  private readonly inFlight = new Map<string, Promise<AgentMcpListingResult>>();
 
   constructor(
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
-    options: McpServiceOptions = {},
+    options: AgentMcpServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_MCP_TTL_MS;
     this.now = options.now ?? Date.now;
@@ -122,40 +133,62 @@ export class McpService {
     // start a second one. Evicting the cache is idempotent; spawning is not.
     const pending = this.inFlight.get(key);
     if (pending) {
-      return { servers: await pending, unavailableReason: null };
+      return this.toWire(await pending);
     }
     const cached = this.cache.get(key);
     if (cached && this.now() - cached.fetchedAt < this.ttlMs) {
       return { servers: cached.servers, unavailableReason: null };
     }
-    const ask = adapter
-      .listMcpServers(
-        { cwd: projectDir },
-        {
-          onSpawn: (child) =>
-            this.processes.register(
-              `mcp:list:${randomUUID()}`,
-              // Paired with the adapter's own `processGroup` spawn: the
-              // listing forks the user's MCP servers, so cancel and shutdown
-              // must reach the whole group, not just the CLI process.
-              childProcessHandle(child, { processGroup: true }),
-            ),
-        },
+    // `Promise.resolve().then(…)` rather than a bare call: an adapter that
+    // throws SYNCHRONOUSLY would otherwise walk straight past the `.catch`
+    // below and reject the whole request, which this read must never do.
+    const ask = Promise.resolve()
+      .then(() =>
+        adapter.listMcpServers(
+          { cwd: projectDir },
+          {
+            onSpawn: (child, spawnInfo) =>
+              this.processes.register(
+                `mcp:list:${randomUUID()}`,
+                // `spawnInfo` comes from the spawn itself, so a group-spawned
+                // listing is always reaped as a group — the user's own MCP
+                // servers run one generation below it.
+                childProcessHandle(child, spawnInfo),
+              ),
+          },
+        ),
       )
-      .catch((err: unknown) => {
+      .catch((err: unknown): AgentMcpListingResult => {
         // An adapter must not throw here, but this feeds a panel — degrade to
-        // an empty list rather than failing the request.
+        // a refusal rather than failing the request.
         this.logger.warn(
           `listing ${agent} MCP servers failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return [] as AgentMcpServer[];
+        return { ok: false, reason: MCP_LIST_FAILED_REASON };
       })
-      .then((servers) => {
-        this.cache.set(key, { fetchedAt: this.now(), servers });
-        return servers;
+      .then((result) => {
+        // ONLY a successful read is remembered. "No servers" is a claim about
+        // the user's configuration; caching a failure would turn one timeout
+        // into five minutes of the panel asserting something untrue, with no
+        // automatic way back. `ModelsService` keeps its last good answer for
+        // the same reason.
+        if (result.ok) {
+          this.cache.set(key, {
+            fetchedAt: this.now(),
+            servers: result.servers,
+          });
+        }
+        return result;
       })
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, ask);
-    return { servers: await ask, unavailableReason: null };
+    return this.toWire(await ask);
+  }
+
+  /** The adapter's refusal becomes the sentence the panel shows, verbatim. */
+  private toWire(result: AgentMcpListingResult): AgentMcpListingWire {
+    return result.ok
+      ? { servers: result.servers, unavailableReason: null }
+      : { servers: [], unavailableReason: result.reason };
   }
 }

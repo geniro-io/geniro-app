@@ -43,6 +43,38 @@ function mount(
   return () => latest;
 }
 
+/**
+ * Drive the hook across several prop values — the same root, re-rendered, so
+ * the effect re-runs the way it does when the user switches chats.
+ */
+function mountRerenderable(agentsApi: DaemonApis['agents']): {
+  get: () => AgentMcpState;
+  show: (kinds: readonly CliKind[], cwd: string | null) => void;
+} {
+  let latest!: AgentMcpState;
+  function Probe({
+    kinds,
+    cwd,
+  }: {
+    kinds: readonly CliKind[];
+    cwd: string | null;
+  }): null {
+    latest = useAgentMcp(agentsApi, kinds, cwd);
+    return null;
+  }
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  return {
+    get: () => latest,
+    show: (kinds, cwd) => {
+      act(() => {
+        root!.render(<Probe kinds={kinds} cwd={cwd} />);
+      });
+    },
+  };
+}
+
 /** Flush the hook's promise chain. */
 async function settle(): Promise<void> {
   await act(async () => {
@@ -132,6 +164,82 @@ describe('useAgentMcp', () => {
     expect(get().byKind.size).toBe(0);
   });
 
+  it('reports loading while a read is in flight, and never a bare "no servers"', async () => {
+    // The panel renders "No servers" — a claim about the user's configuration
+    // — whenever a kind has no listing and nothing is loading. The effect runs
+    // after paint, so without the derived loading state that claim is on
+    // screen for a frame before anything has been asked.
+    let release!: (value: unknown) => void;
+    const call = vi.fn(
+      (_request: McpRequest) =>
+        new Promise<unknown>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const get = mount(apiReturning(call), ['claude'], '/proj');
+
+    expect(get().loading).toBe(true);
+    expect(get().byKind.get('claude')).toBeUndefined();
+
+    release(listing);
+    await settle();
+
+    expect(get().loading).toBe(false);
+    expect(get().byKind.get('claude')).toEqual(listing);
+  });
+
+  it('ignores a read that resolves after the folder has already changed', async () => {
+    // Out-of-order resolution: folder A's slow answer must not land in folder
+    // B's panel. That is a wrong answer, not a stale one.
+    const resolvers = new Map<string, (value: unknown) => void>();
+    const call = vi.fn(
+      (request: McpRequest) =>
+        new Promise<unknown>((resolve) => {
+          resolvers.set(request.cwd, resolve);
+        }),
+    );
+    const ui = mountRerenderable(apiReturning(call));
+    ui.show(['claude'], '/proj-a');
+    await settle();
+    ui.show(['claude'], '/proj-b');
+    await settle();
+
+    // A answers LAST, long after the user moved on.
+    resolvers.get('/proj-b')?.({
+      servers: [
+        {
+          name: 'from-b',
+          target: 'node b.js',
+          transport: 'stdio',
+          status: 'connected',
+          detail: null,
+        },
+      ],
+      unavailableReason: null,
+    });
+    await settle();
+    resolvers.get('/proj-a')?.({
+      servers: [
+        {
+          name: 'from-a',
+          target: 'node a.js',
+          transport: 'stdio',
+          status: 'connected',
+          detail: null,
+        },
+      ],
+      unavailableReason: null,
+    });
+    await settle();
+
+    expect(
+      ui
+        .get()
+        .byKind.get('claude')
+        ?.servers.map((s) => s.name),
+    ).toEqual(['from-b']);
+  });
+
   it('asks nothing when no kinds are in scope', async () => {
     // What keeps a closed panel from health-checking in the background.
     const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
@@ -139,5 +247,68 @@ describe('useAgentMcp', () => {
     await settle();
 
     expect(call).not.toHaveBeenCalled();
+  });
+
+  it('reads the daemon’s cache again when the folder changes after a refresh', async () => {
+    // Refresh is a ONE-SHOT user intent about the folder on screen. A later
+    // automatic read — switching chats, reopening the panel — must go back to
+    // the cached reading, or every navigation for the rest of the session
+    // re-dials and so re-launches the user's own MCP servers.
+    const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
+    const ui = mountRerenderable(apiReturning(call));
+    ui.show(['claude'], '/proj-a');
+    await settle();
+
+    act(() => {
+      ui.get().refresh();
+    });
+    await settle();
+    ui.show(['claude'], '/proj-b');
+    await settle();
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(call.mock.calls[2]?.[0]).toEqual({
+      agent: 'claude',
+      cwd: '/proj-b',
+    });
+  });
+
+  it('reports no listing for a kind that has not answered for the new folder', async () => {
+    // `byKind` promises that an absent kind has not answered yet. Keeping the
+    // previous folder's rows in it breaks that promise in the one direction
+    // that matters: the panel then states folder A's servers as folder B's,
+    // which is wrong rather than merely stale.
+    const neverAnswers = new Promise<never>(() => undefined);
+    const call = vi.fn((request: McpRequest) =>
+      request.cwd === '/proj-a'
+        ? Promise.resolve({
+            servers: [
+              {
+                name: 'only-in-a',
+                target: 'node a.js',
+                transport: 'stdio',
+                status: 'connected',
+                detail: null,
+              },
+            ],
+            unavailableReason: null,
+          })
+        : neverAnswers,
+    );
+    const ui = mountRerenderable(apiReturning(call));
+    ui.show(['claude'], '/proj-a');
+    await settle();
+    expect(
+      ui
+        .get()
+        .byKind.get('claude')
+        ?.servers.map((entry) => entry.name),
+    ).toEqual(['only-in-a']);
+
+    ui.show(['claude'], '/proj-b');
+    await settle();
+
+    expect(ui.get().byKind.get('claude')).toBeUndefined();
+    expect(ui.get().loading).toBe(true);
   });
 });

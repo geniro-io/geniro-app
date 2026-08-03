@@ -18,8 +18,8 @@ import {
   ListModelsQueryDto,
   ListSkillsQueryDto,
 } from '../dto/skills.dto';
+import { AgentMcpService } from '../services/agent-mcp.service';
 import { EffortsService } from '../services/efforts.service';
-import { McpService } from '../services/mcp.service';
 import { ModelsService } from '../services/models.service';
 import { SkillsService } from '../services/skills.service';
 
@@ -37,7 +37,7 @@ export class SkillsController {
     private readonly skillsService: SkillsService,
     private readonly modelsService: ModelsService,
     private readonly effortsService: EffortsService,
-    private readonly mcpService: McpService,
+    private readonly mcpService: AgentMcpService,
   ) {}
 
   @Get('skills')

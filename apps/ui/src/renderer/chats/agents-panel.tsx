@@ -26,14 +26,13 @@ import { RUN_STATUS_META, RunStatusIcon } from './run-status';
  * so it is listed with its health unstated rather than dropped or called
  * broken.
  */
-const MCP_STATUS_META: Record<
-  AgentMcpServer['status'],
-  { label: string; variant: 'success' | 'destructive' | 'muted' | 'outline' }
-> = {
-  connected: { label: 'connected', variant: 'success' },
-  failed: { label: 'failed', variant: 'destructive' },
-  pending: { label: 'pending', variant: 'muted' },
-  unknown: { label: 'unknown', variant: 'outline' },
+type McpStatusTone = 'success' | 'destructive' | 'muted' | 'outline';
+
+const MCP_STATUS_TONE: Record<AgentMcpServer['status'], McpStatusTone> = {
+  connected: 'success',
+  failed: 'destructive',
+  pending: 'muted',
+  unknown: 'outline',
 };
 
 /**
@@ -81,8 +80,11 @@ function McpSection({
               // and it is far too long for the row.
               title={server.detail ?? server.target}>
               <span className="min-w-0 flex-1 truncate">{server.name}</span>
-              <Badge variant={MCP_STATUS_META[server.status].variant}>
-                {MCP_STATUS_META[server.status].label}
+              {/* Defaulted, not indexed blindly: the wire enum is gated by the
+                  response schema today, but a widened status must degrade to a
+                  neutral badge rather than crash the panel. */}
+              <Badge variant={MCP_STATUS_TONE[server.status] ?? 'outline'}>
+                {server.status}
               </Badge>
             </li>
           ))}

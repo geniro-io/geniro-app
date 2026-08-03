@@ -4,7 +4,6 @@ import type { AcpToolCall } from '../acp/acp.types';
 import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
 import type {
   AdapterConfig,
-  AgentMcpServer,
   AgentModel,
   AgentTurnInput,
   TurnDriver,
@@ -130,11 +129,16 @@ export class CursorAcpAdapter extends AgentAdapter {
         /** ACP carries the endpoint in-protocol; no cwd config is written. */
         endpointRequiresCwdConfig: false,
         /**
-         * Shown verbatim wherever this CLI's servers would have been listed.
+         * Shown verbatim wherever this CLI's servers would have been listed —
+         * and, being non-null, it is also what makes the base refuse the
+         * listing, so this adapter needs no `listMcpServers` of its own.
+         *
          * ACP has no agent-to-client inventory of a session's servers, and
-         * whether the binary has a listing subcommand of its own is
-         * unverified — so the honest answer is that we have not asked yet,
-         * not that the folder is empty.
+         * whether the binary has a listing subcommand is UNVERIFIED (the only
+         * attested member of that family is `mcp enable`, from code deleted in
+         * a1b6832). Verifying it is the first step of this feature's cursor
+         * milestone — so the honest answer is that we have not asked, not that
+         * the folder is empty.
          */
         listingUnavailableReason:
           'cursor-agent MCP listing is not supported yet',
@@ -150,26 +154,6 @@ export class CursorAcpAdapter extends AgentAdapter {
    * `cursor-agent models` would produce a picker whose value the turn discards.
    */
   override listModels(): Promise<AgentModel[]> {
-    return Promise.resolve([]);
-  }
-
-  /**
-   * No listing yet — and the empty array is a STATEMENT, not a stub.
-   *
-   * Two independent reasons, neither of which a caller should have to know:
-   * ACP has no agent→client inventory of the servers a session loaded (the
-   * protocol carries `mcpServers` only one way, in `session/new` params), and
-   * whether `cursor-agent` has an `mcp list` subcommand of its own is
-   * UNVERIFIED — the only attested member of that family is `mcp enable`, from
-   * code deleted in `a1b6832`. Verifying it is the first step of this
-   * feature's cursor milestone, deliberately sequenced after the claude path
-   * ships rather than guessed at here.
-   *
-   * Returning `[]` keeps the service and the panel free of any "which CLI is
-   * this" branch; the UI says the list is unavailable for this agent because
-   * it is empty, not because it recognised cursor.
-   */
-  override listMcpServers(): Promise<AgentMcpServer[]> {
     return Promise.resolve([]);
   }
 

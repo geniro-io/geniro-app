@@ -56,6 +56,43 @@ describe('childProcessHandle', () => {
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
   });
 
+  it('cancel signals the process GROUP when the child was spawned as a leader', () => {
+    // The grandchild-orphaning guard: `claude mcp list` health-checks, so it
+    // forks the user's own MCP servers. A single-PID kill leaves them running
+    // (kill-tree.ts states exactly this), so the group-wrapped handle must
+    // reach for the negative pid and NOT fall back to child.kill.
+    const { child, asChild } = utilityChild();
+    Object.defineProperty(child, 'pid', { value: 4242, configurable: true });
+    const killSpy = vi
+      .spyOn(process, 'kill')
+      .mockImplementation((): true => true);
+    try {
+      childProcessHandle(asChild, { processGroup: true }).cancel();
+
+      expect(killSpy).toHaveBeenCalledExactlyOnceWith(-4242, 'SIGKILL');
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('a group cancel still kills the child directly when the group is already gone', () => {
+    // killProcessGroup's fallback: without it a child whose group died first
+    // (or a test fake with no pid) would never be signalled at all.
+    const { child, asChild } = utilityChild();
+    Object.defineProperty(child, 'pid', { value: 4243, configurable: true });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw new Error('ESRCH');
+    });
+    try {
+      childProcessHandle(asChild, { processGroup: true }).cancel();
+
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
   it('respondApproval is a no-op false — utility children carry no approval protocol', () => {
     const { asChild } = utilityChild();
     expect(childProcessHandle(asChild).respondApproval('req-1', true)).toBe(

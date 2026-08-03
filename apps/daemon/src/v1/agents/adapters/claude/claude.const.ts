@@ -123,6 +123,43 @@ export const CLAUDE_MCP_CONFIG_SUFFIX = '.json';
 /** The token rides IN the file, so the file is the user's alone. */
 export const CLAUDE_MCP_CONFIG_FILE_MODE = 0o600;
 
+// ── MCP server listing (PROBE EVIDENCE — human-readable output) ───────────
+//
+// WHERE THESE MARKERS CAME FROM. `claude mcp list` has no machine-readable
+// mode — `--json` is rejected outright ("error: unknown option '--json'") — so
+// the only source is its prose, and these are the exact bytes it printed when
+// DRIVEN LIVE on 2.1.220 against servers created for the probe and removed
+// after. Two of the three glyphs are not the character they look like: the
+// connected mark is U+221A SQUARE ROOT, not a check mark, and the failure mark
+// is U+00D7 MULTIPLICATION SIGN, not an ASCII `x`. Typing them by eye is how a
+// matcher silently matches nothing.
+//
+// That evidence expires. A release may reword any of this, and the parser is
+// built so it degrades to `status: 'unknown'` rather than throwing or dropping
+// the row — a listed server with unreadable health beats a server the user
+// cannot see at all. Prefer a structured mode over this the moment one exists.
+
+/** Argv for the folder-scoped server listing. */
+export const CLAUDE_MCP_LIST_ARGS: readonly string[] = ['mcp', 'list'];
+
+/**
+ * Deadline for that listing. Far above the 10s utility default because the
+ * command HEALTH-CHECKS: it dials every configured server, and an unreachable
+ * HTTP one is only known to be unreachable once its own connect times out.
+ */
+export const CLAUDE_MCP_LIST_TIMEOUT_MS = 30_000;
+
+/** Row status markers, longest-lived part of the format. */
+export const CLAUDE_MCP_CONNECTED_MARKER = '√ Connected';
+export const CLAUDE_MCP_FAILED_MARKER = '× Failed to connect';
+export const CLAUDE_MCP_PENDING_MARKER = '⏸ Pending approval';
+
+/** Separates `Failed to connect` from the reason (U+2014 EM DASH). */
+export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';
+
+/** Printed instead of any rows when nothing is configured for the folder. */
+export const CLAUDE_MCP_EMPTY_MARKER = 'No MCP servers configured';
+
 // ── Messages ──────────────────────────────────────────────────────────────
 
 /** Fallback for an error `result` line that carries no text of its own. */

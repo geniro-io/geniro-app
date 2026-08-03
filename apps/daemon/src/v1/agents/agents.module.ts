@@ -18,6 +18,7 @@ import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
+import { McpService } from './services/mcp.service';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
@@ -62,6 +63,15 @@ import { SkillsService } from './services/skills.service';
         processes: ProcessRegistry,
       ) => new SkillsService(harvest, adapters, processes),
       inject: [SkillHarvestStore, AgentAdapterRegistry, ProcessRegistry],
+    },
+    {
+      // Factory because the trailing options bag is a test seam, not a DI token.
+      provide: McpService,
+      useFactory: (
+        adapters: AgentAdapterRegistry,
+        processes: ProcessRegistry,
+      ) => new McpService(adapters, processes),
+      inject: [AgentAdapterRegistry, ProcessRegistry],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.

@@ -247,6 +247,62 @@ export const AgentModelWireSchema = z.object({
 export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
 
 /**
+ * One MCP server a CLI agent loads in a working directory, with the health the
+ * CLI itself reported for it.
+ *
+ * The set is per-CLI AND per-folder — a CLI resolves project-scoped servers
+ * relative to where it runs — which is why the read is keyed on both and why
+ * two agents in one thread legitimately show different lists.
+ *
+ * `status` carries `unknown` on purpose: for a CLI whose only listing is
+ * human-readable prose, a reworded release must cost a health badge, never the
+ * server row. `detail` is whatever the CLI printed after the status — the
+ * failure reason, or what an unapproved server is waiting for — and is the
+ * only actionable part of a failure.
+ */
+export const AgentMcpServerWireSchema = z
+  .object({
+    name: z.string(),
+    target: z
+      .string()
+      .describe('The command line or URL the CLI reaches the server through'),
+    transport: z.enum(['stdio', 'http', 'sse']),
+    status: z
+      .enum(['connected', 'failed', 'pending', 'unknown'])
+      .describe(
+        'Health as the CLI reported it; `pending` is a configured but unapproved server',
+      ),
+    detail: z
+      .string()
+      .nullable()
+      .describe('The failure reason, or what the server is waiting for'),
+  })
+  .meta({ id: 'AgentMcpServer' });
+export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
+
+/**
+ * One agent's MCP listing for one folder.
+ *
+ * An OBJECT rather than a bare array because an empty list is ambiguous on its
+ * own, and resolving that ambiguity must not become a "which CLI is this?"
+ * branch in the reader. `unavailableReason` is the adapter's own sentence
+ * (`AdapterConfig.mcp.listingUnavailableReason`), non-null exactly when this
+ * CLI cannot be asked at all — so `servers: []` with a null reason means the
+ * folder genuinely has none, and with a reason means we never asked. The UI
+ * shows the sentence verbatim rather than composing one.
+ */
+// No `.meta({ id })` on this ROOT: it is the response DTO's own schema (see
+// AgentModelWireSchema above for the dangling-$ref an id here would cause).
+export const AgentMcpListingWireSchema = z.object({
+  servers: z.array(AgentMcpServerWireSchema),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe('Why this CLI cannot be listed at all; null when it can'),
+});
+export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
+
+/**
  * One reasoning-effort level a CLI accepts for `--effort`.
  *
  * Opaque strings, never an enum on the wire: the vocabulary belongs to one

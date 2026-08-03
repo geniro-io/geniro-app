@@ -8,7 +8,10 @@ import type {
   AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
+  AgentCommandOptions,
   AgentEvent,
+  AgentMcpServer,
+  AgentMcpServersInput,
   AgentModel,
   AgentTurnInput,
   InstalledApprovalSupport,
@@ -22,6 +25,8 @@ import {
   CLAUDE_EFFORT_FLAG,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
+  CLAUDE_MCP_LIST_ARGS,
+  CLAUDE_MCP_LIST_TIMEOUT_MS,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_FLAG,
@@ -40,6 +45,7 @@ import {
   sweepStaleTurnMcpConfigs,
   writeTurnMcpConfig,
 } from './utils/claude-mcp-config.utils';
+import { parseMcpList } from './utils/claude-mcp-list.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
@@ -172,6 +178,8 @@ export class ClaudeAdapter extends AgentAdapter {
         callToolsRequireTrustProbe: false,
         /** `--mcp-config` carries the endpoint for one turn; no cwd file is touched. */
         endpointRequiresCwdConfig: false,
+        /** `claude mcp list` reports them, so an empty answer means an empty folder. */
+        listingUnavailableReason: null,
       },
       terminal: {
         resumeFlag: CLAUDE_RESUME_FLAG,
@@ -295,6 +303,36 @@ export class ClaudeAdapter extends AgentAdapter {
     return Promise.resolve(
       claudeModels(this.getConfig().builtinModels, this.claudeOptions.homeDir),
     );
+  }
+
+  /**
+   * claude DOES have a listing subcommand, so this shells out — and it is the
+   * one utility command that must reap a process GROUP.
+   *
+   * `mcp list` health-checks: it dials every configured server, which for a
+   * stdio server means SPAWNING it. Those are the user's own processes, one
+   * generation below ours, so a single-PID kill on cancel or timeout would
+   * leave them running (`kill-tree.ts`). `processGroup` makes the child a
+   * group leader and moves the deadline onto a group-killing timer; the caller
+   * pairs it with a group-cancelling handle.
+   *
+   * Output is prose — the CLI rejects `--json` — so the parse is deliberately
+   * forgiving and lives in its own pure function. A failed spawn yields null
+   * and parses to `[]`, which is how "cannot be asked" stays indistinguishable
+   * from "nothing configured" at this layer: neither is an error the panel
+   * should surface as one.
+   */
+  override async listMcpServers(
+    input: AgentMcpServersInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpServer[]> {
+    const stdout = await this.runCommand([...CLAUDE_MCP_LIST_ARGS], {
+      ...options,
+      cwd: input.cwd,
+      processGroup: true,
+      timeoutMs: options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS,
+    });
+    return parseMcpList(stdout);
   }
 
   protected buildArgs(input: AgentTurnInput): string[] {

@@ -311,3 +311,136 @@ describe('AgentAdapter.supportsLiveStream', () => {
     expect(spawned).toBe(0);
   });
 });
+
+describe('AgentAdapter.listMcpServers', () => {
+  it('cursor-agent answers [] — the declared absence, not a thrown error', async () => {
+    // The panel must be able to ask EVERY agent without knowing which one it
+    // holds; an adapter with no listing says so by answering empty.
+    const adapter = new CursorAcpAdapter();
+
+    await expect(
+      adapter.listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toStrictEqual([]);
+  });
+
+  it('claude turns the CLI’s own output into rows', async () => {
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      cb(
+        null,
+        'Checking MCP server health…\n\nsentry: node s.js - √ Connected\n',
+      );
+      return { pid: 321, kill: () => true } as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
+
+    await expect(
+      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toEqual([
+      {
+        name: 'sentry',
+        target: 'node s.js',
+        transport: 'stdio',
+        status: 'connected',
+        detail: null,
+      },
+    ]);
+  });
+
+  it('claude answers [] when the binary cannot be run at all', async () => {
+    // Missing binary / not signed in / timeout all arrive as a null stdout.
+    // This feeds a panel: it must cost the user a list, never the request.
+    const execFileFn = (() => {
+      throw new Error('spawn claude ENOENT');
+    }) as unknown as typeof execFile;
+
+    await expect(
+      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toStrictEqual([]);
+  });
+
+  it('asks the CLI for the listing in the folder it was given', async () => {
+    // The whole reason cwd exists on the utility contract: the answer is
+    // folder-scoped, so the wrong folder yields a confidently wrong list.
+    const calls: { args: readonly string[]; cwd: unknown }[] = [];
+    const execFileFn = ((
+      _cmd: string,
+      args: readonly string[],
+      opts: Record<string, unknown>,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      calls.push({ args, cwd: opts.cwd });
+      cb(null, '');
+      return { pid: 322, kill: () => true } as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
+
+    await new ClaudeAdapter({ execFileFn }).listMcpServers({
+      cwd: '/home/me/project-a',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual(['mcp', 'list']);
+    expect(calls[0]?.cwd).toBe('/home/me/project-a');
+  });
+});
+
+describe('AgentAdapter.runCommand spawn options', () => {
+  /** Capture the options object `runCommand` hands to execFile. */
+  function capturingAdapter(): {
+    adapter: ClaudeAdapter;
+    seen: () => Record<string, unknown>;
+  } {
+    let opts: Record<string, unknown> = {};
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      options: Record<string, unknown>,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      opts = options;
+      cb(null, '');
+      return { pid: 999, kill: () => true } as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
+    return {
+      adapter: new ClaudeAdapter({ execFileFn }),
+      seen: () => opts,
+    };
+  }
+
+  it('runs the command in the requested folder', async () => {
+    // `claude mcp list` is folder-scoped — asked from the daemon's own cwd it
+    // reports a different, equally machine-true list.
+    const { adapter, seen } = capturingAdapter();
+
+    await adapter.listMcpServers({ cwd: '/tmp/some-project' });
+
+    expect(seen().cwd).toBe('/tmp/some-project');
+  });
+
+  it('a process-group command spawns detached and drops execFile’s own timeout', async () => {
+    // Both halves matter: `detached` is what creates the group, and leaving
+    // execFile's timeout in place would fire a single-PID kill first — exactly
+    // the orphaning the group spawn exists to prevent.
+    const { adapter, seen } = capturingAdapter();
+
+    await adapter.listMcpServers({ cwd: '/tmp/some-project' });
+
+    expect(seen().detached).toBe(true);
+    expect(seen().timeout).toBeUndefined();
+  });
+
+  it('leaves an ordinary utility command undetached, on execFile’s timeout', async () => {
+    // The default path is unchanged — every pre-existing caller (--version,
+    // --help probes) must keep spawning exactly as it did.
+    const { adapter, seen } = capturingAdapter();
+
+    await adapter.supportsLiveStream();
+
+    expect(seen().detached).toBeUndefined();
+    expect(seen().timeout).toBe(10_000);
+    expect(seen().cwd).toBeUndefined();
+  });
+});

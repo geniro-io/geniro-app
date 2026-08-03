@@ -241,6 +241,44 @@ export interface AgentSkillEntry {
   source: 'project' | 'user' | 'cli';
 }
 
+/**
+ * Health of one MCP server as the CLI itself reports it.
+ *
+ * `unknown` is load-bearing rather than an error case: these rows are parsed
+ * out of human-readable CLI output, so a release that rewords a status must
+ * degrade to "listed, health unreadable" instead of dropping the server or
+ * throwing. `pending` is claude's unapproved-`.mcp.json` state — the server is
+ * configured but deliberately not connected to.
+ */
+export type AgentMcpServerStatus =
+  'connected' | 'failed' | 'pending' | 'unknown';
+
+/**
+ * One MCP server a CLI agent loads in a given working directory.
+ *
+ * The set is per-CLI AND per-folder: a CLI resolves project-scoped servers
+ * relative to the directory it runs in, so the same agent answers differently
+ * in two folders and two agents answer differently in one.
+ */
+export interface AgentMcpServer {
+  name: string;
+  /** The command line or URL the CLI reaches the server through. */
+  target: string;
+  transport: 'stdio' | 'http' | 'sse';
+  status: AgentMcpServerStatus;
+  /**
+   * The failure reason, or what the server is waiting for — whatever the CLI
+   * printed after the status. Null when the status says everything.
+   */
+  detail: string | null;
+}
+
+/** Everything an adapter needs to list the MCP servers it would load. */
+export interface AgentMcpServersInput {
+  /** The user's project folder, already validated and canonicalized. */
+  cwd: string;
+}
+
 /** Everything an adapter needs to list what it can be invoked with. */
 export interface AgentSkillsInput {
   /** The user's project folder, already validated and canonicalized. */
@@ -264,6 +302,32 @@ export interface AgentCommandOptions {
    */
   onTurn?: (handle: AgentTurnHandle) => void;
   timeoutMs?: number;
+  /**
+   * The folder to run the command in. Absent means the daemon's own cwd, which
+   * is what every caller wanted until a command's ANSWER became folder-scoped:
+   * `claude mcp list` reports the project's `.mcp.json` servers and the
+   * local-scope servers keyed to that directory, so asked from the wrong place
+   * it confidently returns a different machine-true list.
+   */
+  cwd?: string;
+  /**
+   * Run the child as its own process-group leader, and reap the whole group
+   * rather than just the child.
+   *
+   * Off by default because it is only worth its cost for a command that FORKS:
+   * `claude mcp list` health-checks, so it launches the user's own MCP servers
+   * as grandchildren. `kill-tree.ts` states the failure mode this closes — "a
+   * single-PID kill would orphan them" — and node's own `execFile` timeout is
+   * exactly such a single-PID kill, which is why setting this also moves the
+   * timeout onto a group-killing timer of our own.
+   *
+   * Pair it with `childProcessHandle(child, { processGroup: true })` at the
+   * registration site: this flag makes the child a group leader, and that one
+   * makes cancel/shutdown signal the group it now leads. Setting either alone
+   * is a half-measure — one detaches without reaping, the other signals a
+   * group that was never created.
+   */
+  processGroup?: boolean;
 }
 
 /**
@@ -664,6 +728,18 @@ export interface AdapterConfig {
      * endpoint rides the turn itself, so nothing outside it ever sees the token.
      */
     readonly endpointRequiresCwdConfig: boolean;
+    /**
+     * Why this CLI's loaded MCP servers cannot be listed, or null when they
+     * can be.
+     *
+     * A VALUE rather than a method because nothing acts on it — it is carried
+     * to the UI and shown. It exists so that "this folder has no servers" and
+     * "this CLI cannot tell us" stay different answers: both are an empty list,
+     * and a reader that cannot distinguish them either invents a reason or
+     * branches on which CLI it is holding. This field is what lets the panel
+     * say something true without ever asking that question.
+     */
+    readonly listingUnavailableReason: string | null;
   };
 
   // ── Interactive terminal mirror ─────────────────────────────────────────

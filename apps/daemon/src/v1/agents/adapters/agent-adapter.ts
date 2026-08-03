@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
+import { killProcessGroup } from '../utils/kill-tree';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
   AdapterConfig,
@@ -14,6 +15,8 @@ import type {
   AgentCommandOptions,
   AgentEffort,
   AgentEvent,
+  AgentMcpServer,
+  AgentMcpServersInput,
   AgentModel,
   AgentSkillEntry,
   AgentSkillsInput,
@@ -252,6 +255,30 @@ export abstract class AgentAdapter {
   abstract listModels(options?: AgentCommandOptions): Promise<AgentModel[]>;
 
   /**
+   * The MCP servers this CLI loads in a given folder, with the health it
+   * reports for each.
+   *
+   * A METHOD rather than a config field because what differs per CLI is a
+   * mechanism, not a value — one has a subcommand whose prose must be parsed,
+   * another has no listing at all — which is the same split `listModels`
+   * makes. A CLI that cannot be asked answers `[]` in its own override, and
+   * that empty answer IS the declaration: nothing outside this layer ever
+   * checks which agent it is holding.
+   *
+   * `input.cwd` is required and load-bearing: the answer is folder-scoped
+   * (project `.mcp.json` servers, and local-scope servers keyed to that
+   * directory), so a listing taken from the wrong place is confidently wrong
+   * rather than empty.
+   *
+   * Must NEVER throw or hang — this feeds a panel, and a CLI that is missing,
+   * unauthenticated or hung must cost the user a list, not the request.
+   */
+  abstract listMcpServers(
+    input: AgentMcpServersInput,
+    options?: AgentCommandOptions,
+  ): Promise<AgentMcpServer[]>;
+
+  /**
    * The reasoning-effort levels this CLI accepts for one turn, weakest first,
    * or `[]` when it has no such control at all.
    *
@@ -433,6 +460,12 @@ export abstract class AgentAdapter {
    * `runHeadlessCli`. It strips the daemon's `GENIRO_`-prefixed env like a
    * turn does, and hands the child to `onSpawn` so the caller can register it
    * for shutdown. Never rejects.
+   *
+   * `options.processGroup` changes HOW the timeout kills, not whether there is
+   * one: node's `execFile` timeout signals the direct child only, so a command
+   * that forks (a health check launching the user's MCP servers) would leave
+   * the grandchildren behind. For those the child is spawned as a group leader
+   * and the deadline is enforced by our own timer through `killProcessGroup`.
    */
   protected runCommand(
     args: string[],
@@ -440,22 +473,41 @@ export abstract class AgentAdapter {
   ): Promise<string | null> {
     return new Promise((resolve) => {
       const run = this.options.execFileFn ?? execFile;
+      const timeoutMs = options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS;
+      const group = options.processGroup === true;
+      let timer: NodeJS.Timeout | undefined;
       let child: ChildProcess;
       try {
         child = run(
           this.command,
           args,
           {
-            timeout: options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS,
+            // A group spawn owns its own deadline below — leaving execFile's
+            // in place too would fire a single-PID kill first and orphan
+            // exactly the grandchildren the group spawn exists to reap.
+            ...(group ? {} : { timeout: timeoutMs }),
+            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+            ...(group ? { detached: true } : {}),
             encoding: 'utf8',
             env: buildChildEnv(),
           },
-          (err, stdout) => resolve(err ? null : String(stdout)),
+          (err, stdout) => {
+            if (timer) {
+              clearTimeout(timer);
+            }
+            resolve(err ? null : String(stdout));
+          },
         );
       } catch {
         // A missing binary throws synchronously on some platforms.
         resolve(null);
         return;
+      }
+      if (group) {
+        timer = setTimeout(() => {
+          killProcessGroup(child.pid, 'SIGKILL', () => child.kill('SIGKILL'));
+        }, timeoutMs);
+        timer.unref?.();
       }
       options.onSpawn?.(child);
     });

@@ -39,6 +39,7 @@ import {
 } from '../../agents/utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
+import { resolveValidPluginDir } from '../../agents/utils/resolve-plugin-dir';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
@@ -218,6 +219,17 @@ export class GraphExecutorService {
     validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
     computeRunOrder(input.workflow.nodes, input.workflow.edges);
     const cwd = resolveValidCwd(input.cwd);
+    // Validated HERE rather than per turn: a bad plugin directory is a
+    // configuration mistake, so refusing the whole run names it once, up
+    // front, instead of failing one node halfway through the graph. The CLI
+    // itself would say nothing at all — it ignores an unusable --plugin-dir
+    // silently (probe-verified), which reads as "this node has no MCP
+    // servers".
+    for (const node of input.workflow.nodes) {
+      if (node.kind === 'agent' && node.pluginDir) {
+        resolveValidPluginDir(node.pluginDir);
+      }
+    }
 
     const em = this.em.fork();
     const run = await this.runDao.create(
@@ -887,6 +899,10 @@ export class GraphExecutorService {
         approvalMode: questionCapable && approval === 'auto' ? 'ask' : approval,
         mcpEndpoint: mcpEndpointFor(node),
         disabledMcpServers,
+        // Per NODE, not per run: two nodes pointed at different plugin
+        // directories are meant to run with different tools. Already refused
+        // at startRun if unusable.
+        pluginDir: node.pluginDir ?? null,
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {

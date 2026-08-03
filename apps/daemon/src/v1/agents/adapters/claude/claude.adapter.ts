@@ -43,6 +43,7 @@ import {
   CLAUDE_PERMISSION_MODE_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+  CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
@@ -393,12 +394,22 @@ export class ClaudeAdapter extends AgentAdapter {
     input: AgentMcpServersInput,
     options: AgentCommandOptions = {},
   ): Promise<AgentMcpListingResult> {
-    const stdout = await this.runCommand([...CLAUDE_MCP_LIST_ARGS], {
-      ...options,
-      cwd: input.cwd,
-      processGroup: true,
-      timeoutMs: options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS,
-    });
+    // PREPENDED, not appended: `--plugin-dir` is a global option, and
+    // `claude mcp list --plugin-dir X` is rejected outright as an unknown
+    // option (probe-verified on 2.1.220). Before the subcommand is the only
+    // placement the CLI accepts here.
+    const pluginArgs = input.pluginDir
+      ? [CLAUDE_PLUGIN_DIR_FLAG, input.pluginDir]
+      : [];
+    const stdout = await this.runCommand(
+      [...pluginArgs, ...CLAUDE_MCP_LIST_ARGS],
+      {
+        ...options,
+        cwd: input.cwd,
+        processGroup: true,
+        timeoutMs: options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS,
+      },
+    );
     if (stdout === null) {
       return { ok: false, reason: CLAUDE_MCP_LIST_FAILED_MESSAGE };
     }
@@ -478,6 +489,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     if (input.resumeSessionId) {
       args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
+    }
+    if (input.pluginDir) {
+      // Session-scoped: the plugin is loaded for this invocation only, so two
+      // nodes of one graph can run with different tools without either
+      // installing anything. The caller has already refused an unusable path
+      // — the CLI would ignore one silently.
+      args.push(CLAUDE_PLUGIN_DIR_FLAG, input.pluginDir);
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.

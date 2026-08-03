@@ -1139,6 +1139,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     approval: ApprovalMode;
+    /**
+     * Absolute path to a plugin directory loaded for this node
+     * @type {string}
+     * @memberof WorkflowAgentNode
+     */
+    pluginDir?: string;
 }
 
 

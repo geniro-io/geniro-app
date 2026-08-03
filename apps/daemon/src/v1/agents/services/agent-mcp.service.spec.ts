@@ -1,6 +1,6 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -77,14 +77,18 @@ interface HarnessOptions {
 }
 
 function harness(
-  impl: (input: { cwd: string }) => Promise<AgentMcpServer[]>,
+  impl: (input: {
+    cwd: string;
+    pluginDir?: string | null;
+  }) => Promise<AgentMcpServer[]>,
   options: HarnessOptions = {},
 ): Harness {
   const { version = '2.1.220', facts } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
-  const listMcpServers = vi.fn((input: { cwd: string }) =>
-    impl(input).then((servers) => ({ ok: true as const, servers })),
+  const listMcpServers = vi.fn(
+    (input: { cwd: string; pluginDir?: string | null }) =>
+      impl(input).then((servers) => ({ ok: true as const, servers })),
   );
   const adapter = {
     listMcpServers,
@@ -112,6 +116,10 @@ function harness(
     {
       now: () => now,
       resolveVersionFn: () => Promise.resolve(version),
+      // Never the default: that resolves under the real userData dir, so a
+      // folder-independent read in a spec would create a directory in the
+      // user's own data.
+      folderlessDir: join(realDir(), 'folderless'),
     },
   );
   return {
@@ -136,6 +144,74 @@ describe('AgentMcpService.list', () => {
 
     // Asking twice means health-checking the user's servers twice.
     expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT serve one plugin directory’s rows for another', async () => {
+    // The pluginDir half of the key, and the whole reason the dimension
+    // exists: two agent nodes pointed at different plugin directories are
+    // MEANT to differ, so sharing a cache entry would show one node's tools
+    // under the other's name — wrong, not merely stale.
+    const cwd = realDir();
+    const pluginA = realDir();
+    const pluginB = realDir();
+    const { service, listMcpServers } = harness((input) =>
+      Promise.resolve([
+        server(input.pluginDir === pluginA ? 'from-a' : 'from-b'),
+      ]),
+    );
+
+    const a = await service.list(AgentKind.Claude, cwd, {
+      pluginDir: pluginA,
+    });
+    const b = await service.list(AgentKind.Claude, cwd, {
+      pluginDir: pluginB,
+    });
+
+    expect(a.servers.map((s) => s.name)).toEqual(['from-a']);
+    expect(b.servers.map((s) => s.name)).toEqual(['from-b']);
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT serve a plugin-less listing for one carrying a plugin', async () => {
+    // The absent case specifically: `undefined` and a real path must not
+    // collapse onto one key, or the inspector's first node would poison the
+    // panel's own folder listing.
+    const cwd = realDir();
+    const plugin = realDir();
+    const { service, listMcpServers } = harness((input) =>
+      Promise.resolve([server(input.pluginDir ? 'with-plugin' : 'bare')]),
+    );
+
+    const bare = await service.list(AgentKind.Claude, cwd);
+    const withPlugin = await service.list(AgentKind.Claude, cwd, {
+      pluginDir: plugin,
+    });
+
+    expect(bare.servers.map((s) => s.name)).toEqual(['bare']);
+    expect(withPlugin.servers.map((s) => s.name)).toEqual(['with-plugin']);
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers a null cwd in its own empty folder, not the daemon’s', async () => {
+    // The graph builder has no folder. A null cwd must still reach the
+    // adapter with a REAL directory — one geniro owns and keeps empty, so the
+    // answer is the folder-independent set rather than whatever project
+    // config happens to sit in the daemon's own working directory.
+    const seen: string[] = [];
+    const { service } = harness((input) => {
+      seen.push(input.cwd);
+      return Promise.resolve([server('global')]);
+    });
+
+    const result = await service.list(AgentKind.Claude, null);
+
+    expect(result.servers.map((s) => s.name)).toEqual(['global']);
+    expect(seen).toHaveLength(1);
+    expect(isAbsolute(seen[0]!)).toBe(true);
+    expect(seen[0]).not.toBe(process.cwd());
+    // And it really is empty — a project `.mcp.json` there would leak one
+    // folder's servers into every builder listing.
+    expect(existsSync(join(seen[0]!, '.mcp.json'))).toBe(false);
   });
 
   it('does NOT serve one folder’s rows for another folder', async () => {
@@ -257,7 +333,7 @@ describe('AgentMcpService.list', () => {
     );
 
     await service.list(AgentKind.Claude, cwd);
-    await service.list(AgentKind.Claude, cwd, true);
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
 
     expect(listMcpServers).toHaveBeenCalledTimes(2);
   });
@@ -297,8 +373,8 @@ describe('AgentMcpService.list', () => {
         }),
     );
 
-    const first = service.list(AgentKind.Claude, cwd, true);
-    const second = service.list(AgentKind.Claude, cwd, true);
+    const first = service.list(AgentKind.Claude, cwd, { refresh: true });
+    const second = service.list(AgentKind.Claude, cwd, { refresh: true });
     await whenCalled(listMcpServers);
 
     expect(listMcpServers).toHaveBeenCalledTimes(1);
@@ -332,7 +408,7 @@ describe('AgentMcpService.list', () => {
     });
 
     await service.list(AgentKind.Claude, cwd);
-    const after = await service.list(AgentKind.Claude, cwd, true);
+    const after = await service.list(AgentKind.Claude, cwd, { refresh: true });
 
     expect(listMcpServers).toHaveBeenCalledTimes(2);
     expect(after.servers.map((s) => s.name)).toEqual(['recovered']);

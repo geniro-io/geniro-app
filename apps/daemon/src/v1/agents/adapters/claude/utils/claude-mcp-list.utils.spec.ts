@@ -189,4 +189,38 @@ describe('parseMcpList', () => {
     expect(server?.status).toBe('failed');
     expect(server?.detail).toBeNull();
   });
+
+  it('keeps a plugin server’s namespaced name whole', () => {
+    // VERBATIM bytes from claude 2.1.220 driven with `--plugin-dir` against a
+    // probe plugin built for the purpose. A plugin's servers are namespaced
+    // `plugin:<plugin>:<server>`, so the row carries THREE colons before the
+    // delimiter — a shape no folder-only listing ever produced, and the one
+    // the name split has to survive. Truncating at the first colon would name
+    // every plugin server "plugin", collapsing them all into one row.
+    const [server] = parseMcpList(
+      'plugin:probe-alpha:alpha-srv: /bin/echo alpha - × Failed to connect — -32000: MCP error -32000: Connection closed',
+    );
+
+    expect(server?.name).toBe('plugin:probe-alpha:alpha-srv');
+    expect(server?.target).toBe('/bin/echo alpha');
+    expect(server?.status).toBe('failed');
+    // The detail itself carries `: ` too, and belongs to the status, not the name.
+    expect(server?.detail).toContain('-32000');
+  });
+
+  it('separates two plugins’ servers into two rows', () => {
+    const servers = parseMcpList(
+      [
+        'Checking MCP server health…',
+        '',
+        'plugin:probe-alpha:alpha-srv: /bin/echo alpha - × Failed to connect — boom',
+        'plugin:probe-beta:beta-srv: /bin/echo beta - × Failed to connect — boom',
+      ].join('\n'),
+    );
+
+    expect(servers.map((s) => s.name)).toEqual([
+      'plugin:probe-alpha:alpha-srv',
+      'plugin:probe-beta:beta-srv',
+    ]);
+  });
 });

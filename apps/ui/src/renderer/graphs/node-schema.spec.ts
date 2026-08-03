@@ -69,6 +69,7 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'description',
       'role',
       'approval',
+      'pluginDir',
     ]);
     expect(triggerKeys).toEqual(['id', 'kind', 'name', 'trigger']);
   });

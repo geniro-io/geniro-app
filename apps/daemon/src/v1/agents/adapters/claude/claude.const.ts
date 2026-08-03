@@ -72,6 +72,17 @@ export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
+ * Loads a plugin for one invocation (`--plugin-dir <path>`, repeatable).
+ *
+ * A GLOBAL option, which is the whole reason this is a named constant used by
+ * two very differently-shaped call sites: on a turn there is no subcommand so
+ * it may sit anywhere in argv, but `claude mcp list --plugin-dir X` is
+ * REJECTED as an unknown option — before the subcommand is the only placement
+ * that works there (probe-verified on 2.1.220).
+ */
+export const CLAUDE_PLUGIN_DIR_FLAG = '--plugin-dir';
+
+/**
  * Restricts a turn to `--mcp-config` servers only. geniro does NOT pass it:
  * an agent must see the same MCP servers a fresh session in that folder sees,
  * plus geniro's call surface. Named so the spec pinning its absence and any

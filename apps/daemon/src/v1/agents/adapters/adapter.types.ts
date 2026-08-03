@@ -291,8 +291,21 @@ export type AgentMcpListingResult =
 
 /** Everything an adapter needs to list the MCP servers it would load. */
 export interface AgentMcpServersInput {
-  /** The user's project folder, already validated and canonicalized. */
+  /**
+   * The folder to list in, already validated and canonicalized.
+   *
+   * Which servers a folder contributes is the CLI's own business: for claude,
+   * a project `.mcp.json` is visible ONLY from its own folder (probe-verified
+   * on 2.1.220), so listing from a folder that has none yields the
+   * folder-INDEPENDENT set — exactly what the graph builder wants, since a
+   * workflow has no folder until it runs.
+   */
   cwd: string;
+  /**
+   * A plugin directory whose own MCP servers should be included, already
+   * validated and canonicalized. Absent: list without one.
+   */
+  pluginDir?: string | null;
 }
 
 /**
@@ -555,6 +568,17 @@ export interface AgentTurnInput {
    * at all, changes nothing outside its own directory.
    */
   disabledMcpServers?: readonly string[];
+  /**
+   * A plugin directory this turn loads, and no other turn's.
+   *
+   * Already validated and canonicalized by the caller — an adapter puts it
+   * straight into argv and must never be the thing that first checks it.
+   * Session-scoped: nothing is installed and no user config is written.
+   *
+   * A CLI with no plugin mechanism simply ignores the field, the same way one
+   * with no settings mechanism ignores {@link disabledMcpServers}.
+   */
+  pluginDir?: string | null;
   /**
    * Loopback MCP endpoint granting this turn the agent-call tools
    * (call_agent / await_agent / answer_agent). Delivery is adapter-specific —

@@ -57,6 +57,7 @@ const AGENT_ONLY_FIELDS = [
   'description',
   'role',
   'approval',
+  'pluginDir',
 ] as const;
 const TRIGGER_ONLY_FIELDS = ['trigger'] as const;
 

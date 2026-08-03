@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
+import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpListingResult,
@@ -13,6 +16,7 @@ import type { AgentMcpListingWire } from '../chat.types';
 import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
 import { resolveValidCwd } from '../utils/resolve-cwd';
+import { resolveValidPluginDir } from '../utils/resolve-plugin-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
@@ -31,20 +35,45 @@ const DEFAULT_MCP_TTL_MS = 5 * 60_000;
 const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
 
 /**
- * The cache key. Three dimensions, and dropping any one of them serves a
+ * The directory a FOLDER-INDEPENDENT listing runs in, under userData.
+ *
+ * The graph builder has no folder: a workflow is edited long before it is run
+ * in one. What it can honestly show is the set that does NOT depend on a
+ * folder — the user's global servers plus whatever the node's own plugin
+ * directory brings — and the way to get that from the CLI is to ask it
+ * somewhere with no project config of its own, because a project `.mcp.json`
+ * is visible ONLY from its own folder (probe-verified on claude 2.1.220).
+ *
+ * geniro owns this directory and keeps it empty, so "no project servers here"
+ * is a property of the path rather than a hope about the user's disk. The
+ * listing writes nothing — not even a `~/.claude.json` project entry
+ * (probe-verified: that file's checksum is unchanged across one).
+ */
+const FOLDERLESS_DIR_NAME = 'mcp-folderless';
+
+/**
+ * The cache key. Four dimensions, and dropping any one of them serves a
  * confidently wrong answer rather than a stale one:
  *
  * - **agent** — the two CLIs read different config files entirely.
  * - **cwd** — the listing is folder-scoped (project `.mcp.json`, and
  *   local-scope servers keyed to that directory).
+ * - **pluginDir** — a plugin ships its own MCP servers, so two nodes pointed
+ *   at different directories genuinely have different sets. Sharing one cache
+ *   entry between them is the exact failure this dimension exists to prevent.
  * - **version** — an upgraded binary can reword the output the parser reads,
  *   so a listing is only reusable while the binary that produced it is.
  *
  * NUL-joined because it is the one byte a path cannot contain — the same key
  * shape `SkillHarvestStore` and the renderer's caches use.
  */
-function keyOf(agent: AgentKind, cwd: string, version: string | null): string {
-  return `${agent}\u0000${cwd}\u0000${version ?? ''}`;
+function keyOf(
+  agent: AgentKind,
+  cwd: string,
+  pluginDir: string | null,
+  version: string | null,
+): string {
+  return `${agent}\u0000${cwd}\u0000${pluginDir ?? ''}\u0000${version ?? ''}`;
 }
 
 /** Constructor options — test seams, not user config. */
@@ -55,6 +84,12 @@ export interface AgentMcpServiceOptions {
   now?: () => number;
   /** Replacement version resolver for tests. */
   resolveVersionFn?: typeof resolveAgentVersion;
+  /**
+   * The empty directory a folder-independent listing runs in (test seam);
+   * defaults to `<userData>/mcp-folderless`. A spec that let this default
+   * through would create it in the real user's data directory.
+   */
+  folderlessDir?: string;
 }
 
 interface CacheEntry {
@@ -88,6 +123,7 @@ export class AgentMcpService {
   private readonly ttlMs: number;
   private readonly now: () => number;
   private readonly resolveVersionFn: typeof resolveAgentVersion;
+  private readonly folderlessDirPath: string;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<AgentMcpListingResult>>();
 
@@ -100,6 +136,19 @@ export class AgentMcpService {
     this.ttlMs = options.ttlMs ?? DEFAULT_MCP_TTL_MS;
     this.now = options.now ?? Date.now;
     this.resolveVersionFn = options.resolveVersionFn ?? resolveAgentVersion;
+    this.folderlessDirPath =
+      options.folderlessDir ??
+      join(environment.userDataDir, FOLDERLESS_DIR_NAME);
+  }
+
+  /**
+   * The empty directory a folder-independent listing runs in, created on
+   * first use. Memoized only in the sense that `mkdirSync` with `recursive`
+   * is a no-op once it exists.
+   */
+  private folderlessDir(): string {
+    mkdirSync(this.folderlessDirPath, { recursive: true });
+    return this.folderlessDirPath;
   }
 
   /**
@@ -109,13 +158,20 @@ export class AgentMcpService {
    */
   async list(
     agent: AgentKind,
-    cwd: string,
-    refresh = false,
+    cwd: string | null,
+    options: { pluginDir?: string | null; refresh?: boolean } = {},
   ): Promise<AgentMcpListingWire> {
-    // Validated FIRST, so a bad cwd is a bad request whichever adapter answers.
-    // Below the refusal it would be, and a folder that 400s for claude today
-    // would start 400ing for cursor the day cursor gains a listing.
-    const projectDir = resolveValidCwd(cwd);
+    const { pluginDir = null, refresh = false } = options;
+    // Validated FIRST, so a bad path is a bad request whichever adapter
+    // answers. Below the refusal it would be, and a folder that 400s for
+    // claude today would start 400ing for cursor the day cursor gains a
+    // listing.
+    //
+    // A null cwd is the graph builder asking what does NOT depend on a folder;
+    // it is answered in geniro's own empty directory rather than refused.
+    const projectDir =
+      cwd === null ? this.folderlessDir() : resolveValidCwd(cwd);
+    const plugin = pluginDir === null ? null : resolveValidPluginDir(pluginDir);
     const adapter = this.adapters.for(agent);
     // The adapter's own sentence, carried through untouched. A CLI that cannot
     // be listed is not asked at all — spawning it to receive a guaranteed
@@ -131,7 +187,7 @@ export class AgentMcpService {
           childProcessHandle(child, { processGroup: false }),
         ),
     });
-    const key = keyOf(agent, projectDir, version);
+    const key = keyOf(agent, projectDir, plugin, version);
     if (refresh) {
       this.cache.delete(key);
     }
@@ -155,7 +211,7 @@ export class AgentMcpService {
     const ask = Promise.resolve()
       .then(() =>
         adapter.listMcpServers(
-          { cwd: projectDir },
+          { cwd: projectDir, pluginDir: plugin },
           {
             onSpawn: (child, spawnInfo) =>
               this.processes.register(

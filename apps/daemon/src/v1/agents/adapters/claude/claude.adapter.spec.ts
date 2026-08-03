@@ -26,6 +26,7 @@ import type {
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
+  CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_RESUME_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
@@ -104,6 +105,29 @@ function fakeSpawn<C extends FakeChild = FakeChild>(
   return { spawn, child, captured };
 }
 
+/**
+ * Answers a utility command (`runCommand`, not `start`) with canned stdout,
+ * capturing its argv. The two paths take different seams: a turn is spawned
+ * through `spawn`, everything else runs through `execFileFn`.
+ */
+function fakeListing(stdout: string): {
+  execFileFn: typeof execFile;
+  captured: { args?: readonly string[] };
+} {
+  const captured: { args?: readonly string[] } = {};
+  const execFileFn = ((
+    _cmd: string,
+    args: readonly string[],
+    _opts: unknown,
+    cb: (err: Error | null, out: string) => void,
+  ) => {
+    captured.args = args;
+    cb(null, stdout);
+    return { pid: 4242 } as ChildProcess;
+  }) as unknown as typeof execFile;
+  return { execFileFn, captured };
+}
+
 describe('ClaudeAdapter', () => {
   it('spawns with stream-json flags, streams a turn, and sends the prompt on stdin', async () => {
     const { spawn, child, captured } = fakeSpawn();
@@ -175,6 +199,52 @@ describe('ClaudeAdapter', () => {
       () => {},
     );
     expect(without.captured.args).not.toContain('--effort');
+  });
+
+  it('passes --plugin-dir on a turn only when the node names one', () => {
+    const withPlugin = fakeSpawn();
+    new ClaudeAdapter({ spawn: withPlugin.spawn }).start(
+      { prompt: 'go', cwd: '/proj', pluginDir: '/opt/plugins/reviewer' },
+      () => {},
+    );
+    expect(withPlugin.captured.args).toEqual(
+      expect.arrayContaining([CLAUDE_PLUGIN_DIR_FLAG, '/opt/plugins/reviewer']),
+    );
+
+    const without = fakeSpawn();
+    new ClaudeAdapter({ spawn: without.spawn }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(without.captured.args).not.toContain(CLAUDE_PLUGIN_DIR_FLAG);
+  });
+
+  it('PREPENDS --plugin-dir before `mcp list`, never after it', async () => {
+    // `--plugin-dir` is a GLOBAL option: `claude mcp list --plugin-dir X` is
+    // rejected as an unknown option (probe-verified on 2.1.220), so appending
+    // it the way the turn path does would break every listing that carries
+    // one. Position IS the behaviour here, which is why this asserts on
+    // indices rather than mere membership.
+    const { execFileFn, captured } = fakeListing('No MCP servers configured\n');
+    await new ClaudeAdapter({ execFileFn }).listMcpServers({
+      cwd: '/proj',
+      pluginDir: '/opt/plugins/reviewer',
+    });
+
+    const args = [...(captured.args ?? [])];
+    expect(args.slice(0, 2)).toEqual([
+      CLAUDE_PLUGIN_DIR_FLAG,
+      '/opt/plugins/reviewer',
+    ]);
+    expect(args.indexOf(CLAUDE_PLUGIN_DIR_FLAG)).toBeLessThan(
+      args.indexOf('mcp'),
+    );
+  });
+
+  it('omits --plugin-dir from a listing that names none', async () => {
+    const { execFileFn, captured } = fakeListing('No MCP servers configured\n');
+    await new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' });
+    expect(captured.args).toEqual(['mcp', 'list']);
   });
 
   it('lists exactly the probe-verified effort vocabulary, ultracode included', () => {

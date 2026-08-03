@@ -244,14 +244,26 @@ export interface AgentSkillEntry {
 /**
  * Health of one MCP server as the CLI itself reports it.
  *
- * `unknown` is load-bearing rather than an error case: these rows are parsed
- * out of human-readable CLI output, so a release that rewords a status must
- * degrade to "listed, health unreadable" instead of dropping the server or
- * throwing. `pending` is claude's unapproved-`.mcp.json` state — the server is
- * configured but deliberately not connected to.
+ * `unknown` is for a row that IS recognisably a row but whose health wording
+ * this parser does not know — these rows come out of human-readable CLI
+ * output, so a reworded release must not throw.
+ *
+ * An unrecognised status must cost the BADGE, never the row, in every parser:
+ * a server the user cannot see is worse than one whose health is unreadable,
+ * and a parser that drops what it cannot read can only announce that when
+ * EVERY row drops — a partly unfamiliar listing would otherwise return the
+ * rows it understood and silently deny the rest. The CALLER still has to turn
+ * "nothing parsed, and no empty-folder sentence" into a stated failure; a
+ * listing may never degrade into a confident "this folder has none".
+ *
+ * `pending` is a server that is configured but deliberately not connected to —
+ * claude's unapproved `.mcp.json`, cursor's `not loaded (needs approval)`.
+ * `disabled` is one the user switched off in the CLI's own configuration, which
+ * geniro cannot undo (cursor's `mcp disable`); it is distinct from the wire's
+ * `disabled` flag, which also covers servers geniro itself suppressed.
  */
 export type AgentMcpServerStatus =
-  'connected' | 'failed' | 'pending' | 'unknown';
+  'connected' | 'failed' | 'pending' | 'disabled' | 'unknown';
 
 /**
  * One MCP server a CLI agent loads in a given working directory.
@@ -262,9 +274,21 @@ export type AgentMcpServerStatus =
  */
 export interface AgentMcpServer {
   name: string;
-  /** The command line or URL the CLI reaches the server through. */
-  target: string;
-  transport: 'stdio' | 'http' | 'sse';
+  /**
+   * The command line or URL the CLI reaches the server through, or null when
+   * the CLI does not say.
+   *
+   * Nullable because not every CLI reports it: claude prints
+   * `sentry: node s.js - √ Connected`, cursor prints `sentry: ready` and
+   * nothing more (probe-verified on 2026.07.23-e383d2b). Reading the CLI's own
+   * config file to fill the gap is out of scope — the CLI is the source of
+   * truth here, for both agents alike — so null is the honest answer. An empty
+   * string would have asserted a command that was never reported, which is the
+   * empty-vs-unknown collapse the discriminated result below exists to prevent.
+   */
+  target: string | null;
+  /** Null for the same reason as {@link AgentMcpServer.target}. */
+  transport: 'stdio' | 'http' | 'sse' | null;
   status: AgentMcpServerStatus;
   /**
    * The failure reason, or what the server is waiting for — whatever the CLI

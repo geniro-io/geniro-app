@@ -4,11 +4,23 @@ import type { AcpToolCall } from '../acp/acp.types';
 import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
 import type {
   AdapterConfig,
+  AgentCommandOptions,
+  AgentMcpListingResult,
+  AgentMcpServersInput,
   AgentModel,
   AgentTurnInput,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import {
+  CURSOR_MCP_EMPTY_MARKER,
+  CURSOR_MCP_LIST_ARGS,
+  CURSOR_MCP_LIST_FAILED_MESSAGE,
+  CURSOR_MCP_LIST_TIMEOUT_MS,
+  CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
+  CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+} from './cursor-acp.const';
+import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
 const CURSOR_PLAN_MODE_ID = 'plan';
@@ -129,40 +141,53 @@ export class CursorAcpAdapter extends AgentAdapter {
         /** ACP carries the endpoint in-protocol; no cwd config is written. */
         endpointRequiresCwdConfig: false,
         /**
-         * Shown verbatim wherever this CLI's servers would have been listed —
-         * and, being non-null, it is also what makes the base refuse the
-         * listing, so this adapter needs no `listMcpServers` of its own.
+         * Null: this CLI CAN be asked. `cursor-agent mcp list` exists and
+         * works without authentication (verified on 2026.07.23-e383d2b), so
+         * {@link CursorAcpAdapter.listMcpServers} below answers for real and
+         * there is no reason to state in place of a listing.
          *
-         * ACP has no agent-to-client inventory of a session's servers, and
-         * whether the binary has a listing subcommand is UNVERIFIED (the only
-         * attested member of that family is `mcp enable`, from code deleted in
-         * a1b6832). Verifying it is the first step of this feature's cursor
-         * milestone — so the honest answer is that we have not asked, not that
-         * the folder is empty.
+         * ACP itself still has no agent-to-client inventory of a session's
+         * servers — the listing is a subcommand, not a protocol frame — which
+         * is why this is an adapter method rather than anything the shared
+         * `adapters/acp/` client could provide.
          */
-        listingUnavailableReason:
-          'cursor-agent MCP listing is not supported yet',
+        listingUnavailableReason: null,
         /**
-         * Milestone 4 decides cursor's toggle after verifying its CLI; until
-         * then saying so is the honest answer, and it keeps every row
-         * read-only rather than offering a control nobody has tested.
+         * Still non-null, and deliberately so after the same verification —
+         * {@link CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON} carries the evidence.
+         * Saying it keeps every cursor row read-only instead of offering a
+         * dead control.
+         *
+         * All three fields get the one sentence, unlike claude's three
+         * distinct ones: the latter two answer "why is THIS row not
+         * toggleable" questions that are never reached while the blanket
+         * reason above is set.
          */
-        toggleUnavailableReason:
-          'cursor-agent MCP switching is not supported yet',
-        notInToggleableScopeReason:
-          'cursor-agent MCP switching is not supported yet',
-        userDisabledReason: 'cursor-agent MCP switching is not supported yet',
+        toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        notInToggleableScopeReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       plugin: {
         /**
-         * `cursor-agent` exposes no per-invocation plugin mechanism — there is
-         * no `--plugin-dir` equivalent, and ACP has no client-supplied plugin
-         * channel the way it has one for MCP servers. Stated as a fact so a
-         * node's `pluginDir` is never validated, refused, or silently dropped
-         * for this CLI.
+         * `cursor-agent` DOES accept a `--plugin-dir` flag — an earlier
+         * revision of this block claimed it did not, which the binary
+         * disproves. What was actually probed (2026.07.23-e383d2b) is
+         * narrower: a plugin directory carrying an `.mcp.json`, a
+         * `.cursor/mcp.json` and a `.cursor-plugin/plugin.json` contributed no
+         * servers to `mcp list`, and a wholly nonexistent path was accepted
+         * just as silently. Whether a plugin's commands or skills reach a TURN
+         * was NOT probed, and the plugin manifest format is undocumented in the
+         * CLI's own `--help`. ACP has no client-supplied plugin channel either,
+         * the way it has one for MCP servers.
+         *
+         * So the claim is only that the field a node would fill has no VERIFIED
+         * effect on this CLI — which is what keeps a node's `pluginDir` from
+         * being validated, refused, or silently dropped for cursor. Establish
+         * the turn side before weakening or removing this.
          */
-        unavailableReason: 'cursor-agent cannot load a plugin directory',
+        unavailableReason:
+          'cursor-agent has no verified way to load a plugin directory',
       },
       terminal: null,
     };
@@ -175,6 +200,52 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   override listModels(): Promise<AgentModel[]> {
     return Promise.resolve([]);
+  }
+
+  /**
+   * `cursor-agent mcp list` exists, so this shells out rather than declaring an
+   * absence — the fork milestone 4 opened, resolved against the real binary.
+   *
+   * `processGroup` for the same reason claude's listing needs it: the command
+   * HEALTH-CHECKS, which means it launches the user's own stdio servers as
+   * children, and killing only the CLI would leave them behind.
+   *
+   * The three-way split mirrors claude's, and carries the same weight:
+   * - a null stdout is the command having FAILED (missing binary, non-zero
+   *   exit, deadline) and is reported as such;
+   * - zero rows WITH the CLI's empty-folder sentence is a real empty listing;
+   * - zero rows WITHOUT it means the output could not be read. That third case
+   *   is load-bearing here in a way it is not for claude: cursor rows have no
+   *   structural marker, so `parseCursorMcpList` drops any row whose status it
+   *   does not recognise, and this is what turns a reworded release into a
+   *   visible "format may have changed" instead of a cached "no servers".
+   */
+  override async listMcpServers(
+    input: AgentMcpServersInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpListingResult> {
+    const stdout = await this.runCommand([...CURSOR_MCP_LIST_ARGS], {
+      ...options,
+      cwd: input.cwd,
+      processGroup: true,
+      timeoutMs: options.timeoutMs ?? CURSOR_MCP_LIST_TIMEOUT_MS,
+    });
+    if (stdout === null) {
+      return { ok: false, reason: CURSOR_MCP_LIST_FAILED_MESSAGE };
+    }
+    const servers = parseCursorMcpList(stdout);
+    // Anchored to the START OF A LINE, not searched across the whole buffer:
+    // the sentence is ordinary English, so a server whose status wording merely
+    // CONTAINS it ("weird-srv: No MCP servers configured are approved yet")
+    // would otherwise satisfy the empty check and turn an unreadable listing
+    // into a confident "this folder has none".
+    const saidEmpty = stdout
+      .split('\n')
+      .some((line) => line.trim().startsWith(CURSOR_MCP_EMPTY_MARKER));
+    if (servers.length === 0 && !saidEmpty) {
+      return { ok: false, reason: CURSOR_MCP_LIST_UNREADABLE_MESSAGE };
+    }
+    return { ok: true, servers };
   }
 
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {

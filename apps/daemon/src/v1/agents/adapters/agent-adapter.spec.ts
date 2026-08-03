@@ -9,8 +9,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeModesCapability } from '../chat.types';
 import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
-import type { AdapterConfig, AgentApprovalMode } from './adapter.types';
-import type { AgentAdapter } from './agent-adapter';
+import type {
+  AdapterConfig,
+  AgentApprovalMode,
+  AgentEvent,
+  AgentModel,
+} from './adapter.types';
+import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
 import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
 
@@ -313,17 +318,42 @@ describe('AgentAdapter.supportsLiveStream', () => {
 });
 
 /**
- * A CLI that claims it CAN be listed but supplies no mechanism — the shape a
- * future adapter author lands in by filling in config and forgetting the
- * override. Neither shipped adapter can reach the base fallback.
+ * The bare minimum an adapter author must supply, and NOTHING else.
+ *
+ * Built on `AgentAdapter` itself rather than on a shipped adapter because both
+ * shipped ones now override `listMcpServers` — subclassing either would inherit
+ * that override and never reach the base fallback these cases exist to pin.
+ * (Milestone 4: cursor gained a real listing, and this fixture used to extend
+ * it.)
  */
-class ForgotToOverrideAdapter extends CursorAcpAdapter {
-  override getConfig(): AdapterConfig {
-    const base = super.getConfig();
+class BareAdapter extends AgentAdapter {
+  constructor(private readonly listingReason: string | null) {
+    super({});
+  }
+
+  protected get command(): string {
+    // Never spawned: neither base path this fixture exercises reaches a child.
+    return 'no-such-binary';
+  }
+
+  getConfig(): AdapterConfig {
+    const base = new CursorAcpAdapter().getConfig();
     return {
       ...base,
-      mcp: { ...base.mcp, listingUnavailableReason: null },
+      mcp: { ...base.mcp, listingUnavailableReason: this.listingReason },
     };
+  }
+
+  protected buildArgs(): string[] {
+    return [];
+  }
+
+  protected mapMessage(): AgentEvent[] {
+    throw new Error('not exercised');
+  }
+
+  override listModels(): Promise<AgentModel[]> {
+    return Promise.resolve([]);
   }
 }
 
@@ -333,7 +363,7 @@ describe('AgentAdapter.listMcpServers', () => {
     // service cache it and the panel state, as fact, that the user has no MCP
     // servers — on a CLI nobody ever asked.
     await expect(
-      new ForgotToOverrideAdapter().listMcpServers({ cwd: '/tmp' }),
+      new BareAdapter(null).listMcpServers({ cwd: '/tmp' }),
     ).resolves.toEqual({
       ok: false,
       reason: expect.stringContaining('does not implement MCP listing'),
@@ -382,15 +412,18 @@ describe('AgentAdapter.listMcpServers', () => {
       new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
     ).resolves.toEqual({ ok: true, servers: [] });
   });
-  it('cursor-agent refuses with its own reason, and writes no code to do it', async () => {
-    // The declared absence: cursor carries only the config string, so there is
-    // no override that could drift from it. The panel can ask EVERY agent
-    // without knowing which one it holds.
-    const adapter = new CursorAcpAdapter();
+  it('an adapter that declares an absence refuses with its own reason, writing no code to do it', async () => {
+    // A CLI with no listing states that in config alone and the base does the
+    // rest, so there is no override that could drift from the sentence the
+    // panel shows. Both SHIPPED adapters can now be asked for real (milestone
+    // 4 verified cursor's `mcp list`), which is exactly why this is pinned on a
+    // fixture: the guarantee is about the base class, not about who currently
+    // needs it.
+    const adapter = new BareAdapter('this CLI has no listing');
 
     await expect(adapter.listMcpServers({ cwd: '/tmp' })).resolves.toEqual({
       ok: false,
-      reason: adapter.getConfig().mcp.listingUnavailableReason,
+      reason: 'this CLI has no listing',
     });
   });
 
@@ -534,10 +567,25 @@ describe('AgentAdapter.runCommand spawn options', () => {
     }
   });
 
-  it('does not fire the group kill once the command has answered', async () => {
-    // The timer is armed BEFORE the spawn (a synchronous execFileFn would
-    // otherwise leave one nothing can clear), so the settle path must clear it
-    // — else it later SIGKILLs whatever process group now owns that pid.
+  it('reaps the group ONCE when the command answers, and never again after', async () => {
+    // Two guarantees in one, because they pull against each other.
+    //
+    // The reap must HAPPEN on the success path: a listing command health-checks
+    // the user's own MCP servers, and one that ignores stdin EOF outlives the
+    // CLI (probe-verified on cursor-agent 2026.07.23-e383d2b — `mcp list`
+    // exited 0 and left a child running). Once the CLI exits, `ProcessRegistry`
+    // drops the handle, so this is the last moment anything can reach that
+    // group.
+    //
+    // This pins the CALL, not the outcome, and deliberately so: node's
+    // `execFile` drops `detached`, so the child is not a group leader and the
+    // kill currently reaches nothing (see `runCommand`). When that is fixed,
+    // this assertion is what says the success path still asks for the reap.
+    //
+    // And it must happen exactly ONCE. The deadline timer is armed BEFORE the
+    // spawn (a synchronous execFileFn would otherwise leave one nothing can
+    // clear), so settle has to clear it — else it fires later and SIGKILLs
+    // whatever process group owns that pid by then.
     vi.useFakeTimers();
     const killSpy = vi
       .spyOn(process, 'kill')
@@ -554,9 +602,14 @@ describe('AgentAdapter.runCommand spawn options', () => {
       }) as unknown as typeof execFile;
 
       await new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' });
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGKILL');
+
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(killSpy).not.toHaveBeenCalled();
+      // Still one: the deadline was cleared, not merely outrun.
+      expect(killSpy).toHaveBeenCalledTimes(1);
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();

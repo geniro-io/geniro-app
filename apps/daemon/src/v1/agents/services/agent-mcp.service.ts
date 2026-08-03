@@ -163,9 +163,11 @@ export class AgentMcpService {
   ): Promise<AgentMcpListingWire> {
     const { pluginDir = null, refresh = false } = options;
     // Validated FIRST, so a bad path is a bad request whichever adapter
-    // answers. Below the refusal it would be, and a folder that 400s for
-    // claude today would start 400ing for cursor the day cursor gains a
-    // listing.
+    // answers — never a 400 for one CLI and a 200 for another. Ordering, not
+    // just validation: placed BELOW an adapter's refusal, a folder's validity
+    // would depend on whether that CLI happened to have a listing, so adding
+    // one would silently start rejecting folders that used to succeed. (That
+    // is not hypothetical — cursor gained a listing in milestone 4.)
     //
     // A null cwd is the graph builder asking what does NOT depend on a folder;
     // it is answered in geniro's own empty directory rather than refused.
@@ -346,7 +348,12 @@ export class AgentMcpService {
           return {
             ...server,
             scope: 'unknown' as const,
-            disabled: false,
+            // Not blanket-false: a CLI geniro cannot switch may still REPORT a
+            // server as switched off in its own config (cursor's `mcp
+            // disable`), and the wire flag asks whether the next turn will
+            // leave the server out — whoever switched it off. Saying `false`
+            // there would render an off server as on.
+            disabled: server.status === 'disabled',
             toggleUnavailableReason: toggle.toggleUnavailableReason,
           };
         }
@@ -361,7 +368,9 @@ export class AgentMcpService {
           // every turn still loads it — the panel stating the opposite of what
           // the next turn does.
           disabled:
-            disabledByUser || (isProject && geniroDisabled.has(server.name)),
+            server.status === 'disabled' ||
+            disabledByUser ||
+            (isProject && geniroDisabled.has(server.name)),
           toggleUnavailableReason: !isProject
             ? toggle.notInToggleableScopeReason
             : disabledByUser

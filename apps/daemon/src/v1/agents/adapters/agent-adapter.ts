@@ -566,9 +566,38 @@ export abstract class AgentAdapter {
             env: buildChildEnv(),
           },
           (err, stdout) => {
-            if (group && err) {
-              // execFile killed the direct pid (maxBuffer, its own signal) —
-              // the group it led is still standing.
+            if (group) {
+              // On the ERROR path: execFile killed the direct pid (maxBuffer,
+              // its own signal) and the group it led is still standing.
+              //
+              // On the SUCCESS path too, which is not symmetry for its own
+              // sake. A listing command HEALTH-CHECKS — it launches the user's
+              // own MCP servers to dial them — and a server that does not exit
+              // on stdin EOF outlives the CLI. Probed on cursor-agent
+              // 2026.07.23-e383d2b with a deliberately lingering stdio server:
+              // `mcp list` exited 0 and left exactly one child running. Once
+              // the CLI exits, `ProcessRegistry` drops the handle on `done`,
+              // so nothing else can ever reach that group — not shutdown, not
+              // cancel — and each refresh strands another copy.
+              //
+              // Safe because this fires from the same callback the error path
+              // already reaped in, so it opens no pid-reuse window that did not
+              // already ship, and `reaped` keeps it to one kill.
+              //
+              // KNOWN GAP, and the reason the probe above still leaks: node's
+              // `execFile` does NOT forward `detached` to `spawn` (it forwards
+              // only cwd/env/uid/gid/shell/windows*), so the child never
+              // becomes a group leader and `killProcessGroup(child.pid)` names
+              // a pgid that does not exist. Every group reap here — this one,
+              // the error path's, and the deadline's — is therefore inert
+              // today, verified by observing a lingering health-check child
+              // survive a daemon listing. Closing it means moving the
+              // `group === true` path onto `spawn` with manual stdout
+              // collection, which also moves the `execFileFn` test seam every
+              // listing spec uses; that is a change of its own, not a
+              // drive-by. The call belongs here regardless: it is the shape
+              // the fix needs, and leaving it out would hide a second bug
+              // behind the first.
               reapGroup();
             }
             settle(err ? null : String(stdout));

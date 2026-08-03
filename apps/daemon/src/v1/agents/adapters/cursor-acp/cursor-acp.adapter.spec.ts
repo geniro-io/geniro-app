@@ -1,6 +1,7 @@
+import type { ChildProcess, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import type { AcpToolCall } from '../acp/acp.types';
@@ -112,6 +113,41 @@ afterEach(() => {
   delete process.env.GENIRO_CURSOR_API_KEY;
   delete process.env.GENIRO_CURSOR_BIN;
 });
+
+/**
+ * Answers a utility command (`runCommand`, not `start`) with canned stdout,
+ * capturing its argv and options. A turn is spawned through `spawn`;
+ * everything else runs through `execFileFn`. A null stdout is the
+ * command-failed signal — `runCommand` swallows the error and returns null.
+ */
+function fakeListing(stdout: string | null): {
+  execFileFn: typeof execFile;
+  captured: {
+    args?: readonly string[];
+    opts?: { cwd?: string; detached?: boolean };
+  };
+} {
+  const captured: {
+    args?: readonly string[];
+    opts?: { cwd?: string; detached?: boolean };
+  } = {};
+  const execFileFn = ((
+    _cmd: string,
+    args: readonly string[],
+    opts: { cwd?: string; detached?: boolean },
+    cb: (err: Error | null, out: string) => void,
+  ) => {
+    captured.args = args;
+    captured.opts = opts;
+    if (stdout === null) {
+      cb(new Error('spawn failed'), '');
+    } else {
+      cb(null, stdout);
+    }
+    return { pid: 4242 } as ChildProcess;
+  }) as unknown as typeof execFile;
+  return { execFileFn, captured };
+}
 
 describe('CursorAcpAdapter spawn', () => {
   it('runs the ACP server and keeps every turn parameter out of argv', () => {
@@ -494,6 +530,171 @@ describe('CursorAcpAdapter misuse', () => {
     ).toEqual({
       sessionId: 'sess-b',
       prompt: [{ type: 'text', text: 'turn B' }],
+    });
+  });
+  describe('listMcpServers', () => {
+    it('asks the CLI in the folder it was given, in its own process group', async () => {
+      const { execFileFn, captured } = fakeListing('probe: ready\n');
+
+      await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+        cwd: '/proj',
+      });
+
+      expect(captured.args).toEqual(['mcp', 'list']);
+      // The folder IS the question: `.cursor/mcp.json` is visible only from
+      // its own directory, so a listing taken elsewhere is confidently wrong.
+      expect(captured.opts?.cwd).toBe('/proj');
+      // The command health-checks, which launches the user's own stdio
+      // servers as children — killing only the CLI would strand them.
+      expect(captured.opts?.detached).toBe(true);
+    });
+
+    it('reports the servers the CLI listed', async () => {
+      const { execFileFn } = fakeListing(
+        'probe-good: ready\nprobe-broken: Error: Connection failed\n',
+      );
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({
+        ok: true,
+        servers: [
+          {
+            name: 'probe-good',
+            target: null,
+            transport: null,
+            status: 'connected',
+            detail: null,
+          },
+          {
+            name: 'probe-broken',
+            target: null,
+            transport: null,
+            status: 'failed',
+            detail: 'Connection failed',
+          },
+        ],
+      });
+    });
+
+    it('reports an empty folder as an EMPTY listing, not a failure', async () => {
+      const { execFileFn } = fakeListing(
+        'No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)\n',
+      );
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({ ok: true, servers: [] });
+    });
+
+    it('reports a command that could not be run as a FAILURE, never as empty', async () => {
+      // null stdout is the missing binary / non-zero exit / deadline signal.
+      // An `ok: true, servers: []` here would be cached and shown as "no
+      // servers" — a lie about the user's configuration for as long as the
+      // entry lives.
+      //
+      // `process.kill` is mocked because the error path reaps the group: with
+      // the fake's invented pid 4242 this spec would otherwise SIGKILL
+      // whatever process group owns that pid on the machine running it.
+      const killSpy = vi
+        .spyOn(process, 'kill')
+        .mockImplementation((): true => true);
+      try {
+        const { execFileFn } = fakeListing(null);
+
+        await expect(
+          new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+        ).resolves.toEqual({
+          ok: false,
+          reason: expect.stringContaining('did not answer'),
+        });
+      } finally {
+        killSpy.mockRestore();
+      }
+    });
+
+    it('reports output with no rows in it at all as a FAILURE, not an empty folder', async () => {
+      // Reached when NOTHING in the output is shaped like a row and the CLI
+      // did not print its empty-folder sentence either. Without this branch
+      // that is indistinguishable from an empty folder and the panel would
+      // confidently say "No servers".
+      const { execFileFn } = fakeListing('something went sideways\n');
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: expect.stringContaining('format may have changed'),
+      });
+    });
+
+    it('does not read the empty-folder sentence out of the MIDDLE of a row', async () => {
+      // The sentence is ordinary English. Searched across the whole buffer, a
+      // server whose status wording merely contains it would satisfy the empty
+      // check — turning "we could not read this" into the one claim the output
+      // does not support: that the folder has no servers.
+      const { execFileFn } = fakeListing(
+        'weird-srv: No MCP servers configured are approved yet\n',
+      );
+
+      const result = await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+        cwd: '/proj',
+      });
+
+      expect(result.ok && result.servers.map((s) => s.name)).toEqual([
+        'weird-srv',
+      ]);
+    });
+
+    it('asks for the process-group reap when the command answers', async () => {
+      // The health check launches the user's own MCP servers as children; one
+      // that ignores stdin EOF outlives the CLI, and once the CLI exits the
+      // registry has dropped the only handle that could reach it.
+      //
+      // "Asks for" is exact: `execFile` drops `detached`, so the kill reaches
+      // nothing until that is fixed in `runCommand`. See the twin case in
+      // `agent-adapter.spec.ts`.
+      const killSpy = vi
+        .spyOn(process, 'kill')
+        .mockImplementation((): true => true);
+      try {
+        const { execFileFn } = fakeListing('probe: ready\n');
+
+        await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+          cwd: '/proj',
+        });
+
+        expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+      } finally {
+        killSpy.mockRestore();
+      }
+    });
+
+    it('never answers with a confident listing that omits a row it could not read', async () => {
+      // The unreadable answer above only fires when EVERY row drops, and a
+      // PARTLY reworded listing is the likelier release: one server carries a
+      // wording this vocabulary does not have while the rest still read. If
+      // the unreadable row is dropped, the result is no longer empty, the
+      // three-way split never reaches its third arm, and the listing goes out
+      // as `ok: true` — so the panel states, as fact, that `linear` is the
+      // only server in a folder that has two. `AgentMcpService` caches only
+      // `ok` results, so that answer then stands for the whole TTL.
+      const { execFileFn } = fakeListing(
+        'linear: ready\nsentry: awaiting-auth\n',
+      );
+
+      const result = await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+        cwd: '/proj',
+      });
+      const answer = result.ok
+        ? result.servers.map((server) => server.name)
+        : result.reason;
+
+      // Either honest answer passes: reporting the output as unreadable, or
+      // keeping `sentry` with its health unstated the way the claude parser
+      // does. Naming `linear` alone is the one answer that denies a server
+      // the CLI printed.
+      expect(answer).not.toEqual(['linear']);
     });
   });
 });

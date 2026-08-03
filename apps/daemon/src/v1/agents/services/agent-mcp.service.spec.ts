@@ -80,6 +80,11 @@ interface HarnessOptions {
   version?: string | null;
   /** What the CLI's own config files say — defaults to knowing nothing. */
   facts?: AgentMcpFolderFacts;
+  /**
+   * A blanket "this CLI cannot be switched at all" reason. Defaults to null —
+   * the toggleable CLI. Set it to reach the other branch of `composeListing`.
+   */
+  toggleUnavailableReason?: string | null;
 }
 
 function harness(
@@ -89,7 +94,11 @@ function harness(
   }) => Promise<AgentMcpServer[]>,
   options: HarnessOptions = {},
 ): Harness {
-  const { version = '2.1.220', facts } = options;
+  const {
+    version = '2.1.220',
+    facts,
+    toggleUnavailableReason = null,
+  } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
   const listMcpServers = vi.fn(
@@ -101,7 +110,7 @@ function harness(
     getConfig: () => ({
       mcp: {
         listingUnavailableReason: null,
-        toggleUnavailableReason: null,
+        toggleUnavailableReason,
         notInToggleableScopeReason: 'not a project server',
         userDisabledReason: 'you switched it off yourself',
       },
@@ -524,19 +533,57 @@ describe('AgentMcpService.list', () => {
     expect(listMcpServers).not.toHaveBeenCalled();
   });
 
-  it('the shipped cursor adapter is the one that declares an absence, claude does not', async () => {
-    // Pins the two REAL adapters, not a fixture: if cursor gains a listing (or
-    // claude loses one) this is what makes the panel's copy follow.
+  it('BOTH shipped adapters now list, and only cursor declares the toggle absent', async () => {
+    // Pins the two REAL adapters, not a fixture, so the panel's copy follows
+    // the CLIs. This assertion was inverted in milestone 4: cursor used to
+    // declare its listing unavailable, and `cursor-agent mcp list` turned out
+    // to exist. What did NOT change is the toggle — `mcp enable|disable` write
+    // cursor's global config, which this feature will not touch — so a cursor
+    // row still carries a reason for having no switch, and losing that reason
+    // would put a dead control on every one of them.
     const { ClaudeAdapter } = await import('../adapters/claude/claude.adapter');
     const { CursorAcpAdapter } =
       await import('../adapters/cursor-acp/cursor-acp.adapter');
 
-    expect(
-      new ClaudeAdapter().getConfig().mcp.listingUnavailableReason,
-    ).toBeNull();
-    expect(
-      new CursorAcpAdapter().getConfig().mcp.listingUnavailableReason,
-    ).toEqual(expect.stringContaining('cursor-agent'));
+    const claudeMcp = new ClaudeAdapter().getConfig().mcp;
+    expect(claudeMcp.listingUnavailableReason).toBeNull();
+    // "ONLY cursor" is half the claim, so claude's null is asserted too: a
+    // blanket reason appearing here would strip the switch off every claude
+    // row, and reading only cursor's field would not notice.
+    expect(claudeMcp.toggleUnavailableReason).toBeNull();
+    const cursorMcp = new CursorAcpAdapter().getConfig().mcp;
+    expect(cursorMcp.listingUnavailableReason).toBeNull();
+    expect(cursorMcp.toggleUnavailableReason).toEqual(
+      expect.stringContaining('cursor-agent'),
+    );
+  });
+
+  it('marks a row the CLI itself reported as switched off, even where geniro cannot switch', async () => {
+    // `cursor-agent mcp disable` is real and reachable, and the wire flag asks
+    // whether the NEXT TURN will leave the server out — whoever switched it
+    // off. Hardcoding `false` for a CLI geniro cannot toggle renders a
+    // switched-off server as on, which is the panel contradicting the run.
+    const cwd = realDir();
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          {
+            name: 'off-srv',
+            target: null,
+            transport: null,
+            status: 'disabled' as const,
+            detail: null,
+          },
+        ]),
+      { toggleUnavailableReason: 'cursor-agent cannot switch these' },
+    );
+
+    const listing = await service.list(AgentKind.CursorAgent, cwd);
+
+    expect(listing.servers[0]?.disabled).toBe(true);
+    expect(listing.servers[0]?.toggleUnavailableReason).toBe(
+      'cursor-agent cannot switch these',
+    );
   });
 
   it('rejects a cwd that is not an absolute existing directory', async () => {

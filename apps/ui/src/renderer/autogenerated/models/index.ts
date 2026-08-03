@@ -83,19 +83,19 @@ export interface AgentMcpServer {
      */
     name: string;
     /**
-     * The command line or URL the CLI reaches the server through
+     * 
      * @type {string}
      * @memberof AgentMcpServer
      */
-    target: string;
+    target: string | null;
     /**
      * 
      * @type {string}
      * @memberof AgentMcpServer
      */
-    transport: AgentMcpServerTransportEnum;
+    transport: AgentMcpServerTransportEnum | null;
     /**
-     * Health as the CLI reported it; `pending` is a configured but unapproved server
+     * Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config
      * @type {string}
      * @memberof AgentMcpServer
      */
@@ -144,6 +144,7 @@ export const AgentMcpServerStatusEnum = {
     Connected: 'connected',
     Failed: 'failed',
     Pending: 'pending',
+    Disabled: 'disabled',
     Unknown: 'unknown'
 } as const;
 export type AgentMcpServerStatusEnum = typeof AgentMcpServerStatusEnum[keyof typeof AgentMcpServerStatusEnum];

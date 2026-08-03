@@ -259,18 +259,30 @@ export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
  * server row. `detail` is whatever the CLI printed after the status — the
  * failure reason, or what an unapproved server is waiting for — and is the
  * only actionable part of a failure.
+ *
+ * `target` and `transport` are nullable because not every CLI reports them:
+ * claude prints the server's command line, cursor prints only a name and a
+ * status. Null says "this CLI did not tell us", which an empty string could
+ * not — it would have claimed a command exists and silently blanked the row's
+ * tooltip instead.
  */
 export const AgentMcpServerWireSchema = z
   .object({
     name: z.string(),
     target: z
       .string()
-      .describe('The command line or URL the CLI reaches the server through'),
-    transport: z.enum(['stdio', 'http', 'sse']),
-    status: z
-      .enum(['connected', 'failed', 'pending', 'unknown'])
+      .nullable()
       .describe(
-        'Health as the CLI reported it; `pending` is a configured but unapproved server',
+        'The command line or URL the CLI reaches the server through, or null when the CLI does not report one',
+      ),
+    transport: z
+      .enum(['stdio', 'http', 'sse'])
+      .nullable()
+      .describe('Null when the CLI does not report one'),
+    status: z
+      .enum(['connected', 'failed', 'pending', 'disabled', 'unknown'])
+      .describe(
+        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config',
       ),
     detail: z
       .string()

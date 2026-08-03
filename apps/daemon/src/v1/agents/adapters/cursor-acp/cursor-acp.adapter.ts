@@ -142,6 +142,16 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         listingUnavailableReason:
           'cursor-agent MCP listing is not supported yet',
+        /**
+         * Milestone 4 decides cursor's toggle after verifying its CLI; until
+         * then saying so is the honest answer, and it keeps every row
+         * read-only rather than offering a control nobody has tested.
+         */
+        toggleUnavailableReason:
+          'cursor-agent MCP switching is not supported yet',
+        notInToggleableScopeReason:
+          'cursor-agent MCP switching is not supported yet',
+        userDisabledReason: 'cursor-agent MCP switching is not supported yet',
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       terminal: null,

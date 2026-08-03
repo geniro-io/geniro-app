@@ -24,7 +24,11 @@ import type {
   AgentTurnInput,
 } from '../adapter.types';
 import { ClaudeAdapter } from './claude.adapter';
-import { CLAUDE_BASE_ARGS, CLAUDE_RESUME_FLAG } from './claude.const';
+import {
+  CLAUDE_BASE_ARGS,
+  CLAUDE_RESUME_FLAG,
+  CLAUDE_STRICT_MCP_CONFIG_FLAG,
+} from './claude.const';
 
 // ── Minimal synchronous child-process fake (no real I/O timing) ──────────────
 class FakeReadable extends EventEmitter {
@@ -626,7 +630,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     // session in that folder sees, PLUS geniro's call surface. Restricting the
     // turn to our own config would also leave a caller node with no project
     // servers to switch off, making the MCP toggle meaningless there.
-    expect(captured.args).not.toContain('--strict-mcp-config');
+    expect(captured.args).not.toContain(CLAUDE_STRICT_MCP_CONFIG_FLAG);
     expect(configPath.startsWith(dir)).toBe(true);
     // The token travels IN the file (0600), never in argv.
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({

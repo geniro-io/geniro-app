@@ -40,6 +40,7 @@ import type { SkillHarvestStore } from '../../agents/services/skill-harvest.stor
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
+import { AgentKind } from '../../runs/runs.types';
 import type { Workflow } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
@@ -378,6 +379,7 @@ function setup(
     mergeOk?: boolean;
     gitTracked?: boolean;
     mergeImpl?: () => Promise<unknown>;
+    mcpSettingsFile?: string;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -503,10 +505,12 @@ function setup(
       port: runtimePort,
     },
     new McpSettingsStore({
-      // No toggles in this suite, and nothing here writes the store — so it
-      // points at a path that never exists. A mkdtemp per setup() would leak
-      // one directory per TEST.
-      file: join(tmpdir(), 'geniro-exec-spec-never-written.json'),
+      // Most tests toggle nothing, so the default points at a path that never
+      // exists — a mkdtemp per setup() would leak one directory per TEST. The
+      // tests that DO exercise the switch pass a real file.
+      file:
+        opts.mcpSettingsFile ??
+        join(tmpdir(), 'geniro-exec-spec-never-written.json'),
     }),
   );
   return {
@@ -2731,5 +2735,43 @@ describe('GraphExecutorService — deleting a workflow run', () => {
   it('404s on a run that does not exist', async () => {
     const { service } = setup();
     await expect(service.deleteRun('nope')).rejects.toThrow();
+  });
+});
+
+describe('GraphExecutorService — the MCP switch reaches a node turn', () => {
+  it('hands each node the servers switched off for ITS agent in the run folder', async () => {
+    // The graph half of the seam the whole feature rests on. Delete the store
+    // read in the executor and every switch stops applying to graph runs,
+    // silently — the panel keeps showing them off.
+    const settingsDir = realpathSync(
+      mkdtempSync(join(tmpdir(), 'exec-mcp-seam-')),
+    );
+    const file = join(settingsDir, 'mcp-settings.json');
+    const store = new McpSettingsStore({ file });
+    await store.setDisabled(AgentKind.Claude, dir, 'sentry', true);
+    await store.setDisabled(AgentKind.CursorAgent, dir, 'linear', true);
+
+    const { service, claude, cursor } = setup(4870, { mcpSettingsFile: file });
+    await service.startRun({
+      slug: 'two',
+      workflow: triggered({
+        name: 'two',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'b', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    // Each node gets its OWN agent's switches, never the other's — one folder
+    // is routinely driven by both CLIs and their server sets are unrelated.
+    expect(claude.starts[0]?.input.disabledMcpServers).toEqual(['sentry']);
+    expect(cursor.starts[0]?.input.disabledMcpServers).toEqual(['linear']);
+
+    rmSync(settingsDir, { recursive: true, force: true });
   });
 });

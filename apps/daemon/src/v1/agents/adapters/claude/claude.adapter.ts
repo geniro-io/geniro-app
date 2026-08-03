@@ -3,8 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { BadRequestException } from '@packages/common';
-
 import { AgentKind } from '../../../runs/runs.types';
 import { claudeCredentialEnv } from '../../utils/child-env';
 import type {
@@ -53,7 +51,7 @@ import {
 import type { ClaudeAdapterOptions } from './claude.types';
 import { buildImageBlocks } from './utils/claude-images.utils';
 import {
-  projectDefinesGeniroServer,
+  definesGeniroServer,
   sweepStaleTurnMcpConfigs,
   sweepStaleTurnSettings,
   writeTurnMcpConfig,
@@ -201,6 +199,12 @@ export class ClaudeAdapter extends AgentAdapter {
          * `listMcpServers` and an empty answer really does mean an empty folder.
          */
         listingUnavailableReason: null,
+        /** Project `.mcp.json` servers can be switched off; verified live. */
+        toggleUnavailableReason: null,
+        notInToggleableScopeReason:
+          'only servers defined in this folder\u2019s .mcp.json can be switched off',
+        userDisabledReason:
+          'switched off in your own claude settings, which geniro cannot re-enable',
       },
       terminal: {
         resumeFlag: CLAUDE_RESUME_FLAG,
@@ -307,37 +311,49 @@ export class ClaudeAdapter extends AgentAdapter {
       this.claudeOptions.mcpConfigDir ??
       join(tmpdir(), CLAUDE_MCP_CONFIG_DIR_NAME);
     const written: string[] = [];
-    if (input.mcpEndpoint) {
-      // Refused BEFORE anything is written, so a rejected turn leaves no file
-      // behind. `--strict-mcp-config` is no longer passed, so the project's own
-      // servers load alongside the call surface: a project entry under geniro's
-      // key would be silently dropped in favour of ours (probe-verified — ours
-      // wins), leaving the user's server missing with no word said.
-      if (projectDefinesGeniroServer(input.cwd)) {
-        throw new BadRequestException(
-          'MCP_GENIRO_KEY_COLLISION',
-          `${join(input.cwd, CLAUDE_PROJECT_MCP_FILE)} defines a server named "${GENIRO_MCP_SERVER_KEY}", which is the name this run uses for its own agent-to-agent call surface. Rename it to run this node.`,
-        );
-      }
-      const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
-      this.mcpConfigPaths.set(input, path);
-      written.push(path);
-    }
-    const settingsPath = writeTurnSettings(dir, input.disabledMcpServers ?? []);
-    if (settingsPath !== null) {
-      this.settingsPaths.set(input, settingsPath);
-      written.push(settingsPath);
-    }
-    if (written.length === 0) {
-      return undefined;
-    }
-    return () => {
+    const discard = (): void => {
       this.mcpConfigPaths.delete(input);
       this.settingsPaths.delete(input);
       for (const path of written) {
         rmSync(path, { force: true });
       }
     };
+    try {
+      if (input.mcpEndpoint) {
+        // Refused BEFORE anything is written, so a rejected turn leaves no file
+        // behind. `--strict-mcp-config` is no longer passed, so the user's own
+        // servers load alongside the call surface: an entry under geniro's key
+        // would be silently dropped in favour of ours (probe-verified — ours
+        // wins), leaving the user's server missing with no word said.
+        const collision = definesGeniroServer(
+          input.cwd,
+          this.claudeOptions.homeDir,
+        );
+        if (collision !== null) {
+          throw new Error(
+            `${collision} defines a server named "${GENIRO_MCP_SERVER_KEY}", which is the name this run uses for its own agent-to-agent call surface. Rename it to run this node.`,
+          );
+        }
+        const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
+        this.mcpConfigPaths.set(input, path);
+        written.push(path);
+      }
+      const settingsPath = writeTurnSettings(
+        dir,
+        input.disabledMcpServers ?? [],
+      );
+      if (settingsPath !== null) {
+        this.settingsPaths.set(input, settingsPath);
+        written.push(settingsPath);
+      }
+    } catch (err) {
+      // A throw from the SECOND write would otherwise strand the first file —
+      // and the first one carries the run's call token at mode 0600, with no
+      // disposer yet in existence to remove it.
+      discard();
+      throw err;
+    }
+    return written.length === 0 ? undefined : discard;
   }
 
   /**

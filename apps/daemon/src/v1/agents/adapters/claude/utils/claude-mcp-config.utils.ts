@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -17,6 +18,7 @@ import {
   CLAUDE_MCP_CONFIG_FILE_MODE,
   CLAUDE_MCP_CONFIG_PREFIX,
   CLAUDE_MCP_CONFIG_SUFFIX,
+  CLAUDE_MODEL_CACHE_FILE,
   CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_SETTINGS_PREFIX,
   CLAUDE_SETTINGS_SUFFIX,
@@ -137,23 +139,69 @@ export function sweepStaleTurnSettings(dir: string): void {
 }
 
 /**
- * Whether the folder's own `.mcp.json` defines a server under geniro's key.
+ * The config file defining a server under geniro's key for this folder, or null
+ * when none does.
  *
  * A caller turn publishes its call surface under {@link GENIRO_MCP_SERVER_KEY},
- * and since `--strict-mcp-config` is no longer passed, the project's own
- * servers load alongside it. Probe-verified on 2.1.220: `--mcp-config` WINS
- * that collision, so the call surface is not hijacked — but the user's own
- * server of that name silently disappears from the turn, and the tool
- * namespace becomes ambiguous. The turn refuses instead.
+ * and since `--strict-mcp-config` is no longer passed, the user's own servers
+ * load alongside it. Probe-verified on 2.1.220: `--mcp-config` WINS that
+ * collision against the project file, so the call surface is not hijacked — but
+ * the user's server of that name silently disappears from the turn and the tool
+ * namespace becomes ambiguous. The turn refuses instead, naming the file to fix.
+ *
+ * All THREE scopes a turn now loads from are checked, not just the project
+ * file: user-scope servers live at `~/.claude.json` under a root `mcpServers`,
+ * and local-scope ones under `projects[<cwd>].mcpServers`. Checking only the
+ * project file would refuse the narrow case and silently permit the wider one.
  *
  * Read-only and synchronous: it runs inside `prepareTurn`, before the spawn.
  */
-export function projectDefinesGeniroServer(cwd: string): boolean {
-  let source: string;
-  try {
-    source = readFileSync(join(cwd, CLAUDE_PROJECT_MCP_FILE), 'utf8');
-  } catch {
-    return false;
+export function definesGeniroServer(
+  cwd: string,
+  homeDir: string = homedir(),
+): string | null {
+  const projectFile = join(cwd, CLAUDE_PROJECT_MCP_FILE);
+  const projectSource = readOrNull(projectFile);
+  if (
+    projectSource !== null &&
+    parseProjectServerNames(projectSource).includes(GENIRO_MCP_SERVER_KEY)
+  ) {
+    return projectFile;
   }
-  return parseProjectServerNames(source).includes(GENIRO_MCP_SERVER_KEY);
+  const homeFile = join(homeDir, CLAUDE_MODEL_CACHE_FILE);
+  const homeSource = readOrNull(homeFile);
+  if (homeSource === null) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(homeSource);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
+  }
+  const home = parsed as {
+    mcpServers?: unknown;
+    projects?: Record<string, { mcpServers?: unknown } | null>;
+  };
+  const named = (servers: unknown): boolean =>
+    typeof servers === 'object' &&
+    servers !== null &&
+    !Array.isArray(servers) &&
+    GENIRO_MCP_SERVER_KEY in servers;
+  if (named(home.mcpServers) || named(home.projects?.[cwd]?.mcpServers)) {
+    return homeFile;
+  }
+  return null;
+}
+
+/** A file's text, or null for absent / unreadable / a directory. */
+function readOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
 }

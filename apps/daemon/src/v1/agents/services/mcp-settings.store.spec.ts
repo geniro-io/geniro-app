@@ -28,7 +28,7 @@ async function onDisk(): Promise<Record<string, string[]>> {
 
 describe('McpSettingsStore', () => {
   it('reports nothing disabled before anything is written', async () => {
-    expect(await store().disabled(AgentKind.Claude, '/proj')).toEqual([]);
+    expect(store().disabled(AgentKind.Claude, '/proj')).toEqual([]);
   });
 
   it('round-trips a disabled server to a fresh instance', async () => {
@@ -36,9 +36,7 @@ describe('McpSettingsStore', () => {
     // toggle would pass a same-instance read and lose the setting on relaunch.
     await store().setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
 
-    expect(await store().disabled(AgentKind.Claude, '/proj')).toEqual([
-      'sentry',
-    ]);
+    expect(store().disabled(AgentKind.Claude, '/proj')).toEqual(['sentry']);
   });
 
   it('re-enabling removes the name', async () => {
@@ -46,14 +44,14 @@ describe('McpSettingsStore', () => {
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', false);
 
-    expect(await store().disabled(AgentKind.Claude, '/proj')).toEqual([]);
+    expect(store().disabled(AgentKind.Claude, '/proj')).toEqual([]);
   });
 
   it('keeps one folder’s toggles out of another’s', async () => {
     const s = store();
     await s.setDisabled(AgentKind.Claude, '/proj-a', 'sentry', true);
 
-    expect(await s.disabled(AgentKind.Claude, '/proj-b')).toEqual([]);
+    expect(s.disabled(AgentKind.Claude, '/proj-b')).toEqual([]);
   });
 
   it('keeps one agent’s toggles out of the other’s in the same folder', async () => {
@@ -63,7 +61,7 @@ describe('McpSettingsStore', () => {
     const s = store();
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
 
-    expect(await s.disabled(AgentKind.CursorAgent, '/proj')).toEqual([]);
+    expect(s.disabled(AgentKind.CursorAgent, '/proj')).toEqual([]);
   });
 
   it('preserves keys it does not own when writing another', async () => {
@@ -71,7 +69,7 @@ describe('McpSettingsStore', () => {
     await s.setDisabled(AgentKind.Claude, '/proj-a', 'alpha', true);
     await s.setDisabled(AgentKind.Claude, '/proj-b', 'beta', true);
 
-    expect(await s.disabled(AgentKind.Claude, '/proj-a')).toEqual(['alpha']);
+    expect(s.disabled(AgentKind.Claude, '/proj-a')).toEqual(['alpha']);
     expect(Object.keys(await onDisk())).toHaveLength(2);
   });
 
@@ -80,14 +78,14 @@ describe('McpSettingsStore', () => {
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
 
-    expect(await s.disabled(AgentKind.Claude, '/proj')).toEqual(['sentry']);
+    expect(s.disabled(AgentKind.Claude, '/proj')).toEqual(['sentry']);
   });
 
   it('re-enabling a server that was never disabled is a no-op', async () => {
     const s = store();
     await s.setDisabled(AgentKind.Claude, '/proj', 'never-set', false);
 
-    expect(await s.disabled(AgentKind.Claude, '/proj')).toEqual([]);
+    expect(s.disabled(AgentKind.Claude, '/proj')).toEqual([]);
   });
 
   it('drops the key entirely once its last server is re-enabled', async () => {
@@ -112,7 +110,7 @@ describe('McpSettingsStore', () => {
     // Risk 3 of the milestone: a broken settings file must not fail a turn.
     await writeFile(file, '{ this is not json', 'utf8');
 
-    expect(await store().disabled(AgentKind.Claude, '/proj')).toEqual([]);
+    expect(store().disabled(AgentKind.Claude, '/proj')).toEqual([]);
   });
 
   it('keeps the well-formed keys when one entry is corrupt', async () => {
@@ -143,9 +141,9 @@ describe('McpSettingsStore', () => {
     );
     const s = store();
 
-    expect(await s.disabled(AgentKind.Claude, '/good')).toEqual(['alpha']);
-    expect(await s.disabled(AgentKind.Claude, '/bad')).toEqual([]);
-    expect(await s.disabled(AgentKind.Claude, '/alsobad')).toEqual([]);
+    expect(s.disabled(AgentKind.Claude, '/good')).toEqual(['alpha']);
+    expect(s.disabled(AgentKind.Claude, '/bad')).toEqual([]);
+    expect(s.disabled(AgentKind.Claude, '/alsobad')).toEqual([]);
   });
 
   it('repairs a corrupt file on the next write instead of needing a migration', async () => {
@@ -154,9 +152,7 @@ describe('McpSettingsStore', () => {
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
 
     expect(Object.values(await onDisk())).toEqual([['sentry']]);
-    expect(await store().disabled(AgentKind.Claude, '/proj')).toEqual([
-      'sentry',
-    ]);
+    expect(store().disabled(AgentKind.Claude, '/proj')).toEqual(['sentry']);
   });
 
   it('leaves no staging file beside the store', async () => {
@@ -180,15 +176,39 @@ describe('McpSettingsStore', () => {
 
     await s.setDisabled(AgentKind.Claude, '/proj', 'sentry', true);
 
-    expect(await s.disabled(AgentKind.Claude, '/proj')).toEqual(['sentry']);
+    expect(s.disabled(AgentKind.Claude, '/proj')).toEqual(['sentry']);
   });
 
-  it('caps a single key’s disabled list', async () => {
+  it('refuses past the cap instead of silently dropping the request', async () => {
+    // Truncating would discard the tail — the name just clicked — and still
+    // report success, so the switch would move and the next turn would load
+    // the server anyway. That is the silent no-op the whole design forbids.
     const s = store();
-    for (let i = 0; i < 210; i += 1) {
+    for (let i = 0; i < 200; i += 1) {
       await s.setDisabled(AgentKind.Claude, '/proj', `srv-${i}`, true);
     }
 
-    expect((await s.disabled(AgentKind.Claude, '/proj')).length).toBe(200);
+    await expect(
+      s.setDisabled(AgentKind.Claude, '/proj', 'one-too-many', true),
+    ).rejects.toThrow();
+    expect(s.disabled(AgentKind.Claude, '/proj')).toHaveLength(200);
+    expect(s.disabled(AgentKind.Claude, '/proj')).not.toContain('one-too-many');
+  });
+
+  it('caps a hand-written file that is already over the limit', async () => {
+    // The load path's own slice, which the write path can no longer reach now
+    // that it refuses rather than truncating.
+    const seed = store();
+    await seed.setDisabled(AgentKind.Claude, '/proj', 'seed', true);
+    const key = Object.keys(await onDisk())[0]!;
+    await writeFile(
+      file,
+      JSON.stringify({
+        [key]: Array.from({ length: 300 }, (_, i) => `srv-${i}`),
+      }),
+      'utf8',
+    );
+
+    expect(store().disabled(AgentKind.Claude, '/proj')).toHaveLength(200);
   });
 });

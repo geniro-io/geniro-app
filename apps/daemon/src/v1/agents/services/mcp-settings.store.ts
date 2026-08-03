@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException } from '@packages/common';
 
 import { environment } from '../../../environments';
 import { atomicWrite } from '../../../utils/atomic-file';
@@ -89,10 +90,23 @@ export class McpSettingsStore {
     const records = this.load();
     const key = keyOf(agent, cwd);
     const current = records.get(key) ?? [];
+    if (
+      disabled &&
+      !current.includes(server) &&
+      current.length >= MAX_DISABLED_PER_KEY
+    ) {
+      // Truncating would drop the tail — which is the name just requested —
+      // and return success, so the switch would move and the next turn would
+      // still load the server. Refusing loudly is the only honest answer.
+      throw new BadRequestException(
+        'MCP_DISABLED_LIMIT',
+        `this folder already has ${MAX_DISABLED_PER_KEY} switched-off MCP servers, which is the most geniro stores per agent`,
+      );
+    }
     const next = disabled
       ? current.includes(server)
         ? current
-        : [...current, server].slice(0, MAX_DISABLED_PER_KEY)
+        : [...current, server]
       : current.filter((name) => name !== server);
     if (next.length === 0) {
       records.delete(key);

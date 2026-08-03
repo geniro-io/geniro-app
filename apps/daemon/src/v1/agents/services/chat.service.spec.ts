@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
-import type { AgentKind } from '../../runs/runs.types';
+import { AgentKind } from '../../runs/runs.types';
 import type {
   AgentApprovalMode,
   AgentEvent,
@@ -289,7 +289,9 @@ async function drain(): Promise<void> {
   }
 }
 
-function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
+function setup(
+  opts: { claudeModes?: ClaudeModesCapability; mcpSettingsFile?: string } = {},
+) {
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
   const nodeDao = new FakeNodeStateDao();
@@ -371,11 +373,13 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     partials,
     teardown,
     efforts,
-    // No toggles in this suite, and nothing here writes the store — so it
-    // points at a path that never exists. A mkdtemp per setup() would leak
-    // one directory per TEST, which is how /tmp grew by ~1700 entries.
+    // Most tests toggle nothing, so the default points at a path that never
+    // exists — a mkdtemp per setup() would leak one directory per TEST. The
+    // tests that DO exercise the switch pass a real file.
     new McpSettingsStore({
-      file: join(tmpdir(), 'geniro-chat-spec-never-written.json'),
+      file:
+        opts.mcpSettingsFile ??
+        join(tmpdir(), 'geniro-chat-spec-never-written.json'),
     }),
   );
   return {
@@ -2015,5 +2019,84 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     claude.finish();
     await drain();
+  });
+});
+
+describe('ChatService — the MCP switch reaches the turn', () => {
+  /** A real store file for this test only. */
+  function settingsFile(): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-seam-')));
+    return join(dir, 'mcp-settings.json');
+  }
+
+  it('hands the turn the servers the user switched off in that folder', async () => {
+    // THE seam this whole feature rests on. Delete the store read in
+    // ChatService and every switch in the panel becomes a control that moves
+    // and changes nothing — with no other test objecting.
+    const file = settingsFile();
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-cwd-')));
+    const store = new McpSettingsStore({ file });
+    await store.setDisabled(AgentKind.Claude, cwd, 'sentry', true);
+
+    const ctx = setup({ mcpSettingsFile: file });
+    const run = await ctx.service.createChat({
+      agentKind: AgentKind.Claude,
+      cwd,
+    });
+    await ctx.service.sendMessage(run.id, { text: 'hi' });
+
+    const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+    expect(startArg.disabledMcpServers).toEqual(['sentry']);
+
+    rmSync(dirname(file), { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('hands the turn nothing when that folder has no switches', async () => {
+    // Pins the KEY, not just the read: a store keyed loosely (or read with the
+    // wrong cwd) would leak another folder's switches into this turn.
+    const file = settingsFile();
+    const disabledCwd = realpathSync(
+      mkdtempSync(join(tmpdir(), 'chat-mcp-a-')),
+    );
+    const otherCwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-b-')));
+    const store = new McpSettingsStore({ file });
+    await store.setDisabled(AgentKind.Claude, disabledCwd, 'sentry', true);
+
+    const ctx = setup({ mcpSettingsFile: file });
+    const run = await ctx.service.createChat({
+      agentKind: AgentKind.Claude,
+      cwd: otherCwd,
+    });
+    await ctx.service.sendMessage(run.id, { text: 'hi' });
+
+    const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+    expect(startArg.disabledMcpServers).toEqual([]);
+
+    rmSync(dirname(file), { recursive: true, force: true });
+    rmSync(disabledCwd, { recursive: true, force: true });
+    rmSync(otherCwd, { recursive: true, force: true });
+  });
+
+  it('does not hand a cursor turn claude’s switches', async () => {
+    // One folder is routinely used by both CLIs; keying loosely would switch
+    // off a server for an agent the user never touched.
+    const file = settingsFile();
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-both-')));
+    const store = new McpSettingsStore({ file });
+    await store.setDisabled(AgentKind.Claude, cwd, 'sentry', true);
+
+    const ctx = setup({ mcpSettingsFile: file });
+    const run = await ctx.service.createChat({
+      agentKind: AgentKind.CursorAgent,
+      cwd,
+    });
+    await ctx.service.sendMessage(run.id, { text: 'hi' });
+
+    const startArg = ctx.cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
+    expect(startArg.disabledMcpServers).toEqual([]);
+
+    rmSync(dirname(file), { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
   });
 });

@@ -567,10 +567,15 @@ export interface AgentTurnInput {
     url: string;
     token: string;
     /**
-     * MCP server name to register the endpoint under. Unique per run, because
-     * ACP has no `--strict-mcp-config` equivalent: a project config defining
-     * the same name would otherwise contend with ours on the agent side.
-     * Claude does not read this — its per-turn config file is strict.
+     * The name geniro's own MCP server is published under for this turn.
+     *
+     * The ACP path uses it verbatim (per-run, so no project server can
+     * collide). Claude currently IGNORES it and publishes under the shared
+     * {@link GENIRO_MCP_SERVER_KEY}, because the renderer drops geniro's own
+     * call tools from the transcript by matching that fixed prefix. Since
+     * `--strict-mcp-config` is no longer passed, `prepareTurn`'s
+     * `definesGeniroServer` guard stands in for the uniqueness this field
+     * gives ACP for free.
      */
     serverName: string;
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
@@ -823,6 +828,24 @@ export interface AdapterConfig {
      * say something true without ever asking that question.
      */
     readonly listingUnavailableReason: string | null;
+    /**
+     * Why NO server of this CLI can be switched off, or null when some can.
+     *
+     * SEPARATE from {@link listingUnavailableReason} on purpose: listing and
+     * toggling are different capabilities that merely coincide today. Reading
+     * one to answer the other would tell the first CLI that can list but not
+     * toggle (or the reverse) a reason that does not answer the question.
+     */
+    readonly toggleUnavailableReason: string | null;
+    /**
+     * Why a row OUTSIDE the disable-able scope carries no switch. Names this
+     * CLI's own config file, so the sentence stays in the adapter layer rather
+     * than being composed by a service that would have to know which CLI it
+     * is holding.
+     */
+    readonly notInToggleableScopeReason: string;
+    /** Why a row the user disabled in their OWN config carries no switch. */
+    readonly userDisabledReason: string;
   };
 
   // ── Interactive terminal mirror ─────────────────────────────────────────

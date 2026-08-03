@@ -141,6 +141,69 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
     expect(facts.userDisabled).toContain('docs');
   });
 
+  it('reports a server the user disabled in ~/.claude/settings.json', async () => {
+    // The home arm. Without it, a server disabled GLOBALLY would render with a
+    // working switch that can never turn it back on, because the CLI unions
+    // the lists — the exact case `userDisabled` exists to prevent.
+    mkdirSync(join(homeDir, '.claude'), { recursive: true });
+    writeFileSync(
+      join(homeDir, '.claude/settings.json'),
+      JSON.stringify({ disabledMcpjsonServers: ['from-home'] }),
+      'utf8',
+    );
+
+    const facts = await adapter().readMcpFolderFacts(cwd);
+
+    expect(facts.userDisabled).toContain('from-home');
+  });
+
+  it('unions the home file with the project ones', async () => {
+    mkdirSync(join(homeDir, '.claude'), { recursive: true });
+    writeFileSync(
+      join(homeDir, '.claude/settings.json'),
+      JSON.stringify({ disabledMcpjsonServers: ['from-home'] }),
+      'utf8',
+    );
+    write(
+      '.claude/settings.json',
+      JSON.stringify({ disabledMcpjsonServers: ['from-project'] }),
+    );
+
+    const facts = await adapter().readMcpFolderFacts(cwd);
+
+    expect(facts.userDisabled).toEqual(
+      expect.arrayContaining(['from-home', 'from-project']),
+    );
+  });
+
+  it('reports a server the user rejected at the CLI’s own trust prompt', async () => {
+    // Answering "No" to claude's "New MCP server found in .mcp.json" prompt is
+    // how a user disables a project server in practice, and the CLI records
+    // that answer in `~/.claude.json` under `projects[<cwd>]` — NOT in any
+    // `settings.json`. Probe-verified live on 2.1.220 in this container: with
+    // `projects[<cwd>].enabledMcpjsonServers: ['probeserver']` a real `-p` turn
+    // reported `mcp_servers: [{name:'probeserver',status:'pending'}]`; moving
+    // the same name to `projects[<cwd>].disabledMcpjsonServers` reported
+    // `mcp_servers: []`.
+    //
+    // Missing this source is the exact failure `userDisabled` exists to
+    // prevent: the row renders a live switch reading ON for a server the turn
+    // never loads, and flipping it off and back on cannot re-enable it,
+    // because the CLI unions the disabled lists.
+    writeFileSync(
+      join(homeDir, '.claude.json'),
+      JSON.stringify({
+        projects: { [cwd]: { disabledMcpjsonServers: ['sentry'] } },
+      }),
+      'utf8',
+    );
+    write('.mcp.json', JSON.stringify({ mcpServers: { sentry: {} } }));
+
+    const facts = await adapter().readMcpFolderFacts(cwd);
+
+    expect(facts.userDisabled).toContain('sentry');
+  });
+
   it('reads project servers and user-disabled names together', async () => {
     write(
       '.mcp.json',

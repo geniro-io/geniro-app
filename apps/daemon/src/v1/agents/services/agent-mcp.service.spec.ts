@@ -88,7 +88,14 @@ function harness(
   );
   const adapter = {
     listMcpServers,
-    getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+    getConfig: () => ({
+      mcp: {
+        listingUnavailableReason: null,
+        toggleUnavailableReason: null,
+        notInToggleableScopeReason: 'not a project server',
+        userDisabledReason: 'you switched it off yourself',
+      },
+    }),
     readMcpFolderFacts: () =>
       Promise.resolve(facts ?? { projectServers: [], userDisabled: [] }),
   } as unknown as AgentAdapter;
@@ -159,7 +166,14 @@ describe('AgentMcpService.list', () => {
         seen.push(kind);
         return {
           listMcpServers,
-          getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+          getConfig: () => ({
+            mcp: {
+              listingUnavailableReason: null,
+              toggleUnavailableReason: null,
+              notInToggleableScopeReason: 'not a project server',
+              userDisabledReason: 'you switched it off yourself',
+            },
+          }),
           readMcpFolderFacts: () =>
             Promise.resolve({ projectServers: [], userDisabled: [] }),
         } as unknown as AgentAdapter;
@@ -192,7 +206,14 @@ describe('AgentMcpService.list', () => {
       for: () =>
         ({
           listMcpServers,
-          getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+          getConfig: () => ({
+            mcp: {
+              listingUnavailableReason: null,
+              toggleUnavailableReason: null,
+              notInToggleableScopeReason: 'not a project server',
+              userDisabledReason: 'you switched it off yourself',
+            },
+          }),
           readMcpFolderFacts: () =>
             Promise.resolve({ projectServers: [], userDisabled: [] }),
         }) as unknown as AgentAdapter,
@@ -446,7 +467,14 @@ describe('AgentMcpService.list', () => {
     const processes = new ProcessRegistry();
     const registerSpy = vi.spyOn(processes, 'register');
     const adapter = {
-      getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+      getConfig: () => ({
+        mcp: {
+          listingUnavailableReason: null,
+          toggleUnavailableReason: null,
+          notInToggleableScopeReason: 'not a project server',
+          userDisabledReason: 'you switched it off yourself',
+        },
+      }),
       listMcpServers: (
         _input: { cwd: string },
         options: {
@@ -580,7 +608,11 @@ describe('AgentMcpService scope + disabled overlay', () => {
   it('renders every row read-only when the folder facts cannot be read', async () => {
     // Knowing nothing must not be rendered as "everything is toggleable".
     const cwd = realDir();
-    const { service } = harness(() => Promise.resolve([server('proj')]));
+    // Facts that WOULD make the row toggleable, so the assertions below hold
+    // only if the catch's empty-facts fallback is what produced them.
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: projectFacts,
+    });
     const adapter = (
       service as unknown as {
         adapters: { for: () => { readMcpFolderFacts: () => Promise<never> } };

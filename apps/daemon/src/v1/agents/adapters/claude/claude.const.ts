@@ -71,7 +71,12 @@ export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
-/** ONLY our server — no longer passed; kept for the spec that pins its absence. */
+/**
+ * Restricts a turn to `--mcp-config` servers only. geniro does NOT pass it:
+ * an agent must see the same MCP servers a fresh session in that folder sees,
+ * plus geniro's call surface. Named so the spec pinning its absence and any
+ * future reader spell it the same way.
+ */
 export const CLAUDE_STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
 
 // ── The MCP toggle: settings merge semantics ──────────────────────────────
@@ -111,9 +116,9 @@ export const CLAUDE_SETTINGS_SUFFIX = '.json';
 export const CLAUDE_PROJECT_MCP_FILE = '.mcp.json';
 
 /**
- * The user's own settings files, in the order the CLI layers them, relative to
- * a run's cwd. `~`-rooted entries are resolved against the home directory.
- * Read ONLY: a name found here is one geniro cannot re-enable.
+ * The user's own settings files, resolved against a run's cwd. Read ONLY — a
+ * name found in one is a server geniro cannot re-enable, because the CLI
+ * unions the disabled lists rather than letting ours override.
  */
 export const CLAUDE_PROJECT_SETTINGS_FILES = [
   '.claude/settings.json',

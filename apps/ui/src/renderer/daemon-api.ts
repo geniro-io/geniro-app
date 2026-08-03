@@ -14,6 +14,13 @@ import {
  * answers in milliseconds — so a request still pending after this long means
  * a wedged daemon, and without a bound the awaiting renderer action (a send
  * button, a run start) hangs forever with no feedback.
+ *
+ * It must stay ABOVE the daemon's own slowest bounded route, or the client
+ * aborts first and throws away the daemon's own explanation. Today that is the
+ * MCP listing: a 5s version probe plus `CLAUDE_MCP_LIST_TIMEOUT_MS` (20s) —
+ * 25s, so there is 5s of headroom. Lowering this without lowering that one
+ * costs the user the daemon's stated reason for a slow read. No test spans the
+ * two packages, so this note is the link.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 

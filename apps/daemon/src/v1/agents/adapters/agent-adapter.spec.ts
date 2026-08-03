@@ -517,10 +517,11 @@ describe('AgentAdapter.runCommand spawn options', () => {
           kill: () => true,
         }) as unknown as ChildProcess) as unknown as typeof execFile;
 
-      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers({
-        cwd: '/tmp',
-      });
-      await vi.advanceTimersByTimeAsync(30_000);
+      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers(
+        { cwd: '/tmp' },
+        { timeoutMs: 50 },
+      );
+      await vi.advanceTimersByTimeAsync(50);
 
       expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
       await expect(pending).resolves.toEqual({
@@ -609,10 +610,15 @@ describe('AgentAdapter.runCommand spawn options', () => {
         return { pid: 4248, kill: () => true } as unknown as ChildProcess;
       }) as unknown as typeof execFile;
 
-      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers({
-        cwd: '/tmp',
-      });
-      await vi.advanceTimersByTimeAsync(20_000); // deadline reaps + settles
+      // An EXPLICIT deadline, not the shipped constant: a bare literal that
+      // has to match `CLAUDE_MCP_LIST_TIMEOUT_MS` goes vacuous the moment that
+      // constant is retuned — the timer never fires and this stops testing the
+      // ordering it names, silently.
+      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers(
+        { cwd: '/tmp' },
+        { timeoutMs: 50 },
+      );
+      await vi.advanceTimersByTimeAsync(50); // deadline reaps + settles
       fire(); // the child's own exit lands afterwards
       await pending;
 

@@ -375,6 +375,28 @@ describe('AgentMcpService.list', () => {
     ).rejects.toThrow(/does not exist/);
   });
 
+  it('validates the cwd even for an agent that cannot be listed', async () => {
+    // Ordering, not just validation: with `resolveValidCwd` below the refusal,
+    // a bad cwd is a 400 for claude and a 200 for cursor — and the day cursor
+    // gains a listing, folders that used to succeed start failing.
+    const registry = {
+      for: () =>
+        ({
+          listMcpServers: vi.fn(),
+          getConfig: () => ({
+            mcp: { listingUnavailableReason: 'no listing on this CLI yet' },
+          }),
+        }) as unknown as AgentAdapter,
+    } as unknown as AgentAdapterRegistry;
+    const service = new AgentMcpService(registry, new ProcessRegistry(), {
+      resolveVersionFn: () => Promise.resolve('1'),
+    });
+
+    await expect(
+      service.list(AgentKind.CursorAgent, 'relative/path'),
+    ).rejects.toThrow(/absolute/);
+  });
+
   it('registers the listing child so shutdown can reap its process group', async () => {
     // The listing forks the user's MCP servers; an unregistered child orphans
     // them on shutdown.

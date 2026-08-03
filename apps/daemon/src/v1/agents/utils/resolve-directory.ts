@@ -28,7 +28,7 @@ export function resolveValidDirectory(
   if (!isAbsolute(path)) {
     throw new BadRequestException(
       errorCode,
-      `${noun} must be an absolute path`,
+      `${noun} must be an absolute path (starting with /)`,
     );
   }
   let canonical: string;

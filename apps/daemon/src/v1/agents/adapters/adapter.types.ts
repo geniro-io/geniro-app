@@ -878,6 +878,19 @@ export interface AdapterConfig {
    * when this CLI has no such mode (the mirror is then refused for it, rather
    * than opening an unrelated fresh TUI).
    */
+  /** Whether this CLI can load a plugin directory for one invocation. */
+  readonly plugin: {
+    /**
+     * Why this CLI cannot load a plugin directory, or `null` when it can.
+     *
+     * Non-null is the "this CLI has no such thing" answer, and it is what
+     * stops a node's `pluginDir` being validated, refused, or spawned for an
+     * agent that would ignore it — geniro becoming the silent one is exactly
+     * the failure the field exists to prevent.
+     */
+    unavailableReason: string | null;
+  };
+
   readonly terminal: {
     /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
     readonly resumeFlag: string;

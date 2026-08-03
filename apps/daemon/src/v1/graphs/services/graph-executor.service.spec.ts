@@ -1,4 +1,10 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -702,6 +708,115 @@ describe('GraphExecutorService', () => {
     expect(code).toBe('GRAPH_NO_TRIGGER');
     expect(claude.starts).toHaveLength(0);
     expect(runDao.runs.size).toBe(0);
+  });
+
+  it('hands a node turn the CANONICAL plugin directory, the way it hands it a canonical cwd', async () => {
+    // `AgentTurnInput.pluginDir` states its contract in its own doc block:
+    // "Already validated and canonicalized by the caller — an adapter puts it
+    // straight into argv and must never be the thing that first checks it."
+    // `resolveValidPluginDir` returns that canonical form, so the executor is
+    // the one place it can be applied. A symlink is what tells the two apart:
+    // both the raw and the resolved path pass validation, so only the value
+    // that actually reaches argv can show which one the run spawns with — and
+    // it must be the same treatment `cwd` gets two lines above it, where the
+    // resolved return value IS what the turn is given.
+    const target = join(dir, 'plugin-target');
+    const link = join(dir, 'plugin-link');
+    rmSync(link, { force: true });
+    mkdirSync(target, { recursive: true });
+    symlinkSync(target, link);
+    const { service, claude } = setup();
+
+    await service.startRun({
+      slug: 'plugged',
+      workflow: triggered({
+        name: 'plugged',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            pluginDir: link,
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts).toHaveLength(1);
+    expect(claude.starts[0]!.input.pluginDir).toBe(realpathSync(target));
+  });
+
+  it('REFUSES the whole run when a node names an unusable plugin directory', async () => {
+    // The CLI would say nothing: an unusable --plugin-dir is ignored silently
+    // (exit 0), so the node would run WITHOUT its plugin and report success —
+    // "this node has no MCP servers", indistinguishable from the truth. Delete
+    // the guard in startRun and this is the assertion that stops holding.
+    const { service, claude, runDao } = setup();
+
+    let code: string | undefined;
+    try {
+      await service.startRun({
+        slug: 'bad-plugin',
+        workflow: triggered({
+          name: 'bad-plugin',
+          nodes: [
+            {
+              id: 'a',
+              kind: 'agent',
+              agent: 'claude',
+              approval: 'auto',
+              pluginDir: join(dir, 'no-such-plugin'),
+            },
+          ],
+          edges: [],
+        }),
+        cwd: dir,
+        prompt: 'go',
+      });
+    } catch (err) {
+      code = (err as BadRequestException).errorCode;
+    }
+
+    expect(code).toBe('INVALID_PLUGIN_DIR');
+    // Refused BEFORE anything ran or was persisted — the point of validating
+    // up front rather than per turn.
+    expect(claude.starts).toHaveLength(0);
+    expect(runDao.runs.size).toBe(0);
+  });
+
+  it('leaves a cursor node’s plugin directory alone, never refusing over it', async () => {
+    // cursor-agent declares no plugin mechanism, so geniro must not invent a
+    // failure over a path that CLI would ignore anyway — nor pass it on as if
+    // it meant something. Without the config check this run would be refused.
+    const { service, cursor } = setup();
+
+    await service.startRun({
+      slug: 'cursor-plugin',
+      workflow: triggered({
+        name: 'cursor-plugin',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+            pluginDir: join(dir, 'no-such-plugin'),
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(cursor.starts).toHaveLength(1);
+    expect(cursor.starts[0]!.input.pluginDir).toBeNull();
   });
 
   it('runs a linear chain, feeding A output into B prompt', async () => {

@@ -157,6 +157,68 @@ describe('useNodeMcp', () => {
     expect(latest().listing?.servers.map((s) => s.name)).toEqual(['from-b']);
   });
 
+  it('shows NOTHING for the new node while its own answer is still in flight', async () => {
+    // The `stale` flag alone cannot carry this one: B's read has not resolved,
+    // so nothing overwrote A's stored answer — only the scope COMPARISON at
+    // the return keeps A's rows off B's inspector during the debounce+fetch
+    // window. Break that comparison and this is the assertion that fails.
+    let resolveB: ((value: AgentMcpListing) => void) | undefined;
+    const listAgentMcpServers = vi.fn((req: { pluginDir?: string }) =>
+      req.pluginDir === '/plugin-a'
+        ? Promise.resolve(listing('from-a'))
+        : new Promise<AgentMcpListing>((resolve) => {
+            resolveB = resolve;
+          }),
+    );
+    const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
+
+    const { latest, rerender } = mount(api, 'claude', '/plugin-a');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    // A's rows are on screen and correct for A.
+    expect(latest().listing?.servers.map((s) => s.name)).toEqual(['from-a']);
+
+    rerender('claude', '/plugin-b');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    // B has not answered yet — and A's rows must NOT be standing in for it.
+    expect(latest().listing).toBeUndefined();
+
+    await act(async () => {
+      resolveB?.(listing('from-b'));
+      await Promise.resolve();
+    });
+    expect(latest().listing?.servers.map((s) => s.name)).toEqual(['from-b']);
+  });
+
+  it('shows the daemon’s refusal rather than swallowing it', async () => {
+    // The refusal is the ONLY thing that can tell the user their path is wrong
+    // — the CLI ignores an unusable --plugin-dir silently. A catch that
+    // discarded it would render a typo as "Not checked".
+    const listAgentMcpServers = vi.fn(() =>
+      Promise.reject(
+        new Error(
+          'daemon GET /v1/agents/mcp failed (400): Plugin directory does not exist: /nope',
+        ),
+      ),
+    );
+    const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
+
+    const { latest } = mount(api, 'claude', '/nope');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(latest().listing?.unavailableReason).toContain(
+      'Plugin directory does not exist',
+    );
+    expect(latest().listing?.servers).toEqual([]);
+    expect(latest().loading).toBe(false);
+  });
+
   it('coalesces a typed path into ONE read, not one per keystroke', async () => {
     // The listing health-checks — it launches the user's own MCP servers — so
     // a read per keystroke would launch them once per character. Intermediate

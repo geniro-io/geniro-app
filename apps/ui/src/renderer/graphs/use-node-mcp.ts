@@ -13,6 +13,9 @@ import type { DaemonApis } from '../daemon-api';
  */
 const LISTING_DEBOUNCE_MS = 500;
 
+/** Shown when the daemon could not be reached at all and said nothing itself. */
+const LOAD_FAILURE = 'could not load MCP servers';
+
 /** One node's servers, as the inspector reads them. */
 export interface NodeMcpState {
   /** Undefined until something has answered for this node. */
@@ -81,11 +84,23 @@ export function useNodeMcp(
             setAnswered({ scope, listing });
           }
         })
-        .catch(() => {
-          // An informational section, not an error surface: a failed read leaves
-          // the node unanswered rather than pinning a banner to the inspector.
+        .catch((err: unknown) => {
+          // SURFACED, never swallowed. The daemon's refusal is the only thing
+          // that can tell the user their path is wrong — the CLI ignores an
+          // unusable --plugin-dir silently — so discarding it here would
+          // re-create the exact failure the validation exists to prevent, with
+          // a typo reading as "Not checked" until a run is refused.
           if (!stale) {
-            setAnswered({ scope, listing: undefined });
+            setAnswered({
+              scope,
+              listing: {
+                servers: [],
+                unavailableReason:
+                  err instanceof Error && err.message
+                    ? err.message
+                    : LOAD_FAILURE,
+              },
+            });
           }
         })
         .finally(() => {

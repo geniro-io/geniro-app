@@ -117,6 +117,44 @@ function hasProbedApprovalMode(
 }
 
 /**
+ * A copy of `workflow` whose agent nodes carry the CANONICAL form of their
+ * plugin directory, refusing any that cannot be used.
+ *
+ * Two things at once, deliberately: the refusal (a bad path fails the run
+ * once, up front, rather than one node halfway through the graph) and the
+ * canonicalization (what a turn spawns with must be what was actually
+ * checked — `resolveValidCwd` one line above has always worked this way, and
+ * a `pluginDir` that stayed raw could reach argv as a symlink re-pointed
+ * after the check).
+ *
+ * A node whose CLI declares no plugin mechanism has the field STRIPPED — not
+ * validated, not refused, not passed on. Refusing a whole run over a path that
+ * adapter would ignore would be geniro inventing a failure, and handing it to
+ * the turn anyway would be geniro going silent, which is the very thing this
+ * field exists to prevent. Only the in-memory run copy is stripped; the
+ * workflow on disk keeps whatever the user wrote.
+ */
+function withCanonicalPluginDirs(
+  workflow: Workflow,
+  adapterFor: (kind: AgentKind) => AgentAdapter,
+): Workflow {
+  return {
+    ...workflow,
+    nodes: workflow.nodes.map((node) => {
+      if (node.kind !== 'agent' || !node.pluginDir) {
+        return node;
+      }
+      if (
+        adapterFor(node.agent).getConfig().plugin.unavailableReason !== null
+      ) {
+        return { ...node, pluginDir: undefined };
+      }
+      return { ...node, pluginDir: resolveValidPluginDir(node.pluginDir) };
+    }),
+  };
+}
+
+/**
  * The DAG fan-out executor: runs a workflow's agent nodes in topological
  * order, independent nodes in parallel, each node's final text feeding its
  * consumers' prompts (plus the shared cwd where their edits land). Reuses the
@@ -219,17 +257,16 @@ export class GraphExecutorService {
     validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
     computeRunOrder(input.workflow.nodes, input.workflow.edges);
     const cwd = resolveValidCwd(input.cwd);
-    // Validated HERE rather than per turn: a bad plugin directory is a
-    // configuration mistake, so refusing the whole run names it once, up
-    // front, instead of failing one node halfway through the graph. The CLI
-    // itself would say nothing at all — it ignores an unusable --plugin-dir
-    // silently (probe-verified), which reads as "this node has no MCP
-    // servers".
-    for (const node of input.workflow.nodes) {
-      if (node.kind === 'agent' && node.pluginDir) {
-        resolveValidPluginDir(node.pluginDir);
-      }
-    }
+    // Resolved HERE rather than per turn, for the same two reasons `cwd` is:
+    // a bad plugin directory is a configuration mistake, so refusing the run
+    // names it once up front instead of failing one node halfway through the
+    // graph — and the CANONICAL path is what the turn must spawn with, since
+    // that is what was actually checked. The CLI itself would say nothing: it
+    // ignores an unusable --plugin-dir silently (probe-verified), which reads
+    // as "this node has no MCP servers".
+    const workflow = withCanonicalPluginDirs(input.workflow, (kind) =>
+      this.adapterFor(kind),
+    );
 
     const em = this.em.fork();
     const run = await this.runDao.create(
@@ -239,7 +276,7 @@ export class GraphExecutorService {
         agentKind: null,
         cwd,
         model: null,
-        title: input.workflow.name,
+        title: workflow.name,
       },
       em,
     );
@@ -272,7 +309,7 @@ export class GraphExecutorService {
         'daemon shutdown started before the workflow could launch',
       );
     }
-    this.drive(em, run.id, input.workflow, cwd, input.prompt);
+    this.drive(em, run.id, workflow, cwd, input.prompt);
 
     return runToWire(run);
   }

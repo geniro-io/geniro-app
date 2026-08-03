@@ -75,12 +75,16 @@ describe('resolveValidPluginDir', () => {
     expect(refusal?.getMessage()).toContain('not a directory');
   });
 
-  it('names pluginDir, not cwd, in every refusal', () => {
-    // The shared core is parameterised by noun; a caller that forgot to pass
-    // its own would silently tell the user their "cwd" was wrong while they
-    // were editing a node's plugin directory.
+  it('names the FIELD LABEL, not cwd and not the wire key', () => {
+    // The shared core is parameterised by noun, and this sentence is rendered
+    // in the node inspector: a caller that forgot to pass its own would tell
+    // the user their "cwd" was wrong while they were editing a plugin
+    // directory, and the wire key would name an identifier they never see.
     for (const bad of ['relative/path', join(tempDir(), 'missing')]) {
-      expect(refusalOf(bad)?.getMessage()).toContain('pluginDir');
+      const message = refusalOf(bad)?.getMessage();
+      expect(message).toContain('Plugin directory');
+      expect(message).not.toContain('cwd');
+      expect(message).not.toContain('pluginDir');
     }
   });
 });

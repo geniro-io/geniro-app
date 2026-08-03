@@ -3,6 +3,7 @@ import { Document, isMap, isSeq, parseDocument, type YAMLMap } from 'yaml';
 
 import {
   type Workflow,
+  type WorkflowAgentNode,
   type WorkflowEdge,
   type WorkflowNode,
   WorkflowYamlSchema,
@@ -51,6 +52,18 @@ function setOrDelete(map: YAMLMap, key: string, value: unknown): void {
   }
 }
 
+/**
+ * Every agent-node field the comment-preserving MERGE path writes back.
+ *
+ * The envelope (`id`, `name`) and `kind` are patched separately, so this is
+ * exactly "the rest of an agent node". Membership is type-checked by
+ * `node[field]` below, but membership is the easy half — COMPLETENESS is what
+ * matters: a field missing here is silently dropped on every save of a
+ * pre-existing file, and a plain round trip cannot catch it (the no-source
+ * path goes through `workflowToPlain`, a JSON round trip that emits
+ * everything). `AgentOnlyFieldsAreComplete` below turns that silent data loss
+ * into a compile error the moment a field is added to the schema.
+ */
 const AGENT_ONLY_FIELDS = [
   'agent',
   'model',
@@ -59,6 +72,21 @@ const AGENT_ONLY_FIELDS = [
   'approval',
   'pluginDir',
 ] as const;
+
+/** Everything on an agent node except the shared envelope and the discriminant. */
+type AgentOnlyField = Exclude<keyof WorkflowAgentNode, 'id' | 'name' | 'kind'>;
+
+/**
+ * Compile-time completeness guard for {@link AGENT_ONLY_FIELDS}. Resolves to
+ * `never` — and so fails to accept the `true` below — while any agent-node
+ * field is missing from the list, naming the offender in the error.
+ */
+type AgentOnlyFieldsAreComplete =
+  Exclude<AgentOnlyField, (typeof AGENT_ONLY_FIELDS)[number]> extends never
+    ? true
+    : never;
+const _agentOnlyFieldsAreComplete: AgentOnlyFieldsAreComplete = true;
+void _agentOnlyFieldsAreComplete;
 const TRIGGER_ONLY_FIELDS = ['trigger'] as const;
 
 function patchNodeItem(item: YAMLMap, node: WorkflowNode): void {

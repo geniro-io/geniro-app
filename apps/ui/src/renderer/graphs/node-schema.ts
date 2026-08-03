@@ -83,7 +83,7 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
       type: 'string',
       required: false,
       description:
-        "Absolute path to a plugin loaded for this node's turns only. A plugin can ship its own MCP servers, so two nodes with different directories run with different tools.",
+        "Absolute path to a plugin loaded for this node's turns only; a plugin can ship its own MCP servers. claude only.",
     },
   ],
   trigger: [

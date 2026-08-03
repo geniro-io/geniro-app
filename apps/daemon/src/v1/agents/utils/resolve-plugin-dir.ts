@@ -18,6 +18,10 @@ import { resolveValidDirectory } from './resolve-directory';
 export function resolveValidPluginDir(pluginDir: string): string {
   return resolveValidDirectory(pluginDir, {
     errorCode: 'INVALID_PLUGIN_DIR',
-    noun: 'pluginDir',
+    // The FIELD LABEL, not the wire key. This sentence is rendered in the node
+    // inspector to someone who just typed into a box labelled "Plugin
+    // directory"; telling them `pluginDir` is wrong names an identifier they
+    // have never seen. The machine-readable half stays in `errorCode`.
+    noun: 'Plugin directory',
   });
 }

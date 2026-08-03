@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -192,6 +198,35 @@ describe('AgentMcpService.list', () => {
     expect(listMcpServers).toHaveBeenCalledTimes(2);
   });
 
+  it('REFUSES an unusable plugin directory instead of asking the CLI', async () => {
+    // The whole point of validating: the CLI ignores a bad --plugin-dir
+    // silently (exit 0, "No MCP servers configured"), so passing it through
+    // would render as "this node has no MCP servers" — indistinguishable from
+    // the truth. Delete the guard in `list` and this is what stops being true.
+    const { service, listMcpServers } = harness(() =>
+      Promise.resolve([server('a')]),
+    );
+
+    await expect(
+      service.list(AgentKind.Claude, realDir(), {
+        pluginDir: join(realDir(), 'no-such-plugin'),
+      }),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_PLUGIN_DIR' });
+    // ...and it never reached the CLI, so nothing was health-checked.
+    expect(listMcpServers).not.toHaveBeenCalled();
+  });
+
+  it('refuses a RELATIVE plugin directory', async () => {
+    const { service, listMcpServers } = harness(() =>
+      Promise.resolve([server('a')]),
+    );
+
+    await expect(
+      service.list(AgentKind.Claude, realDir(), { pluginDir: 'plugins/x' }),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_PLUGIN_DIR' });
+    expect(listMcpServers).not.toHaveBeenCalled();
+  });
+
   it('answers a null cwd in its own empty folder, not the daemon’s', async () => {
     // The graph builder has no folder. A null cwd must still reach the
     // adapter with a REAL directory — one geniro owns and keeps empty, so the
@@ -209,6 +244,12 @@ describe('AgentMcpService.list', () => {
     expect(seen).toHaveLength(1);
     expect(isAbsolute(seen[0]!)).toBe(true);
     expect(seen[0]).not.toBe(process.cwd());
+    // The directory must EXIST — asserting only the absence of a `.mcp.json`
+    // would also hold for a path that was never created, so deleting the
+    // mkdirSync would stay green while production spawned the CLI with an
+    // ENOENT cwd.
+    expect(existsSync(seen[0]!)).toBe(true);
+    expect(statSync(seen[0]!).isDirectory()).toBe(true);
     // And it really is empty — a project `.mcp.json` there would leak one
     // folder's servers into every builder listing.
     expect(existsSync(join(seen[0]!, '.mcp.json'))).toBe(false);

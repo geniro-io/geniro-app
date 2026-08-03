@@ -209,6 +209,10 @@ export class ClaudeAdapter extends AgentAdapter {
         userDisabledReason:
           'switched off in your own claude settings, which geniro cannot re-enable',
       },
+      plugin: {
+        /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */
+        unavailableReason: null,
+      },
       terminal: {
         resumeFlag: CLAUDE_RESUME_FLAG,
         /**

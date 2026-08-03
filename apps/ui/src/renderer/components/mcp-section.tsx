@@ -59,7 +59,7 @@ export function McpSection({
         <span className="text-xs text-muted-foreground">{hint}</span>
       ) : null}
       {listing && listing.unavailableReason !== null ? (
-        // The adapter's own sentence, shown verbatim. The panel never composes
+        // The adapter's own sentence, shown verbatim. This section never composes
         // this, and never asks which CLI it is looking at.
         <span className="text-xs text-muted-foreground">
           {listing.unavailableReason}
@@ -91,13 +91,21 @@ export function McpSection({
               </span>
               {/* Defaulted, not indexed blindly: the wire enum is gated by the
                   response schema today, but a widened status must degrade to a
-                  neutral badge rather than crash the panel. */}
+                  neutral badge rather than crash the surface. */}
               <Badge variant={MCP_STATUS_TONE[server.status] ?? 'outline'}>
                 {server.status}
               </Badge>
-              {server.toggleUnavailableReason !== null ? (
-                // No control at all, and the daemon's own sentence saying why.
-                // A switch here would move and change nothing: the CLI has no
+              {/* Both arms belong to a surface that HAS a write path. A
+                  read-only one (the graph inspector) shows neither switch nor
+                  lock: its rows come from a listing taken in a folder geniro
+                  owns, so every one of them carries a folder-scoped reason —
+                  and explaining why a control is unavailable, where no control
+                  was ever going to appear, only raises a question about a
+                  folder the workflow does not yet have. */}
+              {onSetEnabled ===
+              undefined ? null : server.toggleUnavailableReason !== null ? (
+                // No control, and the daemon's own sentence saying why. A
+                // switch here would move and change nothing: the CLI has no
                 // key that disables this server, or the user disabled it in
                 // their own config, which geniro cannot undo.
                 <span
@@ -107,7 +115,7 @@ export function McpSection({
                   title={server.toggleUnavailableReason}>
                   <Lock aria-hidden="true" className="size-3" />
                 </span>
-              ) : onSetEnabled ? (
+              ) : (
                 <Switch
                   aria-label={`Load ${server.name}`}
                   checked={!server.disabled}
@@ -115,7 +123,7 @@ export function McpSection({
                   disabled={loading}
                   onCheckedChange={(next) => onSetEnabled(server.name, next)}
                 />
-              ) : null}
+              )}
             </li>
           ))}
         </ul>

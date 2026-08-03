@@ -244,14 +244,26 @@ export interface AgentSkillEntry {
 /**
  * Health of one MCP server as the CLI itself reports it.
  *
- * `unknown` is load-bearing rather than an error case: these rows are parsed
- * out of human-readable CLI output, so a release that rewords a status must
- * degrade to "listed, health unreadable" instead of dropping the server or
- * throwing. `pending` is claude's unapproved-`.mcp.json` state — the server is
- * configured but deliberately not connected to.
+ * `unknown` is for a row that IS recognisably a row but whose health wording
+ * this parser does not know — these rows come out of human-readable CLI
+ * output, so a reworded release must not throw.
+ *
+ * An unrecognised status must cost the BADGE, never the row, in every parser:
+ * a server the user cannot see is worse than one whose health is unreadable,
+ * and a parser that drops what it cannot read can only announce that when
+ * EVERY row drops — a partly unfamiliar listing would otherwise return the
+ * rows it understood and silently deny the rest. The CALLER still has to turn
+ * "nothing parsed, and no empty-folder sentence" into a stated failure; a
+ * listing may never degrade into a confident "this folder has none".
+ *
+ * `pending` is a server that is configured but deliberately not connected to —
+ * claude's unapproved `.mcp.json`, cursor's `not loaded (needs approval)`.
+ * `disabled` is one the user switched off in the CLI's own configuration, which
+ * geniro cannot undo (cursor's `mcp disable`); it is distinct from the wire's
+ * `disabled` flag, which also covers servers geniro itself suppressed.
  */
 export type AgentMcpServerStatus =
-  'connected' | 'failed' | 'pending' | 'unknown';
+  'connected' | 'failed' | 'pending' | 'disabled' | 'unknown';
 
 /**
  * One MCP server a CLI agent loads in a given working directory.

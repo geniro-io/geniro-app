@@ -567,10 +567,25 @@ describe('AgentAdapter.runCommand spawn options', () => {
     }
   });
 
-  it('does not fire the group kill once the command has answered', async () => {
-    // The timer is armed BEFORE the spawn (a synchronous execFileFn would
-    // otherwise leave one nothing can clear), so the settle path must clear it
-    // — else it later SIGKILLs whatever process group now owns that pid.
+  it('reaps the group ONCE when the command answers, and never again after', async () => {
+    // Two guarantees in one, because they pull against each other.
+    //
+    // The reap must HAPPEN on the success path: a listing command health-checks
+    // the user's own MCP servers, and one that ignores stdin EOF outlives the
+    // CLI (probe-verified on cursor-agent 2026.07.23-e383d2b — `mcp list`
+    // exited 0 and left a child running). Once the CLI exits, `ProcessRegistry`
+    // drops the handle, so this is the last moment anything can reach that
+    // group.
+    //
+    // This pins the CALL, not the outcome, and deliberately so: node's
+    // `execFile` drops `detached`, so the child is not a group leader and the
+    // kill currently reaches nothing (see `runCommand`). When that is fixed,
+    // this assertion is what says the success path still asks for the reap.
+    //
+    // And it must happen exactly ONCE. The deadline timer is armed BEFORE the
+    // spawn (a synchronous execFileFn would otherwise leave one nothing can
+    // clear), so settle has to clear it — else it fires later and SIGKILLs
+    // whatever process group owns that pid by then.
     vi.useFakeTimers();
     const killSpy = vi
       .spyOn(process, 'kill')
@@ -587,9 +602,14 @@ describe('AgentAdapter.runCommand spawn options', () => {
       }) as unknown as typeof execFile;
 
       await new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' });
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGKILL');
+
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(killSpy).not.toHaveBeenCalled();
+      // Still one: the deadline was cleared, not merely outrun.
+      expect(killSpy).toHaveBeenCalledTimes(1);
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();

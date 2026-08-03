@@ -2,9 +2,11 @@
 //
 // This adapter deliberately carried NO const file until now: every static fact
 // about the CLI was a value only `getConfig()` read, so it belonged inline
-// beside the field it answered. The listing changes that — the status markers
-// and the empty-folder sentence are read by BOTH the parser and the adapter,
-// and two readers of one string is exactly what a name exists to prevent.
+// beside the field it answered. The listing is the first thing here that is
+// NOT such a fact — it spans two files, the adapter and its parser, so these
+// strings cross a file boundary and have nowhere inline to live. (Each export
+// below has exactly one production reader today; what disqualifies the inline
+// exception is that the reader is not `getConfig()`.)
 //
 // Everything below was captured from the real binary, version
 // `2026.07.23-e383d2b`, and the verbatim output is kept alongside the
@@ -47,14 +49,54 @@ export const CURSOR_MCP_FAILED_MARKER = 'Error:';
 export const CURSOR_MCP_PENDING_MARKER = 'not loaded';
 
 /**
+ * What a server switched off with `cursor-agent mcp disable <name>` reports.
+ *
+ * Captured from the same binary:
+ *
+ * ```
+ * $ cursor-agent mcp disable probe-http
+ * ✓ Disabled MCP server: probe-http
+ * $ cursor-agent mcp list
+ * probe-good: ready
+ * probe-broken: Error: Connection failed
+ * probe-http: disabled
+ * ```
+ *
+ * Reachable by the ONLY mechanism this CLI offers for switching a server off —
+ * the one {@link CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON} tells the user about —
+ * so it is a routine state, not an exotic one.
+ */
+export const CURSOR_MCP_DISABLED_MARKER = 'disabled';
+
+/**
  * Printed INSTEAD of any rows when neither `.cursor/mcp.json` nor
  * `~/.cursor/mcp.json` configures a server.
  *
  * It is the only thing that tells an empty folder apart from output the parser
- * could not read at all. Matched as a PREFIX because the CLI appends the two
- * paths it looked in, which are the kind of detail a release rewords.
+ * could not read at all. Kept to the stable opening words and matched as a
+ * SUBSTRING, because the CLI appends the two paths it looked in — the kind of
+ * detail a release rewords.
  */
 export const CURSOR_MCP_EMPTY_MARKER = 'No MCP servers configured';
+
+/**
+ * Why a cursor row never carries a switch.
+ *
+ * `cursor-agent mcp enable|disable` DO exist, but they write the user's global
+ * `~/.cursor/cli-config.json`: enabling one server was observed to flip it from
+ * `not loaded` to `ready` in EVERY folder, not just the one the command ran in.
+ * There is no per-invocation equivalent — `--approve-mcps` was probed and does
+ * not affect `mcp list` at all — so geniro has nothing it could switch without
+ * editing a file this feature has ruled out touching.
+ *
+ * Named because `getConfig()` states it three times: `toggleUnavailableReason`
+ * is the one a user can actually read, and the other two are unreachable while
+ * it is non-null (`AgentMcpService` returns early on it before ever consulting
+ * them) — they exist only to satisfy a contract that requires a string. Three
+ * copies of one sentence to keep in lockstep is what a name is for.
+ */
+export const CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON =
+  'cursor-agent can only switch MCP servers in its own global config';
 
 /**
  * Shown to the user when the listing command could not be run at all — a

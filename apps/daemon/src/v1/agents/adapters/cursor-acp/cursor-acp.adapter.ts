@@ -18,6 +18,7 @@ import {
   CURSOR_MCP_LIST_FAILED_MESSAGE,
   CURSOR_MCP_LIST_TIMEOUT_MS,
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
+  CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 
@@ -152,37 +153,38 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         listingUnavailableReason: null,
         /**
-         * Still non-null, and deliberately so after the same verification.
-         * `cursor-agent mcp enable|disable` DO exist, but they write the
-         * user's global `~/.cursor/cli-config.json`: enabling one server was
-         * observed to flip it from `not loaded` to `ready` in every folder,
-         * not just the one it was run from. There is no per-invocation
-         * equivalent — `--approve-mcps` was probed and does not affect
-         * `mcp list` at all — so geniro has nothing it could switch without
-         * editing a file this feature has ruled out touching. Saying that
-         * keeps every cursor row read-only instead of offering a dead control.
+         * Still non-null, and deliberately so after the same verification —
+         * {@link CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON} carries the evidence.
+         * Saying it keeps every cursor row read-only instead of offering a
+         * dead control.
+         *
+         * All three fields get the one sentence, unlike claude's three
+         * distinct ones: the latter two answer "why is THIS row not
+         * toggleable" questions that are never reached while the blanket
+         * reason above is set.
          */
-        toggleUnavailableReason:
-          'cursor-agent can only switch MCP servers in its own global config',
-        notInToggleableScopeReason:
-          'cursor-agent can only switch MCP servers in its own global config',
-        userDisabledReason:
-          'cursor-agent can only switch MCP servers in its own global config',
+        toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        notInToggleableScopeReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       plugin: {
         /**
-         * `cursor-agent` DOES accept a `--plugin-dir` flag, but nothing
-         * reaches geniro through it: a plugin directory carrying an
-         * `.mcp.json`, a `.cursor/mcp.json` and a `.cursor-plugin/plugin.json`
-         * contributed no servers to `mcp list`, and a wholly nonexistent path
-         * was accepted just as silently (probed on 2026.07.23-e383d2b). ACP
-         * has no client-supplied plugin channel either, the way it has one for
-         * MCP servers.
+         * `cursor-agent` DOES accept a `--plugin-dir` flag — an earlier
+         * revision of this block claimed it did not, which the binary
+         * disproves. What was actually probed (2026.07.23-e383d2b) is
+         * narrower: a plugin directory carrying an `.mcp.json`, a
+         * `.cursor/mcp.json` and a `.cursor-plugin/plugin.json` contributed no
+         * servers to `mcp list`, and a wholly nonexistent path was accepted
+         * just as silently. Whether a plugin's commands or skills reach a TURN
+         * was NOT probed, and the plugin manifest format is undocumented in the
+         * CLI's own `--help`. ACP has no client-supplied plugin channel either,
+         * the way it has one for MCP servers.
          *
-         * So the field a node would fill has no verified effect on this CLI,
-         * and stating that is what keeps a node's `pluginDir` from being
-         * validated, refused, or silently dropped for cursor.
+         * So the claim is only that the field a node would fill has no VERIFIED
+         * effect on this CLI — which is what keeps a node's `pluginDir` from
+         * being validated, refused, or silently dropped for cursor. Establish
+         * the turn side before weakening or removing this.
          */
         unavailableReason:
           'cursor-agent has no verified way to load a plugin directory',
@@ -232,7 +234,15 @@ export class CursorAcpAdapter extends AgentAdapter {
       return { ok: false, reason: CURSOR_MCP_LIST_FAILED_MESSAGE };
     }
     const servers = parseCursorMcpList(stdout);
-    if (servers.length === 0 && !stdout.includes(CURSOR_MCP_EMPTY_MARKER)) {
+    // Anchored to the START OF A LINE, not searched across the whole buffer:
+    // the sentence is ordinary English, so a server whose status wording merely
+    // CONTAINS it ("weird-srv: No MCP servers configured are approved yet")
+    // would otherwise satisfy the empty check and turn an unreadable listing
+    // into a confident "this folder has none".
+    const saidEmpty = stdout
+      .split('\n')
+      .some((line) => line.trim().startsWith(CURSOR_MCP_EMPTY_MARKER));
+    if (servers.length === 0 && !saidEmpty) {
       return { ok: false, reason: CURSOR_MCP_LIST_UNREADABLE_MESSAGE };
     }
     return { ok: true, servers };

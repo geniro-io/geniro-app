@@ -75,10 +75,11 @@ describe('parseCursorMcpList', () => {
   });
 
   it('returns nothing for the empty-folder sentence', () => {
-    // Prose, not a row. It carries no `': '` at all, but the status check is
-    // what would reject it even if it did — listing it would show a server
-    // called "No MCP servers configured" in the one surface whose job is to
-    // state what the user actually configured.
+    // Prose, not a row — and the ONLY thing keeping it out is that it carries
+    // no `': '` anywhere, now that an unrecognised status no longer drops a
+    // line. Listing it would show a server called "No MCP servers configured"
+    // in the one surface whose job is to state what the user configured.
+    expect(REAL_EMPTY_OUTPUT).not.toContain(': ');
     expect(parseCursorMcpList(REAL_EMPTY_OUTPUT)).toEqual([]);
   });
 
@@ -116,42 +117,96 @@ describe('parseCursorMcpList', () => {
     // Both readings parse; the rightmost is the CLI's, because the status is
     // always last. Left-to-right would have named this one "foo" and read
     // "Error: ready" as a failure whose reason is "ready".
-    const [server] = parseCursorMcpList('foo: Error: ready');
+    //
+    // Asserted as the WHOLE result, not `[0]`: the scan must stop at the match
+    // it accepts, and a missing `break` would emit the leftmost reading as a
+    // second, phantom server row that only a full-array assertion catches.
+    expect(parseCursorMcpList('foo: Error: ready')).toEqual([
+      {
+        name: 'foo: Error',
+        target: null,
+        transport: null,
+        status: 'connected',
+        detail: null,
+      },
+    ]);
+  });
 
-    expect(server?.name).toBe('foo: Error');
-    expect(server?.status).toBe('connected');
+  it('reads a server switched off with `mcp disable`', () => {
+    // VERBATIM from the real CLI after `cursor-agent mcp disable probe-http`.
+    // Reachable by the only mechanism cursor offers for switching a server
+    // off, so it is routine — and before it was modelled, this row was dropped
+    // and the server silently vanished from the panel.
+    const [server] = parseCursorMcpList('probe-http: disabled');
+
+    expect(server?.name).toBe('probe-http');
+    expect(server?.status).toBe('disabled');
     expect(server?.detail).toBeNull();
   });
 
-  it('DROPS a row whose status wording it does not recognise', () => {
-    // The deliberate divergence from claude's parser, which keeps such a row
-    // with `status: 'unknown'`. A claude row has a structural ` - ` that marks
-    // it as a row regardless of its status wording; a cursor row has nothing
-    // but `<name>: <status>`, so the status vocabulary IS the row test. Keeping
-    // unrecognised lines would list the CLI's own prose as servers — see the
-    // banner case below. The drop is not silent: zero rows without the
-    // empty-folder sentence is what makes the adapter report the listing as
-    // unreadable.
-    expect(parseCursorMcpList('future-srv: online now')).toEqual([]);
+  it('KEEPS a row whose status wording it does not recognise, as unknown', () => {
+    // The version-drift guard, and the same rule claude's parser follows. A
+    // drop would be undetectable whenever SOME rows still parse: the caller
+    // can only tell that a listing was unreadable when EVERY row drops, so a
+    // partly-reworded release would return the rows it understood and silently
+    // deny the rest. That is the one outcome this surface must never produce.
+    const [server] = parseCursorMcpList('future-srv: online now');
+
+    expect(server?.name).toBe('future-srv');
+    expect(server?.status).toBe('unknown');
+    expect(server?.detail).toBe('online now');
   });
 
-  it('does NOT list the CLI’s own prose as servers', () => {
-    // The whole reason the fallback above is a drop rather than an `unknown`
-    // badge: these lines are shaped exactly like server rows.
+  it('never silently omits a row it could not read from a listing it CAN read', () => {
+    // The concrete shape of the case above, and the reason it is not merely
+    // theoretical: one unfamiliar status among familiar ones.
+    const names = parseCursorMcpList(
+      'linear: ready\nsentry: whatever-comes-next\n',
+    ).map((server) => server.name);
+
+    expect(names).toEqual(['linear', 'sentry']);
+  });
+
+  it('accepts the cost of that rule: prose shaped like a row IS listed', () => {
+    // Stated as a test rather than left as a surprise. A cursor row carries no
+    // structural marker — unlike claude's ` - ` — so a banner is indistinguish-
+    // able from a server row, and keeping unreadable rows means keeping this
+    // too. A visible bogus row beats an invisible missing one; if cursor ever
+    // does print banners here, the fix is to recognise THEM, not to start
+    // dropping servers again.
     const servers = parseCursorMcpList(
-      [
-        'sentry: ready',
-        'Note: a new version is available: 2026.08.01',
-        'Tip: run `cursor-agent upgrade` to update',
-      ].join('\n'),
+      ['sentry: ready', 'Note: a new version is available: 2026.08.01'].join(
+        '\n',
+      ),
     );
 
-    expect(servers.map((server) => server.name)).toEqual(['sentry']);
+    expect(servers.map((server) => server.name)).toEqual(['sentry', 'Note']);
+    expect(servers[1]?.status).toBe('unknown');
   });
 
   it('skips a line that names nothing', () => {
     expect(parseCursorMcpList('just some banner text\n\n   \n')).toEqual([]);
     expect(parseCursorMcpList(': ready')).toEqual([]);
+  });
+
+  it('reads a CRLF stream', () => {
+    // The `.trim()` on each line is the only thing standing between a CRLF
+    // stream and a total listing failure: an untrimmed `\r` rides into the
+    // status match and every row fails it.
+    const servers = parseCursorMcpList(
+      'probe-good: ready\r\nprobe-broken: Error: Connection failed\r\n',
+    );
+
+    expect(servers.map((server) => server.status)).toEqual([
+      'connected',
+      'failed',
+    ]);
+    expect(servers[1]?.detail).toBe('Connection failed');
+  });
+
+  it('reads a column-aligned row', () => {
+    // A release that pads for alignment must not cost the whole listing.
+    expect(parseCursorMcpList('srv:   ready')[0]?.status).toBe('connected');
   });
 
   it('never throws on hostile input', () => {
@@ -177,7 +232,11 @@ describe('parseCursorMcpList', () => {
 
   it('does not read a longer word as a status it merely starts with', () => {
     // `readyish` starts with `ready`; without the word-boundary check it would
-    // be read as a healthy server whose detail is "ish".
-    expect(parseCursorMcpList('srv: readyish')).toEqual([]);
+    // be read as a HEALTHY server whose detail is "ish". It is still listed —
+    // with its health unstated, which is the honest answer.
+    const [server] = parseCursorMcpList('srv: readyish');
+
+    expect(server?.status).toBe('unknown');
+    expect(server?.detail).toBe('readyish');
   });
 });

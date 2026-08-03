@@ -280,9 +280,9 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe('Null when the CLI does not report one'),
     status: z
-      .enum(['connected', 'failed', 'pending', 'unknown'])
+      .enum(['connected', 'failed', 'pending', 'disabled', 'unknown'])
       .describe(
-        'Health as the CLI reported it; `pending` is a configured but unapproved server',
+        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config',
       ),
     detail: z
       .string()

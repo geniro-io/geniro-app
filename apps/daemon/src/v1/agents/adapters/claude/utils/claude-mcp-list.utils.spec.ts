@@ -189,4 +189,67 @@ describe('parseMcpList', () => {
     expect(server?.status).toBe('failed');
     expect(server?.detail).toBeNull();
   });
+
+  it('reads a failure through EITHER glyph the CLI decorates it with', () => {
+    // The same 2.1.220 binary printed U+00D7 (×) when its daemon ran under
+    // Electron's node and U+2718 (✘) under host node, for the identical
+    // server. Both bytes are verbatim from those two runs. Pinning one glyph
+    // downgraded every failed row to `unknown` — listed, reason intact, badge
+    // wrong.
+    for (const glyph of ['\u00d7', '\u2718']) {
+      const [server] = parseMcpList(
+        `srv: /bin/echo a - ${glyph} Failed to connect — -32000: Connection closed`,
+      );
+      expect(server?.status).toBe('failed');
+      expect(server?.target).toBe('/bin/echo a');
+      expect(server?.detail).toContain('-32000');
+    }
+  });
+
+  it('reads connected and pending regardless of their decoration', () => {
+    for (const [line, status] of [
+      ['a: node a.js - \u221a Connected', 'connected'],
+      ['a: node a.js - \u2714 Connected', 'connected'],
+      [
+        'b: node b.js - ⏸ Pending approval (run `claude` to approve)',
+        'pending',
+      ],
+    ] as const) {
+      expect(parseMcpList(line)[0]?.status).toBe(status);
+    }
+  });
+
+  it('keeps a plugin server’s namespaced name whole', () => {
+    // VERBATIM bytes from claude 2.1.220 driven with `--plugin-dir` against a
+    // probe plugin built for the purpose. A plugin's servers are namespaced
+    // `plugin:<plugin>:<server>`, so the row carries THREE colons before the
+    // delimiter — a shape no folder-only listing ever produced, and the one
+    // the name split has to survive. Truncating at the first colon would name
+    // every plugin server "plugin", collapsing them all into one row.
+    const [server] = parseMcpList(
+      'plugin:probe-alpha:alpha-srv: /bin/echo alpha - × Failed to connect — -32000: MCP error -32000: Connection closed',
+    );
+
+    expect(server?.name).toBe('plugin:probe-alpha:alpha-srv');
+    expect(server?.target).toBe('/bin/echo alpha');
+    expect(server?.status).toBe('failed');
+    // The detail itself carries `: ` too, and belongs to the status, not the name.
+    expect(server?.detail).toContain('-32000');
+  });
+
+  it('separates two plugins’ servers into two rows', () => {
+    const servers = parseMcpList(
+      [
+        'Checking MCP server health…',
+        '',
+        'plugin:probe-alpha:alpha-srv: /bin/echo alpha - × Failed to connect — boom',
+        'plugin:probe-beta:beta-srv: /bin/echo beta - × Failed to connect — boom',
+      ].join('\n'),
+    );
+
+    expect(servers.map((s) => s.name)).toEqual([
+      'plugin:probe-alpha:alpha-srv',
+      'plugin:probe-beta:beta-srv',
+    ]);
+  });
 });

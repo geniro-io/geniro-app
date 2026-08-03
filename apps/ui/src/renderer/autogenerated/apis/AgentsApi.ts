@@ -29,7 +29,8 @@ export interface AgentsApiListAgentEffortsRequest {
 
 export interface AgentsApiListAgentMcpServersRequest {
     agent: AgentKind;
-    cwd: string;
+    cwd?: string;
+    pluginDir?: string;
     refresh?: string;
 }
 
@@ -110,13 +111,6 @@ export class AgentsApi extends runtime.BaseAPI {
             );
         }
 
-        if (requestParameters['cwd'] == null) {
-            throw new runtime.RequiredError(
-                'cwd',
-                'Required parameter "cwd" was null or undefined when calling listAgentMcpServers().'
-            );
-        }
-
         const queryParameters: any = {};
 
         if (requestParameters['agent'] != null) {
@@ -125,6 +119,10 @@ export class AgentsApi extends runtime.BaseAPI {
 
         if (requestParameters['cwd'] != null) {
             queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['pluginDir'] != null) {
+            queryParameters['pluginDir'] = requestParameters['pluginDir'];
         }
 
         if (requestParameters['refresh'] != null) {

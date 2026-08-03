@@ -72,6 +72,17 @@ export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
+ * Loads a plugin for one invocation (`--plugin-dir <path>`, repeatable).
+ *
+ * A GLOBAL option, which is the whole reason this is a named constant used by
+ * two very differently-shaped call sites: on a turn there is no subcommand so
+ * it may sit anywhere in argv, but `claude mcp list --plugin-dir X` is
+ * REJECTED as an unknown option — before the subcommand is the only placement
+ * that works there (probe-verified on 2.1.220).
+ */
+export const CLAUDE_PLUGIN_DIR_FLAG = '--plugin-dir';
+
+/**
  * Restricts a turn to `--mcp-config` servers only. geniro does NOT pass it:
  * an agent must see the same MCP servers a fresh session in that folder sees,
  * plus geniro's call surface. Named so the spec pinning its absence and any
@@ -209,10 +220,25 @@ export const CLAUDE_MCP_LIST_ARGS: readonly string[] = ['mcp', 'list'];
  */
 export const CLAUDE_MCP_LIST_TIMEOUT_MS = 20_000;
 
-/** Row status markers, longest-lived part of the format. */
-export const CLAUDE_MCP_CONNECTED_MARKER = '√ Connected';
-export const CLAUDE_MCP_FAILED_MARKER = '× Failed to connect';
-export const CLAUDE_MCP_PENDING_MARKER = '⏸ Pending approval';
+/**
+ * Row status markers — the WORDING only, deliberately WITHOUT the glyph that
+ * precedes it.
+ *
+ * The glyph is not stable. The same 2.1.220 binary printed U+00D7 MULTIPLICATION
+ * SIGN for a failure when driven one way and U+2718 HEAVY BALLOT X when driven
+ * another (observed in this container: a daemon spawned under Electron's node
+ * gave `×`, the same daemon under host node gave `✘` for the identical
+ * server). The CLI evidently picks its decoration from the environment, so
+ * pinning one glyph silently downgraded every failed row to `status: 'unknown'`
+ * — the row still listed, with its reason intact, but wearing the wrong badge.
+ *
+ * The wording has held across every observation. Matching it and letting the
+ * walk-back in `parseMcpList` discard whatever decoration precedes it is both
+ * more robust and less of a guess than enumerating glyphs we have not seen.
+ */
+export const CLAUDE_MCP_CONNECTED_MARKER = 'Connected';
+export const CLAUDE_MCP_FAILED_MARKER = 'Failed to connect';
+export const CLAUDE_MCP_PENDING_MARKER = 'Pending approval';
 
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */
 export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';

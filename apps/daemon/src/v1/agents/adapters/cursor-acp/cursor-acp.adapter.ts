@@ -154,6 +154,16 @@ export class CursorAcpAdapter extends AgentAdapter {
         userDisabledReason: 'cursor-agent MCP switching is not supported yet',
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
+      plugin: {
+        /**
+         * `cursor-agent` exposes no per-invocation plugin mechanism — there is
+         * no `--plugin-dir` equivalent, and ACP has no client-supplied plugin
+         * channel the way it has one for MCP servers. Stated as a fact so a
+         * node's `pluginDir` is never validated, refused, or silently dropped
+         * for this CLI.
+         */
+        unavailableReason: 'cursor-agent cannot load a plugin directory',
+      },
       terminal: null,
     };
   }

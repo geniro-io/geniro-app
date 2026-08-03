@@ -1,7 +1,4 @@
-import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
-
-import { BadRequestException } from '@packages/common';
+import { resolveValidDirectory } from './resolve-directory';
 
 /**
  * Validate a working directory and return its canonical (symlink-resolved)
@@ -13,23 +10,5 @@ import { BadRequestException } from '@packages/common';
  * project folder on their own machine).
  */
 export function resolveValidCwd(cwd: string): string {
-  if (!isAbsolute(cwd)) {
-    throw new BadRequestException(
-      'INVALID_CWD',
-      'cwd must be an absolute path',
-    );
-  }
-  let canonical: string;
-  try {
-    canonical = realpathSync(cwd); // resolves symlinks; throws if missing
-  } catch {
-    throw new BadRequestException('INVALID_CWD', `cwd does not exist: ${cwd}`);
-  }
-  if (!statSync(canonical).isDirectory()) {
-    throw new BadRequestException(
-      'INVALID_CWD',
-      `cwd is not a directory: ${cwd}`,
-    );
-  }
-  return canonical;
+  return resolveValidDirectory(cwd, { errorCode: 'INVALID_CWD', noun: 'cwd' });
 }

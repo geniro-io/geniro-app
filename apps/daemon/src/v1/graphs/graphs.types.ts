@@ -148,6 +148,26 @@ export const WorkflowAgentNodeSchema = z
       .optional()
       .describe('Role/system prompt prepended to the node turn'),
     approval: ApprovalModeSchema.describe('Tool-approval mode for this node'),
+    /**
+     * A plugin directory this node's turns load, and no other node's.
+     *
+     * A plugin may ship its own MCP servers, so two nodes pointed at different
+     * directories genuinely run with different tools — which is the whole
+     * reason this is a NODE field rather than a run-level one. It is loaded
+     * for the session only; nothing is installed and no user config is
+     * written.
+     *
+     * Absolute path, validated before it reaches argv. The CLI silently
+     * ignores a path it cannot use (probe-verified: a missing directory, a
+     * plugin-less one and a plain file all exit 0 reporting no servers), so a
+     * typo would otherwise present as "this node has no MCP servers" —
+     * indistinguishable from the truth.
+     */
+    pluginDir: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Absolute path to a plugin directory loaded for this node'),
   })
   .meta({ id: 'WorkflowAgentNode' });
 

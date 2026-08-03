@@ -39,6 +39,7 @@ import {
 } from '../../agents/utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
+import { resolveValidPluginDir } from '../../agents/utils/resolve-plugin-dir';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
@@ -113,6 +114,44 @@ function hasProbedApprovalMode(
         .getConfig()
         .approval.probedModes.includes(node.approval),
   );
+}
+
+/**
+ * A copy of `workflow` whose agent nodes carry the CANONICAL form of their
+ * plugin directory, refusing any that cannot be used.
+ *
+ * Two things at once, deliberately: the refusal (a bad path fails the run
+ * once, up front, rather than one node halfway through the graph) and the
+ * canonicalization (what a turn spawns with must be what was actually
+ * checked — `resolveValidCwd` one line above has always worked this way, and
+ * a `pluginDir` that stayed raw could reach argv as a symlink re-pointed
+ * after the check).
+ *
+ * A node whose CLI declares no plugin mechanism has the field STRIPPED — not
+ * validated, not refused, not passed on. Refusing a whole run over a path that
+ * adapter would ignore would be geniro inventing a failure, and handing it to
+ * the turn anyway would be geniro going silent, which is the very thing this
+ * field exists to prevent. Only the in-memory run copy is stripped; the
+ * workflow on disk keeps whatever the user wrote.
+ */
+function withCanonicalPluginDirs(
+  workflow: Workflow,
+  adapterFor: (kind: AgentKind) => AgentAdapter,
+): Workflow {
+  return {
+    ...workflow,
+    nodes: workflow.nodes.map((node) => {
+      if (node.kind !== 'agent' || !node.pluginDir) {
+        return node;
+      }
+      if (
+        adapterFor(node.agent).getConfig().plugin.unavailableReason !== null
+      ) {
+        return { ...node, pluginDir: undefined };
+      }
+      return { ...node, pluginDir: resolveValidPluginDir(node.pluginDir) };
+    }),
+  };
 }
 
 /**
@@ -218,6 +257,16 @@ export class GraphExecutorService {
     validateRunnableGraph(input.workflow.nodes, input.workflow.edges);
     computeRunOrder(input.workflow.nodes, input.workflow.edges);
     const cwd = resolveValidCwd(input.cwd);
+    // Resolved HERE rather than per turn, for the same two reasons `cwd` is:
+    // a bad plugin directory is a configuration mistake, so refusing the run
+    // names it once up front instead of failing one node halfway through the
+    // graph — and the CANONICAL path is what the turn must spawn with, since
+    // that is what was actually checked. The CLI itself would say nothing: it
+    // ignores an unusable --plugin-dir silently (probe-verified), which reads
+    // as "this node has no MCP servers".
+    const workflow = withCanonicalPluginDirs(input.workflow, (kind) =>
+      this.adapterFor(kind),
+    );
 
     const em = this.em.fork();
     const run = await this.runDao.create(
@@ -227,7 +276,7 @@ export class GraphExecutorService {
         agentKind: null,
         cwd,
         model: null,
-        title: input.workflow.name,
+        title: workflow.name,
       },
       em,
     );
@@ -260,7 +309,7 @@ export class GraphExecutorService {
         'daemon shutdown started before the workflow could launch',
       );
     }
-    this.drive(em, run.id, input.workflow, cwd, input.prompt);
+    this.drive(em, run.id, workflow, cwd, input.prompt);
 
     return runToWire(run);
   }
@@ -887,6 +936,10 @@ export class GraphExecutorService {
         approvalMode: questionCapable && approval === 'auto' ? 'ask' : approval,
         mcpEndpoint: mcpEndpointFor(node),
         disabledMcpServers,
+        // Per NODE, not per run: two nodes pointed at different plugin
+        // directories are meant to run with different tools. Already refused
+        // at startRun if unusable.
+        pluginDir: node.pluginDir ?? null,
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {

@@ -41,6 +41,7 @@ import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Field } from '../components/field';
+import { McpSection } from '../components/mcp-section';
 import { NoteBox } from '../components/note-box';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
@@ -77,6 +78,7 @@ import {
 import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
 import { useAutosave } from './use-autosave';
+import { useNodeMcp } from './use-node-mcp';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
@@ -639,6 +641,16 @@ export function Graphs({
     selected?.kind === 'agent' ? selected.agent : null,
   );
 
+  // What this node would load regardless of where the run lands: the user's
+  // global servers plus whatever its own plugin directory brings. The folder's
+  // own project servers are added by the CLI at run time, so the builder —
+  // which has no folder — neither knows nor claims them.
+  const nodeMcp = useNodeMcp(
+    apis?.agents ?? null,
+    selected?.kind === 'agent' ? selected.agent : null,
+    selected?.kind === 'agent' ? (selected.pluginDir ?? null) : null,
+  );
+
   // Read-only "Agent calls" summary for the inspector: who this agent may
   // invoke and who may invoke it (the amber call edges touching the node),
   // plus a heads-up when it takes part in a call loop. Null when the node
@@ -1012,6 +1024,36 @@ export function Graphs({
                         }
                       />
                     </Field>
+                    {/* claude only. cursor-agent has no per-invocation plugin
+                        mechanism, so it renders NOTHING here rather than a
+                        field whose value nothing would read — the same choice
+                        the composer's approval chip makes for that CLI. */}
+                    {selected.agent === 'claude' ? (
+                      <Field
+                        label="Plugin directory"
+                        htmlFor="node-plugin-dir"
+                        hint="Absolute path to a plugin loaded for this node's turns only. A plugin can ship its own MCP servers, so two nodes pointed at different directories run with different tools. Nothing is installed.">
+                        <Input
+                          id="node-plugin-dir"
+                          value={selected.pluginDir ?? ''}
+                          placeholder="/Users/you/plugins/reviewer"
+                          onChange={(event) =>
+                            patchSelected({
+                              pluginDir: event.target.value || undefined,
+                            })
+                          }
+                        />
+                      </Field>
+                    ) : null}
+                    <McpSection
+                      listing={nodeMcp.listing}
+                      loading={nodeMcp.loading}
+                      hint={
+                        selected.pluginDir
+                          ? "Global servers plus this node's plugin. The run folder's own project servers are added when it runs."
+                          : 'Global servers. The run folder\u2019s own project servers are added when it runs.'
+                      }
+                    />
                     {callInfo ? (
                       <NoteBox aria-label="Agent calls" className="text-xs">
                         <span className="block font-medium text-foreground">

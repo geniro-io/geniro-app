@@ -78,6 +78,13 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
       description:
         'Tool-approval mode (defaults to auto). acceptEdits auto-approves file edits and asks for the rest.',
     },
+    {
+      key: 'pluginDir',
+      type: 'string',
+      required: false,
+      description:
+        "Absolute path to a plugin loaded for this node's turns only; a plugin can ship its own MCP servers. claude only.",
+    },
   ],
   trigger: [
     ...ENVELOPE_FIELDS,

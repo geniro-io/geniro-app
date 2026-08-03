@@ -146,8 +146,14 @@ export const CLAUDE_MCP_LIST_ARGS: readonly string[] = ['mcp', 'list'];
  * Deadline for that listing. Far above the 10s utility default because the
  * command HEALTH-CHECKS: it dials every configured server, and an unreachable
  * HTTP one is only known to be unreachable once its own connect times out.
+ *
+ * Bounded ABOVE by the renderer's own 30s per-request budget
+ * (`daemon-api.ts` REQUEST_TIMEOUT_MS), which starts strictly earlier and
+ * covers the version probe too: at 30s here the client always aborted first,
+ * so the daemon's "could not read" sentence never reached the panel and the
+ * user was told "No servers" for a folder that had some.
  */
-export const CLAUDE_MCP_LIST_TIMEOUT_MS = 30_000;
+export const CLAUDE_MCP_LIST_TIMEOUT_MS = 20_000;
 
 /** Row status markers, longest-lived part of the format. */
 export const CLAUDE_MCP_CONNECTED_MARKER = '√ Connected';
@@ -164,6 +170,18 @@ export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';
  */
 export const CLAUDE_MCP_LIST_FAILED_MESSAGE =
   'could not read MCP servers — claude did not answer';
+
+/**
+ * Printed INSTEAD of any rows when the folder has none. It is the only thing
+ * that tells an empty folder apart from output this parser could not read at
+ * all — without it, a release that reworded the row format would drop every
+ * row and be indistinguishable from "you have no servers configured".
+ */
+export const CLAUDE_MCP_EMPTY_MARKER = 'No MCP servers configured';
+
+/** Shown when the CLI answered but nothing in its output looked like a row. */
+export const CLAUDE_MCP_LIST_UNREADABLE_MESSAGE =
+  'could not read MCP servers — the claude output format may have changed';
 
 // ── Messages ──────────────────────────────────────────────────────────────
 

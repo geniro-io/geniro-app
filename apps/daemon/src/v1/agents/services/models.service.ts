@@ -59,7 +59,7 @@ export class ModelsService {
       onSpawn: (child) =>
         this.processes.register(
           `models:version:${randomUUID()}`,
-          childProcessHandle(child),
+          childProcessHandle(child, { processGroup: false }),
         ),
     });
     const cached = this.cache.get(kind);
@@ -77,7 +77,7 @@ export class ModelsService {
         onSpawn: (child) =>
           this.processes.register(
             `models:list:${randomUUID()}`,
-            childProcessHandle(child),
+            childProcessHandle(child, { processGroup: false }),
           ),
       });
     } catch (err) {

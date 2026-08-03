@@ -108,6 +108,10 @@ export class AgentMcpService {
     cwd: string,
     refresh = false,
   ): Promise<AgentMcpListingWire> {
+    // Validated FIRST, so a bad cwd is a bad request whichever adapter answers.
+    // Below the refusal it would be, and a folder that 400s for claude today
+    // would start 400ing for cursor the day cursor gains a listing.
+    const projectDir = resolveValidCwd(cwd);
     const adapter = this.adapters.for(agent);
     // The adapter's own sentence, carried through untouched. A CLI that cannot
     // be listed is not asked at all — spawning it to receive a guaranteed
@@ -116,12 +120,11 @@ export class AgentMcpService {
     if (unavailableReason !== null) {
       return { servers: [], unavailableReason };
     }
-    const projectDir = resolveValidCwd(cwd);
     const version = await this.resolveVersionFn(agent, {
       onSpawn: (child) =>
         this.processes.register(
           `mcp:version:${randomUUID()}`,
-          childProcessHandle(child),
+          childProcessHandle(child, { processGroup: false }),
         ),
     });
     const key = keyOf(agent, projectDir, version);

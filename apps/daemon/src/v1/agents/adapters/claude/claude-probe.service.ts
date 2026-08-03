@@ -244,7 +244,7 @@ export class ClaudeProbeService {
       onSpawn: (child) =>
         this.processes.register(
           `claude-probe:version:${randomUUID()}`,
-          childProcessHandle(child),
+          childProcessHandle(child, { processGroup: false }),
         ),
     });
   }

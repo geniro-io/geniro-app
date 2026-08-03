@@ -12,14 +12,16 @@ import { killProcessGroup } from './kill-tree';
  * the "every spawned child is reachable by shutdown/cancel" rule has no
  * short-lived exemption. Registration auto-clears when the child exits.
  *
- * Pass the `AgentSpawnInfo` `runCommand` handed to `onSpawn` rather than
- * writing one: a group-led child needs a group cancel, and taking that fact
- * from the spawn itself is what stops the two disagreeing. Contract:
+ * `spawnInfo` is REQUIRED, and that is the whole enforcement: a group-led
+ * child needs a group cancel, and an optional parameter would let a
+ * registration site silently omit it and revert to a single-PID kill. Pass
+ * what `runCommand` handed to `onSpawn`; a child spawned outside that path
+ * states `{ processGroup: false }` explicitly. Contract:
  * {@link AgentCommandOptions.processGroup}.
  */
 export function childProcessHandle(
   child: ChildProcess,
-  options: Partial<AgentSpawnInfo> = {},
+  spawnInfo: AgentSpawnInfo,
 ): AgentTurnHandle {
   return {
     done: new Promise<void>((resolve) => {
@@ -27,7 +29,7 @@ export function childProcessHandle(
       child.once('error', () => resolve());
     }),
     cancel: () =>
-      options.processGroup === true
+      spawnInfo.processGroup
         ? killProcessGroup(child.pid, 'SIGKILL', () => child.kill('SIGKILL'))
         : void child.kill('SIGKILL'),
     respondApproval: () => false,

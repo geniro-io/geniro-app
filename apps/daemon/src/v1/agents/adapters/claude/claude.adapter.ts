@@ -25,9 +25,11 @@ import {
   CLAUDE_EFFORT_FLAG,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
+  CLAUDE_MCP_EMPTY_MARKER,
   CLAUDE_MCP_LIST_ARGS,
   CLAUDE_MCP_LIST_FAILED_MESSAGE,
   CLAUDE_MCP_LIST_TIMEOUT_MS,
+  CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_FLAG,
@@ -336,7 +338,16 @@ export class ClaudeAdapter extends AgentAdapter {
     if (stdout === null) {
       return { ok: false, reason: CLAUDE_MCP_LIST_FAILED_MESSAGE };
     }
-    return { ok: true, servers: parseMcpList(stdout) };
+    const servers = parseMcpList(stdout);
+    if (servers.length === 0 && !stdout.includes(CLAUDE_MCP_EMPTY_MARKER)) {
+      // The CLI answered, but nothing in what it said looked like a row and it
+      // did not say the folder was empty either. Reporting that as an empty
+      // listing would let it be cached and shown as "no servers" — the
+      // confident lie the whole ok/err split exists to prevent, and the one a
+      // reworded row format would otherwise produce silently.
+      return { ok: false, reason: CLAUDE_MCP_LIST_UNREADABLE_MESSAGE };
+    }
+    return { ok: true, servers };
   }
 
   protected buildArgs(input: AgentTurnInput): string[] {

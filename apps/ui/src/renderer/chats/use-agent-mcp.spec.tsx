@@ -135,9 +135,12 @@ describe('useAgentMcp', () => {
     });
   });
 
-  it('reports a failure as an empty listing, never as a CLI limitation', async () => {
-    // A transport failure is ours. Claiming the CLI has no listing would put
-    // an untrue sentence in the panel.
+  it('gives a transport failure its own sentence, so it cannot read as "No servers"', async () => {
+    // The panel renders an empty listing with no reason as "No servers" — a
+    // claim about the user's CONFIGURATION. A failed request must not make it,
+    // and this is the last hop where the daemon's own failure/empty split can
+    // still be thrown away. The client's per-request budget is shorter than
+    // the daemon's worst case, so this path is the COMMON one on a slow read.
     const get = mount(
       apiReturning(
         vi.fn((_request: McpRequest) => Promise.reject(new Error('offline'))),
@@ -147,11 +150,64 @@ describe('useAgentMcp', () => {
     );
     await settle();
 
-    expect(get().byKind.get('claude')).toEqual({
-      servers: [],
-      unavailableReason: null,
-    });
+    const listed = get().byKind.get('claude');
+    expect(listed?.servers).toEqual([]);
+    expect(listed?.unavailableReason).not.toBeNull();
     expect(get().loading).toBe(false);
+  });
+
+  it('stays loading while a refresh re-reads rows that are already on screen', async () => {
+    // Pins the `pending` half of `loading`. It is the ONLY state where the two
+    // terms disagree — rows present, a read in flight — and it is exactly what
+    // disables the Refresh button. Drop `pending` and this is what breaks.
+    let release!: (value: unknown) => void;
+    let calls = 0;
+    const call = vi.fn((_request: McpRequest) => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve(listing)
+        : new Promise<unknown>((resolve) => {
+            release = resolve;
+          });
+    });
+    const get = mount(apiReturning(call), ['claude'], '/proj');
+    await settle();
+    expect(get().loading).toBe(false);
+
+    act(() => {
+      get().refresh();
+    });
+
+    expect(get().byKind.get('claude')).toEqual(listing);
+    expect(get().loading).toBe(true);
+
+    release(listing);
+    await settle();
+    expect(get().loading).toBe(false);
+  });
+
+  it('is already loading on the very first render, before the effect runs', async () => {
+    // Pins the `awaitingFirstAnswer` half. Effects run after paint, so without
+    // it the panel paints one frame of "No servers" before asking anything.
+    const seen: boolean[] = [];
+    const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
+    // Hoisted: rebuilding the api object per render changes the effect's
+    // identity every time and spins it forever.
+    const api = apiReturning(call);
+    const kinds: CliKind[] = ['claude'];
+    function Probe(): null {
+      seen.push(useAgentMcp(api, kinds, '/proj').loading);
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(<Probe />);
+    });
+
+    expect(seen[0]).toBe(true);
+    await settle();
   });
 
   it('asks nothing, and shows no spinner, when the run has no folder', async () => {

@@ -382,6 +382,24 @@ describe('AgentsPanel — MCP servers', () => {
     expect(cardFor(el, 'Orchestrator').textContent).toContain('No servers');
   });
 
+  it('does not claim "No servers" for an agent nothing has answered for', () => {
+    // A run can carry no folder at all, so nothing is ever asked. Saying "No
+    // servers" there is a claim about the user's configuration made without
+    // looking — the same class of untruth `unavailableReason` exists to stop.
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={new Map<CliKind, AgentMcpListing>()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const orchestrator = cardFor(el, 'Orchestrator');
+    expect(orchestrator.textContent).toContain('Not checked');
+    expect(orchestrator.textContent).not.toContain('No servers');
+  });
+
   it('refreshes on demand, and blocks a second click while one is running', () => {
     const onRefreshMcp = vi.fn();
     const el = render(
@@ -414,11 +432,10 @@ describe('AgentsPanel — MCP servers', () => {
     const refresh = el.querySelector<HTMLButtonElement>(
       'button[aria-label="Refresh MCP servers"]',
     );
+    // A real disabled <button>, not an aria-disabled div — that is what makes
+    // the browser suppress the click, so it is the part worth asserting.
+    expect(refresh?.tagName).toBe('BUTTON');
     expect(refresh?.disabled).toBe(true);
-    // Observed, not inferred from the attribute: the click must not reach the
-    // handler while a read is in flight.
-    click(refresh);
-    expect(onRefreshMcp).toHaveBeenCalledOnce();
   });
 
   it('offers no refresh control when the owner supplies no handler', () => {

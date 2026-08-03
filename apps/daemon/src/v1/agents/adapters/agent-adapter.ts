@@ -497,11 +497,20 @@ export abstract class AgentAdapter {
       // it keeps the reap independent of whether the exec callback happens to
       // be async (node's is; an injected one need not be).
       let reapWhenSpawned = false;
+      let reaped = false;
       const reapGroup = (): void => {
+        // Idempotent, and that is the point: the deadline reaps and settles,
+        // and the exec callback then runs its own error-path reap. Without
+        // this the second `process.kill(-pid)` lands after node has waitpid'd
+        // the child, when the pid may already belong to something else.
+        if (reaped) {
+          return;
+        }
         if (!child) {
           reapWhenSpawned = true;
           return;
         }
+        reaped = true;
         const target = child;
         killProcessGroup(target.pid, 'SIGKILL', () => target.kill('SIGKILL'));
       };

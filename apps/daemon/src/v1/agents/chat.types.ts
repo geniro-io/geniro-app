@@ -285,11 +285,20 @@ export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
  *
  * An OBJECT rather than a bare array because an empty list is ambiguous on its
  * own, and resolving that ambiguity must not become a "which CLI is this?"
- * branch in the reader. `unavailableReason` is the adapter's own sentence
- * (`AdapterConfig.mcp.listingUnavailableReason`), non-null exactly when this
- * CLI cannot be asked at all — so `servers: []` with a null reason means the
- * folder genuinely has none, and with a reason means we never asked. The UI
- * shows the sentence verbatim rather than composing one.
+ * branch in the reader.
+ *
+ * `servers: []` with a NULL reason is the only shape that asserts anything
+ * about the user's configuration — it means the folder genuinely has none.
+ * A non-null reason means we are not asserting that, and it covers BOTH a CLI
+ * that cannot be asked at all (`AdapterConfig.mcp.listingUnavailableReason`)
+ * and a read that failed or could not be understood. The UI shows the sentence
+ * verbatim rather than composing one, and today treats the two identically.
+ *
+ * A consumer that must tell a PERMANENT refusal from a TRANSIENT one — a
+ * Retry affordance, or milestone 4 deciding whether cursor has gained a
+ * listing — needs a discriminator added here rather than a match on the prose.
+ * Deliberately not added yet: nothing reads it, and inventing the field now
+ * would be a wire commitment with no consumer to shape it.
  */
 // No `.meta({ id })` on this ROOT: it is the response DTO's own schema (see
 // AgentModelWireSchema above for the dangling-$ref an id here would cause).

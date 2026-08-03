@@ -112,8 +112,11 @@ function readStatus(statusText: string): {
  *   works around the same thing), and `Note: a new version is available` would
  *   otherwise be listed as a server named "Note" in the one surface whose job
  *   is to say what the user has configured. The empty-folder sentence is
- *   rejected by the same check.
- * - Empty/absent output yields `[]`.
+ *   rejected earlier still, by the missing `<name>: ` delimiter.
+ * - Empty/absent output yields `[]`. Note that `[]` alone does NOT mean the
+ *   folder is empty — it also covers output this parser could not read — so
+ *   the CALLER decides which, by checking for the CLI's own empty-folder
+ *   sentence (`ClaudeAdapter.listMcpServers`).
  *
  * Never throws.
  */

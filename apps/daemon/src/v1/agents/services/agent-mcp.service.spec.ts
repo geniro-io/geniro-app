@@ -31,14 +31,22 @@ afterEach(() => {
 });
 
 /**
- * Let the service reach its adapter call. It defers that call by a microtask
- * (the synchronous-throw guard), so a single `await Promise.resolve()` lands
- * before the fixture's deferred resolver has been assigned.
+ * Wait until the adapter has actually been called, rather than counting ticks.
+ * The service defers its adapter call (the synchronous-throw guard), and a
+ * fixed tick count makes a single-flight regression fail by 5s TIMEOUT instead
+ * of by the assertion that names it.
  */
-async function flush(): Promise<void> {
-  for (let i = 0; i < 4; i += 1) {
-    await Promise.resolve();
-  }
+function whenCalled(fn: { mock: { calls: unknown[] } }): Promise<void> {
+  return new Promise((resolve) => {
+    const check = (): void => {
+      if (fn.mock.calls.length > 0) {
+        resolve();
+        return;
+      }
+      setTimeout(check, 0);
+    };
+    check();
+  });
 }
 
 function server(name: string): AgentMcpServer {
@@ -211,11 +219,14 @@ describe('AgentMcpService.list', () => {
 
     const first = service.list(AgentKind.Claude, cwd);
     const second = service.list(AgentKind.Claude, cwd);
-    await flush();
-    release([server('a')]);
+    await whenCalled(listMcpServers);
 
-    expect(await first).toEqual(await second);
+    // Asserted BEFORE releasing: with single-flight gone the second call would
+    // overwrite `release`, `first` would never settle, and this pin would die
+    // on a timeout instead of reporting the coalescing failure.
     expect(listMcpServers).toHaveBeenCalledTimes(1);
+    release([server('a')]);
+    expect(await first).toEqual(await second);
   });
 
   it('a concurrent refresh joins the read already running', async () => {
@@ -231,11 +242,11 @@ describe('AgentMcpService.list', () => {
 
     const first = service.list(AgentKind.Claude, cwd, true);
     const second = service.list(AgentKind.Claude, cwd, true);
-    await flush();
-    release([server('a')]);
-    await Promise.all([first, second]);
+    await whenCalled(listMcpServers);
 
     expect(listMcpServers).toHaveBeenCalledTimes(1);
+    release([server('a')]);
+    await Promise.all([first, second]);
   });
 
   it('degrades to a stated failure when the adapter rejects', async () => {

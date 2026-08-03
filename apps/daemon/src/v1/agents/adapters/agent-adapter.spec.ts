@@ -312,7 +312,76 @@ describe('AgentAdapter.supportsLiveStream', () => {
   });
 });
 
+/**
+ * A CLI that claims it CAN be listed but supplies no mechanism — the shape a
+ * future adapter author lands in by filling in config and forgetting the
+ * override. Neither shipped adapter can reach the base fallback.
+ */
+class ForgotToOverrideAdapter extends CursorAcpAdapter {
+  override getConfig(): AdapterConfig {
+    const base = super.getConfig();
+    return {
+      ...base,
+      mcp: { ...base.mcp, listingUnavailableReason: null },
+    };
+  }
+}
+
 describe('AgentAdapter.listMcpServers', () => {
+  it('refuses rather than claiming an empty folder when an adapter forgot to override', async () => {
+    // The safety net: answering `{ ok: true, servers: [] }` here would let the
+    // service cache it and the panel state, as fact, that the user has no MCP
+    // servers — on a CLI nobody ever asked.
+    await expect(
+      new ForgotToOverrideAdapter().listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining('does not implement MCP listing'),
+    });
+  });
+
+  it('reports a failure when the CLI answered but nothing parsed as a row', async () => {
+    // Version drift: a release that rewords the row format drops every row.
+    // Reporting that as an empty listing is the confident lie the ok/err split
+    // exists to prevent — and it would be cached for the whole TTL.
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      cb(null, 'Checking MCP server health…\n\nsentry => node s.js [ok]\n');
+      return { pid: 4246, kill: () => true } as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
+
+    await expect(
+      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining('output format may have changed'),
+    });
+  });
+
+  it('reports a genuinely empty folder as an empty SUCCESS, not a failure', async () => {
+    // The other side of that check — the CLI's own empty-folder sentence is
+    // the one thing that makes `[]` a fact about the user's configuration.
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      cb(
+        null,
+        'No MCP servers configured. Use `claude mcp add` to add a server.\n',
+      );
+      return { pid: 4247, kill: () => true } as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
+
+    await expect(
+      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toEqual({ ok: true, servers: [] });
+  });
   it('cursor-agent refuses with its own reason, and writes no code to do it', async () => {
     // The declared absence: cursor carries only the config string, so there is
     // no override that could drift from it. The panel can ask EVERY agent
@@ -517,6 +586,40 @@ describe('AgentAdapter.runCommand spawn options', () => {
       expect(killSpy).toHaveBeenCalledWith(-4244, 'SIGKILL');
     } finally {
       killSpy.mockRestore();
+    }
+  });
+
+  it('reaps the group ONCE, even when the command exits after the deadline', async () => {
+    // The deadline reaps and settles; the exec callback then arrives with an
+    // error and runs its own error-path reap. By then node has waitpid'd the
+    // child, so a second `kill(-pid)` can land on whatever now owns that pid.
+    vi.useFakeTimers();
+    const killSpy = vi
+      .spyOn(process, 'kill')
+      .mockImplementation((): true => true);
+    try {
+      let fire!: () => void;
+      const execFileFn = ((
+        _cmd: string,
+        _args: readonly string[],
+        _opts: unknown,
+        cb: (err: Error | null, out: string) => void,
+      ) => {
+        fire = () => cb(new Error('killed'), '');
+        return { pid: 4248, kill: () => true } as unknown as ChildProcess;
+      }) as unknown as typeof execFile;
+
+      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers({
+        cwd: '/tmp',
+      });
+      await vi.advanceTimersByTimeAsync(20_000); // deadline reaps + settles
+      fire(); // the child's own exit lands afterwards
+      await pending;
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 

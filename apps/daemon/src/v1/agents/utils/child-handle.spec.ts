@@ -29,7 +29,7 @@ async function settledState(done: Promise<void>): Promise<boolean> {
 describe('childProcessHandle', () => {
   it('done resolves on exit, not before', async () => {
     const { child, asChild } = utilityChild();
-    const handle = childProcessHandle(asChild);
+    const handle = childProcessHandle(asChild, { processGroup: false });
 
     expect(await settledState(handle.done)).toBe(false); // still running
 
@@ -39,7 +39,7 @@ describe('childProcessHandle', () => {
 
   it('done resolves on error — the spawn-failure path (git missing, EACCES)', async () => {
     const { child, asChild } = utilityChild();
-    const handle = childProcessHandle(asChild);
+    const handle = childProcessHandle(asChild, { processGroup: false });
 
     // A child that never spawned emits 'error' and NO 'exit' — without the
     // error resolution this handle would never settle.
@@ -49,7 +49,7 @@ describe('childProcessHandle', () => {
 
   it('cancel sends SIGKILL — a short-lived utility child gets no grace dance', () => {
     const { child, asChild } = utilityChild();
-    const handle = childProcessHandle(asChild);
+    const handle = childProcessHandle(asChild, { processGroup: false });
 
     handle.cancel();
 
@@ -95,9 +95,12 @@ describe('childProcessHandle', () => {
 
   it('respondApproval is a no-op false — utility children carry no approval protocol', () => {
     const { asChild } = utilityChild();
-    expect(childProcessHandle(asChild).respondApproval('req-1', true)).toBe(
-      false,
-    );
+    expect(
+      childProcessHandle(asChild, { processGroup: false }).respondApproval(
+        'req-1',
+        true,
+      ),
+    ).toBe(false);
   });
 
   it('a spawn-failed child auto-unregisters from the ProcessRegistry, so shutdown has nothing to drain', async () => {
@@ -106,7 +109,7 @@ describe('childProcessHandle', () => {
     // daemon shutdown for the full drain window.
     const registry = new ProcessRegistry();
     const { child, asChild } = utilityChild();
-    const handle = childProcessHandle(asChild);
+    const handle = childProcessHandle(asChild, { processGroup: false });
     registry.register('utility:probe', handle);
     expect(registry.has('utility:probe')).toBe(true);
 

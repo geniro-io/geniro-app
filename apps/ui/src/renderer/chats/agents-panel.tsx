@@ -65,8 +65,11 @@ function McpSection({
           {listing.unavailableReason}
         </span>
       ) : servers === undefined ? (
+        // Nothing has answered for this agent — which is NOT the same as it
+        // having no servers. A run can carry no folder at all (`Run.cwd` is
+        // nullable), and there is nothing to ask about then.
         <span className="text-xs text-muted-foreground">
-          {loading ? 'Loading…' : 'No servers'}
+          {loading ? 'Loading…' : 'Not checked'}
         </span>
       ) : servers.length === 0 ? (
         <span className="text-xs text-muted-foreground">No servers</span>

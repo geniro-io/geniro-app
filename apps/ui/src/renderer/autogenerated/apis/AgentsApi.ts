@@ -17,12 +17,19 @@ import * as runtime from '../runtime';
 import type {
   AgentEffortDto,
   AgentKind,
+  AgentMcpListingDto,
   AgentModelDto,
   AgentSkillDto,
 } from '../models/index';
 
 export interface AgentsApiListAgentEffortsRequest {
     agent: AgentKind;
+}
+
+export interface AgentsApiListAgentMcpServersRequest {
+    agent: AgentKind;
+    cwd: string;
+    refresh?: string;
 }
 
 export interface AgentsApiListAgentModelsRequest {
@@ -84,6 +91,69 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentEffortDto>> {
         const response = await this.listAgentEffortsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listAgentMcpServersRaw(requestParameters: AgentsApiListAgentMcpServersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpListingDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentMcpServers().'
+            );
+        }
+
+        if (requestParameters['cwd'] == null) {
+            throw new runtime.RequiredError(
+                'cwd',
+                'Required parameter "cwd" was null or undefined when calling listAgentMcpServers().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['cwd'] != null) {
+            queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['refresh'] != null) {
+            queryParameters['refresh'] = requestParameters['refresh'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentMcpServers(requestParameters: AgentsApiListAgentMcpServersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
+        const response = await this.listAgentMcpServersRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

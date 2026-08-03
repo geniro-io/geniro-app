@@ -13,6 +13,7 @@ import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { AgentAdapterRegistry } from './services/agent-adapter.registry';
 import { AgentEventBus } from './services/agent-events.bus';
+import { AgentMcpService } from './services/agent-mcp.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
@@ -62,6 +63,15 @@ import { SkillsService } from './services/skills.service';
         processes: ProcessRegistry,
       ) => new SkillsService(harvest, adapters, processes),
       inject: [SkillHarvestStore, AgentAdapterRegistry, ProcessRegistry],
+    },
+    {
+      // Factory because the trailing options bag is a test seam, not a DI token.
+      provide: AgentMcpService,
+      useFactory: (
+        adapters: AgentAdapterRegistry,
+        processes: ProcessRegistry,
+      ) => new AgentMcpService(adapters, processes),
+      inject: [AgentAdapterRegistry, ProcessRegistry],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.

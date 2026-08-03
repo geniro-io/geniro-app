@@ -59,7 +59,7 @@ export class ModelsService {
       onSpawn: (child) =>
         this.processes.register(
           `models:version:${randomUUID()}`,
-          childProcessHandle(child),
+          childProcessHandle(child, { processGroup: false }),
         ),
     });
     const cached = this.cache.get(kind);
@@ -74,10 +74,13 @@ export class ModelsService {
     let models: AgentModelWire[];
     try {
       models = await adapter.listModels({
-        onSpawn: (child) =>
+        onSpawn: (child, spawnInfo) =>
           this.processes.register(
             `models:list:${randomUUID()}`,
-            childProcessHandle(child),
+            // Taken from the spawn, not restated: this is the one converted
+            // site that IS handed the real value, so hand-writing `false` here
+            // is the exact drift the required parameter exists to prevent.
+            childProcessHandle(child, spawnInfo),
           ),
       });
     } catch (err) {

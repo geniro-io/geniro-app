@@ -88,6 +88,7 @@ import {
   unanswerableRequestIds,
 } from './transcript-item';
 import { useAgentEfforts } from './use-agent-efforts';
+import { useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { useAttachments } from './use-attachments';
@@ -1595,6 +1596,29 @@ export function Chats({
   );
 
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
+  /**
+   * The agents panel's MCP rows. The folder is the RUN's, never the composer's
+   * `folder` — the panel describes the run being viewed, and those diverge the
+   * moment the user picks a different folder for their next chat.
+   *
+   * Only asked while the panel is open: the read health-checks, which launches
+   * the user's own MCP servers, and doing that for a panel nobody opened would
+   * be a background cost with no reader.
+   */
+  const mcpKinds = useMemo(
+    (): CliKind[] =>
+      showAgentsPanel
+        ? [
+            ...new Set(
+              agents
+                .map((agent) => agent.agent)
+                .filter((kind): kind is CliKind => kind !== null),
+            ),
+          ]
+        : [],
+    [showAgentsPanel, agents],
+  );
+  const mcp = useAgentMcp(agentsApi, mcpKinds, activeRun?.cwd ?? null);
 
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
   // content width, or a long cwd path widens the grid past the window. The
@@ -2179,6 +2203,9 @@ export function Chats({
           {showAgentsPanel ? (
             <AgentsPanel
               agents={agents}
+              mcpByKind={mcp.byKind}
+              mcpLoading={mcp.loading}
+              onRefreshMcp={mcp.refresh}
               onOpenThread={(agent, thread) =>
                 void openThreadTerminal(agent, thread)
               }

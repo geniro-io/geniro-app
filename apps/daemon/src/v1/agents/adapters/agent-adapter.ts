@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
+import { killProcessGroup } from '../utils/kill-tree';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
   AdapterConfig,
@@ -14,6 +15,8 @@ import type {
   AgentCommandOptions,
   AgentEffort,
   AgentEvent,
+  AgentMcpListingResult,
+  AgentMcpServersInput,
   AgentModel,
   AgentSkillEntry,
   AgentSkillsInput,
@@ -252,6 +255,42 @@ export abstract class AgentAdapter {
   abstract listModels(options?: AgentCommandOptions): Promise<AgentModel[]>;
 
   /**
+   * The MCP servers this CLI loads in a given folder, with the health it
+   * reports for each.
+   *
+   * CONCRETE over config, like `listSkills` and `listEfforts`: whether a CLI
+   * can be listed at all is a per-CLI VALUE
+   * (`config.mcp.listingUnavailableReason`), so an adapter that cannot be
+   * asked declares that string and writes no code — no override, and so no
+   * unreachable branch that could drift from the declaration. A CLI that CAN
+   * be listed overrides this with its own mechanism.
+   *
+   * The default refuses rather than answering `{ ok: true, servers: [] }`,
+   * because a future adapter that declares no reason and forgets to override
+   * must degrade to a visible "not implemented", never to a confident "this
+   * folder has no MCP servers".
+   *
+   * `input.cwd` is load-bearing: the answer is folder-scoped (project
+   * `.mcp.json` servers, and local-scope servers keyed to that directory), so
+   * a listing taken from the wrong place is confidently wrong rather than empty.
+   *
+   * Must NEVER throw or hang — this feeds a panel, so a CLI that is missing,
+   * unauthenticated or hung costs the user a list, not the request.
+   */
+  listMcpServers(
+    _input: AgentMcpServersInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentMcpListingResult> {
+    const config = this.getConfig();
+    return Promise.resolve({
+      ok: false,
+      reason:
+        config.mcp.listingUnavailableReason ??
+        `${config.kind} does not implement MCP listing`,
+    });
+  }
+
+  /**
    * The reasoning-effort levels this CLI accepts for one turn, weakest first,
    * or `[]` when it has no such control at all.
    *
@@ -433,6 +472,15 @@ export abstract class AgentAdapter {
    * `runHeadlessCli`. It strips the daemon's `GENIRO_`-prefixed env like a
    * turn does, and hands the child to `onSpawn` so the caller can register it
    * for shutdown. Never rejects.
+   *
+   * `options.processGroup` changes HOW the deadline kills — see that option's
+   * doc block, which is the canonical statement. The three rules it imposes
+   * here: the deadline is ours rather than `execFile`'s, it SETTLES the promise
+   * as well as killing (a grandchild holding the inherited stdout pipe open
+   * means `execFile`'s callback never fires at all), and every abnormal exit
+   * reaps the group — including `execFile`'s own `maxBuffer` path, which kills
+   * the direct pid only and would otherwise leave the grandchildren with
+   * nothing left to reap them.
    */
   protected runCommand(
     args: string[],
@@ -440,24 +488,83 @@ export abstract class AgentAdapter {
   ): Promise<string | null> {
     return new Promise((resolve) => {
       const run = this.options.execFileFn ?? execFile;
-      let child: ChildProcess;
+      const timeoutMs = options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS;
+      const group = options.processGroup === true;
+      let child: ChildProcess | undefined;
+      let settled = false;
+      // A reap asked for before `run()` has returned — the child exists, but
+      // this scope has not been handed it yet. Deferring rather than dropping
+      // it keeps the reap independent of whether the exec callback happens to
+      // be async (node's is; an injected one need not be).
+      let reapWhenSpawned = false;
+      let reaped = false;
+      const reapGroup = (): void => {
+        // Idempotent, and that is the point: the deadline reaps and settles,
+        // and the exec callback then runs its own error-path reap. Without
+        // this the second `process.kill(-pid)` lands after node has waitpid'd
+        // the child, when the pid may already belong to something else.
+        if (reaped) {
+          return;
+        }
+        if (!child) {
+          reapWhenSpawned = true;
+          return;
+        }
+        reaped = true;
+        const target = child;
+        killProcessGroup(target.pid, 'SIGKILL', () => target.kill('SIGKILL'));
+      };
+      // Armed BEFORE the spawn: an `execFileFn` that calls back synchronously
+      // (the spec seam) would otherwise leave a live timer no callback can
+      // clear, and it would fire `killProcessGroup` on a pid the test invented.
+      const timer = group
+        ? setTimeout(() => {
+            reapGroup();
+            settle(null);
+          }, timeoutMs)
+        : undefined;
+      timer?.unref?.();
+      function settle(value: string | null): void {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        resolve(value);
+      }
       try {
         child = run(
           this.command,
           args,
           {
-            timeout: options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS,
+            // A group spawn owns its own deadline above — leaving execFile's
+            // in place too would fire a single-PID kill first.
+            ...(group ? {} : { timeout: timeoutMs }),
+            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+            ...(group ? { detached: true } : {}),
             encoding: 'utf8',
             env: buildChildEnv(),
           },
-          (err, stdout) => resolve(err ? null : String(stdout)),
+          (err, stdout) => {
+            if (group && err) {
+              // execFile killed the direct pid (maxBuffer, its own signal) —
+              // the group it led is still standing.
+              reapGroup();
+            }
+            settle(err ? null : String(stdout));
+          },
         );
       } catch {
         // A missing binary throws synchronously on some platforms.
-        resolve(null);
+        settle(null);
         return;
       }
-      options.onSpawn?.(child);
+      if (reapWhenSpawned) {
+        reapGroup();
+      }
+      options.onSpawn?.(child, { processGroup: group });
     });
   }
 

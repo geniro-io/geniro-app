@@ -241,6 +241,60 @@ export interface AgentSkillEntry {
   source: 'project' | 'user' | 'cli';
 }
 
+/**
+ * Health of one MCP server as the CLI itself reports it.
+ *
+ * `unknown` is load-bearing rather than an error case: these rows are parsed
+ * out of human-readable CLI output, so a release that rewords a status must
+ * degrade to "listed, health unreadable" instead of dropping the server or
+ * throwing. `pending` is claude's unapproved-`.mcp.json` state — the server is
+ * configured but deliberately not connected to.
+ */
+export type AgentMcpServerStatus =
+  'connected' | 'failed' | 'pending' | 'unknown';
+
+/**
+ * One MCP server a CLI agent loads in a given working directory.
+ *
+ * The set is per-CLI AND per-folder: a CLI resolves project-scoped servers
+ * relative to the directory it runs in, so the same agent answers differently
+ * in two folders and two agents answer differently in one.
+ */
+export interface AgentMcpServer {
+  name: string;
+  /** The command line or URL the CLI reaches the server through. */
+  target: string;
+  transport: 'stdio' | 'http' | 'sse';
+  status: AgentMcpServerStatus;
+  /**
+   * The failure reason, or what the server is waiting for — whatever the CLI
+   * printed after the status. Null when the status says everything.
+   */
+  detail: string | null;
+}
+
+/**
+ * The outcome of asking one CLI for its MCP servers.
+ *
+ * Discriminated rather than a bare array because an empty array cannot say
+ * WHY it is empty, and the three reasons need different words in front of the
+ * user: the folder genuinely has none, this CLI has no listing at all, or the
+ * CLI could not be reached just now. Collapsing them loses the only
+ * distinction the panel exists to make — and, worse, lets a transient failure
+ * be cached and shown as "no servers configured".
+ *
+ * Same shape as {@link TerminalCommandResult}, for the same reason: an adapter
+ * reports its refusal as data and the owning module decides how to say it.
+ */
+export type AgentMcpListingResult =
+  { ok: true; servers: AgentMcpServer[] } | { ok: false; reason: string };
+
+/** Everything an adapter needs to list the MCP servers it would load. */
+export interface AgentMcpServersInput {
+  /** The user's project folder, already validated and canonicalized. */
+  cwd: string;
+}
+
 /** Everything an adapter needs to list what it can be invoked with. */
 export interface AgentSkillsInput {
   /** The user's project folder, already validated and canonicalized. */
@@ -249,14 +303,30 @@ export interface AgentSkillsInput {
   homeDir: string;
 }
 
+/**
+ * How a utility child was spawned, handed to the registration site so it can
+ * reap exactly what exists. Produced by `runCommand`, consumed by
+ * `childProcessHandle` — the two halves of the process-group pairing, which is
+ * why neither is stated by hand at a call site.
+ */
+export interface AgentSpawnInfo {
+  /** The child leads its own process group (see {@link AgentCommandOptions.processGroup}). */
+  processGroup: boolean;
+}
+
 /** Options for a short-lived utility command a CLI is asked to run. */
 export interface AgentCommandOptions {
   /**
    * Handed the spawned child so the caller can register it with
    * `ProcessRegistry` — every child the daemon spawns must be reapable on
    * shutdown, including these one-shot utility ones.
+   *
+   * `spawnInfo` describes what was ACTUALLY spawned, so the registration site
+   * never has to restate it: `childProcessHandle(child, spawnInfo)` is always
+   * correct, whereas a hand-written `{ processGroup: true }` at the call site
+   * could disagree with the spawn and silently reap nothing.
    */
-  onSpawn?: (child: ChildProcess) => void;
+  onSpawn?: (child: ChildProcess, spawnInfo: AgentSpawnInfo) => void;
   /**
    * Handed a full TURN a utility method started (a probe), for the same
    * reason as `onSpawn` — `start()` hands back a handle, not a child, so the
@@ -264,6 +334,30 @@ export interface AgentCommandOptions {
    */
   onTurn?: (handle: AgentTurnHandle) => void;
   timeoutMs?: number;
+  /**
+   * The folder to run the command in. Absent means the daemon's own cwd, which
+   * is what every caller wanted until a command's ANSWER became folder-scoped:
+   * `claude mcp list` reports the project's `.mcp.json` servers and the
+   * local-scope servers keyed to that directory, so asked from the wrong place
+   * it confidently returns a different machine-true list.
+   */
+  cwd?: string;
+  /**
+   * Run the child as its own process-group leader, and reap the whole group on
+   * every abnormal exit.
+   *
+   * THE canonical statement of this option; the other sites that touch it point
+   * here rather than restating it. Off by default because it is only worth its
+   * cost for a command that FORKS: `claude mcp list` health-checks, so it
+   * launches the user's own MCP servers as grandchildren, and `kill-tree.ts`
+   * names the failure this closes — "a single-PID kill would orphan them".
+   * Node's own `execFile` deadline IS such a single-PID kill, so setting this
+   * also moves the deadline onto a group-killing timer of our own.
+   *
+   * `runCommand` owns both halves: it passes the same flag to `onSpawn` as
+   * `spawnInfo.processGroup`, so a registration site cannot pair them wrongly.
+   */
+  processGroup?: boolean;
 }
 
 /**
@@ -664,6 +758,18 @@ export interface AdapterConfig {
      * endpoint rides the turn itself, so nothing outside it ever sees the token.
      */
     readonly endpointRequiresCwdConfig: boolean;
+    /**
+     * Why this CLI's loaded MCP servers cannot be listed, or null when they
+     * can be.
+     *
+     * A VALUE rather than a method because nothing acts on it — it is carried
+     * to the UI and shown. It exists so that "this folder has no servers" and
+     * "this CLI cannot tell us" stay different answers: both are an empty list,
+     * and a reader that cannot distinguish them either invents a reason or
+     * branches on which CLI it is holding. This field is what lets the panel
+     * say something true without ever asking that question.
+     */
+    readonly listingUnavailableReason: string | null;
   };
 
   // ── Interactive terminal mirror ─────────────────────────────────────────

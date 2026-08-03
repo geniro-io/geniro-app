@@ -150,7 +150,7 @@ export class SkillsService {
       onSpawn: (child) =>
         this.processes.register(
           `skills:version:${randomUUID()}`,
-          childProcessHandle(child),
+          childProcessHandle(child, { processGroup: false }),
         ),
     });
     const cached = this.catalog.get(kind);

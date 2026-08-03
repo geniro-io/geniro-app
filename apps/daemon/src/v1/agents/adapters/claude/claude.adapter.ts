@@ -8,7 +8,10 @@ import type {
   AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
+  AgentCommandOptions,
   AgentEvent,
+  AgentMcpListingResult,
+  AgentMcpServersInput,
   AgentModel,
   AgentTurnInput,
   InstalledApprovalSupport,
@@ -22,6 +25,11 @@ import {
   CLAUDE_EFFORT_FLAG,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
+  CLAUDE_MCP_EMPTY_MARKER,
+  CLAUDE_MCP_LIST_ARGS,
+  CLAUDE_MCP_LIST_FAILED_MESSAGE,
+  CLAUDE_MCP_LIST_TIMEOUT_MS,
+  CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_FLAG,
@@ -40,6 +48,7 @@ import {
   sweepStaleTurnMcpConfigs,
   writeTurnMcpConfig,
 } from './utils/claude-mcp-config.utils';
+import { parseMcpList } from './utils/claude-mcp-list.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
@@ -172,6 +181,11 @@ export class ClaudeAdapter extends AgentAdapter {
         callToolsRequireTrustProbe: false,
         /** `--mcp-config` carries the endpoint for one turn; no cwd file is touched. */
         endpointRequiresCwdConfig: false,
+        /**
+         * Null: `claude mcp list` reports them, so this adapter overrides
+         * `listMcpServers` and an empty answer really does mean an empty folder.
+         */
+        listingUnavailableReason: null,
       },
       terminal: {
         resumeFlag: CLAUDE_RESUME_FLAG,
@@ -295,6 +309,45 @@ export class ClaudeAdapter extends AgentAdapter {
     return Promise.resolve(
       claudeModels(this.getConfig().builtinModels, this.claudeOptions.homeDir),
     );
+  }
+
+  /**
+   * claude DOES have a listing subcommand, so this shells out — and it is the
+   * one utility command that needs `processGroup`
+   * ({@link AgentCommandOptions.processGroup} says why).
+   *
+   * A null stdout is the command having FAILED — missing binary, non-zero
+   * exit, or the deadline — and is reported as such rather than as an empty
+   * listing. The distinction is load-bearing downstream: an empty listing is
+   * cached and shown as "no servers", which would be a lie about the user's
+   * configuration for as long as the entry lives.
+   *
+   * Output is prose (the CLI rejects `--json`), so the parse is deliberately
+   * forgiving and lives in its own pure function.
+   */
+  override async listMcpServers(
+    input: AgentMcpServersInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpListingResult> {
+    const stdout = await this.runCommand([...CLAUDE_MCP_LIST_ARGS], {
+      ...options,
+      cwd: input.cwd,
+      processGroup: true,
+      timeoutMs: options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS,
+    });
+    if (stdout === null) {
+      return { ok: false, reason: CLAUDE_MCP_LIST_FAILED_MESSAGE };
+    }
+    const servers = parseMcpList(stdout);
+    if (servers.length === 0 && !stdout.includes(CLAUDE_MCP_EMPTY_MARKER)) {
+      // The CLI answered, but nothing in what it said looked like a row and it
+      // did not say the folder was empty either. Reporting that as an empty
+      // listing would let it be cached and shown as "no servers" — the
+      // confident lie the whole ok/err split exists to prevent, and the one a
+      // reworded row format would otherwise produce silently.
+      return { ok: false, reason: CLAUDE_MCP_LIST_UNREADABLE_MESSAGE };
+    }
+    return { ok: true, servers };
   }
 
   protected buildArgs(input: AgentTurnInput): string[] {

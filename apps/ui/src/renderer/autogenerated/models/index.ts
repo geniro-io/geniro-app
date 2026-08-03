@@ -54,6 +54,85 @@ export type AgentKind = typeof AgentKind[keyof typeof AgentKind];
 /**
  * 
  * @export
+ * @interface AgentMcpListingDto
+ */
+export interface AgentMcpListingDto {
+    /**
+     * 
+     * @type {Array<AgentMcpServer>}
+     * @memberof AgentMcpListingDto
+     */
+    servers: Array<AgentMcpServer>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpListingDto
+     */
+    unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface AgentMcpServer
+ */
+export interface AgentMcpServer {
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    name: string;
+    /**
+     * The command line or URL the CLI reaches the server through
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    target: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    transport: AgentMcpServerTransportEnum;
+    /**
+     * Health as the CLI reported it; `pending` is a configured but unapproved server
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    status: AgentMcpServerStatusEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    detail: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const AgentMcpServerTransportEnum = {
+    Stdio: 'stdio',
+    Http: 'http',
+    Sse: 'sse'
+} as const;
+export type AgentMcpServerTransportEnum = typeof AgentMcpServerTransportEnum[keyof typeof AgentMcpServerTransportEnum];
+
+/**
+ * @export
+ */
+export const AgentMcpServerStatusEnum = {
+    Connected: 'connected',
+    Failed: 'failed',
+    Pending: 'pending',
+    Unknown: 'unknown'
+} as const;
+export type AgentMcpServerStatusEnum = typeof AgentMcpServerStatusEnum[keyof typeof AgentMcpServerStatusEnum];
+
+/**
+ * 
+ * @export
  * @interface AgentModelDto
  */
 export interface AgentModelDto {

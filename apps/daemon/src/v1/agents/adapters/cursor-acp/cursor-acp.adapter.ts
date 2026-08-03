@@ -128,6 +128,20 @@ export class CursorAcpAdapter extends AgentAdapter {
         callToolsRequireTrustProbe: false,
         /** ACP carries the endpoint in-protocol; no cwd config is written. */
         endpointRequiresCwdConfig: false,
+        /**
+         * Shown verbatim wherever this CLI's servers would have been listed —
+         * and, being non-null, it is also what makes the base refuse the
+         * listing, so this adapter needs no `listMcpServers` of its own.
+         *
+         * ACP has no agent-to-client inventory of a session's servers, and
+         * whether the binary has a listing subcommand is UNVERIFIED (the only
+         * attested member of that family is `mcp enable`, from code deleted in
+         * a1b6832). Verifying it is the first step of this feature's cursor
+         * milestone — so the honest answer is that we have not asked, not that
+         * the folder is empty.
+         */
+        listingUnavailableReason:
+          'cursor-agent MCP listing is not supported yet',
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       terminal: null,

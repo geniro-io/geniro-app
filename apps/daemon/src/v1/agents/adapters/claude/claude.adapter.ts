@@ -36,6 +36,7 @@ import {
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
+  CLAUDE_MODEL_CACHE_FILE,
   CLAUDE_MODEL_FLAG,
   CLAUDE_PARTIAL_MESSAGES_FLAG,
   CLAUDE_PERMISSION_MODE_DEFAULT,
@@ -59,6 +60,7 @@ import {
 } from './utils/claude-mcp-config.utils';
 import {
   parseDisabledServerNames,
+  parseHomeDisabledServerNames,
   parseProjectServerNames,
 } from './utils/claude-mcp-folder.utils';
 import { parseMcpList } from './utils/claude-mcp-list.utils';
@@ -428,16 +430,16 @@ export class ClaudeAdapter extends AgentAdapter {
         return null;
       }
     };
+    const home = this.claudeOptions.homeDir ?? homedir();
     const projectSource = await read(join(cwd, CLAUDE_PROJECT_MCP_FILE));
     const settingsSources = await Promise.all([
       ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) => read(join(cwd, rel))),
-      read(
-        join(
-          this.claudeOptions.homeDir ?? homedir(),
-          CLAUDE_HOME_SETTINGS_FILE,
-        ),
-      ),
+      read(join(home, CLAUDE_HOME_SETTINGS_FILE)),
     ]);
+    // Where answering "No" to the CLI's own trust prompt lands — a different
+    // file and a different shape from the settings ones, but the same
+    // question, and the ordinary way a user switches a project server off.
+    const homeConfig = await read(join(home, CLAUDE_MODEL_CACHE_FILE));
     // Union, because that is how the CLI itself combines them: a name in ANY
     // of these is one geniro cannot pull back out.
     const userDisabled = new Set<string>();
@@ -446,6 +448,11 @@ export class ClaudeAdapter extends AgentAdapter {
         for (const name of parseDisabledServerNames(source)) {
           userDisabled.add(name);
         }
+      }
+    }
+    if (homeConfig !== null) {
+      for (const name of parseHomeDisabledServerNames(homeConfig, cwd)) {
+        userDisabled.add(name);
       }
     }
     return {

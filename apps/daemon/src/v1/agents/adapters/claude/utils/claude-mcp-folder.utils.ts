@@ -62,3 +62,48 @@ export function parseDisabledServerNames(source: string): string[] {
   }
   return disabled.filter((entry): entry is string => typeof entry === 'string');
 }
+
+/**
+ * The `disabledMcpjsonServers` names `~/.claude.json` records for one folder.
+ *
+ * This is where answering "No" to the CLI's own `.mcp.json` trust prompt lands
+ * — the ordinary way a user switches a project server off — so a reader that
+ * consults only the `settings*.json` files reports `userDisabled` as empty and
+ * the row gets a live switch for a server the turn never loads. Probe-verified
+ * on 2.1.220: moving a name into this list emptied the turn's `mcp_servers`.
+ *
+ * Both the per-project entry and any root-level list are read, because the
+ * CLI's own layering is not something this adapter should have to guess at.
+ */
+export function parseHomeDisabledServerNames(
+  source: string,
+  cwd: string,
+): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return [];
+  }
+  const home = parsed as {
+    disabledMcpjsonServers?: unknown;
+    projects?: Record<string, unknown>;
+  };
+  const names = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+  const project = home.projects?.[cwd];
+  return [
+    ...names(home.disabledMcpjsonServers),
+    ...names(
+      typeof project === 'object' && project !== null
+        ? (project as { disabledMcpjsonServers?: unknown })
+            .disabledMcpjsonServers
+        : undefined,
+    ),
+  ];
+}

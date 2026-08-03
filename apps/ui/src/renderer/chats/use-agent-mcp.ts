@@ -72,6 +72,11 @@ export function useAgentMcp(
   // `reloadToken > 0` would make every later navigation re-dial — re-launching
   // the user's own MCP servers — for the rest of the session.
   const consumedToken = useRef(0);
+  // Bumped when a WRITE's answer lands. A read that was already in flight was
+  // composed by the daemon BEFORE the toggle was stored, so its rows still
+  // show the old state; letting it land would flip the switch back while the
+  // next turn honours the toggle, and nothing re-reads to correct it.
+  const writeSeq = useRef(0);
   const kindsKey = kinds.join(',');
   /** Identity of the question being asked — which kinds, in which folder. */
   const readScope = `${kindsKey}\u0000${cwd ?? ''}`;
@@ -92,6 +97,7 @@ export function useAgentMcp(
       return;
     }
     let stale = false;
+    const startedAtWrite = writeSeq.current;
     setPending(true);
     void Promise.all(
       targetKinds.map(async (kind): Promise<[CliKind, AgentMcpListing]> => {
@@ -114,7 +120,7 @@ export function useAgentMcp(
         }
       }),
     ).then((entries) => {
-      if (stale) {
+      if (stale || writeSeq.current !== startedAtWrite) {
         return;
       }
       setAnswered({ scope: readScope, byKind: new Map(entries) });
@@ -146,6 +152,7 @@ export function useAgentMcp(
           setMcpServerEnabledDto: { agent: kind, cwd, server, enabled },
         })
         .then((listing) => {
+          writeSeq.current += 1;
           setAnswered((prev) => {
             // The folder may have changed while the write was in flight.
             // Landing this answer in the new folder's map would state one

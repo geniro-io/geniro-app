@@ -452,6 +452,62 @@ describe('useAgentMcp — the toggle', () => {
     expect(get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
   });
 
+  it('keeps the switched-off row off when an older read finally answers', async () => {
+    // The read path guards only against ITS OWN supersession (a later effect
+    // run marks the in-flight read stale). Nothing marks a read stale when a
+    // WRITE lands while it is out, so the listing the daemon composed before
+    // the toggle was stored comes back and restores the row to loading — and
+    // nothing re-reads afterwards, so the panel keeps stating the opposite of
+    // what the next turn will do until the user refreshes by hand.
+    //
+    // Reached the way a user reaches it: the switch is only clickable while no
+    // read is in flight, and moving between chats (here A → B → A) starts one
+    // for the folder the toggle is still writing to.
+    const reads: ((value: unknown) => void)[] = [];
+    let releaseWrite!: (value: unknown) => void;
+    const ui = mountRerenderable(
+      apiReturning(
+        () =>
+          new Promise<unknown>((resolve) => {
+            reads.push(resolve);
+          }),
+        () =>
+          new Promise<unknown>((resolve) => {
+            releaseWrite = resolve;
+          }),
+      ),
+    );
+    ui.show(['claude'], '/proj-a');
+    await settle();
+    reads[0]?.({ servers: [row('sentry', false)], unavailableReason: null });
+    await settle();
+
+    act(() => {
+      ui.get().setEnabled('claude', 'sentry', false);
+    });
+    // Away and back while the write is still out: folder B's read never
+    // answers, and returning to A starts a second read of A.
+    ui.show(['claude'], '/proj-b');
+    await settle();
+    ui.show(['claude'], '/proj-a');
+    await settle();
+
+    releaseWrite({
+      servers: [row('sentry', true)],
+      unavailableReason: null,
+    });
+    await settle();
+    // The write's own answer did land — the row below is lost to the read, not
+    // to the write path's folder guard.
+    expect(ui.get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+
+    // The A re-read was composed by the daemon before the write landed.
+    reads[2]?.({ servers: [row('sentry', false)], unavailableReason: null });
+    await settle();
+
+    expect(ui.get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+  });
+
   it('surfaces the daemon’s own refusal, so the user learns WHY', async () => {
     const get = mount(
       apiReturning(

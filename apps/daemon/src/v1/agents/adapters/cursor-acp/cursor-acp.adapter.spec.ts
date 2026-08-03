@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process';
+import type { execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -112,6 +114,41 @@ afterEach(() => {
   delete process.env.GENIRO_CURSOR_API_KEY;
   delete process.env.GENIRO_CURSOR_BIN;
 });
+
+/**
+ * Answers a utility command (`runCommand`, not `start`) with canned stdout,
+ * capturing its argv and options. A turn is spawned through `spawn`;
+ * everything else runs through `execFileFn`. A null stdout is the
+ * command-failed signal — `runCommand` swallows the error and returns null.
+ */
+function fakeListing(stdout: string | null): {
+  execFileFn: typeof execFile;
+  captured: {
+    args?: readonly string[];
+    opts?: { cwd?: string; detached?: boolean };
+  };
+} {
+  const captured: {
+    args?: readonly string[];
+    opts?: { cwd?: string; detached?: boolean };
+  } = {};
+  const execFileFn = ((
+    _cmd: string,
+    args: readonly string[],
+    opts: { cwd?: string; detached?: boolean },
+    cb: (err: Error | null, out: string) => void,
+  ) => {
+    captured.args = args;
+    captured.opts = opts;
+    if (stdout === null) {
+      cb(new Error('spawn failed'), '');
+    } else {
+      cb(null, stdout);
+    }
+    return { pid: 4242 } as ChildProcess;
+  }) as unknown as typeof execFile;
+  return { execFileFn, captured };
+}
 
 describe('CursorAcpAdapter spawn', () => {
   it('runs the ACP server and keeps every turn parameter out of argv', () => {
@@ -494,6 +531,91 @@ describe('CursorAcpAdapter misuse', () => {
     ).toEqual({
       sessionId: 'sess-b',
       prompt: [{ type: 'text', text: 'turn B' }],
+    });
+  });
+  describe('listMcpServers', () => {
+    it('asks the CLI in the folder it was given, in its own process group', async () => {
+      const { execFileFn, captured } = fakeListing('probe: ready\n');
+
+      await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+        cwd: '/proj',
+      });
+
+      expect(captured.args).toEqual(['mcp', 'list']);
+      // The folder IS the question: `.cursor/mcp.json` is visible only from
+      // its own directory, so a listing taken elsewhere is confidently wrong.
+      expect(captured.opts?.cwd).toBe('/proj');
+      // The command health-checks, which launches the user's own stdio
+      // servers as children — killing only the CLI would strand them.
+      expect(captured.opts?.detached).toBe(true);
+    });
+
+    it('reports the servers the CLI listed', async () => {
+      const { execFileFn } = fakeListing(
+        'probe-good: ready\nprobe-broken: Error: Connection failed\n',
+      );
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({
+        ok: true,
+        servers: [
+          {
+            name: 'probe-good',
+            target: null,
+            transport: null,
+            status: 'connected',
+            detail: null,
+          },
+          {
+            name: 'probe-broken',
+            target: null,
+            transport: null,
+            status: 'failed',
+            detail: 'Connection failed',
+          },
+        ],
+      });
+    });
+
+    it('reports an empty folder as an EMPTY listing, not a failure', async () => {
+      const { execFileFn } = fakeListing(
+        'No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)\n',
+      );
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({ ok: true, servers: [] });
+    });
+
+    it('reports a command that could not be run as a FAILURE, never as empty', async () => {
+      // null stdout is the missing binary / non-zero exit / deadline signal.
+      // An `ok: true, servers: []` here would be cached and shown as "no
+      // servers" — a lie about the user's configuration for as long as the
+      // entry lives.
+      const { execFileFn } = fakeListing(null);
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: expect.stringContaining('did not answer'),
+      });
+    });
+
+    it('reports unreadable output as a FAILURE rather than an empty folder', async () => {
+      // The case that matters most for this CLI: a cursor row has no
+      // structural marker, so a reworded status makes the parser drop every
+      // row. Without this branch that is indistinguishable from an empty
+      // folder, and the panel would confidently say "No servers".
+      const { execFileFn } = fakeListing('probe-good: online now\n');
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: expect.stringContaining('format may have changed'),
+      });
     });
   });
 });

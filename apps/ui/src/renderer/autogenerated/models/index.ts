@@ -83,17 +83,17 @@ export interface AgentMcpServer {
      */
     name: string;
     /**
-     * The command line or URL the CLI reaches the server through
+     * 
      * @type {string}
      * @memberof AgentMcpServer
      */
-    target: string;
+    target: string | null;
     /**
      * 
      * @type {string}
      * @memberof AgentMcpServer
      */
-    transport: AgentMcpServerTransportEnum;
+    transport: AgentMcpServerTransportEnum | null;
     /**
      * Health as the CLI reported it; `pending` is a configured but unapproved server
      * @type {string}

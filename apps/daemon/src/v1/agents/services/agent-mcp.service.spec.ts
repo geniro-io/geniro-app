@@ -524,9 +524,14 @@ describe('AgentMcpService.list', () => {
     expect(listMcpServers).not.toHaveBeenCalled();
   });
 
-  it('the shipped cursor adapter is the one that declares an absence, claude does not', async () => {
-    // Pins the two REAL adapters, not a fixture: if cursor gains a listing (or
-    // claude loses one) this is what makes the panel's copy follow.
+  it('BOTH shipped adapters now list, and only cursor declares the toggle absent', async () => {
+    // Pins the two REAL adapters, not a fixture, so the panel's copy follows
+    // the CLIs. This assertion was inverted in milestone 4: cursor used to
+    // declare its listing unavailable, and `cursor-agent mcp list` turned out
+    // to exist. What did NOT change is the toggle — `mcp enable|disable` write
+    // cursor's global config, which this feature will not touch — so a cursor
+    // row still carries a reason for having no switch, and losing that reason
+    // would put a dead control on every one of them.
     const { ClaudeAdapter } = await import('../adapters/claude/claude.adapter');
     const { CursorAcpAdapter } =
       await import('../adapters/cursor-acp/cursor-acp.adapter');
@@ -534,9 +539,11 @@ describe('AgentMcpService.list', () => {
     expect(
       new ClaudeAdapter().getConfig().mcp.listingUnavailableReason,
     ).toBeNull();
-    expect(
-      new CursorAcpAdapter().getConfig().mcp.listingUnavailableReason,
-    ).toEqual(expect.stringContaining('cursor-agent'));
+    const cursorMcp = new CursorAcpAdapter().getConfig().mcp;
+    expect(cursorMcp.listingUnavailableReason).toBeNull();
+    expect(cursorMcp.toggleUnavailableReason).toEqual(
+      expect.stringContaining('cursor-agent'),
+    );
   });
 
   it('rejects a cwd that is not an absolute existing directory', async () => {

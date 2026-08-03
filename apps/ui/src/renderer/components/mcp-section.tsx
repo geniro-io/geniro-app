@@ -80,8 +80,14 @@ export function McpSection({
               key={server.name}
               className="flex items-center gap-1.5 text-xs"
               // The failure reason is the only actionable part of a failure,
-              // and it is far too long for the row.
-              title={server.detail ?? server.target}>
+              // and it is far too long for the row. Both may be absent: a
+              // healthy server has no detail, and a CLI that reports no command
+              // line (cursor prints only a name and a status) has no target
+              // either — so the row carries no tooltip at all. NOT `?? ''`,
+              // which would render an empty tooltip; the trailing `?? undefined`
+              // itself is only for the type, since React omits a null attribute
+              // just the same.
+              title={server.detail ?? server.target ?? undefined}>
               <span
                 className={cn(
                   'min-w-0 flex-1 truncate',

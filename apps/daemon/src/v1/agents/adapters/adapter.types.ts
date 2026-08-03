@@ -262,9 +262,21 @@ export type AgentMcpServerStatus =
  */
 export interface AgentMcpServer {
   name: string;
-  /** The command line or URL the CLI reaches the server through. */
-  target: string;
-  transport: 'stdio' | 'http' | 'sse';
+  /**
+   * The command line or URL the CLI reaches the server through, or null when
+   * the CLI does not say.
+   *
+   * Nullable because not every CLI reports it: claude prints
+   * `sentry: node s.js - √ Connected`, cursor prints `sentry: ready` and
+   * nothing more (probe-verified on 2026.07.23-e383d2b). Reading the CLI's own
+   * config file to fill the gap is out of scope — the CLI is the source of
+   * truth here, for both agents alike — so null is the honest answer. An empty
+   * string would have asserted a command that was never reported, which is the
+   * empty-vs-unknown collapse the discriminated result below exists to prevent.
+   */
+  target: string | null;
+  /** Null for the same reason as {@link AgentMcpServer.target}. */
+  transport: 'stdio' | 'http' | 'sse' | null;
   status: AgentMcpServerStatus;
   /**
    * The failure reason, or what the server is waiting for — whatever the CLI

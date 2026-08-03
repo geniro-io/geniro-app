@@ -23,15 +23,20 @@ afterEach(() => {
 });
 
 function listing(
-  ...servers: { name: string; toggleUnavailableReason?: string | null }[]
+  ...servers: {
+    name: string;
+    toggleUnavailableReason?: string | null;
+    target?: string | null;
+    detail?: string | null;
+  }[]
 ): AgentMcpListing {
   return {
     servers: servers.map((s) => ({
       name: s.name,
-      target: `node ${s.name}.js`,
+      target: s.target === undefined ? `node ${s.name}.js` : s.target,
       transport: 'stdio',
       status: 'connected',
-      detail: null,
+      detail: s.detail ?? null,
       scope: 'project',
       disabled: false,
       toggleUnavailableReason: s.toggleUnavailableReason ?? null,
@@ -115,6 +120,37 @@ describe('McpSection', () => {
       loading: false,
     });
     expect(without.textContent).not.toContain('Global servers only.');
+  });
+
+  it('carries NO tooltip for a server whose CLI reported neither a target nor a detail', () => {
+    // cursor prints `<name>: ready` and nothing else, so both fields are null.
+    // What this catches is a `?? ''` fallback, which renders an empty tooltip
+    // that follows the pointer around saying nothing. It does NOT pin the
+    // trailing `?? undefined` — React omits a null attribute anyway, so that
+    // half exists only to satisfy `title?: string`.
+    const el = render({
+      listing: listing({ name: 'srv', target: null }),
+      loading: false,
+    });
+
+    const row = el.querySelector('li');
+    expect(row).not.toBeNull();
+    expect(row?.hasAttribute('title')).toBe(false);
+    // ...and the server is still listed, health badge and all.
+    expect(row?.textContent).toContain('srv');
+  });
+
+  it('still prefers the detail over the target when the CLI gave one', () => {
+    // The precedence the null-handling must not have quietly reordered: a
+    // failure reason is the actionable half and outranks the command line.
+    const el = render({
+      listing: listing({ name: 'srv', detail: 'HTTP 502: dial failed' }),
+      loading: false,
+    });
+
+    expect(el.querySelector('li')?.getAttribute('title')).toBe(
+      'HTTP 502: dial failed',
+    );
   });
 
   it('shows the adapter’s own sentence rather than an empty list', () => {

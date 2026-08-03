@@ -344,8 +344,11 @@ describe('AgentsPanel — MCP servers', () => {
   });
 
   it('shows a CLI’s own reason instead of pretending the folder is empty', () => {
-    // The distinction this whole shape exists for: the cursor agent gets the
-    // daemon's sentence, and the claude agent in the SAME run still gets rows.
+    // The distinction this whole shape exists for: one agent gets the daemon's
+    // sentence, and the claude agent in the SAME run still gets rows. The
+    // sentence here is a REAL one the daemon can send — cursor's listing is
+    // implemented since milestone 4, so what it now fails with is a CLI that
+    // did not answer, not an unimplemented feature.
     const el = render(
       <AgentsPanel
         agents={agents}
@@ -357,7 +360,7 @@ describe('AgentsPanel — MCP servers', () => {
               {
                 servers: [],
                 unavailableReason:
-                  'cursor-agent MCP listing is not supported yet',
+                  'could not read MCP servers — cursor-agent did not answer',
               },
             ],
           ])
@@ -369,7 +372,7 @@ describe('AgentsPanel — MCP servers', () => {
 
     const reviewer = cardFor(el, 'Reviewer');
     expect(reviewer.textContent).toContain(
-      'cursor-agent MCP listing is not supported yet',
+      'could not read MCP servers — cursor-agent did not answer',
     );
     expect(reviewer.textContent).not.toContain('No servers');
     expect(cardFor(el, 'Orchestrator').textContent).toContain('sentry');

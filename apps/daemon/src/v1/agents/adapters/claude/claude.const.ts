@@ -71,8 +71,62 @@ export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
-/** ONLY our server: the user's global MCP config must not leak into a team turn. */
+/**
+ * Restricts a turn to `--mcp-config` servers only. geniro does NOT pass it:
+ * an agent must see the same MCP servers a fresh session in that folder sees,
+ * plus geniro's call surface. Named so the spec pinning its absence and any
+ * future reader spell it the same way.
+ */
 export const CLAUDE_STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
+
+// ── The MCP toggle: settings merge semantics ──────────────────────────────
+//
+// PROBE EVIDENCE, claude 2.1.220, captured in this container. Re-probe before
+// trusting any of it on a new claude series — every line below is an
+// observation of one build, not a documented contract.
+//
+// - `--settings <file-or-json>` is documented by the CLI itself as loading
+//   "additional settings", and behaves that way: a key set in the project's
+//   own `.claude/settings.json` SURVIVED a `--settings` that never mentioned
+//   it. It merges; it does not replace.
+// - `disabledMcpjsonServers` removes a project `.mcp.json` server from a real
+//   turn — the name disappears from the init message's `mcp_servers`.
+// - Two `disabledMcpjsonServers` lists from different sources are UNIONed,
+//   NOT overridden: the user's own settings disabling `a` plus `--settings`
+//   disabling `b` left BOTH gone. So geniro can always switch a server off,
+//   and can NEVER switch one back on that the user disabled themselves.
+// - `claude mcp list` accepts NO options at all (`--settings` is rejected as
+//   an unknown option), so the LISTING can never reflect a toggle. The daemon
+//   merges its own disabled set into the rows instead.
+// - It is the TURN, not the listing, that auto-approves project servers: the
+//   same folder shows them `Pending approval` under `mcp list` while a `-p`
+//   turn reports them `connected`.
+
+/** The settings file geniro hands the CLI for one turn. Merged, never replacing. */
+export const CLAUDE_SETTINGS_FLAG = '--settings';
+
+/** The settings key holding project-`.mcp.json` servers to leave unloaded. */
+export const CLAUDE_DISABLED_MCP_SERVERS_KEY = 'disabledMcpjsonServers';
+
+/** Name parts of one turn's settings file, so a crashed launch's are sweepable. */
+export const CLAUDE_SETTINGS_PREFIX = 'geniro-settings-';
+export const CLAUDE_SETTINGS_SUFFIX = '.json';
+
+/** The folder's own MCP server definitions — the only disable-able scope. */
+export const CLAUDE_PROJECT_MCP_FILE = '.mcp.json';
+
+/**
+ * The user's own settings files, resolved against a run's cwd. Read ONLY — a
+ * name found in one is a server geniro cannot re-enable, because the CLI
+ * unions the disabled lists rather than letting ours override.
+ */
+export const CLAUDE_PROJECT_SETTINGS_FILES = [
+  '.claude/settings.json',
+  '.claude/settings.local.json',
+] as const;
+
+/** The same, in the user's home directory. */
+export const CLAUDE_HOME_SETTINGS_FILE = '.claude/settings.json';
 
 // ── Models ────────────────────────────────────────────────────────────────
 

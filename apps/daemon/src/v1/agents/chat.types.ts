@@ -276,6 +276,22 @@ export const AgentMcpServerWireSchema = z
       .string()
       .nullable()
       .describe('The failure reason, or what the server is waiting for'),
+    scope: z
+      .enum(['project', 'other', 'unknown'])
+      .describe(
+        'Where the server is defined; only `project` has any verified disable mechanism',
+      ),
+    disabled: z
+      .boolean()
+      .describe(
+        'Whether the next turn will leave this server out, whoever switched it off',
+      ),
+    toggleUnavailableReason: z
+      .string()
+      .nullable()
+      .describe(
+        'Why this row carries no switch, or null when it does. A sentence, so the UI never has to derive one from `scope`',
+      ),
   })
   .meta({ id: 'AgentMcpServer' });
 export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;

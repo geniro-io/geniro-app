@@ -295,6 +295,48 @@ export interface AgentMcpServersInput {
   cwd: string;
 }
 
+/**
+ * Where a server came from, which is what decides whether geniro may switch it
+ * off at all.
+ *
+ * `project` — defined in the folder's own MCP config, and the ONLY scope any
+ * verified mechanism can disable. Everything else is `other`: user- and
+ * local-scope servers have no non-destructive disable on claude 2.1.220
+ * (probe-verified), so a control for them would be a switch that does nothing.
+ *
+ * `unknown` is not "probably other" — it is a CLI whose config layout has not
+ * been verified, and it renders read-only for the same reason.
+ */
+export type AgentMcpServerScope = 'project' | 'other' | 'unknown';
+
+/**
+ * What a CLI's own config files say about a folder, beyond the health listing.
+ *
+ * Read-only knowledge: both fields come from files geniro never writes. They
+ * exist because the listing alone cannot answer "may this row be toggled" —
+ * `claude mcp list` prints no scope at all (probe-verified on 2.1.220).
+ */
+export interface AgentMcpFolderFacts {
+  /**
+   * Server names defined in the folder's own project MCP config. Empty means
+   * either none are, or this CLI's project config layout is unverified — the
+   * two are not distinguished here because both render the same: read-only.
+   */
+  readonly projectServers: readonly string[];
+  /**
+   * Server names the USER disabled in their OWN config, which geniro cannot
+   * re-enable.
+   *
+   * Probe-verified on claude 2.1.220: two `disabledMcpjsonServers` lists from
+   * different sources are UNIONed, never overridden. So geniro can always add
+   * a name to the union and switch a server OFF, but removing its own entry
+   * cannot pull a name back out of the user's. A row listed here therefore
+   * gets no switch — offering one would be a control that silently does
+   * nothing, which is exactly what the design forbids.
+   */
+  readonly userDisabled: readonly string[];
+}
+
 /** Everything an adapter needs to list what it can be invoked with. */
 export interface AgentSkillsInput {
   /** The user's project folder, already validated and canonicalized. */
@@ -503,6 +545,17 @@ export interface AgentTurnInput {
    */
   trustWorkspace?: boolean;
   /**
+   * MCP servers the user switched OFF for this agent and folder, which this
+   * turn must not load.
+   *
+   * geniro's own neutral vocabulary — a set of server names — never a CLI's
+   * settings shape. Each adapter translates it into whatever its own CLI
+   * understands (claude writes a per-turn `--settings` file carrying
+   * `disabledMcpjsonServers`), so an agent with a different mechanism, or none
+   * at all, changes nothing outside its own directory.
+   */
+  disabledMcpServers?: readonly string[];
+  /**
    * Loopback MCP endpoint granting this turn the agent-call tools
    * (call_agent / await_agent / answer_agent). Delivery is adapter-specific —
    * claude gets a per-turn config file referenced by `--mcp-config` (the
@@ -514,10 +567,15 @@ export interface AgentTurnInput {
     url: string;
     token: string;
     /**
-     * MCP server name to register the endpoint under. Unique per run, because
-     * ACP has no `--strict-mcp-config` equivalent: a project config defining
-     * the same name would otherwise contend with ours on the agent side.
-     * Claude does not read this — its per-turn config file is strict.
+     * The name geniro's own MCP server is published under for this turn.
+     *
+     * The ACP path uses it verbatim (per-run, so no project server can
+     * collide). Claude currently IGNORES it and publishes under the shared
+     * {@link GENIRO_MCP_SERVER_KEY}, because the renderer drops geniro's own
+     * call tools from the transcript by matching that fixed prefix. Since
+     * `--strict-mcp-config` is no longer passed, `prepareTurn`'s
+     * `definesGeniroServer` guard stands in for the uniqueness this field
+     * gives ACP for free.
      */
     serverName: string;
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
@@ -770,6 +828,24 @@ export interface AdapterConfig {
      * say something true without ever asking that question.
      */
     readonly listingUnavailableReason: string | null;
+    /**
+     * Why NO server of this CLI can be switched off, or null when some can.
+     *
+     * SEPARATE from {@link listingUnavailableReason} on purpose: listing and
+     * toggling are different capabilities that merely coincide today. Reading
+     * one to answer the other would tell the first CLI that can list but not
+     * toggle (or the reverse) a reason that does not answer the question.
+     */
+    readonly toggleUnavailableReason: string | null;
+    /**
+     * Why a row OUTSIDE the disable-able scope carries no switch. Names this
+     * CLI's own config file, so the sentence stays in the adapter layer rather
+     * than being composed by a service that would have to know which CLI it
+     * is holding.
+     */
+    readonly notInToggleableScopeReason: string;
+    /** Why a row the user disabled in their OWN config carries no switch. */
+    readonly userDisabledReason: string;
   };
 
   // ── Interactive terminal mirror ─────────────────────────────────────────

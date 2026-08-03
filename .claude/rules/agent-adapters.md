@@ -82,7 +82,8 @@ CLI-named field of the capability bag carries the verdict.
 
 The optional hooks — `buildStdinPayload`, `buildEnv`, `keepStdinOpen`,
 `buildApprovalResponse`, `prepareTurn`, `createTurnDriver`, `questionFrom`,
-`withAnswer` — each carry their contract in their doc block. Override one only
+`withAnswer`, `readMcpFolderFacts` — each carry their contract in their doc
+block. Override one only
 when your CLI needs it; each default is the "this CLI has no such thing"
 answer. Two deserve naming here:
 

@@ -46,6 +46,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
+import { McpSettingsStore } from './mcp-settings.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
@@ -111,6 +112,7 @@ export class ChatService {
     private readonly partials: PartialStreamService,
     private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
+    private readonly mcpSettings: McpSettingsStore,
   ) {}
 
   /**
@@ -645,6 +647,10 @@ export class ChatService {
           'this chat was deleted while the turn was starting',
         );
       }
+      // Read at turn-build time, not at spawn: the adapter materializes it
+      // into whatever its own CLI reads, and a toggle made after this point
+      // belongs to the NEXT turn rather than silently changing this one.
+      const disabledMcpServers = this.mcpSettings.disabled(agentKind, cwd);
       const handle = adapter.start(
         {
           prompt: text,
@@ -658,6 +664,7 @@ export class ChatService {
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
           streamPartials,
+          disabledMcpServers,
           images: attachments.map((attachment) => ({
             path: this.attachments.pathOf(runId, attachment.id),
             mediaType: attachment.mediaType,

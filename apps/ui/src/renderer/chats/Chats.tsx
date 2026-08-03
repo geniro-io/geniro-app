@@ -2206,6 +2206,9 @@ export function Chats({
               mcpByKind={mcp.byKind}
               mcpLoading={mcp.loading}
               onRefreshMcp={mcp.refresh}
+              onSetMcpEnabled={mcp.setEnabled}
+              mcpToggleError={mcp.toggleError}
+              onDismissMcpToggleError={mcp.dismissToggleError}
               onOpenThread={(agent, thread) =>
                 void openThreadTerminal(agent, thread)
               }

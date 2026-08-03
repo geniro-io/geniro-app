@@ -88,8 +88,19 @@ type McpRequest = { agent: CliKind; cwd: string; refresh?: string };
 
 function apiReturning(
   listAgentMcpServers: (request: McpRequest) => Promise<unknown>,
+  setAgentMcpServerEnabled: (body: {
+    setMcpServerEnabledDto: {
+      agent: CliKind;
+      cwd: string;
+      server: string;
+      enabled: boolean;
+    };
+  }) => Promise<unknown> = () => Promise.resolve(listing),
 ): DaemonApis['agents'] {
-  return { listAgentMcpServers } as unknown as DaemonApis['agents'];
+  return {
+    listAgentMcpServers,
+    setAgentMcpServerEnabled,
+  } as unknown as DaemonApis['agents'];
 }
 
 const listing = { servers: [], unavailableReason: null };
@@ -366,5 +377,281 @@ describe('useAgentMcp', () => {
 
     expect(ui.get().byKind.get('claude')).toBeUndefined();
     expect(ui.get().loading).toBe(true);
+  });
+});
+
+describe('useAgentMcp — the toggle', () => {
+  const row = (name: string, disabled: boolean): unknown => ({
+    name,
+    target: 'node x.js',
+    transport: 'stdio',
+    status: 'connected',
+    detail: null,
+    scope: 'project',
+    disabled,
+    toggleUnavailableReason: null,
+  });
+
+  it('sends the agent, folder, server and desired state', async () => {
+    const write = vi.fn(() =>
+      Promise.resolve({
+        servers: [row('sentry', true)],
+        unavailableReason: null,
+      }),
+    );
+    const get = mount(
+      apiReturning(() => Promise.resolve(listing), write),
+      ['claude'],
+      '/proj',
+    );
+    await settle();
+
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+
+    expect(write).toHaveBeenCalledWith({
+      setMcpServerEnabledDto: {
+        agent: 'claude',
+        cwd: '/proj',
+        server: 'sentry',
+        enabled: false,
+      },
+    });
+  });
+
+  it('renders the listing the daemon returned, not the one it asked for', async () => {
+    // Deliberately NOT optimistic: the daemon refuses a toggle it cannot
+    // honour, so painting the switch first would show a state the next turn
+    // will not have.
+    const get = mount(
+      apiReturning(
+        () =>
+          Promise.resolve({
+            servers: [row('sentry', false)],
+            unavailableReason: null,
+          }),
+        () =>
+          Promise.resolve({
+            servers: [row('sentry', true)],
+            unavailableReason: null,
+          }),
+      ),
+      ['claude'],
+      '/proj',
+    );
+    await settle();
+    expect(get().byKind.get('claude')?.servers[0]?.disabled).toBe(false);
+
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+
+    expect(get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+  });
+
+  it('keeps the switched-off row off when an older read finally answers', async () => {
+    // The read path guards only against ITS OWN supersession (a later effect
+    // run marks the in-flight read stale). Nothing marks a read stale when a
+    // WRITE lands while it is out, so the listing the daemon composed before
+    // the toggle was stored comes back and restores the row to loading — and
+    // nothing re-reads afterwards, so the panel keeps stating the opposite of
+    // what the next turn will do until the user refreshes by hand.
+    //
+    // Reached the way a user reaches it: the switch is only clickable while no
+    // read is in flight, and moving between chats (here A → B → A) starts one
+    // for the folder the toggle is still writing to.
+    const reads: ((value: unknown) => void)[] = [];
+    let releaseWrite!: (value: unknown) => void;
+    const ui = mountRerenderable(
+      apiReturning(
+        () =>
+          new Promise<unknown>((resolve) => {
+            reads.push(resolve);
+          }),
+        () =>
+          new Promise<unknown>((resolve) => {
+            releaseWrite = resolve;
+          }),
+      ),
+    );
+    ui.show(['claude'], '/proj-a');
+    await settle();
+    reads[0]?.({ servers: [row('sentry', false)], unavailableReason: null });
+    await settle();
+
+    act(() => {
+      ui.get().setEnabled('claude', 'sentry', false);
+    });
+    // Away and back while the write is still out: folder B's read never
+    // answers, and returning to A starts a second read of A.
+    ui.show(['claude'], '/proj-b');
+    await settle();
+    ui.show(['claude'], '/proj-a');
+    await settle();
+
+    releaseWrite({
+      servers: [row('sentry', true)],
+      unavailableReason: null,
+    });
+    await settle();
+    // The write's own answer did land — the row below is lost to the read, not
+    // to the write path's folder guard.
+    expect(ui.get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+
+    // The A re-read was composed by the daemon before the write landed.
+    reads[2]?.({ servers: [row('sentry', false)], unavailableReason: null });
+    await settle();
+
+    expect(ui.get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+  });
+
+  it('surfaces the daemon’s own refusal, so the user learns WHY', async () => {
+    const get = mount(
+      apiReturning(
+        () => Promise.resolve(listing),
+        () =>
+          Promise.reject(
+            new Error('daemon PUT /v1/agents/mcp failed (400): not project'),
+          ),
+      ),
+      ['claude'],
+      '/proj',
+    );
+    await settle();
+
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+
+    expect(get().toggleError).toContain('not project');
+  });
+
+  it('clears a previous failure when the user tries again', async () => {
+    let fail = true;
+    const get = mount(
+      apiReturning(
+        () => Promise.resolve(listing),
+        () =>
+          fail ? Promise.reject(new Error('nope')) : Promise.resolve(listing),
+      ),
+      ['claude'],
+      '/proj',
+    );
+    await settle();
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+    expect(get().toggleError).not.toBeNull();
+
+    fail = false;
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+
+    expect(get().toggleError).toBeNull();
+  });
+
+  it('lets the user dismiss the failure', async () => {
+    const get = mount(
+      apiReturning(
+        () => Promise.resolve(listing),
+        () => Promise.reject(new Error('nope')),
+      ),
+      ['claude'],
+      '/proj',
+    );
+    await settle();
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+
+    act(() => {
+      get().dismissToggleError();
+    });
+
+    expect(get().toggleError).toBeNull();
+  });
+
+  it('writes nothing when the run has no folder', async () => {
+    const write = vi.fn(() => Promise.resolve(listing));
+    const get = mount(
+      apiReturning(() => Promise.resolve(listing), write),
+      ['claude'],
+      null,
+    );
+    await settle();
+
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    await settle();
+
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('drops an answer that arrives after the folder changed', async () => {
+    // Out-of-order again, but on the WRITE path: folder A's toggle answer must
+    // not land in folder B's panel, which would state A's servers as B's.
+    let release!: (value: unknown) => void;
+    const ui = mountRerenderable(
+      apiReturning(
+        () => Promise.resolve(listing),
+        () =>
+          new Promise<unknown>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    );
+    ui.show(['claude'], '/proj-a');
+    await settle();
+    act(() => {
+      ui.get().setEnabled('claude', 'sentry', false);
+    });
+    ui.show(['claude'], '/proj-b');
+    await settle();
+
+    release({ servers: [row('from-a', true)], unavailableReason: null });
+    await settle();
+
+    expect(
+      ui
+        .get()
+        .byKind.get('claude')
+        ?.servers.map((s) => s.name),
+    ).not.toContain('from-a');
+  });
+
+  it('reports loading while the write is in flight', async () => {
+    // What keeps the switch from being clicked twice into a write race.
+    let release!: (value: unknown) => void;
+    const get = mount(
+      apiReturning(
+        () => Promise.resolve(listing),
+        () =>
+          new Promise<unknown>((resolve) => {
+            release = resolve;
+          }),
+      ),
+      ['claude'],
+      '/proj',
+    );
+    await settle();
+    expect(get().loading).toBe(false);
+
+    act(() => {
+      get().setEnabled('claude', 'sentry', false);
+    });
+    expect(get().loading).toBe(true);
+
+    release(listing);
+    await settle();
+    expect(get().loading).toBe(false);
   });
 });

@@ -1,12 +1,9 @@
 import {
-  link,
   mkdir,
   readdir,
   readFile,
-  rename,
   rm,
   stat,
-  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -19,6 +16,7 @@ import {
 } from '@packages/common';
 
 import { environment } from '../../../environments';
+import { atomicCreate, atomicWrite } from '../../../utils/atomic-file';
 import type { AgentKind } from '../../runs/runs.types';
 import {
   type Workflow,
@@ -161,7 +159,7 @@ export class WorkflowStoreService {
     const content = serializeWorkflowYaml(workflow);
     if (slug) {
       try {
-        await this.atomicCreate(this.fileFor(slug), content);
+        await atomicCreate(this.fileFor(slug), content);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
           throw new ConflictException(
@@ -188,7 +186,7 @@ export class WorkflowStoreService {
     const existing = (await this.exists(path))
       ? await readFile(path, 'utf8')
       : null;
-    await this.atomicWrite(path, serializeWorkflowYaml(workflow, existing));
+    await atomicWrite(path, serializeWorkflowYaml(workflow, existing));
     return { slug, workflow };
   }
 
@@ -273,42 +271,6 @@ export class WorkflowStoreService {
     }
   }
 
-  private async atomicWrite(path: string, content: string): Promise<void> {
-    // Unique staging name: two concurrent writers sharing `${path}.tmp` would
-    // interleave content and race the rename.
-    const tmp = `${path}.${process.pid}.${WorkflowStoreService.tmpSeq++}.tmp`;
-    // writeFile inside the try so a failed stage (disk full, EACCES) still
-    // cleans up any partial tmp — the unique name means nothing else ever
-    // reclaims a stray. After a successful rename the unlink is an ENOENT
-    // no-op.
-    try {
-      await writeFile(tmp, content, 'utf8');
-      await rename(tmp, path);
-    } finally {
-      await unlink(tmp).catch(() => {});
-    }
-  }
-
-  /**
-   * Exclusive sibling of {@link atomicWrite}: stage to a unique tmp file, then
-   * hard-link it to the final path. `link` fails with EEXIST when the slug is
-   * taken (the `wx` exclusivity a plain rename would lose) and never exposes a
-   * half-written file (the atomicity a direct `wx` write lacked).
-   */
-  private async atomicCreate(path: string, content: string): Promise<void> {
-    const tmp = `${path}.${process.pid}.${WorkflowStoreService.tmpSeq++}.tmp`;
-    // writeFile inside the try so a failed stage (disk full, EACCES) still
-    // cleans up any partial tmp — the finally must guard the write too.
-    try {
-      await writeFile(tmp, content, 'utf8');
-      await link(tmp, path);
-    } finally {
-      await unlink(tmp).catch(() => {});
-    }
-  }
-
-  private static tmpSeq = 0;
-
   /**
    * Land `content` at the first free suffixed candidate of `base` through the
    * exclusive {@link atomicCreate} commit — the one slug-allocation path shared
@@ -322,7 +284,7 @@ export class WorkflowStoreService {
     let candidate = base;
     for (let attempt = 2; ; attempt++) {
       try {
-        await this.atomicCreate(this.fileFor(candidate), content);
+        await atomicCreate(this.fileFor(candidate), content);
         return candidate;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {

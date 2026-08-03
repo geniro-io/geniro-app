@@ -106,6 +106,24 @@ export interface AgentMcpServer {
      * @memberof AgentMcpServer
      */
     detail: string | null;
+    /**
+     * Where the server is defined; only `project` has any verified disable mechanism
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    scope: AgentMcpServerScopeEnum;
+    /**
+     * Whether the next turn will leave this server out, whoever switched it off
+     * @type {boolean}
+     * @memberof AgentMcpServer
+     */
+    disabled: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    toggleUnavailableReason: string | null;
 }
 
 
@@ -129,6 +147,16 @@ export const AgentMcpServerStatusEnum = {
     Unknown: 'unknown'
 } as const;
 export type AgentMcpServerStatusEnum = typeof AgentMcpServerStatusEnum[keyof typeof AgentMcpServerStatusEnum];
+
+/**
+ * @export
+ */
+export const AgentMcpServerScopeEnum = {
+    Project: 'project',
+    Other: 'other',
+    Unknown: 'unknown'
+} as const;
+export type AgentMcpServerScopeEnum = typeof AgentMcpServerScopeEnum[keyof typeof AgentMcpServerScopeEnum];
 
 /**
  * 
@@ -878,6 +906,39 @@ export interface SendMessageDtoImagesInner {
      * @memberof SendMessageDtoImagesInner
      */
     data: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface SetMcpServerEnabledDto
+ */
+export interface SetMcpServerEnabledDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof SetMcpServerEnabledDto
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof SetMcpServerEnabledDto
+     */
+    cwd: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SetMcpServerEnabledDto
+     */
+    server: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof SetMcpServerEnabledDto
+     */
+    enabled: boolean;
 }
 
 

@@ -277,6 +277,9 @@ describe('AgentsPanel — MCP servers', () => {
         transport: 'stdio' as const,
         status: 'connected' as const,
         detail: null,
+        scope: 'project' as const,
+        disabled: false,
+        toggleUnavailableReason: null,
       },
       {
         name: 'linear',
@@ -284,6 +287,9 @@ describe('AgentsPanel — MCP servers', () => {
         transport: 'http' as const,
         status: 'failed' as const,
         detail: 'HTTP 502: upstream dial failed',
+        scope: 'project' as const,
+        disabled: false,
+        toggleUnavailableReason: null,
       },
       {
         name: 'unapproved',
@@ -291,6 +297,10 @@ describe('AgentsPanel — MCP servers', () => {
         transport: 'stdio' as const,
         status: 'pending' as const,
         detail: '(run `claude` to approve)',
+        scope: 'other' as const,
+        disabled: false,
+        toggleUnavailableReason:
+          'only servers defined in this folder\u2019s .mcp.json can be switched off',
       },
     ],
   };
@@ -454,5 +464,212 @@ describe('AgentsPanel — MCP servers', () => {
       <AgentsPanel agents={agents} onOpenThread={vi.fn()} onClose={vi.fn()} />,
     );
     expect(el.textContent).not.toContain('MCP');
+  });
+});
+
+describe('AgentsPanel — MCP toggle', () => {
+  /** One row, shaped by whatever the daemon said about togglability. */
+  function listingOf(
+    server: Partial<AgentMcpListing['servers'][number]> & { name: string },
+  ): AgentMcpListing {
+    return {
+      unavailableReason: null,
+      servers: [
+        {
+          target: 'node x.js',
+          transport: 'stdio' as const,
+          status: 'connected' as const,
+          detail: null,
+          scope: 'project' as const,
+          disabled: false,
+          toggleUnavailableReason: null,
+          ...server,
+        },
+      ],
+    };
+  }
+
+  /** The switches inside one agent's card. */
+  function switchesIn(el: Element): HTMLButtonElement[] {
+    return [...el.querySelectorAll('[role="switch"]')] as HTMLButtonElement[];
+  }
+
+  it('renders a switch for a project-scope server', () => {
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={new Map([['claude', listingOf({ name: 'sentry' })]])}
+        onSetMcpEnabled={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(1);
+  });
+
+  it('renders NO switch for a row the daemon says cannot be toggled', () => {
+    // The forbidden action of this milestone: a switch that moves and changes
+    // nothing. Probe-verified that no settings key disables a user- or
+    // local-scope server.
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={
+          new Map([
+            [
+              'claude',
+              listingOf({
+                name: 'global-one',
+                scope: 'other',
+                toggleUnavailableReason: 'only project servers can be switched',
+              }),
+            ],
+          ])
+        }
+        onSetMcpEnabled={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(0);
+  });
+
+  it('shows the daemon’s reason on a row that cannot be toggled', () => {
+    // Reading "no switch here" is not enough — the user needs to know why, and
+    // the daemon's sentence is the only thing that knows.
+    const reason = 'switched off in your own claude settings';
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={
+          new Map([
+            [
+              'claude',
+              listingOf({
+                name: 'sentry',
+                disabled: true,
+                toggleUnavailableReason: reason,
+              }),
+            ],
+          ])
+        }
+        onSetMcpEnabled={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(
+      cardFor(el, 'Orchestrator').querySelector(`[aria-label="${reason}"]`),
+    ).not.toBeNull();
+  });
+
+  it('reflects a disabled server as off, not on', () => {
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={
+          new Map([['claude', listingOf({ name: 'sentry', disabled: true })]])
+        }
+        onSetMcpEnabled={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(
+      switchesIn(cardFor(el, 'Orchestrator'))[0]?.getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('asks to ENABLE a server that is currently off', () => {
+    // The click carries the state the user wants, not the one on screen.
+    // Inverting this makes the switch a no-op that looks like it worked.
+    const onSetMcpEnabled = vi.fn();
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={
+          new Map([['claude', listingOf({ name: 'sentry', disabled: true })]])
+        }
+        onSetMcpEnabled={onSetMcpEnabled}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    act(() => {
+      switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
+    });
+
+    expect(onSetMcpEnabled).toHaveBeenCalledWith('claude', 'sentry', true);
+  });
+
+  it('asks to DISABLE a server that is currently on', () => {
+    const onSetMcpEnabled = vi.fn();
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={new Map([['claude', listingOf({ name: 'sentry' })]])}
+        onSetMcpEnabled={onSetMcpEnabled}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    act(() => {
+      switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
+    });
+
+    expect(onSetMcpEnabled).toHaveBeenCalledWith('claude', 'sentry', false);
+  });
+
+  it('renders every row read-only when no write path was given', () => {
+    // The panel never invents a control its owner did not offer.
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={new Map([['claude', listingOf({ name: 'sentry' })]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(0);
+  });
+
+  it('shows a failed toggle instead of letting the switch snap back silently', () => {
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={new Map([['claude', listingOf({ name: 'sentry' })]])}
+        mcpToggleError="daemon PUT /v1/agents/mcp failed (400): not project scope"
+        onDismissMcpToggleError={vi.fn()}
+        onSetMcpEnabled={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(el.textContent).toContain('not project scope');
+  });
+
+  it('disables the switch while a read or write is in flight', () => {
+    // Two clicks in a row would race two writes whose answers arrive in any
+    // order, and the loser would be rendered as the truth.
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByKind={new Map([['claude', listingOf({ name: 'sentry' })]])}
+        mcpLoading
+        onSetMcpEnabled={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(switchesIn(cardFor(el, 'Orchestrator'))[0]?.disabled).toBe(true);
   });
 });

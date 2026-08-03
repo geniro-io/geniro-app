@@ -4,7 +4,6 @@ import { z } from 'zod';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AgentEffortWireSchema,
-  AgentMcpListingWireSchema,
   AgentModelWireSchema,
   AgentSkillWireSchema,
 } from '../chat.types';
@@ -29,26 +28,6 @@ export class ListModelsQueryDto extends createZodDto(listModelsQuerySchema) {}
 
 /** One model an agent CLI accepts for `--model`. */
 export class AgentModelDto extends createZodDto(AgentModelWireSchema) {}
-
-/**
- * Query for the MCP-server listing — which agent, and the folder whose servers
- * it would load (validated server-side by `resolveValidCwd`). `refresh` skips
- * the cached health reading; it is what the panel's Refresh control sets, and
- * the only way a server that has since recovered is re-dialled.
- */
-export const listMcpServersQuerySchema = z.object({
-  agent: AgentKindSchema,
-  cwd: z.string().min(1),
-  refresh: z.stringbool().optional(),
-});
-export class ListMcpServersQueryDto extends createZodDto(
-  listMcpServersQuerySchema,
-) {}
-
-/** One agent's MCP servers in a working directory, or why it cannot be asked. */
-export class AgentMcpListingDto extends createZodDto(
-  AgentMcpListingWireSchema,
-) {}
 
 /** Query for the effort listing — which agent CLI's levels to report. */
 export const listEffortsQuerySchema = z.object({ agent: AgentKindSchema });

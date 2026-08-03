@@ -117,6 +117,10 @@ function stubScript(handle) {
     detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected' }, { kind: 'cursor-agent', found: false, path: null, version: null }]),
     saveSecret: async () => {}, hasSecret: async () => false, deleteSecret: async () => {}, completeOnboarding: async () => {},
     pickWorkflowImport: async () => null, pickWorkflowExport: async () => null, checkForUpdates: async () => ({ status: 'dev', version: null, message: null }),
+    // The composer's branch chip calls these on mount; without them the whole
+    // app shell throws to its error boundary before any view renders.
+    getGitInfo: async () => ({ isRepo: false, branch: null, branches: [], dirty: false }),
+    switchBranch: async () => ({ ok: false, branch: null, reason: 'not a repo in the run-desktop stub' }),
   };`;
 }
 

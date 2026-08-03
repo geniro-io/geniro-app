@@ -5,10 +5,14 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../runs/runs.types';
-import type { AgentMcpServer } from '../adapters/adapter.types';
+import type {
+  AgentMcpFolderFacts,
+  AgentMcpServer,
+} from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService } from './agent-mcp.service';
+import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
 
 const dirs: string[] = [];
@@ -63,12 +67,20 @@ interface Harness {
   service: AgentMcpService;
   listMcpServers: ReturnType<typeof vi.fn>;
   setNow: (ms: number) => void;
+  settings: McpSettingsStore;
+}
+
+interface HarnessOptions {
+  version?: string | null;
+  /** What the CLI's own config files say — defaults to knowing nothing. */
+  facts?: AgentMcpFolderFacts;
 }
 
 function harness(
   impl: (input: { cwd: string }) => Promise<AgentMcpServer[]>,
-  version: string | null = '2.1.220',
+  options: HarnessOptions = {},
 ): Harness {
+  const { version = '2.1.220', facts } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
   const listMcpServers = vi.fn((input: { cwd: string }) =>
@@ -77,18 +89,28 @@ function harness(
   const adapter = {
     listMcpServers,
     getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+    readMcpFolderFacts: () =>
+      Promise.resolve(facts ?? { projectServers: [], userDisabled: [] }),
   } as unknown as AgentAdapter;
   const registry = {
     for: () => adapter,
   } as unknown as AgentAdapterRegistry;
   let now = 1_000;
-  const service = new AgentMcpService(registry, new ProcessRegistry(), {
-    now: () => now,
-    resolveVersionFn: () => Promise.resolve(version),
-  });
+  const settingsFile = join(realDir(), 'mcp-settings.json');
+  const settings = new McpSettingsStore({ file: settingsFile });
+  const service = new AgentMcpService(
+    registry,
+    new ProcessRegistry(),
+    settings,
+    {
+      now: () => now,
+      resolveVersionFn: () => Promise.resolve(version),
+    },
+  );
   return {
     service,
     listMcpServers,
+    settings,
     setNow: (ms) => {
       now = ms;
     },
@@ -138,12 +160,19 @@ describe('AgentMcpService.list', () => {
         return {
           listMcpServers,
           getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+          readMcpFolderFacts: () =>
+            Promise.resolve({ projectServers: [], userDisabled: [] }),
         } as unknown as AgentAdapter;
       },
     } as unknown as AgentAdapterRegistry;
-    const service = new AgentMcpService(registry, new ProcessRegistry(), {
-      resolveVersionFn: () => Promise.resolve('1'),
-    });
+    const service = new AgentMcpService(
+      registry,
+      new ProcessRegistry(),
+      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      {
+        resolveVersionFn: () => Promise.resolve('1'),
+      },
+    );
 
     await service.list(AgentKind.Claude, cwd);
     await service.list(AgentKind.CursorAgent, cwd);
@@ -164,12 +193,19 @@ describe('AgentMcpService.list', () => {
         ({
           listMcpServers,
           getConfig: () => ({ mcp: { listingUnavailableReason: null } }),
+          readMcpFolderFacts: () =>
+            Promise.resolve({ projectServers: [], userDisabled: [] }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
     let version = '2.1.220';
-    const service = new AgentMcpService(registry, new ProcessRegistry(), {
-      resolveVersionFn: () => Promise.resolve(version),
-    });
+    const service = new AgentMcpService(
+      registry,
+      new ProcessRegistry(),
+      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      {
+        resolveVersionFn: () => Promise.resolve(version),
+      },
+    );
 
     await service.list(AgentKind.Claude, cwd);
     version = '2.2.0';
@@ -336,9 +372,12 @@ describe('AgentMcpService.list', () => {
           }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
-    const service = new AgentMcpService(registry, new ProcessRegistry(), {
-      resolveVersionFn: () => Promise.resolve('1'),
-    });
+    const service = new AgentMcpService(
+      registry,
+      new ProcessRegistry(),
+      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      { resolveVersionFn: () => Promise.resolve('1') },
+    );
 
     await expect(service.list(AgentKind.CursorAgent, cwd)).resolves.toEqual({
       servers: [],
@@ -388,9 +427,12 @@ describe('AgentMcpService.list', () => {
           }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
-    const service = new AgentMcpService(registry, new ProcessRegistry(), {
-      resolveVersionFn: () => Promise.resolve('1'),
-    });
+    const service = new AgentMcpService(
+      registry,
+      new ProcessRegistry(),
+      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      { resolveVersionFn: () => Promise.resolve('1') },
+    );
 
     await expect(
       service.list(AgentKind.CursorAgent, 'relative/path'),
@@ -420,10 +462,13 @@ describe('AgentMcpService.list', () => {
         );
         return Promise.resolve({ ok: true as const, servers: [server('a')] });
       },
+      readMcpFolderFacts: () =>
+        Promise.resolve({ projectServers: [], userDisabled: [] }),
     } as unknown as AgentAdapter;
     const service = new AgentMcpService(
       { for: () => adapter } as unknown as AgentAdapterRegistry,
       processes,
+      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -446,5 +491,222 @@ describe('AgentMcpService.list', () => {
     } finally {
       kill.mockRestore();
     }
+  });
+});
+
+describe('AgentMcpService scope + disabled overlay', () => {
+  const projectFacts: AgentMcpFolderFacts = {
+    projectServers: ['proj'],
+    userDisabled: [],
+  };
+
+  it('marks a .mcp.json server as project scope and lets it be switched', async () => {
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: projectFacts,
+    });
+
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row?.scope).toBe('project');
+    expect(row?.toggleUnavailableReason).toBeNull();
+    expect(row?.disabled).toBe(false);
+  });
+
+  it('gives a non-project server no switch, with the reason on the row', async () => {
+    // Probe-verified: no settings key disables a user- or local-scope server,
+    // so a switch there would move and change nothing.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('global')]), {
+      facts: projectFacts,
+    });
+
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row?.scope).toBe('other');
+    expect(row?.toggleUnavailableReason).not.toBeNull();
+  });
+
+  it('gives no switch to a server the user disabled in their own settings', async () => {
+    // The CLI UNIONs the disabled lists, so geniro can never pull a name back
+    // out of the user's own. Offering the switch would be a control that
+    // silently does nothing in the one direction the user would try.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: { projectServers: ['proj'], userDisabled: ['proj'] },
+    });
+
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row?.scope).toBe('project');
+    expect(row?.disabled).toBe(true);
+    expect(row?.toggleUnavailableReason).not.toBeNull();
+  });
+
+  it('reports a server geniro switched off as disabled', async () => {
+    const cwd = realDir();
+    const { service, settings } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: projectFacts },
+    );
+    await settings.setDisabled(AgentKind.Claude, cwd, 'proj', true);
+
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row?.disabled).toBe(true);
+    // Still switchable — geniro put it there, so geniro can take it back out.
+    expect(row?.toggleUnavailableReason).toBeNull();
+  });
+
+  it('applies the overlay to a CACHED listing, not just a fresh one', async () => {
+    // The disabled set changes independently of the health reading. Decorating
+    // only the fresh path would leave a toggled row reading its old state for
+    // the rest of the listing's five-minute TTL — the switch would appear to
+    // snap back.
+    const cwd = realDir();
+    const { service, settings, listMcpServers } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: projectFacts },
+    );
+    await service.list(AgentKind.Claude, cwd);
+    await settings.setDisabled(AgentKind.Claude, cwd, 'proj', true);
+
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+    expect(row?.disabled).toBe(true);
+  });
+
+  it('renders every row read-only when the folder facts cannot be read', async () => {
+    // Knowing nothing must not be rendered as "everything is toggleable".
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]));
+    const adapter = (
+      service as unknown as {
+        adapters: { for: () => { readMcpFolderFacts: () => Promise<never> } };
+      }
+    ).adapters.for();
+    adapter.readMcpFolderFacts = () => Promise.reject(new Error('EACCES'));
+
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row?.scope).toBe('other');
+    expect(row?.toggleUnavailableReason).not.toBeNull();
+  });
+});
+
+describe('AgentMcpService.setEnabled', () => {
+  const projectFacts: AgentMcpFolderFacts = {
+    projectServers: ['proj'],
+    userDisabled: [],
+  };
+
+  it('switches a project server off and reports it back as disabled', async () => {
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: projectFacts,
+    });
+
+    const listing = await service.setEnabled(
+      AgentKind.Claude,
+      cwd,
+      'proj',
+      false,
+    );
+
+    expect(listing.servers[0]?.disabled).toBe(true);
+  });
+
+  it('switches it back on', async () => {
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: projectFacts,
+    });
+    await service.setEnabled(AgentKind.Claude, cwd, 'proj', false);
+
+    const listing = await service.setEnabled(
+      AgentKind.Claude,
+      cwd,
+      'proj',
+      true,
+    );
+
+    expect(listing.servers[0]?.disabled).toBe(false);
+  });
+
+  it('refuses a server that is not project scope', async () => {
+    // Writing the setting anyway would persist a toggle the CLI ignores: the
+    // user would see the switch move and the next turn would load the server
+    // regardless.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('global')]), {
+      facts: projectFacts,
+    });
+
+    await expect(
+      service.setEnabled(AgentKind.Claude, cwd, 'global', false),
+    ).rejects.toThrow();
+  });
+
+  it('refuses to re-enable one the user disabled themselves', async () => {
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: { projectServers: ['proj'], userDisabled: ['proj'] },
+    });
+
+    await expect(
+      service.setEnabled(AgentKind.Claude, cwd, 'proj', true),
+    ).rejects.toThrow();
+  });
+
+  it('refuses for a CLI that cannot be told which servers to load', async () => {
+    const cwd = realDir();
+    const registry = {
+      for: () =>
+        ({
+          getConfig: () => ({
+            mcp: { listingUnavailableReason: 'no listing on this CLI yet' },
+          }),
+          readMcpFolderFacts: () =>
+            Promise.resolve({ projectServers: [], userDisabled: [] }),
+        }) as unknown as AgentAdapter,
+    } as unknown as AgentAdapterRegistry;
+    const service = new AgentMcpService(
+      registry,
+      new ProcessRegistry(),
+      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      { resolveVersionFn: () => Promise.resolve('1') },
+    );
+
+    await expect(
+      service.setEnabled(AgentKind.CursorAgent, cwd, 'anything', false),
+    ).rejects.toThrow();
+  });
+
+  it('does not write the setting when it refuses', async () => {
+    const cwd = realDir();
+    const { service, settings } = harness(
+      () => Promise.resolve([server('global')]),
+      { facts: projectFacts },
+    );
+
+    await service
+      .setEnabled(AgentKind.Claude, cwd, 'global', false)
+      .catch(() => undefined);
+
+    expect(await settings.disabled(AgentKind.Claude, cwd)).toEqual([]);
+  });
+
+  it('keeps one folder’s switch out of another folder’s listing', async () => {
+    const dirA = realDir();
+    const dirB = realDir();
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: projectFacts,
+    });
+    await service.setEnabled(AgentKind.Claude, dirA, 'proj', false);
+
+    const inB = await service.list(AgentKind.Claude, dirB);
+
+    expect(inB.servers[0]?.disabled).toBe(false);
   });
 });

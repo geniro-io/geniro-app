@@ -1,6 +1,9 @@
 import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { BadRequestException } from '@packages/common';
 
 import { AgentKind } from '../../../runs/runs.types';
 import { claudeCredentialEnv } from '../../utils/child-env';
@@ -10,6 +13,7 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentEvent,
+  AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpServersInput,
   AgentModel,
@@ -17,12 +21,14 @@ import type {
   InstalledApprovalSupport,
   InstalledCapabilities,
 } from '../adapter.types';
+import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_BASE_ARGS,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
+  CLAUDE_HOME_SETTINGS_FILE,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_EMPTY_MARKER,
@@ -38,16 +44,25 @@ import {
   CLAUDE_PERMISSION_MODE_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+  CLAUDE_PROJECT_MCP_FILE,
+  CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SETTINGS_FLAG,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
-  CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
 import { buildImageBlocks } from './utils/claude-images.utils';
 import {
+  projectDefinesGeniroServer,
   sweepStaleTurnMcpConfigs,
+  sweepStaleTurnSettings,
   writeTurnMcpConfig,
+  writeTurnSettings,
 } from './utils/claude-mcp-config.utils';
+import {
+  parseDisabledServerNames,
+  parseProjectServerNames,
+} from './utils/claude-mcp-folder.utils';
 import { parseMcpList } from './utils/claude-mcp-list.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
@@ -256,6 +271,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
+  private readonly settingsPaths = new WeakMap<AgentTurnInput, string>();
 
   constructor(private readonly claudeOptions: ClaudeAdapterOptions = {}) {
     super(claudeOptions);
@@ -270,27 +286,57 @@ export class ClaudeAdapter extends AgentAdapter {
     const dir = this.claudeOptions.mcpConfigDir;
     if (dir) {
       sweepStaleTurnMcpConfigs(dir);
+      sweepStaleTurnSettings(dir);
     }
   }
 
   /**
-   * A caller turn's MCP config is a per-turn 0600 file: the call token must
-   * never ride argv (visible in `ps`), so argv carries only the path.
+   * Materialize the two per-turn files this CLI reads from disk, and hand back
+   * one disposer for whichever were written.
+   *
+   * A caller turn's MCP config is a 0600 file because the call token must never
+   * ride argv (visible in `ps`), so argv carries only the path. The settings
+   * file is per-turn for a different reason: the disabled set is read when the
+   * turn is built, so writing it here means argv can never point at a file a
+   * toggle in another window has since rewritten.
    */
   protected override prepareTurn(
     input: AgentTurnInput,
   ): (() => void) | undefined {
-    if (!input.mcpEndpoint) {
-      return undefined;
-    }
     const dir =
       this.claudeOptions.mcpConfigDir ??
       join(tmpdir(), CLAUDE_MCP_CONFIG_DIR_NAME);
-    const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
-    this.mcpConfigPaths.set(input, path);
+    const written: string[] = [];
+    if (input.mcpEndpoint) {
+      // Refused BEFORE anything is written, so a rejected turn leaves no file
+      // behind. `--strict-mcp-config` is no longer passed, so the project's own
+      // servers load alongside the call surface: a project entry under geniro's
+      // key would be silently dropped in favour of ours (probe-verified — ours
+      // wins), leaving the user's server missing with no word said.
+      if (projectDefinesGeniroServer(input.cwd)) {
+        throw new BadRequestException(
+          'MCP_GENIRO_KEY_COLLISION',
+          `${join(input.cwd, CLAUDE_PROJECT_MCP_FILE)} defines a server named "${GENIRO_MCP_SERVER_KEY}", which is the name this run uses for its own agent-to-agent call surface. Rename it to run this node.`,
+        );
+      }
+      const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
+      this.mcpConfigPaths.set(input, path);
+      written.push(path);
+    }
+    const settingsPath = writeTurnSettings(dir, input.disabledMcpServers ?? []);
+    if (settingsPath !== null) {
+      this.settingsPaths.set(input, settingsPath);
+      written.push(settingsPath);
+    }
+    if (written.length === 0) {
+      return undefined;
+    }
     return () => {
       this.mcpConfigPaths.delete(input);
-      rmSync(path, { force: true });
+      this.settingsPaths.delete(input);
+      for (const path of written) {
+        rmSync(path, { force: true });
+      }
     };
   }
 
@@ -350,6 +396,49 @@ export class ClaudeAdapter extends AgentAdapter {
     return { ok: true, servers };
   }
 
+  /**
+   * What claude's own files say about a folder, which is what decides whether
+   * a row may carry a switch at all. Both reads are best-effort and neither
+   * writes anything — see `utils/claude-mcp-folder.utils.ts` for the probe
+   * evidence behind the two questions.
+   */
+  override async readMcpFolderFacts(cwd: string): Promise<AgentMcpFolderFacts> {
+    const read = async (path: string): Promise<string | null> => {
+      try {
+        return await readFile(path, 'utf8');
+      } catch {
+        // Absent, unreadable, or a directory — all mean "this file says
+        // nothing", never a failure the user should see.
+        return null;
+      }
+    };
+    const projectSource = await read(join(cwd, CLAUDE_PROJECT_MCP_FILE));
+    const settingsSources = await Promise.all([
+      ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) => read(join(cwd, rel))),
+      read(
+        join(
+          this.claudeOptions.homeDir ?? homedir(),
+          CLAUDE_HOME_SETTINGS_FILE,
+        ),
+      ),
+    ]);
+    // Union, because that is how the CLI itself combines them: a name in ANY
+    // of these is one geniro cannot pull back out.
+    const userDisabled = new Set<string>();
+    for (const source of settingsSources) {
+      if (source !== null) {
+        for (const name of parseDisabledServerNames(source)) {
+          userDisabled.add(name);
+        }
+      }
+    }
+    return {
+      projectServers:
+        projectSource === null ? [] : parseProjectServerNames(projectSource),
+      userDisabled: [...userDisabled],
+    };
+  }
+
   protected buildArgs(input: AgentTurnInput): string[] {
     const args = [...CLAUDE_BASE_ARGS];
     if (input.streamPartials) {
@@ -404,15 +493,23 @@ export class ClaudeAdapter extends AgentAdapter {
         CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
       );
     }
+    // OUTSIDE the caller-node branch below: the disabled set applies to every
+    // turn, chat and graph node alike, not only to one that carries a call
+    // surface.
+    const settingsPath = this.settingsPaths.get(input);
+    if (settingsPath) {
+      args.push(CLAUDE_SETTINGS_FLAG, settingsPath);
+    }
     const mcpConfigPath = this.mcpConfigPaths.get(input);
     if (mcpConfigPath) {
-      // --strict-mcp-config: ONLY our server — the user's global MCP config
-      // must not leak into a headless team turn.
-      args.push(
-        CLAUDE_MCP_CONFIG_FLAG,
-        mcpConfigPath,
-        CLAUDE_STRICT_MCP_CONFIG_FLAG,
-      );
+      // Deliberately WITHOUT `--strict-mcp-config`. An agent must see the same
+      // MCP servers a fresh claude session in that folder sees, PLUS geniro's
+      // call surface — they combine. Restricting the turn to our config alone
+      // would also make the MCP switch meaningless for a caller node, since
+      // there would be no project servers loaded to switch off. The collision
+      // guard in `prepareTurn` is what keeps the call surface unambiguous now
+      // that the project's own servers load beside it.
+      args.push(CLAUDE_MCP_CONFIG_FLAG, mcpConfigPath);
     }
     return args;
   }

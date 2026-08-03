@@ -15,6 +15,7 @@ import type {
   AgentCommandOptions,
   AgentEffort,
   AgentEvent,
+  AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpServersInput,
   AgentModel,
@@ -288,6 +289,23 @@ export abstract class AgentAdapter {
         config.mcp.listingUnavailableReason ??
         `${config.kind} does not implement MCP listing`,
     });
+  }
+
+  /**
+   * What this CLI's own config files say about one folder's servers — which
+   * are project-scope, and which the user has already disabled themselves.
+   *
+   * A MECHANISM, not a value: each CLI keeps this in different files with
+   * different keys, so an adapter that knows those files overrides this. The
+   * default is the honest answer for one that does not — nothing is known,
+   * which renders every row read-only rather than offering a switch whose
+   * effect has never been verified for that CLI.
+   *
+   * Reads only. The files it consults belong to the user, and nothing in this
+   * feature ever writes them.
+   */
+  readMcpFolderFacts(_cwd: string): Promise<AgentMcpFolderFacts> {
+    return Promise.resolve({ projectServers: [], userDisabled: [] });
   }
 
   /**

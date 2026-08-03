@@ -1,17 +1,20 @@
 import { randomUUID } from 'node:crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException } from '@packages/common';
 
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpListingResult,
   AgentMcpServer,
 } from '../adapters/adapter.types';
+import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentMcpListingWire } from '../chat.types';
 import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
 
 /**
@@ -26,6 +29,15 @@ const DEFAULT_MCP_TTL_MS = 5 * 60_000;
 
 /** Shown when the adapter itself misbehaved rather than the CLI refusing. */
 const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
+
+/**
+ * Why a row carries no switch. Both are probe-verified limits of the CLI, not
+ * choices this app made, so each says what is true rather than "unavailable".
+ */
+const NOT_PROJECT_SCOPE_REASON =
+  'only servers defined in this folder\u2019s .mcp.json can be switched off';
+const USER_DISABLED_REASON =
+  'switched off in your own claude settings, which geniro cannot re-enable';
 
 /**
  * The cache key. Three dimensions, and dropping any one of them serves a
@@ -91,6 +103,7 @@ export class AgentMcpService {
   constructor(
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
+    private readonly settings: McpSettingsStore,
     options: AgentMcpServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_MCP_TTL_MS;
@@ -136,11 +149,14 @@ export class AgentMcpService {
     // start a second one. Evicting the cache is idempotent; spawning is not.
     const pending = this.inFlight.get(key);
     if (pending) {
-      return this.toWire(await pending);
+      return this.toWire(adapter, agent, projectDir, await pending);
     }
     const cached = this.cache.get(key);
     if (cached && this.now() - cached.fetchedAt < this.ttlMs) {
-      return { servers: cached.servers, unavailableReason: null };
+      return this.toWire(adapter, agent, projectDir, {
+        ok: true,
+        servers: cached.servers,
+      });
     }
     // `Promise.resolve().then(…)` rather than a bare call: an adapter that
     // throws SYNCHRONOUSLY would otherwise walk straight past the `.catch`
@@ -185,13 +201,107 @@ export class AgentMcpService {
       })
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, ask);
-    return this.toWire(await ask);
+    return this.toWire(adapter, agent, projectDir, await ask);
   }
 
-  /** The adapter's refusal becomes the sentence the panel shows, verbatim. */
-  private toWire(result: AgentMcpListingResult): AgentMcpListingWire {
-    return result.ok
-      ? { servers: result.servers, unavailableReason: null }
-      : { servers: [], unavailableReason: result.reason };
+  /**
+   * Switch one server on or off for one agent in one folder.
+   *
+   * Refuses anything it cannot actually change, rather than writing a setting
+   * that would have no effect: only a project-scope server can be disabled at
+   * all, and one the user disabled in their OWN settings can never be
+   * re-enabled from here, because the CLI unions the two lists rather than
+   * letting geniro's override theirs. A silent no-op is the exact failure the
+   * design forbids — the user would watch a switch move and the next turn
+   * would ignore it.
+   *
+   * Answers with the freshly-composed listing, so the caller renders the state
+   * that actually landed rather than the one it asked for.
+   */
+  async setEnabled(
+    agent: AgentKind,
+    cwd: string,
+    server: string,
+    enabled: boolean,
+  ): Promise<AgentMcpListingWire> {
+    const projectDir = resolveValidCwd(cwd);
+    const adapter = this.adapters.for(agent);
+    const unavailableReason = adapter.getConfig().mcp.listingUnavailableReason;
+    if (unavailableReason !== null) {
+      throw new BadRequestException(
+        'MCP_TOGGLE_UNSUPPORTED',
+        `${agent} cannot be told which MCP servers to load: ${unavailableReason}`,
+      );
+    }
+    const facts = await adapter.readMcpFolderFacts(projectDir);
+    if (!facts.projectServers.includes(server)) {
+      throw new BadRequestException(
+        'MCP_SERVER_NOT_TOGGLEABLE',
+        `${server} is not a project-scope server in ${projectDir}, so it cannot be switched — ${NOT_PROJECT_SCOPE_REASON}`,
+      );
+    }
+    if (enabled && facts.userDisabled.includes(server)) {
+      throw new BadRequestException(
+        'MCP_SERVER_DISABLED_BY_USER',
+        `${server} is ${USER_DISABLED_REASON}`,
+      );
+    }
+    await this.settings.setDisabled(agent, projectDir, server, !enabled);
+    return this.list(agent, projectDir);
+  }
+
+  /**
+   * Compose the wire listing: the adapter's rows, plus what the CLI's own
+   * config files say about each one.
+   *
+   * The overlay is applied on EVERY exit path — cache hit, single-flight join,
+   * and fresh read alike — because the disabled set and the project config
+   * change independently of the health reading. Decorating only the fresh path
+   * would leave a toggled row reading its old state for the rest of the
+   * listing's five-minute TTL.
+   *
+   * The adapter's refusal becomes the sentence the panel shows, verbatim.
+   */
+  private async toWire(
+    adapter: AgentAdapter,
+    agent: AgentKind,
+    cwd: string,
+    result: AgentMcpListingResult,
+  ): Promise<AgentMcpListingWire> {
+    if (!result.ok) {
+      return { servers: [], unavailableReason: result.reason };
+    }
+    const [facts, disabledByGeniro] = await Promise.all([
+      adapter.readMcpFolderFacts(cwd).catch((err: unknown) => {
+        // Reading the user's own files is best-effort. Knowing nothing means
+        // every row renders read-only, which is the safe direction: a switch
+        // that cannot work is worse than no switch.
+        this.logger.warn(
+          `reading ${agent} MCP folder facts failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return { projectServers: [], userDisabled: [] };
+      }),
+      this.settings.disabled(agent, cwd),
+    ]);
+    const geniroDisabled = new Set(disabledByGeniro);
+    const userDisabled = new Set(facts.userDisabled);
+    const projectServers = new Set(facts.projectServers);
+    return {
+      servers: result.servers.map((server) => {
+        const isProject = projectServers.has(server.name);
+        const disabledByUser = userDisabled.has(server.name);
+        return {
+          ...server,
+          scope: isProject ? ('project' as const) : ('other' as const),
+          disabled: disabledByUser || geniroDisabled.has(server.name),
+          toggleUnavailableReason: !isProject
+            ? NOT_PROJECT_SCOPE_REASON
+            : disabledByUser
+              ? USER_DISABLED_REASON
+              : null,
+        };
+      }),
+      unavailableReason: null,
+    };
   }
 }

@@ -4,21 +4,17 @@ import { ZodResponse } from 'nestjs-zod';
 
 import type {
   AgentEffortWire,
-  AgentMcpListingWire,
   AgentModelWire,
   AgentSkillWire,
 } from '../chat.types';
 import {
   AgentEffortDto,
-  AgentMcpListingDto,
   AgentModelDto,
   AgentSkillDto,
   ListEffortsQueryDto,
-  ListMcpServersQueryDto,
   ListModelsQueryDto,
   ListSkillsQueryDto,
 } from '../dto/skills.dto';
-import { AgentMcpService } from '../services/agent-mcp.service';
 import { EffortsService } from '../services/efforts.service';
 import { ModelsService } from '../services/models.service';
 import { SkillsService } from '../services/skills.service';
@@ -26,8 +22,9 @@ import { SkillsService } from '../services/skills.service';
 /**
  * Loopback agent-capability REST surface (token-gated by the global
  * LoopbackTokenGuard): what an agent kind can be invoked with in a folder —
- * the composer's `/` autocomplete listing, its model and effort vocabularies,
- * and the MCP servers it would load there.
+ * the composer's `/` autocomplete listing, and its model and effort
+ * vocabularies. The MCP servers it would load are `McpController`'s, which
+ * owns them together with the switch that changes them.
  */
 @Controller('v1/agents')
 @ApiTags('agents')
@@ -37,7 +34,6 @@ export class SkillsController {
     private readonly skillsService: SkillsService,
     private readonly modelsService: ModelsService,
     private readonly effortsService: EffortsService,
-    private readonly mcpService: AgentMcpService,
   ) {}
 
   @Get('skills')
@@ -59,14 +55,5 @@ export class SkillsController {
   @ZodResponse({ status: 200, type: [AgentEffortDto] })
   listEfforts(@Query() query: ListEffortsQueryDto): AgentEffortWire[] {
     return this.effortsService.list(query.agent);
-  }
-
-  @Get('mcp')
-  @ApiOperation({ operationId: 'listAgentMcpServers' })
-  @ZodResponse({ status: 200, type: AgentMcpListingDto })
-  listMcpServers(
-    @Query() query: ListMcpServersQueryDto,
-  ): Promise<AgentMcpListingWire> {
-    return this.mcpService.list(query.agent, query.cwd, query.refresh ?? false);
   }
 }

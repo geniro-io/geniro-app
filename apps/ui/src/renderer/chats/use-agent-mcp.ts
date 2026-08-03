@@ -7,6 +7,9 @@ import type { DaemonApis } from '../daemon-api';
 /** Shown when the daemon itself could not be reached or timed out. */
 const TRANSPORT_FAILURE = 'could not load MCP servers';
 
+/** Shown when the daemon refused or never received the toggle. */
+const TOGGLE_FAILURE = 'could not change that server';
+
 /** Stable empty map, so a folder with no answers yet keeps a steady identity. */
 const EMPTY_LISTINGS: ReadonlyMap<CliKind, AgentMcpListing> = new Map();
 
@@ -17,6 +20,18 @@ export interface AgentMcpState {
   loading: boolean;
   /** Re-read health from the CLIs, bypassing the daemon's cached reading. */
   refresh: () => void;
+  /**
+   * Switch one server on or off for one CLI kind in the run's folder.
+   *
+   * Deliberately NOT optimistic. The daemon refuses a toggle it cannot honour
+   * — a non-project server, or one the user disabled in their own settings —
+   * and painting the switch first would show the user a state the next turn
+   * will not have. The answer it returns IS the new listing.
+   */
+  setEnabled: (kind: CliKind, server: string, enabled: boolean) => void;
+  /** The last toggle failure, or null. Cleared by dismissing or by a new try. */
+  toggleError: string | null;
+  dismissToggleError: () => void;
 }
 
 /**
@@ -116,6 +131,43 @@ export function useAgentMcp(
     setReloadToken((token) => token + 1);
   }, []);
 
+  const [toggleError, setToggleError] = useState<string | null>(null);
+  const dismissToggleError = useCallback(() => setToggleError(null), []);
+
+  const setEnabled = useCallback(
+    (kind: CliKind, server: string, enabled: boolean) => {
+      if (cwd === null) {
+        return;
+      }
+      setToggleError(null);
+      setPending(true);
+      void agentsApi
+        .setAgentMcpServerEnabled({
+          setMcpServerEnabledDto: { agent: kind, cwd, server, enabled },
+        })
+        .then((listing) => {
+          setAnswered((prev) => {
+            // The folder may have changed while the write was in flight.
+            // Landing this answer in the new folder's map would state one
+            // folder's servers as another's.
+            if (prev.scope !== readScope) {
+              return prev;
+            }
+            const byKind = new Map(prev.byKind);
+            byKind.set(kind, listing);
+            return { scope: prev.scope, byKind };
+          });
+        })
+        .catch((err: unknown) => {
+          // The daemon's own sentence when it has one — it explains WHY the
+          // toggle was refused, which a generic message cannot.
+          setToggleError(err instanceof Error ? err.message : TOGGLE_FAILURE);
+        })
+        .finally(() => setPending(false));
+    },
+    [agentsApi, cwd, readScope],
+  );
+
   // Answers for a different folder are not this folder's answers.
   const byKind =
     answered.scope === readScope ? answered.byKind : EMPTY_LISTINGS;
@@ -126,5 +178,12 @@ export function useAgentMcp(
   const awaitingFirstAnswer =
     cwd !== null && kinds.length > 0 && byKind.size === 0;
 
-  return { byKind, loading: pending || awaitingFirstAnswer, refresh };
+  return {
+    byKind,
+    loading: pending || awaitingFirstAnswer,
+    refresh,
+    setEnabled,
+    toggleError,
+    dismissToggleError,
+  };
 }

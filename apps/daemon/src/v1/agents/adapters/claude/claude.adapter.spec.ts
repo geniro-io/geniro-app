@@ -13,7 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeModesCapability } from '../../chat.types';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
@@ -622,7 +622,11 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     const idx = captured.args!.indexOf('--mcp-config');
     expect(idx).toBeGreaterThan(-1);
     const configPath = captured.args![idx + 1]!;
-    expect(captured.args).toContain('--strict-mcp-config');
+    // NOT strict: an agent must see the same MCP servers a fresh claude
+    // session in that folder sees, PLUS geniro's call surface. Restricting the
+    // turn to our own config would also leave a caller node with no project
+    // servers to switch off, making the MCP toggle meaningless there.
+    expect(captured.args).not.toContain('--strict-mcp-config');
     expect(configPath.startsWith(dir)).toBe(true);
     // The token travels IN the file (0600), never in argv.
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
@@ -1523,5 +1527,217 @@ describe('ClaudeAdapter — models', () => {
       'sonnet',
       'haiku',
     ]);
+  });
+});
+
+describe('ClaudeAdapter MCP toggle (--settings)', () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    while (dirs.length > 0) {
+      rmSync(dirs.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  const settingsDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-settings-'));
+    dirs.push(dir);
+    return dir;
+  };
+
+  /** The `--settings` path in a captured argv, or null when the flag is absent. */
+  function settingsPathIn(args: string[] | undefined): string | null {
+    const idx = args?.indexOf('--settings') ?? -1;
+    return idx > -1 ? (args![idx + 1] ?? null) : null;
+  }
+
+  it('passes a settings file carrying the disabled servers', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const dir = settingsDir();
+    const handle = new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
+      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry', 'docs'] },
+      () => {},
+    );
+
+    const path = settingsPathIn(captured.args);
+    expect(path).not.toBeNull();
+    expect(JSON.parse(readFileSync(path!, 'utf8'))).toEqual({
+      disabledMcpjsonServers: ['sentry', 'docs'],
+    });
+
+    child.emit('close', 0);
+    await handle.done;
+  });
+
+  it('passes NO settings flag when nothing is switched off', async () => {
+    // An empty settings file is one more thing that can be malformed for no
+    // gain, and a turn with no overrides should spawn exactly as it did before
+    // this feature existed.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: settingsDir() }).start(
+      { prompt: 'p', cwd: '/proj', disabledMcpServers: [] },
+      () => {},
+    );
+
+    expect(captured.args).not.toContain('--settings');
+  });
+
+  it('passes the settings flag on a PLAIN chat turn, not only a caller node', async () => {
+    // The toggle is a chat-panel control first. Pushing `--settings` inside the
+    // caller-node branch would leave every chat turn ignoring the switch while
+    // the panel showed it as off.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: settingsDir() }).start(
+      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry'] },
+      () => {},
+    );
+
+    expect(captured.args).not.toContain('--mcp-config');
+    expect(settingsPathIn(captured.args)).not.toBeNull();
+  });
+
+  it('deletes the settings file when the turn settles', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const handle = new ClaudeAdapter({
+      spawn,
+      mcpConfigDir: settingsDir(),
+    }).start(
+      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry'] },
+      () => {},
+    );
+    const path = settingsPathIn(captured.args)!;
+    expect(existsSync(path)).toBe(true);
+
+    child.emit('close', 0);
+    await handle.done;
+
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('writes the settings file 0600', async () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, mcpConfigDir: settingsDir() }).start(
+      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry'] },
+      () => {},
+    );
+
+    expect(statSync(settingsPathIn(captured.args)!).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('ClaudeAdapter geniro-key collision', () => {
+  const ENDPOINT = {
+    url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
+    token: 'call-token-1',
+  };
+  const dirs: string[] = [];
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'claude-collision-'));
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+    while (dirs.length > 0) {
+      rmSync(dirs.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  function writeProjectMcp(servers: Record<string, unknown>): void {
+    writeFileSync(
+      join(cwd, '.mcp.json'),
+      JSON.stringify({ mcpServers: servers }),
+      'utf8',
+    );
+  }
+
+  it('refuses a caller turn when the project defines a server named geniro', () => {
+    // `--strict-mcp-config` is gone, so the project's own servers load beside
+    // the call surface. Ours wins the name (probe-verified), which means the
+    // user's server of that name silently disappears and the tool namespace
+    // becomes ambiguous. Failing visibly is the whole mitigation.
+    const { spawn } = fakeSpawn();
+    writeProjectMcp({ geniro: { command: 'node', args: ['x.js'] } });
+
+    expect(() =>
+      new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+        () => {},
+      ),
+    ).toThrow(/geniro/);
+  });
+
+  it('does not spawn the turn it refused', () => {
+    const { spawn, captured } = fakeSpawn();
+    writeProjectMcp({ geniro: {} });
+
+    try {
+      new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+        () => {},
+      );
+    } catch {
+      // asserted above
+    }
+
+    expect(captured.args).toBeUndefined();
+  });
+
+  it('leaves no config file behind when it refuses', () => {
+    // The refusal happens before anything is written, so a rejected turn does
+    // not litter the config dir with a token-bearing file nothing disposes.
+    const { spawn } = fakeSpawn();
+    writeProjectMcp({ geniro: {} });
+    const dir = mkdtempSync(join(tmpdir(), 'claude-collision-dir-'));
+    dirs.push(dir);
+
+    try {
+      new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
+        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+        () => {},
+      );
+    } catch {
+      // asserted above
+    }
+
+    expect(existsSync(dir) ? readdirSync(dir) : []).toEqual([]);
+  });
+
+  it('allows a caller turn when the project defines other servers', () => {
+    const { spawn, captured } = fakeSpawn();
+    writeProjectMcp({ sentry: {}, docs: {} });
+
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+      { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+      () => {},
+    );
+
+    expect(captured.args).toContain('--mcp-config');
+  });
+
+  it('allows a NON-caller turn even when the project defines geniro', () => {
+    // Without a call surface there is no name to collide with, so a plain chat
+    // in that folder must keep working.
+    const { spawn, captured } = fakeSpawn();
+    writeProjectMcp({ geniro: {} });
+
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+      { prompt: 'p', cwd },
+      () => {},
+    );
+
+    expect(captured.args).toContain('-p');
+  });
+
+  it('allows a caller turn when the folder has no .mcp.json at all', () => {
+    const { spawn, captured } = fakeSpawn();
+
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+      { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+      () => {},
+    );
+
+    expect(captured.args).toContain('--mcp-config');
   });
 });

@@ -36,6 +36,7 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
+import { McpSettingsStore } from './mcp-settings.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
@@ -370,6 +371,12 @@ function setup(opts: { claudeModes?: ClaudeModesCapability } = {}) {
     partials,
     teardown,
     efforts,
+    // No toggles in this suite, and nothing here writes the store — so it
+    // points at a path that never exists. A mkdtemp per setup() would leak
+    // one directory per TEST, which is how /tmp grew by ~1700 entries.
+    new McpSettingsStore({
+      file: join(tmpdir(), 'geniro-chat-spec-never-written.json'),
+    }),
   );
   return {
     service,

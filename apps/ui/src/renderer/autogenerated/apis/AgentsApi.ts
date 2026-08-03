@@ -20,6 +20,7 @@ import type {
   AgentMcpListingDto,
   AgentModelDto,
   AgentSkillDto,
+  SetMcpServerEnabledDto,
 } from '../models/index';
 
 export interface AgentsApiListAgentEffortsRequest {
@@ -39,6 +40,10 @@ export interface AgentsApiListAgentModelsRequest {
 export interface AgentsApiListAgentSkillsRequest {
     agent: AgentKind;
     cwd: string;
+}
+
+export interface AgentsApiSetAgentMcpServerEnabledRequest {
+    setMcpServerEnabledDto: SetMcpServerEnabledDto;
 }
 
 /**
@@ -261,6 +266,53 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentSkills(requestParameters: AgentsApiListAgentSkillsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentSkillDto>> {
         const response = await this.listAgentSkillsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setAgentMcpServerEnabledRaw(requestParameters: AgentsApiSetAgentMcpServerEnabledRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpListingDto>> {
+        if (requestParameters['setMcpServerEnabledDto'] == null) {
+            throw new runtime.RequiredError(
+                'setMcpServerEnabledDto',
+                'Required parameter "setMcpServerEnabledDto" was null or undefined when calling setAgentMcpServerEnabled().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['setMcpServerEnabledDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setAgentMcpServerEnabled(requestParameters: AgentsApiSetAgentMcpServerEnabledRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
+        const response = await this.setAgentMcpServerEnabledRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

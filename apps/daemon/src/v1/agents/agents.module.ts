@@ -7,6 +7,7 @@ import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { ClaudeProbeService } from './adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
 import { ChatController } from './controllers/chat.controller';
+import { McpController } from './controllers/mcp.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
@@ -19,6 +20,7 @@ import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
+import { McpSettingsStore } from './services/mcp-settings.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
@@ -41,7 +43,7 @@ import { SkillsService } from './services/skills.service';
  * makes the probe run once.
  */
 @Module({
-  controllers: [ChatController, SkillsController],
+  controllers: [ChatController, McpController, SkillsController],
   providers: [
     ChatService,
     AgentAdapterRegistry,
@@ -66,12 +68,18 @@ import { SkillsService } from './services/skills.service';
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
+      provide: McpSettingsStore,
+      useFactory: () => new McpSettingsStore(),
+    },
+    {
+      // Factory because the trailing options bag is a test seam, not a DI token.
       provide: AgentMcpService,
       useFactory: (
         adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
-      ) => new AgentMcpService(adapters, processes),
-      inject: [AgentAdapterRegistry, ProcessRegistry],
+        settings: McpSettingsStore,
+      ) => new AgentMcpService(adapters, processes, settings),
+      inject: [AgentAdapterRegistry, ProcessRegistry, McpSettingsStore],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -133,6 +141,9 @@ import { SkillsService } from './services/skills.service';
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,
     SkillHarvestStore,
+    // Exported so a turn can be built with the servers the user switched off:
+    // the store holds geniro's neutral set and each adapter translates it.
+    McpSettingsStore,
     CursorMcpCleanupService,
     ItemDao,
     NodeStateDao,

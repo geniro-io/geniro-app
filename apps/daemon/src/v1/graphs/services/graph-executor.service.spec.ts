@@ -32,6 +32,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { McpSettingsStore } from '../../agents/services/mcp-settings.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
@@ -501,6 +502,12 @@ function setup(
       startedAt: 0,
       port: runtimePort,
     },
+    new McpSettingsStore({
+      // No toggles in this suite, and nothing here writes the store — so it
+      // points at a path that never exists. A mkdtemp per setup() would leak
+      // one directory per TEST.
+      file: join(tmpdir(), 'geniro-exec-spec-never-written.json'),
+    }),
   );
   return {
     service,

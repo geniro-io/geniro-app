@@ -24,6 +24,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { McpSettingsStore } from '../../agents/services/mcp-settings.store';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
@@ -157,6 +158,7 @@ export class GraphExecutorService {
     private readonly store: WorkflowStoreService,
     private readonly teardown: RunTeardownService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
+    private readonly mcpSettings: McpSettingsStore,
   ) {}
 
   /**
@@ -867,6 +869,10 @@ export class GraphExecutorService {
         adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
+      // The same switch the chat panel writes: a graph node runs in a folder
+      // too, and a server the user turned off there stays off for every agent
+      // that runs in it.
+      const disabledMcpServers = this.mcpSettings.disabled(node.agent, cwd);
       const input: AgentTurnInput = {
         prompt,
         cwd,
@@ -880,6 +886,7 @@ export class GraphExecutorService {
         // dialogue, so they spawn as themselves.
         approvalMode: questionCapable && approval === 'auto' ? 'ask' : approval,
         mcpEndpoint: mcpEndpointFor(node),
+        disabledMcpServers,
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {

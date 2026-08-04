@@ -92,8 +92,9 @@ describe('parseCursorMcpList', () => {
   it('keeps a server whose OWN NAME contains the delimiter', () => {
     // VERBATIM from the real CLI, driven with a `.cursor/mcp.json` entry named
     // `weird: name`. Splitting on the FIRST `': '` names this server "weird"
-    // and reads its status as "name: not loaded (needs approval)" — an unknown
-    // status, which this parser drops, so the row would vanish entirely.
+    // and reads its status as "name: not loaded (needs approval)" — which no
+    // status word matches, so the row would be listed under the wrong name
+    // wearing an `unknown` badge instead of the pending one it earned.
     const [server] = parseCursorMcpList(
       'weird: name: not loaded (needs approval)',
     );
@@ -118,9 +119,10 @@ describe('parseCursorMcpList', () => {
     // always last. Left-to-right would have named this one "foo" and read
     // "Error: ready" as a failure whose reason is "ready".
     //
-    // Asserted as the WHOLE result, not `[0]`: the scan must stop at the match
-    // it accepts, and a missing `break` would emit the leftmost reading as a
-    // second, phantom server row that only a full-array assertion catches.
+    // Asserted as the WHOLE result, not `[0]`: one input line must yield one
+    // row. Reading `[0]` alone would pass on any implementation that also
+    // emitted the leftmost reading beside the right one, and a listing that
+    // invents a server is worse than one that mis-names it.
     expect(parseCursorMcpList('foo: Error: ready')).toEqual([
       {
         name: 'foo: Error',

@@ -79,6 +79,7 @@ import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
 import { useAutosave } from './use-autosave';
 import { useNodeMcp } from './use-node-mcp';
+import { usePluginCapability } from './use-plugin-capability';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
@@ -651,6 +652,28 @@ export function Graphs({
     selected?.kind === 'agent' ? (selected.pluginDir ?? null) : null,
   );
 
+  /**
+   * Why the plugin directory the node names cannot be used, or null.
+   *
+   * The daemon refuses an unusable `--plugin-dir` and that refusal arrives
+   * folded into the listing's `unavailableReason` — which the section renders
+   * in the same muted span as "No servers" and "Not checked". Read there it
+   * looks like a fact about the plugin; read on the field it is what it
+   * actually is, a path the user has to fix. The CLI itself says nothing: it
+   * ignores an unusable directory silently, which is the whole reason the
+   * validation exists.
+   */
+  const pluginDirError =
+    selected?.kind === 'agent' && selected.pluginDir
+      ? (nodeMcp.listing?.unavailableReason ?? null)
+      : null;
+
+  // Whether the selected node's CLI can load a plugin directory at all, asked
+  // of the daemon rather than decided here — the inspector used to allowlist
+  // one agent by name, which is how this question came to have three
+  // incompatible answers across the app.
+  const pluginCapability = usePluginCapability(apis?.capabilities ?? null);
+
   // Read-only "Agent calls" summary for the inspector: who this agent may
   // invoke and who may invoke it (the amber call edges touching the node),
   // plus a heads-up when it takes part in a call loop. Null when the node
@@ -1024,11 +1047,14 @@ export function Graphs({
                         }
                       />
                     </Field>
-                    {/* claude only. cursor-agent has no per-invocation plugin
-                        mechanism, so it renders NOTHING here rather than a
-                        field whose value nothing would read — the same choice
-                        the composer's approval chip makes for that CLI. */}
-                    {selected.agent === 'claude' ? (
+                    {/* Whether this CLI has a plugin mechanism is the DAEMON's
+                        answer (`AdapterConfig.plugin.unavailableReason`), read
+                        over /v1/capabilities. Undefined means the read has not
+                        landed — render nothing rather than guess, since a
+                        wrong guess either hides the field from a CLI that has
+                        one or offers a field nothing will read. */}
+                    {pluginCapability.unavailableReasonFor(selected.agent) ===
+                    null ? (
                       <Field
                         label="Plugin directory"
                         htmlFor="node-plugin-dir"
@@ -1037,23 +1063,71 @@ export function Graphs({
                           id="node-plugin-dir"
                           value={selected.pluginDir ?? ''}
                           placeholder="/Users/you/plugins/reviewer"
+                          aria-invalid={pluginDirError !== null || undefined}
+                          aria-describedby={
+                            pluginDirError ? 'node-plugin-dir-error' : undefined
+                          }
                           onChange={(event) =>
                             patchSelected({
                               pluginDir: event.target.value || undefined,
                             })
                           }
                         />
+                        {/* The daemon's refusal is the ONLY thing that can tell
+                            the user their path is wrong — the CLI ignores an
+                            unusable --plugin-dir silently. Folded into the
+                            listing's `unavailableReason` it rendered in the
+                            same muted span as "No servers", which reads as a
+                            fact about the plugin rather than a typo. */}
+                        {pluginDirError ? (
+                          <ErrorText id="node-plugin-dir-error">
+                            {pluginDirError}
+                          </ErrorText>
+                        ) : null}
                       </Field>
+                    ) : pluginCapability.unavailableReasonFor(
+                        selected.agent,
+                      ) ? (
+                      <NoteBox
+                        aria-label="Plugin directory"
+                        className="text-xs">
+                        <span className="block font-medium text-foreground">
+                          Plugin directory
+                        </span>
+                        <span className="block">
+                          {pluginCapability.unavailableReasonFor(
+                            selected.agent,
+                          )}
+                        </span>
+                        {/* Only when the node actually carries one — a workflow
+                            imported from YAML can, and with the field hidden
+                            the user had no way to see what to remove. */}
+                        {selected.pluginDir ? (
+                          <span className="block text-warning">
+                            This node names {selected.pluginDir}, which will be
+                            ignored when it runs.
+                          </span>
+                        ) : null}
+                      </NoteBox>
                     ) : null}
-                    <McpSection
-                      listing={nodeMcp.listing}
-                      loading={nodeMcp.loading}
-                      hint={
-                        selected.pluginDir
-                          ? "Global servers plus this node's plugin. The run folder's own project servers are added when it runs."
-                          : 'Global servers. The run folder\u2019s own project servers are added when it runs.'
-                      }
-                    />
+                    {/* Suppressed while the field carries the refusal: the
+                        section would restate the same sentence as though it
+                        were a fact about the folder's servers, and there is no
+                        listing behind it to show either way. */}
+                    {pluginDirError === null ? (
+                      <McpSection
+                        // No card chrome here: the inspector is a field stack,
+                        // not the Agents panel's stacked card.
+                        className="border-t-0 px-0"
+                        listing={nodeMcp.listing}
+                        loading={nodeMcp.loading}
+                        hint={
+                          selected.pluginDir
+                            ? "Global servers plus this node's plugin. The run folder's own project servers are added when it runs."
+                            : 'Global servers. The run folder\u2019s own project servers are added when it runs.'
+                        }
+                      />
+                    ) : null}
                     {callInfo ? (
                       <NoteBox aria-label="Agent calls" className="text-xs">
                         <span className="block font-medium text-foreground">

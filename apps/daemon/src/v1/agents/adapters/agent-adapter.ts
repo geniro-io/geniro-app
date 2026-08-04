@@ -1,4 +1,4 @@
-import { type ChildProcess, execFile } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,6 +35,14 @@ import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
 const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
 
 /**
+ * Stdout retained from a group-spawned utility command, matching `execFile`'s
+ * own `maxBuffer` default. The `execFile` path gets this cap from node; the
+ * `spawn` path collects by hand, so it has to state it — an unbounded string
+ * built from a chatty child is a daemon-wide memory fault, not a failed read.
+ */
+const UTILITY_COMMAND_MAX_BUFFER_BYTES = 1024 * 1024;
+
+/**
  * Constructor options every adapter accepts — test seams, not user config. The
  * option bag is not a DI token, so `agents.module.ts` provides each adapter via
  * a factory.
@@ -54,6 +62,18 @@ export interface AgentAdapterOptions {
   };
   /** Replacement execFile for the utility commands in tests; defaults to node's. */
   execFileFn?: typeof execFile;
+  /**
+   * Replacement spawn for the utility commands that run as their own process
+   * group ({@link AgentCommandOptions.processGroup}); defaults to the
+   * group-leader `defaultSpawn`.
+   *
+   * A THIRD seam rather than a reuse of either neighbour, because all three
+   * describe different children: `spawn` is the turn, `execFileFn` is a
+   * plain utility command, and this is a group-led one. Folding it into
+   * `spawn` would make a spec that fakes a turn silently intercept a listing
+   * as well, and the two adapter specs that fake both would then cross-wire.
+   */
+  groupSpawnFn?: typeof spawn;
   /**
    * Root for the throwaway workspace {@link AgentAdapter.listReportedCommands}
    * runs its probe turn in (the daemon passes its own userData tmp dir, never
@@ -491,36 +511,94 @@ export abstract class AgentAdapter {
    * turn does, and hands the child to `onSpawn` so the caller can register it
    * for shutdown. Never rejects.
    *
-   * `options.processGroup` changes HOW the deadline kills — see that option's
-   * doc block, which is the canonical statement. The three rules it imposes
-   * here: the deadline is ours rather than `execFile`'s, it SETTLES the promise
-   * as well as killing (a grandchild holding the inherited stdout pipe open
-   * means `execFile`'s callback never fires at all), and every abnormal exit
-   * reaps the group — including `execFile`'s own `maxBuffer` path, which kills
-   * the direct pid only and would otherwise leave the grandchildren with
-   * nothing left to reap them.
+   * `options.processGroup` picks WHICH of the two child shapes below runs —
+   * see that option's doc block, which is the canonical statement of why.
    */
   protected runCommand(
     args: string[],
     options: AgentCommandOptions = {},
   ): Promise<string | null> {
+    return options.processGroup === true
+      ? this.runAsProcessGroup(args, options)
+      : this.runViaExecFile(args, options);
+  }
+
+  /**
+   * The plain path: node buffers stdout and enforces the deadline itself with
+   * a single-PID kill, which is the whole story for a command that forks
+   * nothing of its own.
+   */
+  private runViaExecFile(
+    args: string[],
+    options: AgentCommandOptions,
+  ): Promise<string | null> {
     return new Promise((resolve) => {
       const run = this.options.execFileFn ?? execFile;
+      let child: ChildProcess;
+      try {
+        child = run(
+          this.command,
+          args,
+          {
+            timeout: options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS,
+            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+            encoding: 'utf8',
+            env: buildChildEnv(),
+          },
+          (err, stdout) => resolve(err ? null : String(stdout)),
+        );
+      } catch {
+        // A missing binary throws synchronously on some platforms.
+        resolve(null);
+        return;
+      }
+      options.onSpawn?.(child, { processGroup: false });
+    });
+  }
+
+  /**
+   * The group path: `spawn` with `detached`, stdout collected by hand, and a
+   * deadline of our own that reaps the WHOLE group.
+   *
+   * It cannot be `execFile` carrying `detached: true` in its options bag,
+   * which is what this used to be. node forwards only
+   * cwd/env/uid/gid/shell/windows* from `execFile` down to `spawn` and drops
+   * everything else, so the child never became a group leader and every
+   * `killProcessGroup(child.pid)` named a pgid that did not exist. The reap
+   * was addressing nobody, verified by watching a lingering `mcp list`
+   * health-check child survive a daemon listing.
+   *
+   * Reaps on EVERY settle, success included, and that is not symmetry for its
+   * own sake. A listing command HEALTH-CHECKS — it launches the user's own MCP
+   * servers to dial them — and a server that does not exit on stdin EOF
+   * outlives the CLI. Probed on cursor-agent 2026.07.23-e383d2b with a
+   * deliberately lingering stdio server: `mcp list` exited 0 and left exactly
+   * one child running. Once the CLI exits `ProcessRegistry` drops the handle
+   * on `done`, so nothing else could ever reach that group again — not
+   * shutdown, not cancel — and each refresh stranded another copy.
+   */
+  private runAsProcessGroup(
+    args: string[],
+    options: AgentCommandOptions,
+  ): Promise<string | null> {
+    return new Promise((resolve) => {
+      const spawnFn = this.options.groupSpawnFn ?? spawn;
       const timeoutMs = options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS;
-      const group = options.processGroup === true;
       let child: ChildProcess | undefined;
       let settled = false;
-      // A reap asked for before `run()` has returned — the child exists, but
-      // this scope has not been handed it yet. Deferring rather than dropping
-      // it keeps the reap independent of whether the exec callback happens to
-      // be async (node's is; an injected one need not be).
-      let reapWhenSpawned = false;
       let reaped = false;
+      // A reap asked for before `spawnFn` has returned — the child exists, but
+      // this scope has not been handed it yet. Deferring rather than dropping
+      // it keeps the reap independent of whether an injected spawn emits
+      // synchronously.
+      let reapWhenSpawned = false;
+      let stdout = '';
+      let overflowed = false;
       const reapGroup = (): void => {
-        // Idempotent, and that is the point: the deadline reaps and settles,
-        // and the exec callback then runs its own error-path reap. Without
-        // this the second `process.kill(-pid)` lands after node has waitpid'd
-        // the child, when the pid may already belong to something else.
+        // Idempotent, and that is the point: `exit`, `close` and the deadline
+        // all reap. Without this the second `process.kill(-pid)` would land
+        // after node has waitpid'd the child, when the pid may already belong
+        // to something else.
         if (reaped) {
           return;
         }
@@ -532,86 +610,66 @@ export abstract class AgentAdapter {
         const target = child;
         killProcessGroup(target.pid, 'SIGKILL', () => target.kill('SIGKILL'));
       };
-      // Armed BEFORE the spawn: an `execFileFn` that calls back synchronously
-      // (the spec seam) would otherwise leave a live timer no callback can
-      // clear, and it would fire `killProcessGroup` on a pid the test invented.
-      const timer = group
-        ? setTimeout(() => {
-            reapGroup();
-            settle(null);
-          }, timeoutMs)
-        : undefined;
-      timer?.unref?.();
-      function settle(value: string | null): void {
+      const settle = (value: string | null): void => {
         if (settled) {
           return;
         }
         settled = true;
-        if (timer) {
-          clearTimeout(timer);
-        }
+        clearTimeout(timer);
         resolve(value);
-      }
+      };
+      // Armed BEFORE the spawn: an injected spawn that emits synchronously
+      // (the spec seam) would otherwise leave a live timer no listener can
+      // clear, and it would fire `killProcessGroup` on a pid the test invented.
+      const timer = setTimeout(() => {
+        reapGroup();
+        settle(null);
+      }, timeoutMs);
+      timer.unref?.();
       try {
-        child = run(
-          this.command,
-          args,
-          {
-            // A group spawn owns its own deadline above — leaving execFile's
-            // in place too would fire a single-PID kill first.
-            ...(group ? {} : { timeout: timeoutMs }),
-            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-            ...(group ? { detached: true } : {}),
-            encoding: 'utf8',
-            env: buildChildEnv(),
-          },
-          (err, stdout) => {
-            if (group) {
-              // On the ERROR path: execFile killed the direct pid (maxBuffer,
-              // its own signal) and the group it led is still standing.
-              //
-              // On the SUCCESS path too, which is not symmetry for its own
-              // sake. A listing command HEALTH-CHECKS — it launches the user's
-              // own MCP servers to dial them — and a server that does not exit
-              // on stdin EOF outlives the CLI. Probed on cursor-agent
-              // 2026.07.23-e383d2b with a deliberately lingering stdio server:
-              // `mcp list` exited 0 and left exactly one child running. Once
-              // the CLI exits, `ProcessRegistry` drops the handle on `done`,
-              // so nothing else can ever reach that group — not shutdown, not
-              // cancel — and each refresh strands another copy.
-              //
-              // Safe because this fires from the same callback the error path
-              // already reaped in, so it opens no pid-reuse window that did not
-              // already ship, and `reaped` keeps it to one kill.
-              //
-              // KNOWN GAP, and the reason the probe above still leaks: node's
-              // `execFile` does NOT forward `detached` to `spawn` (it forwards
-              // only cwd/env/uid/gid/shell/windows*), so the child never
-              // becomes a group leader and `killProcessGroup(child.pid)` names
-              // a pgid that does not exist. Every group reap here — this one,
-              // the error path's, and the deadline's — is therefore inert
-              // today, verified by observing a lingering health-check child
-              // survive a daemon listing. Closing it means moving the
-              // `group === true` path onto `spawn` with manual stdout
-              // collection, which also moves the `execFileFn` test seam every
-              // listing spec uses; that is a change of its own, not a
-              // drive-by. The call belongs here regardless: it is the shape
-              // the fix needs, and leaving it out would hide a second bug
-              // behind the first.
-              reapGroup();
-            }
-            settle(err ? null : String(stdout));
-          },
-        );
+        child = spawnFn(this.command, args, {
+          ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+          detached: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: buildChildEnv(),
+        });
       } catch {
         // A missing binary throws synchronously on some platforms.
         settle(null);
         return;
       }
+      child.stdout?.on('data', (chunk: string | Buffer) => {
+        if (overflowed) {
+          return;
+        }
+        stdout += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        if (stdout.length > UTILITY_COMMAND_MAX_BUFFER_BYTES) {
+          // `execFile`'s own maxBuffer path kills the direct pid only; ours
+          // reaps the group, or the grandchildren outlive the read that gave
+          // up on them.
+          overflowed = true;
+          stdout = '';
+          reapGroup();
+          settle(null);
+        }
+      });
+      child.on('error', () => {
+        reapGroup();
+        settle(null);
+      });
+      // `exit` fires when the CLI itself is gone; `close` waits for the stdio
+      // pipes, which a lingering health-check grandchild holds open. Reaping
+      // at `exit` is what lets `close` arrive at all in that case — otherwise
+      // the read that DID succeed sits until the deadline and reports null.
+      child.on('exit', () => reapGroup());
+      child.on('close', (code, signal) => {
+        reapGroup();
+        settle(code === 0 && signal === null ? stdout : null);
+      });
       if (reapWhenSpawned) {
         reapGroup();
       }
-      options.onSpawn?.(child, { processGroup: group });
+      options.onSpawn?.(child, { processGroup: true });
     });
   }
 

@@ -157,29 +157,51 @@ describe('McpSection', () => {
     expect(el.querySelector('li')?.hasAttribute('title')).toBe(false);
   });
 
-  it('falls back to the target when the CLI gave a command but no detail', () => {
-    // The middle rung, which nothing else asserted: rewriting the tooltip as
-    // `title={server.detail ?? undefined}` silently drops claude's command
-    // line and every other case here still passes.
+  it('keeps the command line in the tooltip, where wanting it is optional', () => {
+    // The command line is context, not an instruction. Rewriting the tooltip
+    // as `title={server.target ?? undefined}` would pass claude's blank column
+    // through as `title=""` — a tooltip that follows the pointer saying
+    // nothing — which is what the `||` guards.
     const el = render({
       listing: listing({ name: 'srv' }),
       loading: false,
     });
 
-    expect(el.querySelector('li')?.getAttribute('title')).toBe('node srv.js');
+    expect(el.querySelector('li > span')?.getAttribute('title')).toBe(
+      'node srv.js',
+    );
   });
 
-  it('still prefers the detail over the target when the CLI gave one', () => {
-    // The precedence the null-handling must not have quietly reordered: a
-    // failure reason is the actionable half and outranks the command line.
+  it('renders a FAILURE reason as text, not only as a tooltip', () => {
+    // The reason is the only actionable part of a failure — fix a path, start
+    // a service, sign in — and it used to live solely in a `title` on a
+    // non-focusable `li`. A keyboard user could see the badge go red and never
+    // reach the sentence explaining it.
     const el = render({
-      listing: listing({ name: 'srv', detail: 'HTTP 502: dial failed' }),
+      listing: listing({
+        name: 'srv',
+        status: 'failed',
+        detail: 'HTTP 502: dial failed',
+      }),
       loading: false,
     });
 
-    expect(el.querySelector('li')?.getAttribute('title')).toBe(
-      'HTTP 502: dial failed',
+    expect(el.textContent).toContain('HTTP 502: dial failed');
+    // And it is NOT hidden behind the pointer any more.
+    expect(el.querySelector('li > span')?.getAttribute('title')).toBe(
+      'node srv.js',
     );
+  });
+
+  it('does not print a detail for a server that did not fail', () => {
+    // A healthy list stays one line per server. Dropping the status guard puts
+    // an explanatory sentence under rows with nothing to explain.
+    const el = render({
+      listing: listing({ name: 'srv', detail: 'connected in 12ms' }),
+      loading: false,
+    });
+
+    expect(el.textContent).not.toContain('connected in 12ms');
   });
 
   it('renders a CLI-reported disabled server struck through, with its own badge', () => {

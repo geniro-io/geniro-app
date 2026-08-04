@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CliKind } from '../../shared/contracts';
 import type { DaemonApis } from '../daemon-api';
-import { type AgentMcpState, useAgentMcp } from './use-agent-mcp';
+import {
+  type AgentMcpScope,
+  type AgentMcpState,
+  mcpScopeKey,
+  useAgentMcp,
+} from './use-agent-mcp';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -23,15 +28,21 @@ afterEach(() => {
   container = null;
 });
 
+/** A plugin-less scope, which is what every pre-existing case describes. */
+const claudeScope: AgentMcpScope = { agent: 'claude', pluginDir: null };
+const cursorScope: AgentMcpScope = { agent: 'cursor-agent', pluginDir: null };
+const scopeKey = (agent: CliKind, pluginDir: string | null = null): string =>
+  mcpScopeKey({ agent, pluginDir });
+
 /** Drive the hook and expose its latest value. */
 function mount(
   agentsApi: DaemonApis['agents'],
-  kinds: readonly CliKind[],
+  scopes: readonly AgentMcpScope[],
   cwd: string | null,
 ): () => AgentMcpState {
   let latest!: AgentMcpState;
   function Probe(): null {
-    latest = useAgentMcp(agentsApi, kinds, cwd);
+    latest = useAgentMcp(agentsApi, scopes, cwd);
     return null;
   }
   container = document.createElement('div');
@@ -49,17 +60,17 @@ function mount(
  */
 function mountRerenderable(agentsApi: DaemonApis['agents']): {
   get: () => AgentMcpState;
-  show: (kinds: readonly CliKind[], cwd: string | null) => void;
+  show: (scopes: readonly AgentMcpScope[], cwd: string | null) => void;
 } {
   let latest!: AgentMcpState;
   function Probe({
-    kinds,
+    scopes,
     cwd,
   }: {
-    kinds: readonly CliKind[];
+    scopes: readonly AgentMcpScope[];
     cwd: string | null;
   }): null {
-    latest = useAgentMcp(agentsApi, kinds, cwd);
+    latest = useAgentMcp(agentsApi, scopes, cwd);
     return null;
   }
   container = document.createElement('div');
@@ -67,9 +78,9 @@ function mountRerenderable(agentsApi: DaemonApis['agents']): {
   root = createRoot(container);
   return {
     get: () => latest,
-    show: (kinds, cwd) => {
+    show: (scopes, cwd) => {
       act(() => {
-        root!.render(<Probe kinds={kinds} cwd={cwd} />);
+        root!.render(<Probe scopes={scopes} cwd={cwd} />);
       });
     },
   };
@@ -108,19 +119,19 @@ const listing = { servers: [], unavailableReason: null };
 describe('useAgentMcp', () => {
   it('asks each kind once for the run’s folder', async () => {
     const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
-    const get = mount(apiReturning(call), ['claude', 'cursor-agent'], '/proj');
+    const get = mount(apiReturning(call), [claudeScope, cursorScope], '/proj');
     await settle();
 
     expect(call).toHaveBeenCalledTimes(2);
     expect(call).toHaveBeenCalledWith({ agent: 'claude', cwd: '/proj' });
-    expect(get().byKind.get('claude')).toEqual(listing);
+    expect(get().byScope.get(scopeKey('claude'))).toEqual(listing);
   });
 
   it('does NOT bypass the daemon’s cache on the first read', async () => {
     // The read health-checks — launching the user's own MCP servers — so
     // merely opening the panel must not force a re-dial.
     const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
-    mount(apiReturning(call), ['claude'], '/proj');
+    mount(apiReturning(call), [claudeScope], '/proj');
     await settle();
 
     expect(call.mock.calls[0]?.[0]).not.toHaveProperty('refresh');
@@ -130,7 +141,7 @@ describe('useAgentMcp', () => {
     // Without this Refresh is a lie: the daemon would keep serving the same
     // cached reading and a recovered server would never turn green.
     const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
-    const get = mount(apiReturning(call), ['claude'], '/proj');
+    const get = mount(apiReturning(call), [claudeScope], '/proj');
     await settle();
 
     act(() => {
@@ -156,12 +167,12 @@ describe('useAgentMcp', () => {
       apiReturning(
         vi.fn((_request: McpRequest) => Promise.reject(new Error('offline'))),
       ),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();
 
-    const listed = get().byKind.get('claude');
+    const listed = get().byScope.get(scopeKey('claude'));
     expect(listed?.servers).toEqual([]);
     expect(listed?.unavailableReason).not.toBeNull();
     expect(get().loading).toBe(false);
@@ -181,7 +192,7 @@ describe('useAgentMcp', () => {
             release = resolve;
           });
     });
-    const get = mount(apiReturning(call), ['claude'], '/proj');
+    const get = mount(apiReturning(call), [claudeScope], '/proj');
     await settle();
     expect(get().loading).toBe(false);
 
@@ -189,7 +200,7 @@ describe('useAgentMcp', () => {
       get().refresh();
     });
 
-    expect(get().byKind.get('claude')).toEqual(listing);
+    expect(get().byScope.get(scopeKey('claude'))).toEqual(listing);
     expect(get().loading).toBe(true);
 
     release(listing);
@@ -205,9 +216,9 @@ describe('useAgentMcp', () => {
     // Hoisted: rebuilding the api object per render changes the effect's
     // identity every time and spins it forever.
     const api = apiReturning(call);
-    const kinds: CliKind[] = ['claude'];
+    const scopes: AgentMcpScope[] = [claudeScope];
     function Probe(): null {
-      seen.push(useAgentMcp(api, kinds, '/proj').loading);
+      seen.push(useAgentMcp(api, scopes, '/proj').loading);
       return null;
     }
     container = document.createElement('div');
@@ -223,12 +234,12 @@ describe('useAgentMcp', () => {
 
   it('asks nothing, and shows no spinner, when the run has no folder', async () => {
     const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
-    const get = mount(apiReturning(call), ['claude'], null);
+    const get = mount(apiReturning(call), [claudeScope], null);
     await settle();
 
     expect(call).not.toHaveBeenCalled();
     expect(get().loading).toBe(false);
-    expect(get().byKind.size).toBe(0);
+    expect(get().byScope.size).toBe(0);
   });
 
   it('reports loading while a read is in flight, and never a bare "no servers"', async () => {
@@ -243,16 +254,16 @@ describe('useAgentMcp', () => {
           release = resolve;
         }),
     );
-    const get = mount(apiReturning(call), ['claude'], '/proj');
+    const get = mount(apiReturning(call), [claudeScope], '/proj');
 
     expect(get().loading).toBe(true);
-    expect(get().byKind.get('claude')).toBeUndefined();
+    expect(get().byScope.get(scopeKey('claude'))).toBeUndefined();
 
     release(listing);
     await settle();
 
     expect(get().loading).toBe(false);
-    expect(get().byKind.get('claude')).toEqual(listing);
+    expect(get().byScope.get(scopeKey('claude'))).toEqual(listing);
   });
 
   it('ignores a read that resolves after the folder has already changed', async () => {
@@ -266,9 +277,9 @@ describe('useAgentMcp', () => {
         }),
     );
     const ui = mountRerenderable(apiReturning(call));
-    ui.show(['claude'], '/proj-a');
+    ui.show([claudeScope], '/proj-a');
     await settle();
-    ui.show(['claude'], '/proj-b');
+    ui.show([claudeScope], '/proj-b');
     await settle();
 
     // A answers LAST, long after the user moved on.
@@ -302,7 +313,7 @@ describe('useAgentMcp', () => {
     expect(
       ui
         .get()
-        .byKind.get('claude')
+        .byScope.get(scopeKey('claude'))
         ?.servers.map((s) => s.name),
     ).toEqual(['from-b']);
   });
@@ -323,14 +334,14 @@ describe('useAgentMcp', () => {
     // re-dials and so re-launches the user's own MCP servers.
     const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
     const ui = mountRerenderable(apiReturning(call));
-    ui.show(['claude'], '/proj-a');
+    ui.show([claudeScope], '/proj-a');
     await settle();
 
     act(() => {
       ui.get().refresh();
     });
     await settle();
-    ui.show(['claude'], '/proj-b');
+    ui.show([claudeScope], '/proj-b');
     await settle();
 
     expect(call).toHaveBeenCalledTimes(3);
@@ -341,7 +352,7 @@ describe('useAgentMcp', () => {
   });
 
   it('reports no listing for a kind that has not answered for the new folder', async () => {
-    // `byKind` promises that an absent kind has not answered yet. Keeping the
+    // `byScope` promises that an absent kind has not answered yet. Keeping the
     // previous folder's rows in it breaks that promise in the one direction
     // that matters: the panel then states folder A's servers as folder B's,
     // which is wrong rather than merely stale.
@@ -363,19 +374,19 @@ describe('useAgentMcp', () => {
         : neverAnswers,
     );
     const ui = mountRerenderable(apiReturning(call));
-    ui.show(['claude'], '/proj-a');
+    ui.show([claudeScope], '/proj-a');
     await settle();
     expect(
       ui
         .get()
-        .byKind.get('claude')
+        .byScope.get(scopeKey('claude'))
         ?.servers.map((entry) => entry.name),
     ).toEqual(['only-in-a']);
 
-    ui.show(['claude'], '/proj-b');
+    ui.show([claudeScope], '/proj-b');
     await settle();
 
-    expect(ui.get().byKind.get('claude')).toBeUndefined();
+    expect(ui.get().byScope.get(scopeKey('claude'))).toBeUndefined();
     expect(ui.get().loading).toBe(true);
   });
 });
@@ -401,7 +412,7 @@ describe('useAgentMcp — the toggle', () => {
     );
     const get = mount(
       apiReturning(() => Promise.resolve(listing), write),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();
@@ -438,18 +449,22 @@ describe('useAgentMcp — the toggle', () => {
             unavailableReason: null,
           }),
       ),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();
-    expect(get().byKind.get('claude')?.servers[0]?.disabled).toBe(false);
+    expect(get().byScope.get(scopeKey('claude'))?.servers[0]?.disabled).toBe(
+      false,
+    );
 
     act(() => {
       get().setEnabled('claude', 'sentry', false);
     });
     await settle();
 
-    expect(get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+    expect(get().byScope.get(scopeKey('claude'))?.servers[0]?.disabled).toBe(
+      true,
+    );
   });
 
   it('keeps the switched-off row off when an older read finally answers', async () => {
@@ -477,7 +492,7 @@ describe('useAgentMcp — the toggle', () => {
           }),
       ),
     );
-    ui.show(['claude'], '/proj-a');
+    ui.show([claudeScope], '/proj-a');
     await settle();
     reads[0]?.({ servers: [row('sentry', false)], unavailableReason: null });
     await settle();
@@ -487,9 +502,9 @@ describe('useAgentMcp — the toggle', () => {
     });
     // Away and back while the write is still out: folder B's read never
     // answers, and returning to A starts a second read of A.
-    ui.show(['claude'], '/proj-b');
+    ui.show([claudeScope], '/proj-b');
     await settle();
-    ui.show(['claude'], '/proj-a');
+    ui.show([claudeScope], '/proj-a');
     await settle();
 
     releaseWrite({
@@ -499,13 +514,17 @@ describe('useAgentMcp — the toggle', () => {
     await settle();
     // The write's own answer did land — the row below is lost to the read, not
     // to the write path's folder guard.
-    expect(ui.get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+    expect(ui.get().byScope.get(scopeKey('claude'))?.servers[0]?.disabled).toBe(
+      true,
+    );
 
     // The A re-read was composed by the daemon before the write landed.
     reads[2]?.({ servers: [row('sentry', false)], unavailableReason: null });
     await settle();
 
-    expect(ui.get().byKind.get('claude')?.servers[0]?.disabled).toBe(true);
+    expect(ui.get().byScope.get(scopeKey('claude'))?.servers[0]?.disabled).toBe(
+      true,
+    );
   });
 
   it('surfaces the daemon’s own refusal, so the user learns WHY', async () => {
@@ -517,7 +536,7 @@ describe('useAgentMcp — the toggle', () => {
             new Error('daemon PUT /v1/agents/mcp failed (400): not project'),
           ),
       ),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();
@@ -538,7 +557,7 @@ describe('useAgentMcp — the toggle', () => {
         () =>
           fail ? Promise.reject(new Error('nope')) : Promise.resolve(listing),
       ),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();
@@ -563,7 +582,7 @@ describe('useAgentMcp — the toggle', () => {
         () => Promise.resolve(listing),
         () => Promise.reject(new Error('nope')),
       ),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();
@@ -583,7 +602,7 @@ describe('useAgentMcp — the toggle', () => {
     const write = vi.fn(() => Promise.resolve(listing));
     const get = mount(
       apiReturning(() => Promise.resolve(listing), write),
-      ['claude'],
+      [claudeScope],
       null,
     );
     await settle();
@@ -609,12 +628,12 @@ describe('useAgentMcp — the toggle', () => {
           }),
       ),
     );
-    ui.show(['claude'], '/proj-a');
+    ui.show([claudeScope], '/proj-a');
     await settle();
     act(() => {
       ui.get().setEnabled('claude', 'sentry', false);
     });
-    ui.show(['claude'], '/proj-b');
+    ui.show([claudeScope], '/proj-b');
     await settle();
 
     release({ servers: [row('from-a', true)], unavailableReason: null });
@@ -623,7 +642,7 @@ describe('useAgentMcp — the toggle', () => {
     expect(
       ui
         .get()
-        .byKind.get('claude')
+        .byScope.get(scopeKey('claude'))
         ?.servers.map((s) => s.name),
     ).not.toContain('from-a');
   });
@@ -639,7 +658,7 @@ describe('useAgentMcp — the toggle', () => {
             release = resolve;
           }),
       ),
-      ['claude'],
+      [claudeScope],
       '/proj',
     );
     await settle();

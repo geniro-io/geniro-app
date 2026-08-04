@@ -43,6 +43,7 @@ export function McpSection({
   loading,
   hint,
   onSetEnabled,
+  className,
 }: {
   listing: AgentMcpListing | undefined;
   loading: boolean;
@@ -50,10 +51,22 @@ export function McpSection({
   hint?: string;
   /** Absent when the surface offers no write path — the inspector's case. */
   onSetEnabled?: (server: string, enabled: boolean) => void;
+  /**
+   * Overrides the CARD chrome (`border-t`, the card's own horizontal padding),
+   * which belongs to the Agents panel where every section is one band of a
+   * stacked card. The builder's inspector is a field stack with its own
+   * rhythm, and inheriting a card's edges there reads as a stray rule across
+   * the panel.
+   */
+  className?: string;
 }): React.JSX.Element {
   const servers = listing?.servers;
   return (
-    <div className="flex flex-col gap-1 border-t border-border px-2.5 py-1.5">
+    <div
+      className={cn(
+        'flex flex-col gap-1 border-t border-border px-2.5 py-1.5',
+        className,
+      )}>
       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Plug aria-hidden="true" className="size-3 shrink-0" />
         <span className="font-medium">MCP</span>
@@ -80,62 +93,71 @@ export function McpSection({
       ) : (
         <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
           {servers.map((server) => (
-            <li
-              key={server.name}
-              className="flex items-center gap-1.5 text-xs"
-              // The failure reason is the only actionable part of a failure,
-              // and it is far too long for the row. Both may be absent: a
-              // healthy server has no detail, and a CLI that reports no command
-              // line (cursor prints only a name and a status) has no target
-              // either — so the row carries no tooltip at all rather than an
-              // empty one that follows the pointer saying nothing.
-              //
-              // `||`, not `??`: absent is not only null here. claude's parser
-              // yields `target: ''` for a row whose command column is blank,
-              // and `??` would pass that straight through as `title=""`.
-              title={server.detail || server.target || undefined}>
+            <li key={server.name} className="flex flex-col gap-0.5 text-xs">
               <span
-                className={cn(
-                  'min-w-0 flex-1 truncate',
-                  server.disabled && 'text-muted-foreground line-through',
-                )}>
-                {server.name}
-              </span>
-              {/* Defaulted, not indexed blindly: the wire enum is gated by the
+                className="flex items-center gap-1.5"
+                // The COMMAND LINE only. It is context, not an instruction —
+                // wanting it is a deliberate act, and a tooltip is a fine place
+                // for something nobody is required to read. The failure reason
+                // used to live here too and does not any more: see below.
+                //
+                // `||`, not `??`: absent is not only null here. claude's parser
+                // yields `target: ''` for a row whose command column is blank,
+                // and `??` would pass that straight through as `title=""`.
+                title={server.target || undefined}>
+                <span
+                  className={cn(
+                    'min-w-0 flex-1 truncate',
+                    server.disabled && 'text-muted-foreground line-through',
+                  )}>
+                  {server.name}
+                </span>
+                {/* Defaulted, not indexed blindly: the wire enum is gated by the
                   response schema today, but a widened status must degrade to a
                   neutral badge rather than crash the surface. */}
-              <Badge variant={MCP_STATUS_TONE[server.status] ?? 'outline'}>
-                {server.status}
-              </Badge>
-              {/* Both arms belong to a surface that HAS a write path. A
+                <Badge variant={MCP_STATUS_TONE[server.status] ?? 'outline'}>
+                  {server.status}
+                </Badge>
+                {/* Both arms belong to a surface that HAS a write path. A
                   read-only one (the graph inspector) shows neither switch nor
                   lock: its rows come from a listing taken in a folder geniro
                   owns, so every one of them carries a folder-scoped reason —
                   and explaining why a control is unavailable, where no control
                   was ever going to appear, only raises a question about a
                   folder the workflow does not yet have. */}
-              {onSetEnabled ===
-              undefined ? null : server.toggleUnavailableReason !== null ? (
-                // No control, and the daemon's own sentence saying why. A
-                // switch here would move and change nothing: the CLI has no
-                // key that disables this server, or the user disabled it in
-                // their own config, which geniro cannot undo.
-                <span
-                  aria-label={server.toggleUnavailableReason}
-                  className="shrink-0 text-muted-foreground"
-                  role="img"
-                  title={server.toggleUnavailableReason}>
-                  <Lock aria-hidden="true" className="size-3" />
-                </span>
-              ) : (
-                <Switch
-                  aria-label={`Load ${server.name}`}
-                  checked={!server.disabled}
-                  className="h-4 w-7 shrink-0"
-                  disabled={loading}
-                  onCheckedChange={(next) => onSetEnabled(server.name, next)}
-                />
-              )}
+                {onSetEnabled ===
+                undefined ? null : server.toggleUnavailableReason !== null ? (
+                  // No control, and the daemon's own sentence saying why. A
+                  // switch here would move and change nothing: the CLI has no
+                  // key that disables this server, or the user disabled it in
+                  // their own config, which geniro cannot undo.
+                  <span
+                    aria-label={server.toggleUnavailableReason}
+                    className="shrink-0 text-muted-foreground"
+                    role="img"
+                    title={server.toggleUnavailableReason}>
+                    <Lock aria-hidden="true" className="size-3" />
+                  </span>
+                ) : (
+                  <Switch
+                    aria-label={`Load ${server.name}`}
+                    checked={!server.disabled}
+                    className="h-4 w-7 shrink-0"
+                    disabled={loading}
+                    onCheckedChange={(next) => onSetEnabled(server.name, next)}
+                  />
+                )}
+              </span>
+              {/* On its own line, not in the row's tooltip.
+                  The reason is the only ACTIONABLE part of a failure — it is
+                  what says whether to fix a path, start a service, or sign in
+                  — and a tooltip on a non-focusable `li` is reachable by
+                  pointer alone: a keyboard user could see the badge go red and
+                  never reach the sentence explaining it. Rendered only for a
+                  failure, so a healthy list stays one line per server. */}
+              {server.status === 'failed' && server.detail ? (
+                <span className="text-destructive">{server.detail}</span>
+              ) : null}
             </li>
           ))}
         </ul>

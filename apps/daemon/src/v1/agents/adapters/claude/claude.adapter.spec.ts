@@ -1,4 +1,4 @@
-import type { ChildProcess, execFile } from 'node:child_process';
+import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   existsSync,
@@ -23,6 +23,7 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
 } from '../adapter.types';
+import { spawnAnswering } from '../utils/fake-group-child.spec-helper';
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
@@ -111,21 +112,18 @@ function fakeSpawn<C extends FakeChild = FakeChild>(
  * through `spawn`, everything else runs through `execFileFn`.
  */
 function fakeListing(stdout: string): {
-  execFileFn: typeof execFile;
-  captured: { args?: readonly string[] };
+  groupSpawnFn: typeof spawn;
+  captured: { args?: readonly string[]; options?: Record<string, unknown> };
 } {
-  const captured: { args?: readonly string[] } = {};
-  const execFileFn = ((
-    _cmd: string,
-    args: readonly string[],
-    _opts: unknown,
-    cb: (err: Error | null, out: string) => void,
-  ) => {
+  const captured: {
+    args?: readonly string[];
+    options?: Record<string, unknown>;
+  } = {};
+  const groupSpawnFn = spawnAnswering(stdout, 4242, (args, options) => {
     captured.args = args;
-    cb(null, stdout);
-    return { pid: 4242 } as ChildProcess;
-  }) as unknown as typeof execFile;
-  return { execFileFn, captured };
+    captured.options = options;
+  });
+  return { groupSpawnFn, captured };
 }
 
 describe('ClaudeAdapter', () => {
@@ -225,8 +223,10 @@ describe('ClaudeAdapter', () => {
     // it the way the turn path does would break every listing that carries
     // one. Position IS the behaviour here, which is why this asserts on
     // indices rather than mere membership.
-    const { execFileFn, captured } = fakeListing('No MCP servers configured\n');
-    await new ClaudeAdapter({ execFileFn }).listMcpServers({
+    const { groupSpawnFn, captured } = fakeListing(
+      'No MCP servers configured\n',
+    );
+    await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({
       cwd: '/proj',
       pluginDir: '/opt/plugins/reviewer',
     });
@@ -242,8 +242,10 @@ describe('ClaudeAdapter', () => {
   });
 
   it('omits --plugin-dir from a listing that names none', async () => {
-    const { execFileFn, captured } = fakeListing('No MCP servers configured\n');
-    await new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' });
+    const { groupSpawnFn, captured } = fakeListing(
+      'No MCP servers configured\n',
+    );
+    await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' });
     expect(captured.args).toEqual(['mcp', 'list']);
   });
 
@@ -1706,17 +1708,38 @@ describe('ClaudeAdapter geniro-key collision', () => {
   };
   const dirs: string[] = [];
   let cwd: string;
+  /**
+   * An EMPTY home for every case here.
+   *
+   * The guard reads all three scopes a turn loads from, and the last two live
+   * in `~/.claude.json`. Left to the real home directory these specs consult a
+   * file the developer running them owns: a `geniro` entry in it turns every
+   * "allows" case red, and the two home-scope branches below could only ever
+   * pass by accident. The same isolation the models describe already uses.
+   */
+  let homeDir: string;
 
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), 'claude-collision-'));
+    homeDir = mkdtempSync(join(tmpdir(), 'claude-collision-home-'));
   });
 
   afterEach(() => {
     rmSync(cwd, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
     while (dirs.length > 0) {
       rmSync(dirs.pop() as string, { recursive: true, force: true });
     }
   });
+
+  /** Write `~/.claude.json` — the user- and local-scope source. */
+  function writeHomeConfig(config: Record<string, unknown>): void {
+    writeFileSync(
+      join(homeDir, '.claude.json'),
+      JSON.stringify(config),
+      'utf8',
+    );
+  }
 
   function writeProjectMcp(servers: Record<string, unknown>): void {
     writeFileSync(
@@ -1735,7 +1758,7 @@ describe('ClaudeAdapter geniro-key collision', () => {
     writeProjectMcp({ geniro: { command: 'node', args: ['x.js'] } });
 
     expect(() =>
-      new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
         { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
         () => {},
       ),
@@ -1747,7 +1770,7 @@ describe('ClaudeAdapter geniro-key collision', () => {
     writeProjectMcp({ geniro: {} });
 
     try {
-      new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
         { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
         () => {},
       );
@@ -1782,7 +1805,7 @@ describe('ClaudeAdapter geniro-key collision', () => {
     const { spawn, captured } = fakeSpawn();
     writeProjectMcp({ sentry: {}, docs: {} });
 
-    new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
       { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
       () => {},
     );
@@ -1796,7 +1819,7 @@ describe('ClaudeAdapter geniro-key collision', () => {
     const { spawn, captured } = fakeSpawn();
     writeProjectMcp({ geniro: {} });
 
-    new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
       { prompt: 'p', cwd },
       () => {},
     );
@@ -1804,10 +1827,57 @@ describe('ClaudeAdapter geniro-key collision', () => {
     expect(captured.args).toContain('-p');
   });
 
+  it('refuses when the USER-scope config defines geniro', () => {
+    // `~/.claude.json`'s root `mcpServers` — a scope the turn loads from and
+    // no test reached. Checking the project file alone refuses the narrow case
+    // and silently permits the wider one, which is the more dangerous half:
+    // a user-scope entry collides in EVERY folder.
+    const { spawn } = fakeSpawn();
+    writeHomeConfig({ mcpServers: { geniro: { command: 'node' } } });
+
+    expect(() =>
+      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
+        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+        () => {},
+      ),
+    ).toThrow(/defines a server named "geniro"/);
+  });
+
+  it('refuses when the LOCAL-scope config defines geniro for this folder', () => {
+    // `~/.claude.json`'s `projects[<cwd>].mcpServers` — the third scope, keyed
+    // by the very folder the turn runs in.
+    const { spawn } = fakeSpawn();
+    writeHomeConfig({ projects: { [cwd]: { mcpServers: { geniro: {} } } } });
+
+    expect(() =>
+      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
+        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+        () => {},
+      ),
+    ).toThrow(/defines a server named "geniro"/);
+  });
+
+  it('allows a caller turn when ANOTHER folder has a local-scope geniro', () => {
+    // The keying itself: `projects` is per folder, so an entry under a
+    // different path must not refuse this one. Dropping the `[cwd]` lookup for
+    // a scan of every project would make this red.
+    const { spawn, captured } = fakeSpawn();
+    writeHomeConfig({
+      projects: { '/some/other/project': { mcpServers: { geniro: {} } } },
+    });
+
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
+      { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
+      () => {},
+    );
+
+    expect(captured.args).toContain('--mcp-config');
+  });
+
   it('allows a caller turn when the folder has no .mcp.json at all', () => {
     const { spawn, captured } = fakeSpawn();
 
-    new ClaudeAdapter({ spawn, mcpConfigDir: cwd }).start(
+    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
       { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
       () => {},
     );

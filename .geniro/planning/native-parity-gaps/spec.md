@@ -23,14 +23,22 @@ checkpoints:
 forbidden_actions:
   - "do NOT put call tokens, API keys, or any secret on argv — tokens ride 0600 files or stdin only"
   - "do NOT let claude credentials reach cursor-agent children (or vice versa) — per-child env re-injection only"
-  - "do NOT drop --strict-mcp-config by default — only the explicit per-node useProjectMcp toggle may omit it"
+  - "do NOT let a caller turn silently lose the user's own MCP server to geniro's key — the collision must be refused visibly, naming the file to fix (AMENDED: this rule previously read 'do NOT drop --strict-mcp-config by default — only the explicit per-node useProjectMcp toggle may omit it'. No useProjectMcp toggle was ever built — the identifier has zero matches repo-wide — and the flag was dropped unconditionally instead, so the rule as written forbade the shipped design on a premise that never existed. The INTENT it was protecting, that a caller turn not silently shadow a user server, is preserved by definesGeniroServer in claude-mcp-config.utils.ts, which refuses the turn across all three scopes claude loads from.)"
   - "do NOT store secrets outside the macOS Keychain"
   - "do NOT persist per-delta item rows — the block item is the durable record; exactly ONE partial-text flush item is allowed when a turn cancels or fails mid-stream"
-  - "do NOT trust a project .mcp.json that redefines the geniro server name — a useProjectMcp turn must refuse the collision visibly (mirror cursor-mcp-file.ts:160-164)"
+  - "do NOT trust a project .mcp.json that redefines the geniro server name — EVERY caller turn must refuse the collision visibly (AMENDED: was scoped to 'a useProjectMcp turn'; with no such toggle the guard applies to every caller turn, which is how it shipped)"
 approval_required_for:
   - step-4
 tools_required: ["pnpm", "node>=24", "claude CLI", "cursor-agent CLI"]
 ---
+
+> **AMENDED after the `agent-mcp-sidebar` milestones shipped.** The `useProjectMcp` per-node
+> toggle this plan describes was never built (`useProjectMcp` has zero matches in the source
+> tree). `--strict-mcp-config` was dropped unconditionally instead, and the intent the toggle
+> was protecting — a caller turn must not silently shadow the user's own MCP server under
+> geniro's key — is carried by `definesGeniroServer` in `claude-mcp-config.utils.ts`, which
+> refuses such a turn across all three scopes claude loads from. Read every `useProjectMcp`
+> mention below as historical intent, not as a description of the code.
 
 <!-- geniro:design-doc -->
 

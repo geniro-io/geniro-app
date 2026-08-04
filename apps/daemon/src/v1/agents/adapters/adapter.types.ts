@@ -430,8 +430,13 @@ export interface AgentCommandOptions {
    * cost for a command that FORKS: `claude mcp list` health-checks, so it
    * launches the user's own MCP servers as grandchildren, and `kill-tree.ts`
    * names the failure this closes — "a single-PID kill would orphan them".
-   * Node's own `execFile` deadline IS such a single-PID kill, so setting this
-   * also moves the deadline onto a group-killing timer of our own.
+   *
+   * Setting it moves the command off `execFile` entirely, onto `spawn` with
+   * `detached` plus a group-killing deadline of our own. That is not an
+   * implementation detail worth hiding: `execFile` forwards only
+   * cwd/env/uid/gid/shell/windows* to `spawn` and silently drops `detached`,
+   * so an `execFile` child can never lead a group no matter what its options
+   * bag says, and the reap addresses nobody.
    *
    * `runCommand` owns both halves: it passes the same flag to `onSpawn` as
    * `spawnInfo.processGroup`, so a registration site cannot pair them wrongly.
@@ -896,12 +901,7 @@ export interface AdapterConfig {
     readonly userDisabledReason: string;
   };
 
-  // ── Interactive terminal mirror ─────────────────────────────────────────
-  /**
-   * How to reopen an existing headless session in the CLI's own TUI, or null
-   * when this CLI has no such mode (the mirror is then refused for it, rather
-   * than opening an unrelated fresh TUI).
-   */
+  // ── Plugin directory ────────────────────────────────────────────────────
   /** Whether this CLI can load a plugin directory for one invocation. */
   readonly plugin: {
     /**
@@ -912,9 +912,15 @@ export interface AdapterConfig {
      * agent that would ignore it — geniro becoming the silent one is exactly
      * the failure the field exists to prevent.
      */
-    unavailableReason: string | null;
+    readonly unavailableReason: string | null;
   };
 
+  // ── Interactive terminal mirror ─────────────────────────────────────────
+  /**
+   * How to reopen an existing headless session in the CLI's own TUI, or null
+   * when this CLI has no such mode (the mirror is then refused for it, rather
+   * than opening an unrelated fresh TUI).
+   */
   readonly terminal: {
     /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
     readonly resumeFlag: string;

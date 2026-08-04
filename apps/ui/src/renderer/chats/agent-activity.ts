@@ -58,6 +58,15 @@ export interface AgentDisplay {
   name: string;
   /** The CLI driving it; null for a node no longer in the workflow. */
   agent: CliKind | null;
+  /**
+   * The plugin directory this node's turns load, or null.
+   *
+   * Carried on the DISPLAY row because a plugin can ship its own MCP servers:
+   * two nodes on the same CLI with different plugin directories genuinely load
+   * different sets, so the panel cannot ask one question per CLI and paint the
+   * answer on both.
+   */
+  pluginDir: string | null;
   status: RunStatusKind;
   activeTurns: number;
   contextTokens: number | null;

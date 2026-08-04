@@ -145,6 +145,7 @@ describe('the header and the panel read the SAME meter', () => {
             id: 'agent',
             name: 'claude',
             agent: 'claude',
+            pluginDir: null,
             status: 'running',
             activeTurns: 1,
             ...CONTEXT,

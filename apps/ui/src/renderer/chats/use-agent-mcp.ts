@@ -11,12 +11,33 @@ const TRANSPORT_FAILURE = 'could not load MCP servers';
 const TOGGLE_FAILURE = 'could not change that server';
 
 /** Stable empty map, so a folder with no answers yet keeps a steady identity. */
-const EMPTY_LISTINGS: ReadonlyMap<CliKind, AgentMcpListing> = new Map();
+const EMPTY_LISTINGS: ReadonlyMap<string, AgentMcpListing> = new Map();
 
-/** One agent kind's servers, as the panel reads them. */
+/**
+ * What a listing is ABOUT: a CLI, plus the plugin directory the node running
+ * it names — a plugin can ship its own MCP servers, so two nodes on the same
+ * CLI pointed at different directories genuinely load different sets.
+ */
+export interface AgentMcpScope {
+  agent: CliKind;
+  pluginDir: string | null;
+}
+
+/**
+ * The map key for one scope. NUL-joined, the one byte neither an agent kind
+ * nor a path can contain — the same key shape the daemon's own cache uses.
+ */
+export function mcpScopeKey(scope: AgentMcpScope): string {
+  return `${scope.agent}\u0000${scope.pluginDir ?? ''}`;
+}
+
+/** One agent scope's servers, as the panel reads them. */
 export interface AgentMcpState {
-  /** Listing per CLI kind. A kind absent from the map has not answered yet. */
-  byKind: ReadonlyMap<CliKind, AgentMcpListing>;
+  /**
+   * Listing per {@link mcpScopeKey}. A scope absent from the map has not
+   * answered yet.
+   */
+  byScope: ReadonlyMap<string, AgentMcpListing>;
   loading: boolean;
   /** Re-read health from the CLIs, bypassing the daemon's cached reading. */
   refresh: () => void;
@@ -27,6 +48,14 @@ export interface AgentMcpState {
    * — a non-project server, or one the user disabled in their own settings —
    * and painting the switch first would show the user a state the next turn
    * will not have. The answer it returns IS the new listing.
+   *
+   * KNOWN LIMITATION: the in-flight write raises the same `loading` flag the
+   * read does, so every switch in the panel goes disabled, not just the one
+   * clicked — including an unrelated CLI's card. Accepted rather than fixed:
+   * the window is sub-second on a cache hit and the header's refresh control
+   * already spins as feedback. A per-row pending set is the fix if the wait
+   * ever becomes visible (a first read after the TTL lapses re-dials, and
+   * that one is not sub-second).
    */
   setEnabled: (kind: CliKind, server: string, enabled: boolean) => void;
   /** The last toggle failure, or null. Cleared by dismissing or by a new try. */
@@ -35,12 +64,17 @@ export interface AgentMcpState {
 }
 
 /**
- * The MCP servers each agent kind loads in the run's folder.
+ * The MCP servers each agent SCOPE loads in the run's folder.
  *
- * Keyed by CLI KIND rather than by agent, because that is the grain the answer
- * actually has: a run has one folder, so two nodes driving the same CLI in it
- * necessarily load the same servers, and asking once per node would health-check
- * the user's servers N times over for one answer.
+ * Keyed by (CLI kind, plugin directory) rather than by node, because that is
+ * the grain the answer actually has: two nodes driving the same CLI with the
+ * same plugin directory necessarily load the same servers, and asking once per
+ * node would health-check the user's servers N times over for one answer.
+ *
+ * It was keyed by CLI kind ALONE until the plugin directory became a per-NODE
+ * field. The rationale written here then — "a run has one folder, so two nodes
+ * on the same CLI load the same servers" — stopped being true at that moment,
+ * and the panel went on painting one node's answer onto another's card.
  *
  * Unlike the skills hook this deliberately holds NO session cache of its own —
  * the daemon already caches per (agent, cwd, version), and a second cache in
@@ -52,7 +86,7 @@ export interface AgentMcpState {
  */
 export function useAgentMcp(
   agentsApi: DaemonApis['agents'],
-  kinds: readonly CliKind[],
+  scopes: readonly AgentMcpScope[],
   cwd: string | null,
 ): AgentMcpState {
   // The answers are stored WITH the (kinds, folder) they answer for. Without
@@ -61,8 +95,8 @@ export function useAgentMcp(
   // servers as folder B's, which is wrong rather than merely stale.
   const [answered, setAnswered] = useState<{
     scope: string;
-    byKind: ReadonlyMap<CliKind, AgentMcpListing>;
-  }>({ scope: '', byKind: EMPTY_LISTINGS });
+    byScope: ReadonlyMap<string, AgentMcpListing>;
+  }>({ scope: '', byScope: EMPTY_LISTINGS });
   const [pending, setPending] = useState(false);
   // Bumped by refresh; the effect keys on it, so a bump re-runs the read.
   const [reloadToken, setReloadToken] = useState(0);
@@ -77,20 +111,36 @@ export function useAgentMcp(
   // show the old state; letting it land would flip the switch back while the
   // next turn honours the toggle, and nothing re-reads to correct it.
   const writeSeq = useRef(0);
-  const kindsKey = kinds.join(',');
-  /** Identity of the question being asked — which kinds, in which folder. */
-  const readScope = `${kindsKey}\u0000${cwd ?? ''}`;
+  /**
+   * Re-read WITHOUT bypassing the daemon's cache. A toggle is stored per
+   * (agent, folder) and the daemon merges the disabled set on every exit path
+   * — cache hits included — so the other scopes of that agent can be corrected
+   * for the price of a cached read, rather than re-dialling the user's servers
+   * the way {@link refresh} deliberately does.
+   */
+  const [rereadToken, setRereadToken] = useState(0);
+  // Serialized rather than joined on a single byte: a scope is two fields, and
+  // flattening them would let ('a', 'b/c') and ('a/b', 'c') collide.
+  const scopesKey = JSON.stringify(
+    scopes.map((scope) => [scope.agent, scope.pluginDir ?? '']),
+  );
+  /** Identity of the question being asked — which scopes, in which folder. */
+  const readScope = `${scopesKey}\u0000${cwd ?? ''}`;
 
   useEffect(() => {
-    const targetKinds =
-      kindsKey === '' ? [] : (kindsKey.split(',') as CliKind[]);
+    const targetScopes = (JSON.parse(scopesKey) as [CliKind, string][]).map(
+      ([agent, pluginDir]): AgentMcpScope => ({
+        agent,
+        pluginDir: pluginDir === '' ? null : pluginDir,
+      }),
+    );
     const bypassCache = reloadToken > consumedToken.current;
     // Spent even when there is nothing to ask: a refresh raised with no folder
     // in scope must not be banked and then applied to whichever folder the
     // user opens next, which would re-dial a read nobody asked to refresh.
     consumedToken.current = reloadToken;
-    if (cwd === null || targetKinds.length === 0) {
-      setAnswered({ scope: readScope, byKind: EMPTY_LISTINGS });
+    if (cwd === null || targetScopes.length === 0) {
+      setAnswered({ scope: readScope, byScope: EMPTY_LISTINGS });
       // Also clears a spinner left by a read that was in flight when the run
       // lost its folder — nothing below will resolve to clear it.
       setPending(false);
@@ -100,13 +150,14 @@ export function useAgentMcp(
     const startedAtWrite = writeSeq.current;
     setPending(true);
     void Promise.all(
-      targetKinds.map(async (kind): Promise<[CliKind, AgentMcpListing]> => {
+      targetScopes.map(async (scope): Promise<[string, AgentMcpListing]> => {
         try {
           return [
-            kind,
+            mcpScopeKey(scope),
             await agentsApi.listAgentMcpServers({
-              agent: kind,
+              agent: scope.agent,
               cwd,
+              ...(scope.pluginDir ? { pluginDir: scope.pluginDir } : {}),
               ...(bypassCache ? { refresh: 'true' } : {}),
             }),
           ];
@@ -116,14 +167,17 @@ export function useAgentMcp(
           // the panel renders as "No servers", so returning one here would
           // undo the daemon's whole failure-vs-empty distinction at the last
           // hop. The wording blames nothing about the CLI.
-          return [kind, { servers: [], unavailableReason: TRANSPORT_FAILURE }];
+          return [
+            mcpScopeKey(scope),
+            { servers: [], unavailableReason: TRANSPORT_FAILURE },
+          ];
         }
       }),
     ).then((entries) => {
       if (stale || writeSeq.current !== startedAtWrite) {
         return;
       }
-      setAnswered({ scope: readScope, byKind: new Map(entries) });
+      setAnswered({ scope: readScope, byScope: new Map(entries) });
       setPending(false);
     });
     return () => {
@@ -131,7 +185,7 @@ export function useAgentMcp(
       // panel the user has already closed.
       stale = true;
     };
-  }, [agentsApi, kindsKey, cwd, readScope, reloadToken]);
+  }, [agentsApi, scopesKey, cwd, readScope, reloadToken, rereadToken]);
 
   const refresh = useCallback(() => {
     setReloadToken((token) => token + 1);
@@ -160,10 +214,30 @@ export function useAgentMcp(
             if (prev.scope !== readScope) {
               return prev;
             }
-            const byKind = new Map(prev.byKind);
-            byKind.set(kind, listing);
-            return { scope: prev.scope, byKind };
+            // Applied ONLY to the plugin-less scope of that CLI, because that
+            // is the one the write's answer describes: the toggle route takes
+            // no plugin directory, so its recomposed listing is the folder's
+            // servers alone. Painting it onto a scope that carries a plugin
+            // would drop exactly the servers that plugin contributes.
+            const key = mcpScopeKey({ agent: kind, pluginDir: null });
+            if (!prev.byScope.has(key)) {
+              return prev;
+            }
+            const byScope = new Map(prev.byScope);
+            byScope.set(key, listing);
+            return { scope: prev.scope, byScope };
           });
+          // Any OTHER scope of that CLI now carries a stale `disabled` flag —
+          // the store is per (agent, folder), so one toggle applies to all of
+          // them. A plain re-read corrects them off the daemon's cache.
+          //
+          // Only when such a scope EXISTS. With the single scope every chat
+          // and most workflows have, the write's own answer is already the
+          // whole truth, and re-reading would spend a round trip to replace it
+          // with a value that cannot differ.
+          if (scopes.some((s) => s.agent === kind && s.pluginDir !== null)) {
+            setRereadToken((token) => token + 1);
+          }
         })
         .catch((err: unknown) => {
           // The daemon's own sentence when it has one — it explains WHY the
@@ -172,21 +246,21 @@ export function useAgentMcp(
         })
         .finally(() => setPending(false));
     },
-    [agentsApi, cwd, readScope],
+    [agentsApi, cwd, readScope, scopes],
   );
 
   // Answers for a different folder are not this folder's answers.
-  const byKind =
-    answered.scope === readScope ? answered.byKind : EMPTY_LISTINGS;
+  const byScope =
+    answered.scope === readScope ? answered.byScope : EMPTY_LISTINGS;
 
   // "Asked for, not answered yet" counts as loading. The effect runs after
   // paint, so without this the panel renders one frame of "No servers" — a
   // claim about the user's configuration — before it has asked anything.
   const awaitingFirstAnswer =
-    cwd !== null && kinds.length > 0 && byKind.size === 0;
+    cwd !== null && scopes.length > 0 && byScope.size === 0;
 
   return {
-    byKind,
+    byScope,
     loading: pending || awaitingFirstAnswer,
     refresh,
     setEnabled,

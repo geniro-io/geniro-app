@@ -1,4 +1,4 @@
-import type { ChildProcess, execFile } from 'node:child_process';
+import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,12 +12,17 @@ import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import type {
   AdapterConfig,
   AgentApprovalMode,
+  AgentCommandOptions,
   AgentEvent,
   AgentModel,
 } from './adapter.types';
 import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
 import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
+import {
+  fakeGroupChild,
+  spawnAnswering,
+} from './utils/fake-group-child.spec-helper';
 
 /**
  * The config-driven members the base answers for EVERY adapter, driven through
@@ -374,18 +379,13 @@ describe('AgentAdapter.listMcpServers', () => {
     // Version drift: a release that rewords the row format drops every row.
     // Reporting that as an empty listing is the confident lie the ok/err split
     // exists to prevent — and it would be cached for the whole TTL.
-    const execFileFn = ((
-      _cmd: string,
-      _args: readonly string[],
-      _opts: unknown,
-      cb: (err: Error | null, out: string) => void,
-    ) => {
-      cb(null, 'Checking MCP server health…\n\nsentry => node s.js [ok]\n');
-      return { pid: 4246, kill: () => true } as unknown as ChildProcess;
-    }) as unknown as typeof execFile;
+    const groupSpawnFn = spawnAnswering(
+      'Checking MCP server health…\n\nsentry => node s.js [ok]\n',
+      4246,
+    );
 
     await expect(
-      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+      new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' }),
     ).resolves.toEqual({
       ok: false,
       reason: expect.stringContaining('output format may have changed'),
@@ -395,21 +395,13 @@ describe('AgentAdapter.listMcpServers', () => {
   it('reports a genuinely empty folder as an empty SUCCESS, not a failure', async () => {
     // The other side of that check — the CLI's own empty-folder sentence is
     // the one thing that makes `[]` a fact about the user's configuration.
-    const execFileFn = ((
-      _cmd: string,
-      _args: readonly string[],
-      _opts: unknown,
-      cb: (err: Error | null, out: string) => void,
-    ) => {
-      cb(
-        null,
-        'No MCP servers configured. Use `claude mcp add` to add a server.\n',
-      );
-      return { pid: 4247, kill: () => true } as unknown as ChildProcess;
-    }) as unknown as typeof execFile;
+    const groupSpawnFn = spawnAnswering(
+      'No MCP servers configured. Use `claude mcp add` to add a server.\n',
+      4247,
+    );
 
     await expect(
-      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+      new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' }),
     ).resolves.toEqual({ ok: true, servers: [] });
   });
   it('an adapter that declares an absence refuses with its own reason, writing no code to do it', async () => {
@@ -428,21 +420,13 @@ describe('AgentAdapter.listMcpServers', () => {
   });
 
   it('claude turns the CLI’s own output into rows', async () => {
-    const execFileFn = ((
-      _cmd: string,
-      _args: readonly string[],
-      _opts: unknown,
-      cb: (err: Error | null, out: string) => void,
-    ) => {
-      cb(
-        null,
-        'Checking MCP server health…\n\nsentry: node s.js - √ Connected\n',
-      );
-      return { pid: 321, kill: () => true } as unknown as ChildProcess;
-    }) as unknown as typeof execFile;
+    const groupSpawnFn = spawnAnswering(
+      'Checking MCP server health…\n\nsentry: node s.js - √ Connected\n',
+      321,
+    );
 
     await expect(
-      new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' }),
+      new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' }),
     ).resolves.toEqual({
       ok: true,
       servers: [
@@ -461,11 +445,11 @@ describe('AgentAdapter.listMcpServers', () => {
     // Missing binary / not signed in / timeout all arrive as a null stdout.
     // Reporting that as `ok: true, servers: []` would let the service cache it
     // and the panel state, untruthfully, that the folder has no MCP servers.
-    const execFileFn = (() => {
+    const groupSpawnFn = (() => {
       throw new Error('spawn claude ENOENT');
-    }) as unknown as typeof execFile;
+    }) as unknown as typeof spawn;
 
-    const result = await new ClaudeAdapter({ execFileFn }).listMcpServers({
+    const result = await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({
       cwd: '/tmp',
     });
 
@@ -476,18 +460,11 @@ describe('AgentAdapter.listMcpServers', () => {
     // The whole reason cwd exists on the utility contract: the answer is
     // folder-scoped, so the wrong folder yields a confidently wrong list.
     const calls: { args: readonly string[]; cwd: unknown }[] = [];
-    const execFileFn = ((
-      _cmd: string,
-      args: readonly string[],
-      opts: Record<string, unknown>,
-      cb: (err: Error | null, out: string) => void,
-    ) => {
-      calls.push({ args, cwd: opts.cwd });
-      cb(null, '');
-      return { pid: 322, kill: () => true } as unknown as ChildProcess;
-    }) as unknown as typeof execFile;
+    const groupSpawnFn = spawnAnswering('', 322, (args, opts) =>
+      calls.push({ args, cwd: opts.cwd }),
+    );
 
-    await new ClaudeAdapter({ execFileFn }).listMcpServers({
+    await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({
       cwd: '/home/me/project-a',
     });
 
@@ -497,60 +474,129 @@ describe('AgentAdapter.listMcpServers', () => {
   });
 });
 
-describe('AgentAdapter.runCommand spawn options', () => {
-  /** Capture the options object `runCommand` hands to execFile. */
-  function capturingAdapter(): {
-    adapter: ClaudeAdapter;
-    seen: () => Record<string, unknown>;
-  } {
-    let opts: Record<string, unknown> = {};
-    const execFileFn = ((
-      _cmd: string,
-      _args: readonly string[],
-      options: Record<string, unknown>,
-      cb: (err: Error | null, out: string) => void,
-    ) => {
-      opts = options;
-      cb(null, '');
-      return { pid: 999, kill: () => true } as unknown as ChildProcess;
-    }) as unknown as typeof execFile;
-    return {
-      adapter: new ClaudeAdapter({ execFileFn }),
-      seen: () => opts,
-    };
+/**
+ * Runs a REAL child (this node binary) through `runCommand`, so the one thing
+ * no double can show — whether the OS actually put the child in its own
+ * process group — is observable.
+ */
+class RealSpawnAdapter extends BareAdapter {
+  constructor() {
+    super(null);
   }
 
-  it('a process-group command spawns detached and drops execFile’s own timeout', async () => {
-    // Both halves matter: `detached` is what creates the group, and leaving
-    // execFile's timeout in place would fire a single-PID kill first — exactly
-    // the orphaning the group spawn exists to prevent.
-    const { adapter, seen } = capturingAdapter();
+  protected override get command(): string {
+    return process.execPath;
+  }
 
-    await adapter.listMcpServers({ cwd: '/tmp/some-project' });
+  run(args: string[], options: AgentCommandOptions): Promise<string | null> {
+    return this.runCommand(args, options);
+  }
+}
 
-    expect(seen().detached).toBe(true);
-    expect(seen().timeout).toBeUndefined();
+describe('AgentAdapter.runCommand process groups (real children)', () => {
+  it('puts a group command in its OWN group, and an ordinary one in ours', async () => {
+    // THE assertion that would have caught the defect this rewrite fixes.
+    // Every other spec in this file pins that we ASK for a group; only the
+    // child's real pgid proves one exists. `execFile` accepted `detached` in
+    // its options bag and silently dropped it before reaching `spawn`, so the
+    // call-level assertions stayed green while no group was ever created and
+    // every `kill(-pid)` addressed nobody.
+    //
+    // Probed inside `onSpawn`, the only moment the child is guaranteed alive.
+    // `kill(-pid, 0)` sends no signal — it asks the kernel whether a process
+    // GROUP with that id exists, which is exactly the question `kill(-pid,
+    // 'SIGKILL')` silently got wrong before.
+    const groupExists = (pid: number | undefined): boolean => {
+      try {
+        process.kill(-(pid ?? 0), 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const adapter = new RealSpawnAdapter();
+    const script = 'process.stdout.write("grouped")';
+
+    let groupPid: number | undefined;
+    let leadsOwnGroup = false;
+    const grouped = await adapter.run(['-e', script], {
+      processGroup: true,
+      onSpawn: (child) => {
+        groupPid = child.pid;
+        leadsOwnGroup = groupExists(child.pid);
+      },
+    });
+
+    expect(grouped).toBe('grouped');
+    expect(groupPid).toBeGreaterThan(0);
+    expect(leadsOwnGroup).toBe(true);
+
+    let plainLeadsOwnGroup = true;
+    await adapter.run(['-e', script], {
+      onSpawn: (child) => {
+        plainLeadsOwnGroup = groupExists(child.pid);
+      },
+    });
+
+    // The other half: an ordinary utility command must NOT be detached, or
+    // the daemon stops being able to signal it as part of its own group.
+    expect(plainLeadsOwnGroup).toBe(false);
+  });
+});
+
+describe('AgentAdapter.runCommand spawn options', () => {
+  it('a process-group command goes through spawn, detached, with piped stdio', async () => {
+    // The whole finding this replaced: `detached` was being handed to
+    // `execFile`, which forwards only cwd/env/uid/gid/shell/windows* down to
+    // `spawn` and silently drops the rest. The child therefore never led a
+    // group and every `kill(-pid)` addressed nobody. This pins the CALL; the
+    // real-children describe above pins the OUTCOME.
+    let opts: Record<string, unknown> = {};
+    const groupSpawnFn = spawnAnswering('', 999, (_args, options) => {
+      opts = options;
+    });
+
+    await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({
+      cwd: '/tmp/some-project',
+    });
+
+    expect(opts.detached).toBe(true);
+    expect(opts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    expect(opts.cwd).toBe('/tmp/some-project');
+    // execFile's own deadline would be a single-PID kill; the group path owns
+    // its deadline instead, so no `timeout` may ride along.
+    expect(opts.timeout).toBeUndefined();
+  });
+
+  it('collects the child’s stdout off the pipe rather than a callback', async () => {
+    // `spawn` hands back no buffered stdout, so the collector is ours. If it
+    // regressed to returning '' the parser above would report every folder as
+    // unreadable, so this is the assertion holding the rewrite together.
+    const groupSpawnFn = spawnAnswering(
+      'Checking MCP server health…\n\nsentry: node s.js - √ Connected\n',
+      777,
+    );
+
+    await expect(
+      new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' }),
+    ).resolves.toMatchObject({ ok: true, servers: [{ name: 'sentry' }] });
   });
 
   it('kills the whole group when the deadline passes, and settles the read', async () => {
-    // Dropping execFile's timeout is only safe because this replacement timer
-    // exists. It must do BOTH things: reap the group (a grandchild that
-    // survives holds the inherited stdout pipe open, so execFile's callback
-    // never fires) and settle the promise, or the service's in-flight slot for
-    // that folder is wedged for the life of the daemon.
+    // Owning the deadline is only safe because this timer does BOTH things:
+    // reap the group (a grandchild that survives holds the inherited stdout
+    // pipe open, so `close` never fires) and settle the promise, or the
+    // service's in-flight slot for that folder is wedged for the daemon's life.
     vi.useFakeTimers();
     const killSpy = vi
       .spyOn(process, 'kill')
       .mockImplementation((): true => true);
     try {
-      const execFileFn = (() =>
-        // Never calls back — the wedged-grandchild case.
-        ({
-          pid: 4242,
-          kill: () => true,
-        }) as unknown as ChildProcess) as unknown as typeof execFile;
+      // Never emits — the wedged-grandchild case.
+      const groupSpawnFn = (() =>
+        fakeGroupChild(4242).child) as unknown as typeof spawn;
 
-      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers(
+      const pending = new ClaudeAdapter({ groupSpawnFn }).listMcpServers(
         { cwd: '/tmp' },
         { timeoutMs: 50 },
       );
@@ -577,31 +623,19 @@ describe('AgentAdapter.runCommand spawn options', () => {
     // drops the handle, so this is the last moment anything can reach that
     // group.
     //
-    // This pins the CALL, not the outcome, and deliberately so: node's
-    // `execFile` drops `detached`, so the child is not a group leader and the
-    // kill currently reaches nothing (see `runCommand`). When that is fixed,
-    // this assertion is what says the success path still asks for the reap.
-    //
-    // And it must happen exactly ONCE. The deadline timer is armed BEFORE the
-    // spawn (a synchronous execFileFn would otherwise leave one nothing can
-    // clear), so settle has to clear it — else it fires later and SIGKILLs
-    // whatever process group owns that pid by then.
+    // And it must happen exactly ONCE. `exit`, `close` and the deadline all
+    // reap, and the timer is armed BEFORE the spawn (an injected spawn that
+    // emits synchronously would otherwise leave one nothing can clear), so
+    // settle has to clear it — else it fires later and SIGKILLs whatever
+    // process group owns that pid by then.
     vi.useFakeTimers();
     const killSpy = vi
       .spyOn(process, 'kill')
       .mockImplementation((): true => true);
     try {
-      const execFileFn = ((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: Error | null, out: string) => void,
-      ) => {
-        cb(null, '');
-        return { pid: 4243, kill: () => true } as unknown as ChildProcess;
-      }) as unknown as typeof execFile;
+      const groupSpawnFn = spawnAnswering('', 4243);
 
-      await new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' });
+      await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
       expect(killSpy).toHaveBeenCalledTimes(1);
       expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGKILL');
@@ -616,26 +650,46 @@ describe('AgentAdapter.runCommand spawn options', () => {
     }
   });
 
-  it('reaps the group when execFile kills the direct child itself', async () => {
-    // execFile's own failure paths (maxBuffer overflow, its own signal) kill
-    // the direct pid only. Without this the grandchildren — the user's MCP
-    // servers — survive with the timer already cleared and nothing left to
-    // reap them, which is the exact orphaning this spawn mode exists to stop.
+  it('falls back to a direct kill when the group is already gone', async () => {
+    // The ESRCH branch of `killProcessGroup`, and the only kill that lands
+    // once the leader has exited. Every spec above stubs `process.kill` to
+    // SUCCEED, so none of them enters it — a stub that throws is the only way
+    // in, and without this the fallback ships unpinned and a later "this looks
+    // like dead code" cleanup would silently drop the last reap.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((): never => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
+    try {
+      const fake = fakeGroupChild(4249);
+      const groupSpawnFn = ((): unknown => {
+        queueMicrotask(() => fake.close(0));
+        return fake.child;
+      }) as unknown as typeof spawn;
+
+      await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
+
+      expect(killSpy).toHaveBeenCalledWith(-4249, 'SIGKILL');
+      expect(fake.directKills).toEqual(['SIGKILL']);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('reaps the group when the child fails instead of answering', async () => {
+    // A spawn error (ENOENT surfaced asynchronously) settles the read, and the
+    // group has to go with it — otherwise the grandchildren survive with the
+    // timer already cleared and nothing left to reap them.
     const killSpy = vi
       .spyOn(process, 'kill')
       .mockImplementation((): true => true);
     try {
-      const execFileFn = ((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: Error | null, out: string) => void,
-      ) => {
-        cb(new Error('stdout maxBuffer length exceeded'), '');
-        return { pid: 4244, kill: () => true } as unknown as ChildProcess;
-      }) as unknown as typeof execFile;
+      const fake = fakeGroupChild(4244);
+      const groupSpawnFn = ((): unknown => {
+        queueMicrotask(() => fake.fail());
+        return fake.child;
+      }) as unknown as typeof spawn;
 
-      await new ClaudeAdapter({ execFileFn }).listMcpServers({ cwd: '/tmp' });
+      await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
       expect(killSpy).toHaveBeenCalledWith(-4244, 'SIGKILL');
     } finally {
@@ -643,36 +697,50 @@ describe('AgentAdapter.runCommand spawn options', () => {
     }
   });
 
-  it('reaps the group ONCE, even when the command exits after the deadline', async () => {
-    // The deadline reaps and settles; the exec callback then arrives with an
-    // error and runs its own error-path reap. By then node has waitpid'd the
-    // child, so a second `kill(-pid)` can land on whatever now owns that pid.
+  it('reports a non-zero exit as unreadable rather than as empty output', async () => {
+    // `execFile` gave us this for free via its `err` argument; the spawn path
+    // has to read the exit code itself. Getting it wrong turns every failed
+    // listing into a confident "this folder has no MCP servers".
+    const killSpy = vi
+      .spyOn(process, 'kill')
+      .mockImplementation((): true => true);
+    try {
+      const fake = fakeGroupChild(4250);
+      const groupSpawnFn = ((): unknown => {
+        queueMicrotask(() => fake.close(1));
+        return fake.child;
+      }) as unknown as typeof spawn;
+
+      await expect(
+        new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' }),
+      ).resolves.toMatchObject({ ok: false });
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('reaps the group ONCE, even when the child exits after the deadline', async () => {
+    // The deadline reaps and settles; the child's own `close` then arrives and
+    // runs its own reap. By then node has waitpid'd the child, so a second
+    // `kill(-pid)` can land on whatever now owns that pid.
     vi.useFakeTimers();
     const killSpy = vi
       .spyOn(process, 'kill')
       .mockImplementation((): true => true);
     try {
-      let fire!: () => void;
-      const execFileFn = ((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: Error | null, out: string) => void,
-      ) => {
-        fire = () => cb(new Error('killed'), '');
-        return { pid: 4248, kill: () => true } as unknown as ChildProcess;
-      }) as unknown as typeof execFile;
+      const fake = fakeGroupChild(4248);
+      const groupSpawnFn = (() => fake.child) as unknown as typeof spawn;
 
       // An EXPLICIT deadline, not the shipped constant: a bare literal that
       // has to match `CLAUDE_MCP_LIST_TIMEOUT_MS` goes vacuous the moment that
       // constant is retuned — the timer never fires and this stops testing the
       // ordering it names, silently.
-      const pending = new ClaudeAdapter({ execFileFn }).listMcpServers(
+      const pending = new ClaudeAdapter({ groupSpawnFn }).listMcpServers(
         { cwd: '/tmp' },
         { timeoutMs: 50 },
       );
       await vi.advanceTimersByTimeAsync(50); // deadline reaps + settles
-      fire(); // the child's own exit lands afterwards
+      fake.close(0); // the child's own exit lands afterwards
       await pending;
 
       expect(killSpy).toHaveBeenCalledTimes(1);
@@ -696,7 +764,10 @@ describe('AgentAdapter.runCommand spawn options', () => {
       cb(null, '');
       return { pid: 4245, kill: () => true } as unknown as ChildProcess;
     }) as unknown as typeof execFile;
-    const adapter = new ClaudeAdapter({ execFileFn });
+    const adapter = new ClaudeAdapter({
+      execFileFn,
+      groupSpawnFn: spawnAnswering('', 4245),
+    });
 
     await adapter.listMcpServers(
       { cwd: '/tmp' },
@@ -709,15 +780,26 @@ describe('AgentAdapter.runCommand spawn options', () => {
     expect(seen).toEqual([{ processGroup: true }, { processGroup: false }]);
   });
 
-  it('leaves an ordinary utility command undetached, on execFile’s timeout', async () => {
+  it('leaves an ordinary utility command on execFile, undetached', async () => {
     // The default path is unchanged — every pre-existing caller (--version,
-    // --help probes) must keep spawning exactly as it did.
-    const { adapter, seen } = capturingAdapter();
+    // --help probes) must keep spawning exactly as it did, through execFile
+    // with node's own deadline.
+    let opts: Record<string, unknown> = {};
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      options: Record<string, unknown>,
+      cb: (err: Error | null, out: string) => void,
+    ) => {
+      opts = options;
+      cb(null, '');
+      return { pid: 999, kill: () => true } as unknown as ChildProcess;
+    }) as unknown as typeof execFile;
 
-    await adapter.supportsLiveStream();
+    await new ClaudeAdapter({ execFileFn }).supportsLiveStream();
 
-    expect(seen().detached).toBeUndefined();
-    expect(seen().timeout).toBe(10_000);
-    expect(seen().cwd).toBeUndefined();
+    expect(opts.detached).toBeUndefined();
+    expect(opts.timeout).toBe(10_000);
+    expect(opts.cwd).toBeUndefined();
   });
 });

@@ -54,8 +54,10 @@ to do with several answers, never HOW to ask. Reference pair: `ModelsService` /
   exempt an adapter from the rule above — an ACP adapter still answers every
   per-CLI question through its own `AdapterConfig`.
 - A second ACP-capable CLI composes `adapters/acp/`; it never copies the
-  protocol. Compare `adapters/cursor-acp/cursor-acp.adapter.ts`: ~150 lines of
-  binary name, env re-injection, an approval policy, and the mode mapping.
+  protocol. Compare `adapters/cursor-acp/cursor-acp.adapter.ts`: binary name,
+  env re-injection, an approval policy, and the mode mapping — plus, like any
+  adapter, whatever its own CLI needs that ACP does not cover (its `mcp list`
+  listing is a subcommand, not a protocol method).
 
 ## Config field, or abstract method?
 
@@ -161,7 +163,10 @@ or names.
   reader of — write it inline in that literal, beside the field it answers. A
   name nothing else ever says buys nothing and only puts the value one file
   away from the shape that gives it meaning. An adapter whose every fact takes
-  that exception needs no `.const.ts` at all (`cursor-acp`).
+  that exception needs no `.const.ts` at all — and the moment one of its facts
+  gains a SECOND reader, it does: `cursor-acp` had none until its `mcp list`
+  argv and probed row markers came to be spelled by both its parser and its
+  adapter, which is exactly the drift a name prevents.
 - **An agent is named, never spelled.** `AgentKind.Claude` /
   `AgentKind.CursorAgent` (`v1/runs/runs.types.ts`), which also drives
   `AgentKindSchema` — a bare `'claude'` string is a typo away from a branch

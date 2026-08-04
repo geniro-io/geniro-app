@@ -183,6 +183,10 @@ export class AgentMcpService {
       return { servers: [], unavailableReason };
     }
     const version = await this.resolveVersionFn(agent, {
+      // A Refresh means the user believes the machine changed, and the version
+      // IS part of the cache key — reusing a memoized one would re-derive the
+      // same key and hand back the very reading they asked to replace.
+      forceRefresh: refresh,
       onSpawn: (child) =>
         this.processes.register(
           `mcp:version:${randomUUID()}`,

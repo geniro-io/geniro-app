@@ -42,7 +42,12 @@ export function writeTurnMcpConfig(
   dir: string,
   endpoint: NonNullable<AgentTurnInput['mcpEndpoint']>,
 ): string {
-  mkdirSync(dir, { recursive: true });
+  // 0700, not the 0755 `mkdirSync` defaults to. The FILE is already 0600,
+  // but the directory sits at a predictable path under the OS tmpdir on a
+  // shared machine — world-readable, it lets any local account enumerate
+  // which turns are live and when. The mode applies only when this call
+  // creates the directory; an existing one keeps whatever it has.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(
     dir,
     `${CLAUDE_MCP_CONFIG_PREFIX}${randomUUID()}${CLAUDE_MCP_CONFIG_SUFFIX}`,
@@ -107,7 +112,8 @@ export function writeTurnSettings(
     // be one more thing that can be malformed for no gain.
     return null;
   }
-  mkdirSync(dir, { recursive: true });
+  // 0700 for the same reason the config file's directory is — see above.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(
     dir,
     `${CLAUDE_SETTINGS_PREFIX}${randomUUID()}${CLAUDE_SETTINGS_SUFFIX}`,

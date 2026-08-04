@@ -819,6 +819,52 @@ describe('GraphExecutorService', () => {
     expect(cursor.starts[0]!.input.pluginDir).toBeNull();
   });
 
+  it('SAYS a plugin directory it dropped was dropped, and why', async () => {
+    // Not refusing is right; dropping in silence is not. A workflow imported
+    // as YAML can carry a `pluginDir` on a CLI that has no such mechanism —
+    // the builder never offered the field, so the user never saw it refused —
+    // and the run would otherwise proceed as though the node had named none.
+    // Deleting the notice leaves the previous spec green, which is why this
+    // one exists beside it.
+    const { service, itemDao, cursor } = setup();
+
+    await service.startRun({
+      slug: 'cursor-plugin-notice',
+      workflow: triggered({
+        name: 'cursor-plugin-notice',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+            name: 'Reviewer',
+            pluginDir: join(dir, 'no-such-plugin'),
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const notice = [...itemDao.items.values()]
+      .flat()
+      .find(
+        (item) =>
+          item.kind === 'system' &&
+          String(JSON.parse(item.payload).message).includes('plugin directory'),
+      );
+
+    expect(notice).toBeDefined();
+    const message = String(JSON.parse(notice!.payload).message);
+    // The node the user has to go and fix, and the adapter's OWN reason —
+    // a sentence composed here could not stay true as the config changes.
+    expect(message).toContain('Reviewer');
+    expect(message).toContain(cursor.getConfig().plugin.unavailableReason);
+  });
+
   it('runs a linear chain, feeding A output into B prompt', async () => {
     const { service, claude, runDao, itemDao, nodeDao } = setup();
     const run = await service.startRun({

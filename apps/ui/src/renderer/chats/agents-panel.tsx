@@ -17,6 +17,7 @@ import { cn } from '../components/ui/utils';
 import { type AgentDisplay, type AgentThread } from './agent-activity';
 import { ContextMeter } from './context-meter';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
+import { mcpScopeKey } from './use-agent-mcp';
 
 /**
  * The right side panel (opened from the transcript header): every agent of
@@ -28,7 +29,7 @@ import { RUN_STATUS_META, RunStatusIcon } from './run-status';
  */
 export function AgentsPanel({
   agents,
-  mcpByKind,
+  mcpByScope,
   mcpLoading = false,
   onRefreshMcp,
   onSetMcpEnabled,
@@ -39,11 +40,16 @@ export function AgentsPanel({
 }: {
   agents: AgentDisplay[];
   /**
-   * MCP servers per CLI kind, fetched by the owner. Keyed by kind and not by
-   * agent because a run has ONE folder, so two nodes on the same CLI load the
-   * same servers. Absent while the panel's owner has nothing to show.
+   * MCP servers per {@link mcpScopeKey}, fetched by the owner.
+   *
+   * Keyed by (CLI, plugin directory) rather than by node: several nodes
+   * routinely share one pair and would get identical answers, but two nodes on
+   * the same CLI with DIFFERENT plugin directories do not — a plugin ships its
+   * own MCP servers. Keyed by CLI alone (as it was) the panel painted one
+   * node's servers onto every card of that CLI, including nodes that load a
+   * different set. Absent while the panel's owner has nothing to show.
    */
-  mcpByKind?: ReadonlyMap<CliKind, AgentMcpListing>;
+  mcpByScope?: ReadonlyMap<string, AgentMcpListing>;
   mcpLoading?: boolean;
   /** Re-read health from the CLIs; absent hides the control entirely. */
   onRefreshMcp?: () => void;
@@ -147,6 +153,10 @@ export function AgentsPanel({
             // Bound here so the toggle closure below carries a NARROWED kind
             // rather than a non-null assertion on a field re-read at call time.
             const mcpKind = agent.agent;
+            const mcpScope =
+              mcpKind === null
+                ? null
+                : mcpScopeKey({ agent: mcpKind, pluginDir: agent.pluginDir });
             // An agent whose only thread is its own conversation has nothing
             // to expand INTO — the card already is that conversation. Showing
             // a chevron over a one-row list (the 1:1 chat's whole shape) is
@@ -232,9 +242,9 @@ export function AgentsPanel({
                     spentUsd={agent.spentUsd}
                   />
                 </Header>
-                {mcpByKind && mcpKind !== null ? (
+                {mcpByScope && mcpKind !== null && mcpScope !== null ? (
                   <McpSection
-                    listing={mcpByKind.get(mcpKind)}
+                    listing={mcpByScope.get(mcpScope)}
                     loading={mcpLoading}
                     onSetEnabled={
                       onSetMcpEnabled

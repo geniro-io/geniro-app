@@ -29,6 +29,14 @@ approval_required_for:
 tools_required: ["pnpm", "cursor-agent CLI"]
 ---
 
+> **AMENDED after the `agent-mcp-sidebar` milestones shipped.** The `useProjectMcp` per-node
+> toggle this plan describes was never built (`useProjectMcp` has zero matches in the source
+> tree). `--strict-mcp-config` was dropped unconditionally instead, and the intent the toggle
+> was protecting — a caller turn must not silently shadow the user's own MCP server under
+> geniro's key — is carried by `definesGeniroServer` in `claude-mcp-config.utils.ts`, which
+> refuses such a turn across all three scopes claude loads from. Read every `useProjectMcp`
+> mention below as historical intent, not as a description of the code.
+
 <!-- geniro:design-doc -->
 
 # Milestone 4 — Cursor parity and per-node MCP toggle

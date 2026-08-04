@@ -13,11 +13,11 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentMcpListingWire } from '../chat.types';
-import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { resolveValidPluginDir } from '../utils/resolve-plugin-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentVersionService } from './agent-version.service';
 import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
 
@@ -83,7 +83,7 @@ export interface AgentMcpServiceOptions {
   /** Clock (test seam). */
   now?: () => number;
   /** Replacement version resolver for tests. */
-  resolveVersionFn?: typeof resolveAgentVersion;
+  resolveVersionFn?: AgentVersionService['resolve'];
   /**
    * The empty directory a folder-independent listing runs in (test seam);
    * defaults to `<userData>/mcp-folderless`. A spec that let this default
@@ -122,7 +122,7 @@ export class AgentMcpService {
   private readonly logger = new Logger(AgentMcpService.name);
   private readonly ttlMs: number;
   private readonly now: () => number;
-  private readonly resolveVersionFn: typeof resolveAgentVersion;
+  private readonly resolveVersionFn: AgentVersionService['resolve'];
   private readonly folderlessDirPath: string;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<AgentMcpListingResult>>();
@@ -131,11 +131,14 @@ export class AgentMcpService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     private readonly settings: McpSettingsStore,
+    private readonly versions: AgentVersionService,
     options: AgentMcpServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_MCP_TTL_MS;
     this.now = options.now ?? Date.now;
-    this.resolveVersionFn = options.resolveVersionFn ?? resolveAgentVersion;
+    this.resolveVersionFn =
+      options.resolveVersionFn ??
+      ((kind, opts) => versions.resolve(kind, opts));
     this.folderlessDirPath =
       options.folderlessDir ??
       join(environment.userDataDir, FOLDERLESS_DIR_NAME);

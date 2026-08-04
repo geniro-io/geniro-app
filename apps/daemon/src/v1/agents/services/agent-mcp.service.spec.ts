@@ -18,6 +18,7 @@ import type {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService } from './agent-mcp.service';
+import { AgentVersionService } from './agent-version.service';
 import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
 
@@ -128,6 +129,7 @@ function harness(
     registry,
     new ProcessRegistry(),
     settings,
+    new AgentVersionService(),
     {
       now: () => now,
       resolveVersionFn: () => Promise.resolve(version),
@@ -309,6 +311,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      new AgentVersionService(),
       {
         resolveVersionFn: () => Promise.resolve('1'),
       },
@@ -349,6 +352,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      new AgentVersionService(),
       {
         resolveVersionFn: () => Promise.resolve(version),
       },
@@ -523,6 +527,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -616,6 +621,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -661,6 +667,7 @@ describe('AgentMcpService.list', () => {
       { for: () => adapter } as unknown as AgentAdapterRegistry,
       processes,
       new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -871,6 +878,7 @@ describe('AgentMcpService.setEnabled', () => {
       registry,
       new ProcessRegistry(),
       new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
+      new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 

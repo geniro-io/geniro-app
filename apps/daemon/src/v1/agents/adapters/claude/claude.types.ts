@@ -1,4 +1,4 @@
-import type { resolveAgentVersion } from '../../utils/agent-version';
+import type { AgentVersionService } from '../../services/agent-version.service';
 import type { AgentAdapterOptions } from '../agent-adapter';
 
 /**
@@ -48,5 +48,5 @@ export interface ClaudeProbeOptions {
   cachePath?: string;
   turnTimeoutMs?: number;
   /** Replacement version resolver for tests. */
-  resolveVersionFn?: typeof resolveAgentVersion;
+  resolveVersionFn?: AgentVersionService['resolve'];
 }

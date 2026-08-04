@@ -1,7 +1,5 @@
 import { type ChildProcess, execFile } from 'node:child_process';
 
-import type { AgentKind } from '../../runs/runs.types';
-import { resolveAgentBinary } from './agent-binary';
 import { buildChildEnv } from './child-env';
 
 export interface ResolveAgentVersionOptions {
@@ -14,9 +12,11 @@ export interface ResolveAgentVersionOptions {
   /**
    * Ask the binary again instead of reusing a memoized answer.
    *
-   * For the caller that already knows something changed — the MCP listing's
-   * own `refresh=true`, where the user asked for a re-read precisely because
-   * they believe the machine is no longer what geniro last saw.
+   * Read by {@link AgentVersionService}, not here — this function always forks.
+   * It rides the same options bag so a caller states its intent once, at the
+   * call site that has the reason: the MCP listing's own `refresh=true`, where
+   * the user asked for a re-read precisely because they believe the machine is
+   * no longer what geniro last saw.
    */
   forceRefresh?: boolean;
 }
@@ -24,106 +24,19 @@ export interface ResolveAgentVersionOptions {
 const VERSION_TIMEOUT_MS = 5_000;
 
 /**
- * How long a resolved version is reused before the binary is asked again.
+ * Fork `<binary> --version` and return its first non-empty line.
  *
- * Deliberately SHORT. The version is what every downstream cache is keyed by,
- * so a long memo would keep serving a stale key after the user upgrades their
- * CLI and the models / skills / MCP answers would stay pinned to the old
- * binary. A minute is long enough to collapse the burst this exists for — one
- * panel opening forks `--version` once per listing, and a chat switch, folder
- * change, Refresh, toggle write and debounced builder selection all land
- * inside it — and short enough that an upgrade is noticed while the user is
- * still wondering why.
- */
-const VERSION_MEMO_TTL_MS = 60_000;
-
-/** Resolved versions, keyed by the BINARY the version describes. */
-const memo = new Map<
-  string,
-  { value: string | null; at: number; seq: number }
->();
-
-/**
- * Monotonic flight counter, ordering the reads that produced those values.
+ * Pure in the sense `utils/` means: no state, no DI, one child per call. The
+ * memo and single-flight that stop this being forked on every request live in
+ * `services/agent-version.service.ts`, because a cache is state and state in a
+ * util is state shared by every consumer with no way to scope it.
  *
- * Separate from `at` (the TTL clock) because a timestamp cannot order two
- * forks started in the same millisecond — which is every pair under a test
- * clock, and a real pair whenever a Refresh lands while a read is still out.
+ * Never throws and never hangs — the timeout kills the child, and every
+ * failure (missing binary, non-zero exit, deadline) answers `null`.
  */
-let flightSeq = 0;
-
-/** Reads in flight, so N concurrent callers fork the CLI once between them. */
-const inFlight = new Map<string, Promise<string | null>>();
-
-/**
- * Drop every memoized version. For specs only — nothing in the daemon calls
- * it, because a caller that genuinely needs a fresh reading asks for one
- * ({@link ResolveAgentVersionOptions.forceRefresh}) rather than clearing a
- * cache other callers are sharing.
- */
-export function resetAgentVersionCache(): void {
-  memo.clear();
-  inFlight.clear();
-}
-
-/**
- * `<binary> --version` as an opaque cache key (a probe verdict is cached per
- * installed binary, re-probed only when the binary changes).
- * `null` means "version unknown" — callers must treat that as cache-miss,
- * never as "unsupported": a CLI that can't print a version can still work.
- * Never throws and never hangs (timeout kills the child).
- *
- * MEMOIZED per binary with a single-flight, because this is the one read that
- * happens BEFORE any consumer's own cache key can be computed — so every
- * consumer's cache HIT still paid for a process fork, and on a cache hit that
- * fork was the entire cost of the request. Both renderer hooks deliberately
- * hold no cache of their own ("the daemon already caches"), which is what made
- * the burst continuous rather than occasional.
- */
-export function resolveAgentVersion(
-  kind: AgentKind,
-  options: ResolveAgentVersionOptions = {},
-): Promise<string | null> {
-  const binary = resolveAgentBinary(kind);
-  if (!options.forceRefresh) {
-    const hit = memo.get(binary);
-    if (hit && Date.now() - hit.at < VERSION_MEMO_TTL_MS) {
-      return Promise.resolve(hit.value);
-    }
-    const flight = inFlight.get(binary);
-    if (flight) {
-      return flight;
-    }
-  }
-  // Stamped when the fork STARTS, not when it answers. Two reads can be in
-  // flight at once — a `forceRefresh` raised while an ordinary one is still
-  // out — and whichever child exits last would otherwise win. The slower one
-  // is the older reading, so letting it land would re-pin the very answer the
-  // refresh asked to replace, for the full TTL.
-  const seq = ++flightSeq;
-  const startedAt = Date.now();
-  const tracked: Promise<string | null> = spawnVersion(binary, options)
-    .then((value) => {
-      const current = memo.get(binary);
-      if (!current || current.seq < seq) {
-        memo.set(binary, { value, at: startedAt, seq });
-      }
-      return value;
-    })
-    .finally(() => {
-      // Only if it is still OURS: a forced refresh may have replaced it.
-      if (inFlight.get(binary) === tracked) {
-        inFlight.delete(binary);
-      }
-    });
-  inFlight.set(binary, tracked);
-  return tracked;
-}
-
-/** The actual fork. Never throws; `null` is every failure. */
-function spawnVersion(
+export function spawnAgentVersion(
   binary: string,
-  options: ResolveAgentVersionOptions,
+  options: ResolveAgentVersionOptions = {},
 ): Promise<string | null> {
   const run = options.execFileFn ?? execFile;
   return new Promise((resolve) => {

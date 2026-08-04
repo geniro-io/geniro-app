@@ -14,6 +14,7 @@ import type { AgentCommandOptions } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { SkillsService } from './skills.service';
@@ -99,6 +100,7 @@ function build(
       harvest,
       new AgentAdapterRegistry(claude, cursor),
       new ProcessRegistry(),
+      new AgentVersionService(),
       {
         homeDir: home,
         resolveVersionFn: () => Promise.resolve('pinned'),

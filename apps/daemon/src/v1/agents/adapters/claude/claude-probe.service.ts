@@ -10,8 +10,8 @@ import type {
   ClaudeModeProbeStatus,
   ClaudeModesCapability,
 } from '../../chat.types';
+import { AgentVersionService } from '../../services/agent-version.service';
 import { ProcessRegistry } from '../../services/process-registry';
-import { resolveAgentVersion } from '../../utils/agent-version';
 import { childProcessHandle } from '../../utils/child-handle';
 import { ClaudeAdapter } from './claude.adapter';
 import {
@@ -60,7 +60,7 @@ export class ClaudeProbeService {
   private readonly probeRootDir: string;
   private readonly cachePath: string;
   private readonly turnTimeoutMs: number;
-  private readonly resolveVersionFn: typeof resolveAgentVersion;
+  private readonly resolveVersionFn: AgentVersionService['resolve'];
 
   /** Latest settled verdict this launch (both modes pass/fail — never unknown). */
   private verdict: ClaudeModesCapability | null = null;
@@ -69,6 +69,7 @@ export class ClaudeProbeService {
   constructor(
     private readonly claudeAdapter: ClaudeAdapter,
     private readonly processes: ProcessRegistry,
+    private readonly versions: AgentVersionService,
     options: ClaudeProbeOptions = {},
   ) {
     this.probeRootDir =
@@ -76,7 +77,9 @@ export class ClaudeProbeService {
     this.cachePath =
       options.cachePath ?? join(environment.userDataDir, 'claude-probe.json');
     this.turnTimeoutMs = options.turnTimeoutMs ?? CLAUDE_MODE_PROBE_TIMEOUT_MS;
-    this.resolveVersionFn = options.resolveVersionFn ?? resolveAgentVersion;
+    this.resolveVersionFn =
+      options.resolveVersionFn ??
+      ((kind, opts) => versions.resolve(kind, opts));
   }
 
   /** The current verdict without probing — all-`unknown` until a probe ran. */

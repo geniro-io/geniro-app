@@ -46,6 +46,7 @@ import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import { createDaemonApis, daemonErrorStatus } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
+import { useCapabilities } from '../use-capabilities';
 import {
   type AgentDisplay,
   type AgentThread,
@@ -193,9 +194,6 @@ export function Chats({
   // vocabulary, and the other CLI has none at all.
   const [efforts, setEfforts] = useState<Partial<Record<CliKind, string>>>({});
   // Machine capabilities — gates the plan option; reading pre-warms the probe.
-  const [capabilities, setCapabilities] = useState<CapabilitiesWire | null>(
-    null,
-  );
   // Working directory for the NEXT new chat. Seeded from the last-used folder
   // (persisted in settings); each chat records its own cwd, so this is only the
   // default the picker starts from.
@@ -556,41 +554,7 @@ export function Chats({
     };
   }, [workflowSlug, workflowApi]);
 
-  // Capabilities gate the plan option in the approval selector; the FIRST read
-  // is also what pre-warms the daemon-side probe, so on a cold launch the
-  // claude-mode verdict comes back `unknown`. Re-poll (bounded) while it is
-  // unsettled so the pre-warmed pass actually reaches `planSupported` this
-  // session, not only after a remount. Fail-open — no verdict just hides plan.
-  useEffect(() => {
-    let cancelled = false;
-    let attempts = 0;
-    const poll = (): void => {
-      void capabilitiesApi
-        .getCapabilities()
-        .then((caps) => {
-          if (cancelled) {
-            return;
-          }
-          setCapabilities(caps);
-          const unsettled =
-            caps.claudeModes.acceptEdits === 'unknown' ||
-            caps.claudeModes.plan === 'unknown';
-          if (unsettled && attempts < 5) {
-            attempts += 1;
-            window.setTimeout(poll, 2000);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setCapabilities(null);
-          }
-        });
-    };
-    poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [workflowApi]);
+  const capabilities = useCapabilities(capabilitiesApi);
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are

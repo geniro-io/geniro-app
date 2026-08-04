@@ -5,9 +5,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentModelWire } from '../chat.types';
-import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
 
 /** Constructor options — test seams, not user config. */
@@ -48,6 +48,7 @@ export class ModelsService {
   constructor(
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
+    private readonly versions: AgentVersionService,
     options: ModelsServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
@@ -55,11 +56,11 @@ export class ModelsService {
   }
 
   async list(kind: AgentKind): Promise<AgentModelWire[]> {
-    const version = await resolveAgentVersion(kind, {
-      onSpawn: (child) =>
+    const version = await this.versions.resolve(kind, {
+      onSpawn: (child, spawnInfo) =>
         this.processes.register(
           `models:version:${randomUUID()}`,
-          childProcessHandle(child, { processGroup: false }),
+          childProcessHandle(child, spawnInfo),
         ),
     });
     const cached = this.cache.get(kind);

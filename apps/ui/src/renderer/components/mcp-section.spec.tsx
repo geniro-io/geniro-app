@@ -154,32 +154,68 @@ describe('McpSection', () => {
       loading: false,
     });
 
-    expect(el.querySelector('li')?.hasAttribute('title')).toBe(false);
+    expect(el.querySelector('li > span')?.hasAttribute('title')).toBe(false);
   });
 
-  it('falls back to the target when the CLI gave a command but no detail', () => {
-    // The middle rung, which nothing else asserted: rewriting the tooltip as
-    // `title={server.detail ?? undefined}` silently drops claude's command
-    // line and every other case here still passes.
+  it('carries NO tooltip for a target the CLI left blank', () => {
+    // The `||` vs `??` distinction, actually driven. claude's parser yields
+    // `target: ''` for a row whose command column is blank, and `??` would pass
+    // that straight through as `title=""` — a tooltip that follows the pointer
+    // saying nothing. Every other case here uses a non-empty target, which both
+    // operators handle identically, so this is the only one that can fail.
+    const el = render({
+      listing: listing({ name: 'srv', target: '' }),
+      loading: false,
+    });
+
+    expect(el.querySelector('li > span')?.hasAttribute('title')).toBe(false);
+  });
+
+  it('keeps the command line in the tooltip, where wanting it is optional', () => {
+    // The command line is context, not an instruction. Rewriting the tooltip
+    // as `title={server.target ?? undefined}` would pass claude's blank column
+    // through as `title=""` — a tooltip that follows the pointer saying
+    // nothing — which is what the `||` guards.
     const el = render({
       listing: listing({ name: 'srv' }),
       loading: false,
     });
 
-    expect(el.querySelector('li')?.getAttribute('title')).toBe('node srv.js');
+    expect(el.querySelector('li > span')?.getAttribute('title')).toBe(
+      'node srv.js',
+    );
   });
 
-  it('still prefers the detail over the target when the CLI gave one', () => {
-    // The precedence the null-handling must not have quietly reordered: a
-    // failure reason is the actionable half and outranks the command line.
+  it('renders a FAILURE reason as text, not only as a tooltip', () => {
+    // The reason is the only actionable part of a failure — fix a path, start
+    // a service, sign in — and it used to live solely in a `title` on a
+    // non-focusable `li`. A keyboard user could see the badge go red and never
+    // reach the sentence explaining it.
     const el = render({
-      listing: listing({ name: 'srv', detail: 'HTTP 502: dial failed' }),
+      listing: listing({
+        name: 'srv',
+        status: 'failed',
+        detail: 'HTTP 502: dial failed',
+      }),
       loading: false,
     });
 
-    expect(el.querySelector('li')?.getAttribute('title')).toBe(
-      'HTTP 502: dial failed',
+    expect(el.textContent).toContain('HTTP 502: dial failed');
+    // And it is NOT hidden behind the pointer any more.
+    expect(el.querySelector('li > span')?.getAttribute('title')).toBe(
+      'node srv.js',
     );
+  });
+
+  it('does not print a detail for a server that did not fail', () => {
+    // A healthy list stays one line per server. Dropping the status guard puts
+    // an explanatory sentence under rows with nothing to explain.
+    const el = render({
+      listing: listing({ name: 'srv', detail: 'connected in 12ms' }),
+      loading: false,
+    });
+
+    expect(el.textContent).not.toContain('connected in 12ms');
   });
 
   it('renders a CLI-reported disabled server struck through, with its own badge', () => {
@@ -208,5 +244,60 @@ describe('McpSection', () => {
 
     expect(el.textContent).toContain('cursor-agent cannot list MCP servers');
     expect(el.textContent).not.toContain('No servers');
+  });
+
+  it('offers a re-dial only where the surface asked for one', () => {
+    // The Agents panel puts its control in the PANEL header, because it shows
+    // one listing per CLI and a per-section button would be the same action
+    // offered several times. A surface that shows exactly one listing has
+    // nowhere else to put it.
+    const withoutRefresh = render({
+      listing: listing({ name: 'srv' }),
+      loading: false,
+    });
+    expect(
+      withoutRefresh.querySelector('[aria-label="Refresh MCP servers"]'),
+    ).toBeNull();
+
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+
+    const onRefresh = vi.fn();
+    const el = render({
+      listing: listing({ name: 'srv' }),
+      loading: false,
+      onRefresh,
+    });
+    const button = el.querySelector<HTMLButtonElement>(
+      '[aria-label="Refresh MCP servers"]',
+    );
+    expect(button).not.toBeNull();
+
+    act(() => {
+      button!.click();
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a second re-dial be asked for while one is running', () => {
+    // The read health-checks — it launches the user's own MCP servers — so a
+    // click-happy user must not be able to stack them.
+    const onRefresh = vi.fn();
+    const el = render({
+      listing: listing({ name: 'srv' }),
+      loading: true,
+      onRefresh,
+    });
+
+    const button = el.querySelector<HTMLButtonElement>(
+      '[aria-label="Refresh MCP servers"]',
+    );
+    expect(button?.disabled).toBe(true);
+    act(() => {
+      button!.click();
+    });
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 });

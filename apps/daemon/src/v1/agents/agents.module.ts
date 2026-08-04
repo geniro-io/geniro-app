@@ -15,6 +15,7 @@ import { RunDao } from './dao/run.dao';
 import { AgentAdapterRegistry } from './services/agent-adapter.registry';
 import { AgentEventBus } from './services/agent-events.bus';
 import { AgentMcpService } from './services/agent-mcp.service';
+import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
@@ -47,6 +48,7 @@ import { SkillsService } from './services/skills.service';
   providers: [
     ChatService,
     AgentAdapterRegistry,
+    AgentVersionService,
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
     {
@@ -63,8 +65,14 @@ import { SkillsService } from './services/skills.service';
         harvest: SkillHarvestStore,
         adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
-      ) => new SkillsService(harvest, adapters, processes),
-      inject: [SkillHarvestStore, AgentAdapterRegistry, ProcessRegistry],
+        versions: AgentVersionService,
+      ) => new SkillsService(harvest, adapters, processes, versions),
+      inject: [
+        SkillHarvestStore,
+        AgentAdapterRegistry,
+        ProcessRegistry,
+        AgentVersionService,
+      ],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -78,8 +86,14 @@ import { SkillsService } from './services/skills.service';
         adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
         settings: McpSettingsStore,
-      ) => new AgentMcpService(adapters, processes, settings),
-      inject: [AgentAdapterRegistry, ProcessRegistry, McpSettingsStore],
+        versions: AgentVersionService,
+      ) => new AgentMcpService(adapters, processes, settings, versions),
+      inject: [
+        AgentAdapterRegistry,
+        ProcessRegistry,
+        McpSettingsStore,
+        AgentVersionService,
+      ],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -87,8 +101,9 @@ import { SkillsService } from './services/skills.service';
       useFactory: (
         adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
-      ) => new ModelsService(adapters, processes),
-      inject: [AgentAdapterRegistry, ProcessRegistry],
+        versions: AgentVersionService,
+      ) => new ModelsService(adapters, processes, versions),
+      inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
     },
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
@@ -126,9 +141,12 @@ import { SkillsService } from './services/skills.service';
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
       provide: ClaudeProbeService,
-      useFactory: (adapter: ClaudeAdapter, processes: ProcessRegistry) =>
-        new ClaudeProbeService(adapter, processes),
-      inject: [ClaudeAdapter, ProcessRegistry],
+      useFactory: (
+        adapter: ClaudeAdapter,
+        processes: ProcessRegistry,
+        versions: AgentVersionService,
+      ) => new ClaudeProbeService(adapter, processes, versions),
+      inject: [ClaudeAdapter, ProcessRegistry, AgentVersionService],
     },
   ],
   exports: [

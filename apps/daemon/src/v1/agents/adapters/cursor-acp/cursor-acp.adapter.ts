@@ -216,9 +216,12 @@ export class CursorAcpAdapter extends AgentAdapter {
    * - zero rows WITH the CLI's empty-folder sentence is a real empty listing;
    * - zero rows WITHOUT it means the output could not be read. That third case
    *   is load-bearing here in a way it is not for claude: cursor rows have no
-   *   structural marker, so `parseCursorMcpList` drops any row whose status it
-   *   does not recognise, and this is what turns a reworded release into a
-   *   visible "format may have changed" instead of a cached "no servers".
+   *   structural marker, so a reworded release can leave NOTHING in the output
+   *   shaped like a row, and this is what turns that into a visible "format
+   *   may have changed" instead of a cached "no servers". A row whose STATUS
+   *   alone is unrecognised is kept and badged `unknown` rather than dropped
+   *   — milestone 4 reversed the drop rule, because a listed server with its
+   *   health unstated beats one the user cannot see at all.
    */
   override async listMcpServers(
     input: AgentMcpServersInput,

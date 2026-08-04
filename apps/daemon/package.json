@@ -8,7 +8,7 @@
     "geniro-daemon": "dist/main.js"
   },
   "scripts": {
-    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts'",
+    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts' --ignore '**/__tests__/**'",
     "prebuild": "rm -rf ./dist || true",
     "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
     "start": "node dist/main.js",

@@ -1,9 +1,10 @@
-import type { ChildProcess, execFile } from 'node:child_process';
+import type { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
+import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
@@ -121,7 +122,7 @@ afterEach(() => {
  * command-failed signal — `runCommand` swallows the error and returns null.
  */
 function fakeListing(stdout: string | null): {
-  execFileFn: typeof execFile;
+  groupSpawnFn: typeof spawn;
   captured: {
     args?: readonly string[];
     opts?: { cwd?: string; detached?: boolean };
@@ -131,22 +132,28 @@ function fakeListing(stdout: string | null): {
     args?: readonly string[];
     opts?: { cwd?: string; detached?: boolean };
   } = {};
-  const execFileFn = ((
-    _cmd: string,
+  const groupSpawnFn = ((
+    _command: string,
     args: readonly string[],
     opts: { cwd?: string; detached?: boolean },
-    cb: (err: Error | null, out: string) => void,
   ) => {
     captured.args = args;
     captured.opts = opts;
-    if (stdout === null) {
-      cb(new Error('spawn failed'), '');
-    } else {
-      cb(null, stdout);
-    }
-    return { pid: 4242 } as ChildProcess;
-  }) as unknown as typeof execFile;
-  return { execFileFn, captured };
+    const fake = fakeGroupChild(4242);
+    queueMicrotask(() => {
+      // A null stdout is the could-not-be-run signal: the CLI is missing, or
+      // it exited non-zero. `spawn` reports that as the exit status rather
+      // than as an error argument, so the double has to as well.
+      if (stdout === null) {
+        fake.close(1);
+        return;
+      }
+      fake.writeStdout(stdout);
+      fake.close(0);
+    });
+    return fake.child;
+  }) as unknown as typeof spawn;
+  return { groupSpawnFn, captured };
 }
 
 describe('CursorAcpAdapter spawn', () => {
@@ -534,9 +541,9 @@ describe('CursorAcpAdapter misuse', () => {
   });
   describe('listMcpServers', () => {
     it('asks the CLI in the folder it was given, in its own process group', async () => {
-      const { execFileFn, captured } = fakeListing('probe: ready\n');
+      const { groupSpawnFn, captured } = fakeListing('probe: ready\n');
 
-      await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+      await new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
         cwd: '/proj',
       });
 
@@ -550,12 +557,12 @@ describe('CursorAcpAdapter misuse', () => {
     });
 
     it('reports the servers the CLI listed', async () => {
-      const { execFileFn } = fakeListing(
+      const { groupSpawnFn } = fakeListing(
         'probe-good: ready\nprobe-broken: Error: Connection failed\n',
       );
 
       await expect(
-        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+        new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' }),
       ).resolves.toEqual({
         ok: true,
         servers: [
@@ -578,12 +585,12 @@ describe('CursorAcpAdapter misuse', () => {
     });
 
     it('reports an empty folder as an EMPTY listing, not a failure', async () => {
-      const { execFileFn } = fakeListing(
+      const { groupSpawnFn } = fakeListing(
         'No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)\n',
       );
 
       await expect(
-        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+        new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' }),
       ).resolves.toEqual({ ok: true, servers: [] });
     });
 
@@ -600,10 +607,12 @@ describe('CursorAcpAdapter misuse', () => {
         .spyOn(process, 'kill')
         .mockImplementation((): true => true);
       try {
-        const { execFileFn } = fakeListing(null);
+        const { groupSpawnFn } = fakeListing(null);
 
         await expect(
-          new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+          new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
+            cwd: '/proj',
+          }),
         ).resolves.toEqual({
           ok: false,
           reason: expect.stringContaining('did not answer'),
@@ -618,10 +627,10 @@ describe('CursorAcpAdapter misuse', () => {
       // did not print its empty-folder sentence either. Without this branch
       // that is indistinguishable from an empty folder and the panel would
       // confidently say "No servers".
-      const { execFileFn } = fakeListing('something went sideways\n');
+      const { groupSpawnFn } = fakeListing('something went sideways\n');
 
       await expect(
-        new CursorAcpAdapter({ execFileFn }).listMcpServers({ cwd: '/proj' }),
+        new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' }),
       ).resolves.toEqual({
         ok: false,
         reason: expect.stringContaining('format may have changed'),
@@ -633,11 +642,13 @@ describe('CursorAcpAdapter misuse', () => {
       // server whose status wording merely contains it would satisfy the empty
       // check — turning "we could not read this" into the one claim the output
       // does not support: that the folder has no servers.
-      const { execFileFn } = fakeListing(
+      const { groupSpawnFn } = fakeListing(
         'weird-srv: No MCP servers configured are approved yet\n',
       );
 
-      const result = await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+      const result = await new CursorAcpAdapter({
+        groupSpawnFn,
+      }).listMcpServers({
         cwd: '/proj',
       });
 
@@ -651,16 +662,16 @@ describe('CursorAcpAdapter misuse', () => {
       // that ignores stdin EOF outlives the CLI, and once the CLI exits the
       // registry has dropped the only handle that could reach it.
       //
-      // "Asks for" is exact: `execFile` drops `detached`, so the kill reaches
-      // nothing until that is fixed in `runCommand`. See the twin case in
-      // `agent-adapter.spec.ts`.
+      // The reap now genuinely lands: the group path spawns `detached`, so
+      // the negative pid names a group that exists. See the twin case in
+      // `agent-adapter.spec.ts`, which pins the spawn options themselves.
       const killSpy = vi
         .spyOn(process, 'kill')
         .mockImplementation((): true => true);
       try {
-        const { execFileFn } = fakeListing('probe: ready\n');
+        const { groupSpawnFn } = fakeListing('probe: ready\n');
 
-        await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+        await new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
           cwd: '/proj',
         });
 
@@ -679,11 +690,13 @@ describe('CursorAcpAdapter misuse', () => {
       // as `ok: true` — so the panel states, as fact, that `linear` is the
       // only server in a folder that has two. `AgentMcpService` caches only
       // `ok` results, so that answer then stands for the whole TTL.
-      const { execFileFn } = fakeListing(
+      const { groupSpawnFn } = fakeListing(
         'linear: ready\nsentry: awaiting-auth\n',
       );
 
-      const result = await new CursorAcpAdapter({ execFileFn }).listMcpServers({
+      const result = await new CursorAcpAdapter({
+        groupSpawnFn,
+      }).listMcpServers({
         cwd: '/proj',
       });
       const answer = result.ok

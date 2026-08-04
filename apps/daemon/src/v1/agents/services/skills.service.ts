@@ -7,10 +7,10 @@ import type { AgentKind } from '../../runs/runs.types';
 import type { AgentSkillEntry } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentSkillWire } from '../chat.types';
-import { resolveAgentVersion } from '../utils/agent-version';
 import { childProcessHandle } from '../utils/child-handle';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
 import { SkillHarvestStore } from './skill-harvest.store';
 
@@ -33,7 +33,7 @@ export interface SkillsServiceOptions {
   /** Clock (test seam). */
   now?: () => number;
   /** Replacement version resolver for tests. */
-  resolveVersionFn?: typeof resolveAgentVersion;
+  resolveVersionFn?: AgentVersionService['resolve'];
 }
 
 /** Popup ordering: the user's own entries first, CLI-reported extras last. */
@@ -77,7 +77,7 @@ export class SkillsService {
   private readonly homeDir: string;
   private readonly catalogTtlMs: number;
   private readonly now: () => number;
-  private readonly resolveVersionFn: typeof resolveAgentVersion;
+  private readonly resolveVersionFn: AgentVersionService['resolve'];
   private readonly catalog = new Map<AgentKind, CatalogEntry>();
   private readonly inFlight = new Map<AgentKind, Promise<string[]>>();
 
@@ -85,12 +85,15 @@ export class SkillsService {
     private readonly harvest: SkillHarvestStore,
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
+    private readonly versions: AgentVersionService,
     options: SkillsServiceOptions = {},
   ) {
     this.homeDir = options.homeDir ?? homedir();
     this.catalogTtlMs = options.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS;
     this.now = options.now ?? Date.now;
-    this.resolveVersionFn = options.resolveVersionFn ?? resolveAgentVersion;
+    this.resolveVersionFn =
+      options.resolveVersionFn ??
+      ((kind, opts) => versions.resolve(kind, opts));
   }
 
   async list(agent: AgentKind, cwd: string): Promise<AgentSkillWire[]> {
@@ -147,10 +150,10 @@ export class SkillsService {
       return pending;
     }
     const version = await this.resolveVersionFn(kind, {
-      onSpawn: (child) =>
+      onSpawn: (child, spawnInfo) =>
         this.processes.register(
           `skills:version:${randomUUID()}`,
-          childProcessHandle(child, { processGroup: false }),
+          childProcessHandle(child, spawnInfo),
         ),
     });
     const cached = this.catalog.get(kind);

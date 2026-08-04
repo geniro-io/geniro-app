@@ -25,7 +25,6 @@ import type { CliKind, DaemonHandle } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import type {
   AgentSkillDto as AgentSkill,
-  CapabilitiesDto as CapabilitiesWire,
   ItemDto as ChatItem,
   RunDto as ChatRun,
   SendMessageDtoImagesInner,
@@ -46,6 +45,7 @@ import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import { createDaemonApis, daemonErrorStatus } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
+import { useCapabilities } from '../use-capabilities';
 import {
   type AgentDisplay,
   type AgentThread,
@@ -88,7 +88,7 @@ import {
   unanswerableRequestIds,
 } from './transcript-item';
 import { useAgentEfforts } from './use-agent-efforts';
-import { useAgentMcp } from './use-agent-mcp';
+import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { useAttachments } from './use-attachments';
@@ -193,9 +193,6 @@ export function Chats({
   // vocabulary, and the other CLI has none at all.
   const [efforts, setEfforts] = useState<Partial<Record<CliKind, string>>>({});
   // Machine capabilities — gates the plan option; reading pre-warms the probe.
-  const [capabilities, setCapabilities] = useState<CapabilitiesWire | null>(
-    null,
-  );
   // Working directory for the NEXT new chat. Seeded from the last-used folder
   // (persisted in settings); each chat records its own cwd, so this is only the
   // default the picker starts from.
@@ -556,41 +553,7 @@ export function Chats({
     };
   }, [workflowSlug, workflowApi]);
 
-  // Capabilities gate the plan option in the approval selector; the FIRST read
-  // is also what pre-warms the daemon-side probe, so on a cold launch the
-  // claude-mode verdict comes back `unknown`. Re-poll (bounded) while it is
-  // unsettled so the pre-warmed pass actually reaches `planSupported` this
-  // session, not only after a remount. Fail-open — no verdict just hides plan.
-  useEffect(() => {
-    let cancelled = false;
-    let attempts = 0;
-    const poll = (): void => {
-      void capabilitiesApi
-        .getCapabilities()
-        .then((caps) => {
-          if (cancelled) {
-            return;
-          }
-          setCapabilities(caps);
-          const unsettled =
-            caps.claudeModes.acceptEdits === 'unknown' ||
-            caps.claudeModes.plan === 'unknown';
-          if (unsettled && attempts < 5) {
-            attempts += 1;
-            window.setTimeout(poll, 2000);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setCapabilities(null);
-          }
-        });
-    };
-    poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [workflowApi]);
+  const capabilities = useCapabilities(capabilitiesApi);
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
@@ -1470,6 +1433,8 @@ export function Chats({
           id: CHAT_AGENT_KEY,
           name: activeRun.agentKind ?? 'agent',
           agent: activeRun.agentKind,
+          // A 1:1 chat has no node, so no plugin directory to carry.
+          pluginDir: null,
           status: running ? 'running' : activeRun.status,
           activeTurns: running ? 1 : 0,
           // LIVE first: the delta plane reports the window as of the turn's
@@ -1503,6 +1468,7 @@ export function Chats({
         id: node.id,
         name: node.name ?? node.id,
         agent: node.agent,
+        pluginDir: node.pluginDir ?? null,
         status: displayStatus(nodeActivity),
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens: nodeActivity?.contextTokens ?? null,
@@ -1521,6 +1487,9 @@ export function Chats({
         id: nodeId,
         name: nodeId,
         agent: null,
+        // The workflow no longer has this node, so nothing states what it ran
+        // with. Claiming a plugin directory here would be an invention.
+        pluginDir: null,
         status: displayStatus(nodeActivity),
         activeTurns: nodeActivity.activeTurns,
         contextTokens: nodeActivity.contextTokens,
@@ -1605,20 +1574,28 @@ export function Chats({
    * the user's own MCP servers, and doing that for a panel nobody opened would
    * be a background cost with no reader.
    */
-  const mcpKinds = useMemo(
-    (): CliKind[] =>
-      showAgentsPanel
-        ? [
-            ...new Set(
-              agents
-                .map((agent) => agent.agent)
-                .filter((kind): kind is CliKind => kind !== null),
-            ),
-          ]
-        : [],
-    [showAgentsPanel, agents],
-  );
-  const mcp = useAgentMcp(agentsApi, mcpKinds, activeRun?.cwd ?? null);
+  const mcpScopes = useMemo((): AgentMcpScope[] => {
+    if (!showAgentsPanel) {
+      return [];
+    }
+    // DEDUPED by (CLI, plugin directory): several nodes routinely share one
+    // pair, and each distinct pair costs a health check — which launches the
+    // user's own MCP servers — so asking once per node would multiply that by
+    // the width of the graph for answers that are identical.
+    const byKey = new Map<string, AgentMcpScope>();
+    for (const agent of agents) {
+      if (agent.agent === null) {
+        continue;
+      }
+      const scope: AgentMcpScope = {
+        agent: agent.agent,
+        pluginDir: agent.pluginDir,
+      };
+      byKey.set(mcpScopeKey(scope), scope);
+    }
+    return [...byKey.values()];
+  }, [showAgentsPanel, agents]);
+  const mcp = useAgentMcp(agentsApi, mcpScopes, activeRun?.cwd ?? null);
 
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
   // content width, or a long cwd path widens the grid past the window. The
@@ -2203,7 +2180,7 @@ export function Chats({
           {showAgentsPanel ? (
             <AgentsPanel
               agents={agents}
-              mcpByKind={mcp.byKind}
+              mcpByScope={mcp.byScope}
               mcpLoading={mcp.loading}
               onRefreshMcp={mcp.refresh}
               onSetMcpEnabled={mcp.setEnabled}

@@ -69,6 +69,18 @@ describe('writeTurnMcpConfig', () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it('creates that dir 0700, not the 0755 mkdirSync defaults to', () => {
+    // The file is already 0600, but the DIRECTORY sits at a predictable path
+    // under the OS tmpdir. World-readable, it lets any local account list the
+    // turns geniro has live and when each started — a smaller leak than the
+    // token, and one that costs a single option to close.
+    const dir = join(tempDir(), 'fresh');
+
+    writeTurnMcpConfig(dir, ENDPOINT);
+
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
   it('names each turn its own file, so two live turns never share one', () => {
     const dir = tempDir();
 

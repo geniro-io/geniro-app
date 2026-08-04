@@ -4,8 +4,8 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { AgentVersionService } from '../../services/agent-version.service';
 import { ProcessRegistry } from '../../services/process-registry';
-import type { resolveAgentVersion } from '../../utils/agent-version';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import type { ClaudeAdapter } from './claude.adapter';
 import type { ClaudeProbeOptions } from './claude.types';
@@ -91,14 +91,19 @@ function build(
   const root = tempRoot();
   const cachePath = overrides.cachePath ?? join(root, 'claude-probe.json');
   const { adapter, starts, cancels } = fakeAdapter(behave);
-  const service = new ClaudeProbeService(adapter, new ProcessRegistry(), {
-    probeRootDir: join(root, 'probes'),
-    cachePath,
-    turnTimeoutMs: overrides.turnTimeoutMs ?? 1_000,
-    resolveVersionFn: vi.fn(
-      async () => overrides.version ?? 'claude 2.1.202',
-    ) as unknown as typeof resolveAgentVersion,
-  });
+  const service = new ClaudeProbeService(
+    adapter,
+    new ProcessRegistry(),
+    new AgentVersionService(),
+    {
+      probeRootDir: join(root, 'probes'),
+      cachePath,
+      turnTimeoutMs: overrides.turnTimeoutMs ?? 1_000,
+      resolveVersionFn: vi.fn(
+        async () => overrides.version ?? 'claude 2.1.202',
+      ) as unknown as AgentVersionService['resolve'],
+    },
+  );
   return { service, starts, cancels, cachePath };
 }
 

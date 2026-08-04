@@ -1,7 +1,12 @@
 {
   "extends": "../../tsconfig.build.json",
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.spec.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.spec.ts",
+    "**/__tests__/**"
+  ],
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",

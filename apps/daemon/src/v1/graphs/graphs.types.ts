@@ -392,11 +392,38 @@ export interface ParkQuestionInput {
   fail(): void;
 }
 
+/**
+ * Whether ONE CLI can load a plugin directory for an invocation.
+ *
+ * The wire home for `AdapterConfig.plugin.unavailableReason`, which was the
+ * daemon's single source of truth with no way to reach the renderer — so the
+ * builder hardcoded its own `agent === 'claude'` allowlist, the executor
+ * silently STRIPPED a `pluginDir` it could not honour, and the listing service
+ * refused one with a 400. Three answers to one question, reachable today by
+ * importing a workflow YAML. Carrying the adapter's own reason here is what
+ * collapses them back to one.
+ */
+export const AgentPluginCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * Why this CLI cannot load a plugin directory, or null when it can. A
+     * SENTENCE rather than a boolean, because the renderer shows it: "cannot"
+     * with no reason is the silent refusal this replaced.
+     */
+    unavailableReason: z.string().nullable(),
+  })
+  .meta({ id: 'AgentPluginCapability' });
+export type AgentPluginCapability = z.infer<typeof AgentPluginCapabilitySchema>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
     'Claude permission-mode probe verdict (acceptEdits / plan support)',
   ),
+  plugins: z
+    .array(AgentPluginCapabilitySchema)
+    .describe('Per-CLI plugin-directory support, one entry per known agent'),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

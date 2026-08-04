@@ -35,6 +35,18 @@ export class AgentAdapterRegistry {
     );
   }
 
+  /**
+   * Every registered adapter, keyed by the kind it declares.
+   *
+   * For the consumers that answer a question ABOUT the CLIs rather than
+   * driving one — `GET /v1/capabilities` composing per-agent support. Iterating
+   * this map is what keeps a third CLI from being silently omitted from such
+   * an answer, the way a hand-written two-entry literal would.
+   */
+  all(): ReadonlyMap<AgentKind, AgentAdapter> {
+    return this.byKind;
+  }
+
   /** The adapter driving one agent kind. */
   for(kind: AgentKind): AgentAdapter {
     const adapter = this.byKind.get(kind);

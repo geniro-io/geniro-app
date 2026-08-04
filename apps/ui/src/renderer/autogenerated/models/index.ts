@@ -198,6 +198,27 @@ export type AgentModelDtoSourceEnum = typeof AgentModelDtoSourceEnum[keyof typeo
 /**
  * 
  * @export
+ * @interface AgentPluginCapability
+ */
+export interface AgentPluginCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentPluginCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentPluginCapability
+     */
+    unavailableReason: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentSkillDto
  */
 export interface AgentSkillDto {
@@ -324,6 +345,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     claudeModes: ClaudeModesCapability;
+    /**
+     * Per-CLI plugin-directory support, one entry per known agent
+     * @type {Array<AgentPluginCapability>}
+     * @memberof CapabilitiesDto
+     */
+    plugins: Array<AgentPluginCapability>;
 }
 
 /**

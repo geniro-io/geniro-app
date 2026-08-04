@@ -52,6 +52,10 @@ Thumbs.db
 # geniro working state — planning (plans/specs/milestones/state.md) and other
 # generated files stay local; only workflow and instructions are committed.
 # Note: `.geniro/*` (not `.geniro/`) so the negations below can re-include subdirs.
+# Note: these rules do NOT reach a file git is already tracking. If a planning
+# artifact shows up in `git ls-files .geniro/`, it predates this block and needs
+# `git rm --cached` to actually go local — an ignore rule alone leaves it in the
+# repo, where it goes stale and starts contradicting the code.
 .geniro/*
 !.geniro/
 !.geniro/workflow/

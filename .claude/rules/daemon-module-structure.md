@@ -24,6 +24,29 @@ Everything else goes into a kind-directory:
 | `utils/`       | Pure helpers with no DI (parsers, buffers, spawn plumbing), plainly kebab-named at a module level (`json-util.ts`, `ndjson-buffer.ts`); the `*.utils.ts` suffix is used in ONE place only — an adapter's own `adapters/<name>/utils/` and `adapters/utils/` |
 | `adapters/`    | CLI agent adapters — see `agent-adapters.md`. A CLI's own probe and per-turn lifecycle services live in its adapter directory, not in `services/` (`adapters/claude/claude-probe.service.ts`); so does a protocol several CLIs could speak, in its own agent-agnostic directory (`adapters/acp/`) |
 | `gateways/`    | Socket.IO gateways                                                       |
+| `__tests__/`   | Test-only helpers shared by more than one spec — fixtures, process doubles, builders. NOT a home for the specs themselves, which stay co-located (see below) |
+
+## `__tests__/` — shared spec helpers, and only those
+
+Specs are co-located: `foo.spec.ts` sits next to `foo.ts` and moves with it.
+What does NOT sit next to production code is a helper that exists only to serve
+specs — a fixture, a process double, a builder. It has no production caller, so
+placing it in `utils/` claims a production role it does not have, and every
+reader then has to open it to learn otherwise.
+
+Such a helper lives in a `__tests__/` directory at the level its specs share —
+`adapters/__tests__/fake-group-child.ts`, imported by `agent-adapter.spec.ts`
+and by both adapters' specs. A helper only ONE spec uses does not need the
+directory at all: declare it in that spec.
+
+**The directory is the exclusion mechanism, which is the whole point.** Test-only
+code must not reach `dist/`, and the daemon has two independent build configs
+that must agree on what to skip (`package.json`'s swc `--ignore` globs and
+`tsconfig.build.json`'s `exclude`). A directory is a boundary every tool already
+understands — `**/__tests__/**` in both — whereas a bespoke filename suffix has
+to be re-spelled in each config, and the config that misses the spelling ships
+the helper into the build silently. If you add a third build config, it excludes
+the same directory.
 
 ## Thin controllers, fat services — and types in the types file
 

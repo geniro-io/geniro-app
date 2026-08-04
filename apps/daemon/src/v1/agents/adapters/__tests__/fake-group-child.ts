@@ -18,9 +18,12 @@ import { PassThrough } from 'node:stream';
  * node's own StringDecoder, so a spec that writes a split multi-byte sequence
  * is testing the decode this double claims to model.
  *
- * Lives in a `.spec-helper.ts` rather than a plain `.ts` because it is test
- * scaffolding: the daemon's build ignores that suffix exactly as it ignores
- * `.spec.ts`, so this never reaches `dist/`.
+ * Lives in `__tests__/` rather than beside the code it doubles because it is
+ * test scaffolding with no production caller: the daemon's build excludes that
+ * DIRECTORY, so this never reaches `dist/`. A directory is the exclusion the
+ * whole toolchain already understands — a bespoke filename suffix has to be
+ * re-spelled in every build config that must skip it, and one config that
+ * misses the spelling ships the helper silently.
  */
 export interface FakeGroupChild {
   /** The object `runCommand` receives — structurally a `ChildProcess`. */

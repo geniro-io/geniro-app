@@ -17,13 +17,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeModesCapability } from '../../chat.types';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
+import { spawnAnswering } from '../__tests__/fake-group-child';
 import type {
   AdapterConfig,
   AgentEvent,
   AgentTurnHandle,
   AgentTurnInput,
 } from '../adapter.types';
-import { spawnAnswering } from '../utils/fake-group-child.spec-helper';
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,

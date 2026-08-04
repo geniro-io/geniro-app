@@ -4,9 +4,9 @@ import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
+import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
-import { fakeGroupChild } from '../utils/fake-group-child.spec-helper';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
 
 class FakeReadable extends EventEmitter {

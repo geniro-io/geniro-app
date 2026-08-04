@@ -152,6 +152,13 @@ Adapter-agnostic contract types and constants live in
 `adapters/utils/` (`skill-scan.utils.ts`) and stays free of any one CLI's paths
 or names.
 
+A helper that exists only for SPECS — a fixture, a process double, a builder —
+is not a `utils/` helper and never sits beside the code it doubles: it lives in
+a `__tests__/` directory at the level its specs share
+(`adapters/__tests__/fake-group-child.ts`, shared by the base's specs and both
+adapters'). See `daemon-module-structure.md` §`__tests__/` for why the
+directory, and not a filename suffix, is what keeps it out of `dist/`.
+
 ## Non-negotiables
 
 - **Constants live in `<name>.const.ts` — except the config literal's own.**

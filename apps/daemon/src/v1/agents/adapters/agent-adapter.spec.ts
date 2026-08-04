@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeModesCapability } from '../chat.types';
 import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
+import { fakeGroupChild, spawnAnswering } from './__tests__/fake-group-child';
 import type {
   AdapterConfig,
   AgentApprovalMode,
@@ -19,10 +20,6 @@ import type {
 import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
 import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
-import {
-  fakeGroupChild,
-  spawnAnswering,
-} from './utils/fake-group-child.spec-helper';
 
 /**
  * The config-driven members the base answers for EVERY adapter, driven through

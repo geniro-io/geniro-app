@@ -25,7 +25,6 @@ import type { CliKind, DaemonHandle } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import type {
   AgentSkillDto as AgentSkill,
-  CapabilitiesDto as CapabilitiesWire,
   ItemDto as ChatItem,
   RunDto as ChatRun,
   SendMessageDtoImagesInner,

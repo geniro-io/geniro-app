@@ -1121,6 +1121,7 @@ export function Graphs({
                             ? "Global servers plus this node's plugin. The run folder's own project servers are added when it runs."
                             : 'Global servers. The run folder\u2019s own project servers are added when it runs.'
                         }
+                        onRefresh={nodeMcp.refresh}
                       />
                     ) : null}
                     {callInfo ? (

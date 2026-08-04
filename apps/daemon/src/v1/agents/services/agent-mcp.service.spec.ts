@@ -73,6 +73,7 @@ function server(name: string): AgentMcpServer {
 interface Harness {
   service: AgentMcpService;
   listMcpServers: ReturnType<typeof vi.fn>;
+  readMcpFolderFacts: ReturnType<typeof vi.fn>;
   setNow: (ms: number) => void;
   settings: McpSettingsStore;
 }
@@ -106,6 +107,9 @@ function harness(
     (input: { cwd: string; pluginDir?: string | null }) =>
       impl(input).then((servers) => ({ ok: true as const, servers })),
   );
+  const readMcpFolderFacts = vi.fn(() =>
+    Promise.resolve(facts ?? { projectServers: [], userDisabled: [] }),
+  );
   const adapter = {
     listMcpServers,
     getConfig: () => ({
@@ -116,8 +120,7 @@ function harness(
         userDisabledReason: 'you switched it off yourself',
       },
     }),
-    readMcpFolderFacts: () =>
-      Promise.resolve(facts ?? { projectServers: [], userDisabled: [] }),
+    readMcpFolderFacts,
   } as unknown as AgentAdapter;
   const registry = {
     for: () => adapter,
@@ -142,6 +145,7 @@ function harness(
   return {
     service,
     listMcpServers,
+    readMcpFolderFacts,
     settings,
     setNow: (ms) => {
       now = ms;
@@ -818,6 +822,36 @@ describe('AgentMcpService.setEnabled', () => {
     );
 
     expect(listing.servers[0]?.disabled).toBe(true);
+  });
+
+  it('reads the folder facts ONCE per toggle', async () => {
+    // `setEnabled` must read them to validate the request, and the listing it
+    // answers with needs the same facts to compose its rows. Going back
+    // through `list()` re-read the user's `.mcp.json` and CLI settings a
+    // second time per click, for an answer that cannot have changed: the
+    // write lands in geniro's OWN settings file, which those reads never see.
+    const cwd = realDir();
+    const { service, readMcpFolderFacts } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: projectFacts },
+    );
+
+    const listing = await service.setEnabled(
+      AgentKind.Claude,
+      cwd,
+      'proj',
+      false,
+    );
+
+    expect(readMcpFolderFacts).toHaveBeenCalledTimes(1);
+    // And the reused facts still produce a correctly composed row — the whole
+    // point is that the second read was redundant, not that it was skipped.
+    expect(listing.servers[0]).toMatchObject({
+      name: 'proj',
+      scope: 'project',
+      disabled: true,
+      toggleUnavailableReason: null,
+    });
   });
 
   it('switches it back on', async () => {

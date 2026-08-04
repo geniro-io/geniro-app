@@ -150,10 +150,10 @@ export class SkillsService {
       return pending;
     }
     const version = await this.resolveVersionFn(kind, {
-      onSpawn: (child) =>
+      onSpawn: (child, spawnInfo) =>
         this.processes.register(
           `skills:version:${randomUUID()}`,
-          childProcessHandle(child, { processGroup: false }),
+          childProcessHandle(child, spawnInfo),
         ),
     });
     const cached = this.catalog.get(kind);

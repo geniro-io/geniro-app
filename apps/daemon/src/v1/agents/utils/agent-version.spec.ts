@@ -66,7 +66,7 @@ describe('spawnAgentVersion', () => {
     // Every child the daemon spawns must be reapable on shutdown, and this one
     // is spawned deep inside a promise — `onSpawn` is the only handle a caller
     // ever gets.
-    const seen: { cmd?: string; child?: unknown } = {};
+    const seen: { cmd?: string; child?: unknown; spawnInfo?: unknown } = {};
     const execFileFn = ((
       cmd: string,
       _args: string[],
@@ -80,8 +80,9 @@ describe('spawnAgentVersion', () => {
 
     await spawnAgentVersion('/opt/custom/cursor-agent', {
       execFileFn,
-      onSpawn: (child) => {
+      onSpawn: (child, spawnInfo) => {
         seen.child = child;
+        seen.spawnInfo = spawnInfo;
       },
     });
 
@@ -90,5 +91,10 @@ describe('spawnAgentVersion', () => {
     // resolution.
     expect(seen.cmd).toBe('/opt/custom/cursor-agent');
     expect(seen.child).toEqual({ pid: 7 });
+    // The SPAWN states whether the child leads a group; the registration site
+    // cannot know. `execFile` never forwards `detached`, so this one does not
+    // — and saying so here is what stops four consumers each hand-writing it,
+    // and each keeping a single-pid cancel if that ever changes.
+    expect(seen.spawnInfo).toEqual({ processGroup: false });
   });
 });

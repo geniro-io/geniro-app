@@ -244,10 +244,10 @@ export class ClaudeProbeService {
 
   private async readVersion(): Promise<string | null> {
     return this.resolveVersionFn(AgentKind.Claude, {
-      onSpawn: (child) =>
+      onSpawn: (child, spawnInfo) =>
         this.processes.register(
           `claude-probe:version:${randomUUID()}`,
-          childProcessHandle(child, { processGroup: false }),
+          childProcessHandle(child, spawnInfo),
         ),
     });
   }

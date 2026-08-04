@@ -8,6 +8,7 @@ import { BadRequestException } from '@packages/common';
 import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
+  AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpServer,
 } from '../adapters/adapter.types';
@@ -164,6 +165,31 @@ export class AgentMcpService {
     cwd: string | null,
     options: { pluginDir?: string | null; refresh?: boolean } = {},
   ): Promise<AgentMcpListingWire> {
+    const { projectDir, adapter, result } = await this.readServers(
+      agent,
+      cwd,
+      options,
+    );
+    return this.composeListing(adapter, agent, projectDir, result);
+  }
+
+  /**
+   * The servers themselves — validation, the version key, the cache and the
+   * single-flight — with none of the overlay {@link composeListing} adds.
+   *
+   * Split out so {@link setEnabled} can compose ONCE with folder facts it has
+   * already read, rather than going through {@link list} and paying for a
+   * second read of the same files on every toggle.
+   */
+  private async readServers(
+    agent: AgentKind,
+    cwd: string | null,
+    options: { pluginDir?: string | null; refresh?: boolean } = {},
+  ): Promise<{
+    projectDir: string;
+    adapter: AgentAdapter;
+    result: AgentMcpListingResult;
+  }> {
     const { pluginDir = null, refresh = false } = options;
     // Validated FIRST, so a bad path is a bad request whichever adapter
     // answers — never a 400 for one CLI and a 200 for another. Ordering, not
@@ -183,17 +209,21 @@ export class AgentMcpService {
     // empty answer would health-check nothing and cost a process.
     const unavailableReason = adapter.getConfig().mcp.listingUnavailableReason;
     if (unavailableReason !== null) {
-      return { servers: [], unavailableReason };
+      return {
+        projectDir,
+        adapter,
+        result: { ok: false, reason: unavailableReason },
+      };
     }
     const version = await this.resolveVersionFn(agent, {
       // A Refresh means the user believes the machine changed, and the version
       // IS part of the cache key — reusing a memoized one would re-derive the
       // same key and hand back the very reading they asked to replace.
       forceRefresh: refresh,
-      onSpawn: (child) =>
+      onSpawn: (child, spawnInfo) =>
         this.processes.register(
           `mcp:version:${randomUUID()}`,
-          childProcessHandle(child, { processGroup: false }),
+          childProcessHandle(child, spawnInfo),
         ),
     });
     const key = keyOf(agent, projectDir, plugin, version);
@@ -205,14 +235,15 @@ export class AgentMcpService {
     // start a second one. Evicting the cache is idempotent; spawning is not.
     const pending = this.inFlight.get(key);
     if (pending) {
-      return this.composeListing(adapter, agent, projectDir, await pending);
+      return { projectDir, adapter, result: await pending };
     }
     const cached = this.cache.get(key);
     if (cached && this.now() - cached.fetchedAt < this.ttlMs) {
-      return this.composeListing(adapter, agent, projectDir, {
-        ok: true,
-        servers: cached.servers,
-      });
+      return {
+        projectDir,
+        adapter,
+        result: { ok: true, servers: cached.servers },
+      };
     }
     // `Promise.resolve().then(…)` rather than a bare call: an adapter that
     // throws SYNCHRONOUSLY would otherwise walk straight past the `.catch`
@@ -257,7 +288,7 @@ export class AgentMcpService {
       })
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, ask);
-    return this.composeListing(adapter, agent, projectDir, await ask);
+    return { projectDir, adapter, result: await ask };
   }
 
   /**
@@ -306,7 +337,20 @@ export class AgentMcpService {
       );
     }
     await this.settings.setDisabled(agent, projectDir, server, !enabled);
-    return this.list(agent, projectDir);
+    const read = await this.readServers(agent, projectDir);
+    // `facts` is REUSED across the write rather than re-read. It describes the
+    // user's OWN files (the project `.mcp.json`, their CLI settings), and the
+    // write above touched neither — geniro's disabled set lives in its own
+    // `<userData>/mcp-settings.json`, which `composeListing` reads fresh. So
+    // the second read those files got per toggle could only ever return what
+    // the validation above had already seen.
+    return this.composeListing(
+      read.adapter,
+      agent,
+      read.projectDir,
+      read.result,
+      facts,
+    );
   }
 
   /**
@@ -320,26 +364,33 @@ export class AgentMcpService {
    * listing's five-minute TTL.
    *
    * The adapter's refusal becomes the sentence the panel shows, verbatim.
+   *
+   * `knownFacts` is for a caller that has ALREADY read them in this request —
+   * only {@link setEnabled}, which must read them to validate the toggle. The
+   * disabled set is still read fresh either way; it is the half the write
+   * changes.
    */
   private async composeListing(
     adapter: AgentAdapter,
     agent: AgentKind,
     cwd: string,
     result: AgentMcpListingResult,
+    knownFacts?: AgentMcpFolderFacts,
   ): Promise<AgentMcpListingWire> {
     if (!result.ok) {
       return { servers: [], unavailableReason: result.reason };
     }
     const [facts, disabledByGeniro] = await Promise.all([
-      adapter.readMcpFolderFacts(cwd).catch((err: unknown) => {
-        // Reading the user's own files is best-effort. Knowing nothing means
-        // every row renders read-only, which is the safe direction: a switch
-        // that cannot work is worse than no switch.
-        this.logger.warn(
-          `reading ${agent} MCP folder facts failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return { projectServers: [], userDisabled: [] };
-      }),
+      knownFacts ??
+        adapter.readMcpFolderFacts(cwd).catch((err: unknown) => {
+          // Reading the user's own files is best-effort. Knowing nothing means
+          // every row renders read-only, which is the safe direction: a switch
+          // that cannot work is worse than no switch.
+          this.logger.warn(
+            `reading ${agent} MCP folder facts failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return { projectServers: [], userDisabled: [] };
+        }),
       this.settings.disabled(agent, cwd),
     ]);
     const geniroDisabled = new Set(disabledByGeniro);

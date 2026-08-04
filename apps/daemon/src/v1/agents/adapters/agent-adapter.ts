@@ -642,6 +642,9 @@ export abstract class AgentAdapter {
       // turned into two replacement characters.
       child.stdout?.setEncoding('utf8');
       child.stdout?.on('data', (chunk: string) => {
+        // A settled read still has a live pipe until `close`. Without this the
+        // buffer would go on growing past the cap that just gave up on it —
+        // for a deadline settle, until the child is reaped.
         if (settled) {
           return;
         }
@@ -650,7 +653,6 @@ export abstract class AgentAdapter {
           // `execFile`'s own maxBuffer path kills the direct pid only; ours
           // reaps the group, or the grandchildren outlive the read that gave
           // up on them.
-          stdout = '';
           reapGroup();
           settle(null);
         }

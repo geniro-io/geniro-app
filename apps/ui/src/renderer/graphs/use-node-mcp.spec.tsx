@@ -300,4 +300,90 @@ describe('useNodeMcp', () => {
 
     expect(latest().invalidPluginDir).toBeNull();
   });
+
+  it('reads through the daemon’s cache until the user asks for a re-dial', async () => {
+    // The automatic read exists to POPULATE the section. Sending refresh=true
+    // on it would re-launch the user's own MCP servers every time a node is
+    // selected or a path character typed — which is what makes re-dialling an
+    // explicit act rather than a side effect of clicking around.
+    const seen: Record<string, unknown>[] = [];
+    const listAgentMcpServers = vi.fn((req: Record<string, unknown>) => {
+      seen.push(req);
+      return Promise.resolve(listing('a'));
+    });
+    const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
+
+    const { latest } = mount(api, 'claude', '/opt/plugins');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    expect(seen[0]).not.toHaveProperty('refresh');
+
+    // Two acts, not one: the state update must be flushed — and the effect it
+    // re-runs scheduled — before the wait, or nothing has been asked yet when
+    // the wait expires.
+    act(() => {
+      latest().refresh();
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(listAgentMcpServers).toHaveBeenCalledTimes(2);
+    expect(seen[1]).toMatchObject({ refresh: 'true' });
+  });
+
+  it('does NOT debounce a refresh', async () => {
+    // The delay exists to collapse keystrokes. A click is not a keystroke, and
+    // making the user wait half a second for the one control that re-dials
+    // reads as a dead button.
+    const listAgentMcpServers = vi.fn(() => Promise.resolve(listing('a')));
+    const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
+
+    const { latest } = mount(api, 'claude', null);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    expect(listAgentMcpServers).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      latest().refresh();
+    });
+    await act(async () => {
+      // A tenth of LISTING_DEBOUNCE_MS. A debounced refresh has not fired at
+      // this point, so this assertion fails the moment the delay is applied
+      // to one.
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(listAgentMcpServers).toHaveBeenCalledTimes(2);
+  });
+
+  it('spends a refresh raised with no node selected instead of banking it', async () => {
+    // A latched token would make the NEXT node the user clicks re-dial their
+    // servers — a read nobody asked to refresh, and then every one after it.
+    const seen: Record<string, unknown>[] = [];
+    const listAgentMcpServers = vi.fn((req: Record<string, unknown>) => {
+      seen.push(req);
+      return Promise.resolve(listing('a'));
+    });
+    const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
+
+    const { latest, rerender } = mount(api, null, null);
+    act(() => {
+      latest().refresh();
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    expect(listAgentMcpServers).not.toHaveBeenCalled();
+
+    rerender('claude', null);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(listAgentMcpServers).toHaveBeenCalledTimes(1);
+    expect(seen[0]).not.toHaveProperty('refresh');
+  });
 });

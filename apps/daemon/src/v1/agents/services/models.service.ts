@@ -57,10 +57,10 @@ export class ModelsService {
 
   async list(kind: AgentKind): Promise<AgentModelWire[]> {
     const version = await this.versions.resolve(kind, {
-      onSpawn: (child) =>
+      onSpawn: (child, spawnInfo) =>
         this.processes.register(
           `models:version:${randomUUID()}`,
-          childProcessHandle(child, { processGroup: false }),
+          childProcessHandle(child, spawnInfo),
         ),
     });
     const cached = this.cache.get(kind);

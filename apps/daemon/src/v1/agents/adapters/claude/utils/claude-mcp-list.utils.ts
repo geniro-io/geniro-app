@@ -30,6 +30,11 @@ const STATUS_MARKERS: readonly {
 /**
  * Split `<target> - <status …>` at the separator in front of the status.
  *
+ * PRECONDITION: `rest` contains {@link TARGET_STATUS_SEPARATOR}. `parseMcpList`
+ * is the only caller and skips any line without one — that check is what keeps
+ * the CLI's prose out of the list, so it cannot be dropped — which is why the
+ * fallback below indexes the separator unconditionally.
+ *
  * Anchors on the status marker and walks BACK to the separator, because a
  * server's own command may carry ` - ` as an argument and a naive split would
  * then cut the row in the wrong place. When no marker is recognised — the
@@ -44,6 +49,9 @@ function splitAtStatus(rest: string): { target: string; statusText: string } {
       continue;
     }
     const before = rest.slice(0, at);
+    // Unlike the fallback, this CAN miss: the separator is guaranteed
+    // somewhere in `rest`, not before the marker. A row that opens with its
+    // status has no target at all.
     const sep = before.lastIndexOf(TARGET_STATUS_SEPARATOR);
     return {
       target: (sep < 0 ? before : before.slice(0, sep)).trim(),
@@ -51,12 +59,10 @@ function splitAtStatus(rest: string): { target: string; statusText: string } {
     };
   }
   const sep = rest.lastIndexOf(TARGET_STATUS_SEPARATOR);
-  return sep < 0
-    ? { target: rest.trim(), statusText: '' }
-    : {
-        target: rest.slice(0, sep).trim(),
-        statusText: rest.slice(sep + TARGET_STATUS_SEPARATOR.length).trim(),
-      };
+  return {
+    target: rest.slice(0, sep).trim(),
+    statusText: rest.slice(sep + TARGET_STATUS_SEPARATOR.length).trim(),
+  };
 }
 
 /** Peel ` (HTTP)` / ` (SSE)` off the target; anything else is stdio. */

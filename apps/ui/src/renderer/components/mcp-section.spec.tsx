@@ -245,4 +245,59 @@ describe('McpSection', () => {
     expect(el.textContent).toContain('cursor-agent cannot list MCP servers');
     expect(el.textContent).not.toContain('No servers');
   });
+
+  it('offers a re-dial only where the surface asked for one', () => {
+    // The Agents panel puts its control in the PANEL header, because it shows
+    // one listing per CLI and a per-section button would be the same action
+    // offered several times. A surface that shows exactly one listing has
+    // nowhere else to put it.
+    const withoutRefresh = render({
+      listing: listing({ name: 'srv' }),
+      loading: false,
+    });
+    expect(
+      withoutRefresh.querySelector('[aria-label="Refresh MCP servers"]'),
+    ).toBeNull();
+
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+
+    const onRefresh = vi.fn();
+    const el = render({
+      listing: listing({ name: 'srv' }),
+      loading: false,
+      onRefresh,
+    });
+    const button = el.querySelector<HTMLButtonElement>(
+      '[aria-label="Refresh MCP servers"]',
+    );
+    expect(button).not.toBeNull();
+
+    act(() => {
+      button!.click();
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a second re-dial be asked for while one is running', () => {
+    // The read health-checks — it launches the user's own MCP servers — so a
+    // click-happy user must not be able to stack them.
+    const onRefresh = vi.fn();
+    const el = render({
+      listing: listing({ name: 'srv' }),
+      loading: true,
+      onRefresh,
+    });
+
+    const button = el.querySelector<HTMLButtonElement>(
+      '[aria-label="Refresh MCP servers"]',
+    );
+    expect(button?.disabled).toBe(true);
+    act(() => {
+      button!.click();
+    });
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
 });

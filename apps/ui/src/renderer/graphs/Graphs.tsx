@@ -655,18 +655,13 @@ export function Graphs({
   /**
    * Why the plugin directory the node names cannot be used, or null.
    *
-   * The daemon refuses an unusable `--plugin-dir` and that refusal arrives
-   * folded into the listing's `unavailableReason` — which the section renders
-   * in the same muted span as "No servers" and "Not checked". Read there it
-   * looks like a fact about the plugin; read on the field it is what it
-   * actually is, a path the user has to fix. The CLI itself says nothing: it
-   * ignores an unusable directory silently, which is the whole reason the
-   * validation exists.
+   * On the FIELD rather than only inside the listing, because it is a path
+   * the user has to fix — and the CLI itself says nothing, silently ignoring
+   * a directory it cannot use, which is the whole reason the validation
+   * exists. The hook narrows this to a daemon REFUSAL; a missing CLI or an
+   * unreachable daemon stays in the section below, where it belongs.
    */
-  const pluginDirError =
-    selected?.kind === 'agent' && selected.pluginDir
-      ? (nodeMcp.listing?.unavailableReason ?? null)
-      : null;
+  const pluginDirError = nodeMcp.invalidPluginDir;
 
   // Whether the selected node's CLI can load a plugin directory at all, asked
   // of the daemon rather than decided here — the inspector used to allowlist

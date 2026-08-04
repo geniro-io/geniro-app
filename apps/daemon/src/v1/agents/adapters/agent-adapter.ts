@@ -35,12 +35,14 @@ import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
 const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
 
 /**
- * Stdout retained from a group-spawned utility command, matching `execFile`'s
- * own `maxBuffer` default. The `execFile` path gets this cap from node; the
- * `spawn` path collects by hand, so it has to state it — an unbounded string
- * built from a chatty child is a daemon-wide memory fault, not a failed read.
+ * Stdout retained from a group-spawned utility command, in JS string length
+ * — UTF-16 code units, NOT bytes. `execFile` gets a byte cap from node; the
+ * `spawn` path collects by hand, and comparing decoded length is both cheaper
+ * and the number that actually bounds the string we are holding. The point is
+ * a ceiling at all: an unbounded string built from a chatty child is a
+ * daemon-wide memory fault, not a failed read.
  */
-const UTILITY_COMMAND_MAX_BUFFER_BYTES = 1024 * 1024;
+const UTILITY_COMMAND_MAX_BUFFER_CHARS = 1024 * 1024;
 
 /**
  * Constructor options every adapter accepts — test seams, not user config. The
@@ -560,13 +562,17 @@ export abstract class AgentAdapter {
    * The group path: `spawn` with `detached`, stdout collected by hand, and a
    * deadline of our own that reaps the WHOLE group.
    *
-   * It cannot be `execFile` carrying `detached: true` in its options bag,
-   * which is what this used to be. node forwards only
-   * cwd/env/uid/gid/shell/windows* from `execFile` down to `spawn` and drops
-   * everything else, so the child never became a group leader and every
-   * `killProcessGroup(child.pid)` named a pgid that did not exist. The reap
-   * was addressing nobody, verified by watching a lingering `mcp list`
-   * health-check child survive a daemon listing.
+   * It cannot be `execFile` carrying `detached: true` in its options bag:
+   * node forwards only cwd/env/uid/gid/shell/windows* from `execFile` down to
+   * `spawn` and silently drops the rest, so such a child never leads a group
+   * and `killProcessGroup(child.pid)` names a pgid that does not exist.
+   *
+   * Both streams are handled explicitly, because `execFile` did it for us and
+   * `spawn` does not: stdout is DECODED AS A STREAM (`setEncoding`, so a
+   * multi-byte character split across two reads survives), and stderr is
+   * DRAINED. An unread stderr pipe fills at ~64KB and blocks the child
+   * mid-write, so a listing whose answer was already on the wire would hang
+   * to the deadline and report as a failure.
    *
    * Reaps on EVERY settle, success included, and that is not symmetry for its
    * own sake. A listing command HEALTH-CHECKS — it launches the user's own MCP
@@ -587,23 +593,16 @@ export abstract class AgentAdapter {
       let child: ChildProcess | undefined;
       let settled = false;
       let reaped = false;
-      // A reap asked for before `spawnFn` has returned — the child exists, but
-      // this scope has not been handed it yet. Deferring rather than dropping
-      // it keeps the reap independent of whether an injected spawn emits
-      // synchronously.
-      let reapWhenSpawned = false;
       let stdout = '';
-      let overflowed = false;
       const reapGroup = (): void => {
         // Idempotent, and that is the point: `exit`, `close` and the deadline
         // all reap. Without this the second `process.kill(-pid)` would land
         // after node has waitpid'd the child, when the pid may already belong
         // to something else.
-        if (reaped) {
-          return;
-        }
-        if (!child) {
-          reapWhenSpawned = true;
+        // `child` is assigned before any caller of this can run: the stream
+        // and process listeners are attached after the spawn, and the timer
+        // cannot fire synchronously. The guard is the type narrowing.
+        if (reaped || !child) {
           return;
         }
         reaped = true;
@@ -638,21 +637,30 @@ export abstract class AgentAdapter {
         settle(null);
         return;
       }
-      child.stdout?.on('data', (chunk: string | Buffer) => {
-        if (overflowed) {
+      // Decoded as a STREAM: node's StringDecoder holds a partial multi-byte
+      // sequence across reads, so a character split at a 64KB boundary is not
+      // turned into two replacement characters.
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
+        if (settled) {
           return;
         }
-        stdout += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-        if (stdout.length > UTILITY_COMMAND_MAX_BUFFER_BYTES) {
+        stdout += chunk;
+        if (stdout.length > UTILITY_COMMAND_MAX_BUFFER_CHARS) {
           // `execFile`'s own maxBuffer path kills the direct pid only; ours
           // reaps the group, or the grandchildren outlive the read that gave
           // up on them.
-          overflowed = true;
           stdout = '';
           reapGroup();
           settle(null);
         }
       });
+      // DRAINED, never read. Nothing here wants the child's stderr, but a
+      // piped stream with no reader is not free: the pipe fills at ~64KB and
+      // the child blocks mid-write, so `close` never arrives. `mcp list`
+      // health-checks the user's own MCP servers and forwards their startup
+      // noise down exactly this pipe.
+      child.stderr?.resume();
       child.on('error', () => {
         reapGroup();
         settle(null);
@@ -666,9 +674,6 @@ export abstract class AgentAdapter {
         reapGroup();
         settle(code === 0 && signal === null ? stdout : null);
       });
-      if (reapWhenSpawned) {
-        reapGroup();
-      }
       options.onSpawn?.(child, { processGroup: true });
     });
   }

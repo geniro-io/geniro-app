@@ -1,5 +1,6 @@
 import type { ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 /**
  * A child-process double for the `processGroup: true` path of
@@ -11,6 +12,12 @@ import { EventEmitter } from 'node:events';
  * hand-rolled doubles would drift the moment one of them grows a listener the
  * others lack.
  *
+ * `stdout` and `stderr` are REAL streams, not bare emitters. The collector
+ * calls `setEncoding` on stdout and `resume` on stderr, and both of those are
+ * behaviours worth exercising rather than stubbing: a `PassThrough` carries
+ * node's own StringDecoder, so a spec that writes a split multi-byte sequence
+ * is testing the decode this double claims to model.
+ *
  * Lives in a `.spec-helper.ts` rather than a plain `.ts` because it is test
  * scaffolding: the daemon's build ignores that suffix exactly as it ignores
  * `.spec.ts`, so this never reaches `dist/`.
@@ -18,9 +25,17 @@ import { EventEmitter } from 'node:events';
 export interface FakeGroupChild {
   /** The object `runCommand` receives — structurally a `ChildProcess`. */
   readonly child: ChildProcess;
-  /** Push a stdout chunk the collector should accumulate. */
-  writeStdout(chunk: string): void;
-  /** End the child: emits `exit` then `close` with the given status. */
+  /** Push one stdout chunk. A Buffer is delivered as raw bytes. */
+  writeStdout(chunk: string | Buffer): void;
+  /** Push one stderr chunk — nothing reads it unless the collector drains. */
+  writeStderr(chunk: string | Buffer): void;
+  /**
+   * End the child: flushes stdout, then emits `exit` and `close`.
+   *
+   * The flush is why this is not two `emit` calls. A real child's `close`
+   * arrives after its stdio has drained, and a double that fires it first
+   * would let a correct collector lose the output it had already been handed.
+   */
   close(code: number | null, signal?: NodeJS.Signals | null): void;
   /** Fail the spawn after the fact (ENOENT surfaced asynchronously). */
   fail(err?: Error): void;
@@ -31,8 +46,8 @@ export interface FakeGroupChild {
 /** Build a fake group-spawned child. `pid` doubles as the process-group id. */
 export function fakeGroupChild(pid = 4242): FakeGroupChild {
   const emitter = new EventEmitter();
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
   const directKills: NodeJS.Signals[] = [];
 
   const child = Object.assign(emitter, {
@@ -49,10 +64,19 @@ export function fakeGroupChild(pid = 4242): FakeGroupChild {
   return {
     child,
     directKills,
-    writeStdout: (chunk) => stdout.emit('data', Buffer.from(chunk, 'utf8')),
+    writeStdout: (chunk) => void stdout.write(chunk),
+    writeStderr: (chunk) => void stderr.write(chunk),
     close: (code, signal = null) => {
-      emitter.emit('exit', code, signal);
-      emitter.emit('close', code, signal);
+      const settle = (): void => {
+        emitter.emit('exit', code, signal);
+        emitter.emit('close', code, signal);
+      };
+      // `end` flushes what is buffered; `finish` fires once it has. An
+      // unconsumed stream still finishes, so this cannot wedge a spec that
+      // never reads stdout.
+      stdout.once('finish', settle);
+      stdout.end();
+      stderr.end();
     },
     fail: (err = new Error('spawn ENOENT')) => emitter.emit('error', err),
   };

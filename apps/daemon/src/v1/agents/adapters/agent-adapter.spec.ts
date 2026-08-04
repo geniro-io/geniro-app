@@ -507,8 +507,14 @@ describe('AgentAdapter.runCommand process groups (real children)', () => {
     // GROUP with that id exists, which is exactly the question `kill(-pid,
     // 'SIGKILL')` silently got wrong before.
     const groupExists = (pid: number | undefined): boolean => {
+      if (pid === undefined) {
+        // `kill(-0)` signals the CALLER's group and would answer "yes" for a
+        // child that never spawned — a silent pass on the one assertion here
+        // that is load-bearing.
+        throw new Error('child had no pid');
+      }
       try {
-        process.kill(-(pid ?? 0), 0);
+        process.kill(-pid, 0);
         return true;
       } catch {
         return false;
@@ -540,9 +546,48 @@ describe('AgentAdapter.runCommand process groups (real children)', () => {
 
     // The other half: an ordinary utility command must NOT be detached, or
     // the daemon stops being able to signal it as part of its own group.
+    //
+    // Reads "no group with that id exists". Strictly this could answer wrongly
+    // if the child's pid happened to equal a live pgid after wraparound — a
+    // collision, not a behaviour — so the sibling assertion above (which pins
+    // that `detached` is absent from the plain path's options) is what carries
+    // the guarantee if this one ever flakes.
     expect(plainLeadsOwnGroup).toBe(false);
   });
+
+  it('reads a command that writes more to stderr than the pipe can hold', async () => {
+    // `stdio: ['pipe', 'pipe', 'pipe']` opens a stderr pipe nothing consumes.
+    // A child that writes past the OS pipe buffer (64 KiB on Linux) then never
+    // drains it never exits, so `close` never fires and the read reports the
+    // folder unreadable after the full deadline — for a command that printed
+    // its whole answer. `execFile` drained stderr itself (it buffers it for
+    // the error object), so this is reachable only on the group path.
+    //
+    // `mcp list` is the group-path command, and it HEALTH-CHECKS: it launches
+    // the user's own MCP servers, whose startup noise lands on the CLI's
+    // stderr, which is this pipe.
+    const adapter = new RealSpawnAdapter();
+    const script =
+      'process.stderr.write("e".repeat(512 * 1024)); process.stdout.write("done");';
+
+    const out = await adapter.run(['-e', script], {
+      processGroup: true,
+      timeoutMs: 3_000,
+    });
+
+    expect(out).toBe('done');
+  }, 15_000);
 });
+
+/**
+ * A shipped adapter with `runCommand` exposed, so a spec can read the RAW
+ * stdout the collector produced instead of whatever survived a parser.
+ */
+class RawCommandAdapter extends ClaudeAdapter {
+  run(args: string[], options: AgentCommandOptions): Promise<string | null> {
+    return this.runCommand(args, options);
+  }
+}
 
 describe('AgentAdapter.runCommand spawn options', () => {
   it('a process-group command goes through spawn, detached, with piped stdio', async () => {
@@ -580,6 +625,37 @@ describe('AgentAdapter.runCommand spawn options', () => {
     await expect(
       new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' }),
     ).resolves.toMatchObject({ ok: true, servers: [{ name: 'sentry' }] });
+  });
+
+  it('joins a multi-byte character that arrived split across two stdout chunks', async () => {
+    // A pipe read boundary falls wherever the kernel put it, so a UTF-8
+    // sequence routinely straddles two `data` events. Decoding each chunk on
+    // its own turns the halves into replacement characters — the CLI's own
+    // output already carries non-ASCII (`√ Connected`, `health…`), and a
+    // mangled row is a server name the user never configured.
+    // `execFile`'s `encoding: 'utf8'` decoded the STREAM, not the chunk.
+    const payload = Buffer.from('café', 'utf8');
+    const chunks = [
+      payload.subarray(0, payload.length - 1),
+      payload.subarray(payload.length - 1),
+    ];
+    const groupSpawnFn = ((): unknown => {
+      const fake = fakeGroupChild(4251);
+      queueMicrotask(() => {
+        for (const chunk of chunks) {
+          fake.writeStdout(chunk);
+        }
+        fake.close(0);
+      });
+      return fake.child;
+    }) as unknown as typeof spawn;
+
+    const out = await new RawCommandAdapter({ groupSpawnFn }).run(
+      ['mcp', 'list'],
+      { processGroup: true },
+    );
+
+    expect(out).toBe('café');
   });
 
   it('kills the whole group when the deadline passes, and settles the read', async () => {
@@ -707,7 +783,15 @@ describe('AgentAdapter.runCommand spawn options', () => {
     try {
       const fake = fakeGroupChild(4250);
       const groupSpawnFn = ((): unknown => {
-        queueMicrotask(() => fake.close(1));
+        queueMicrotask(() => {
+          // A PARSEABLE payload, then a non-zero exit. With empty stdout this
+          // assertion could not tell "we returned null" from "we returned ''",
+          // and '' already parses to { ok: false } — so it passed with the
+          // exit code ignored entirely, which is exactly the regression it
+          // names. Returning the collected stdout here yields ok: true.
+          fake.writeStdout('sentry: node s.js - √ Connected\n');
+          fake.close(1);
+        });
         return fake.child;
       }) as unknown as typeof spawn;
 

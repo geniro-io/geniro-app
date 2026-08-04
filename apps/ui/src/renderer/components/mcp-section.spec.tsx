@@ -154,7 +154,21 @@ describe('McpSection', () => {
       loading: false,
     });
 
-    expect(el.querySelector('li')?.hasAttribute('title')).toBe(false);
+    expect(el.querySelector('li > span')?.hasAttribute('title')).toBe(false);
+  });
+
+  it('carries NO tooltip for a target the CLI left blank', () => {
+    // The `||` vs `??` distinction, actually driven. claude's parser yields
+    // `target: ''` for a row whose command column is blank, and `??` would pass
+    // that straight through as `title=""` — a tooltip that follows the pointer
+    // saying nothing. Every other case here uses a non-empty target, which both
+    // operators handle identically, so this is the only one that can fail.
+    const el = render({
+      listing: listing({ name: 'srv', target: '' }),
+      loading: false,
+    });
+
+    expect(el.querySelector('li > span')?.hasAttribute('title')).toBe(false);
   });
 
   it('keeps the command line in the tooltip, where wanting it is optional', () => {

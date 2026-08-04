@@ -38,7 +38,19 @@ const VERSION_TIMEOUT_MS = 5_000;
 const VERSION_MEMO_TTL_MS = 60_000;
 
 /** Resolved versions, keyed by the BINARY the version describes. */
-const memo = new Map<string, { value: string | null; at: number }>();
+const memo = new Map<
+  string,
+  { value: string | null; at: number; seq: number }
+>();
+
+/**
+ * Monotonic flight counter, ordering the reads that produced those values.
+ *
+ * Separate from `at` (the TTL clock) because a timestamp cannot order two
+ * forks started in the same millisecond — which is every pair under a test
+ * clock, and a real pair whenever a Refresh lands while a read is still out.
+ */
+let flightSeq = 0;
 
 /** Reads in flight, so N concurrent callers fork the CLI once between them. */
 const inFlight = new Map<string, Promise<string | null>>();
@@ -83,9 +95,19 @@ export function resolveAgentVersion(
       return flight;
     }
   }
+  // Stamped when the fork STARTS, not when it answers. Two reads can be in
+  // flight at once — a `forceRefresh` raised while an ordinary one is still
+  // out — and whichever child exits last would otherwise win. The slower one
+  // is the older reading, so letting it land would re-pin the very answer the
+  // refresh asked to replace, for the full TTL.
+  const seq = ++flightSeq;
+  const startedAt = Date.now();
   const tracked: Promise<string | null> = spawnVersion(binary, options)
     .then((value) => {
-      memo.set(binary, { value, at: Date.now() });
+      const current = memo.get(binary);
+      if (!current || current.seq < seq) {
+        memo.set(binary, { value, at: startedAt, seq });
+      }
       return value;
     })
     .finally(() => {

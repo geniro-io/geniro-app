@@ -47,21 +47,34 @@ function caps(
   } as unknown as CapabilitiesDto;
 }
 
-async function mount(
-  api: DaemonApis['capabilities'] | null,
-): Promise<() => PluginCapabilityState> {
-  let latest!: PluginCapabilityState;
-  function Probe(): null {
-    latest = usePluginCapability(api);
-    return null;
-  }
+function Probe({ api }: { api: DaemonApis['capabilities'] | null }): null {
+  latest = usePluginCapability(api);
+  return null;
+}
+
+let latest!: PluginCapabilityState;
+
+/** Mount the hook; the returned `rerender` drives a parent re-render. */
+async function mount(api: DaemonApis['capabilities'] | null): Promise<{
+  (): PluginCapabilityState;
+  rerender: () => Promise<void>;
+}> {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root!.render(<Probe />);
+    root!.render(<Probe api={api} />);
   });
-  return () => latest;
+  const read = ((): PluginCapabilityState => latest) as {
+    (): PluginCapabilityState;
+    rerender: () => Promise<void>;
+  };
+  read.rerender = async (): Promise<void> => {
+    await act(async () => {
+      root!.render(<Probe api={api} />);
+    });
+  };
+  return read;
 }
 
 describe('usePluginCapability', () => {
@@ -111,12 +124,29 @@ describe('usePluginCapability', () => {
     expect(latest().unavailableReasonFor('claude')).toBeUndefined();
   });
 
-  it('is not loading, and asks nothing, before a daemon handle exists', async () => {
-    const getCapabilities = vi.fn();
+  it('is not loading, and knows nothing, before a daemon handle exists', async () => {
+    // No spy here on purpose: with a null api there is nothing the hook COULD
+    // have called, so a not-called assertion would hold for any implementation.
+    // What is actually observable is that it does not sit in a loading state
+    // waiting for a request it will never make.
     const latest = await mount(null);
 
     expect(latest().loading).toBe(false);
     expect(latest().unavailableReasonFor('claude')).toBeUndefined();
-    expect(getCapabilities).not.toHaveBeenCalled();
+  });
+
+  it('does not re-ask once it has an answer', async () => {
+    // The real "asks nothing" claim, driven where a call is possible: the
+    // effect keys on the api identity, so a re-render must not re-fetch —
+    // otherwise every parent render re-reads a machine capability that cannot
+    // change between them.
+    const getCapabilities = vi.fn(() =>
+      Promise.resolve(caps([{ agent: 'claude', unavailableReason: null }])),
+    );
+    const read = await mount(capabilitiesApi(getCapabilities));
+    await read.rerender();
+
+    expect(read().unavailableReasonFor('claude')).toBeNull();
+    expect(getCapabilities).toHaveBeenCalledTimes(1);
   });
 });

@@ -16,10 +16,35 @@ const LISTING_DEBOUNCE_MS = 500;
 /** Shown when the daemon could not be reached at all and said nothing itself. */
 const LOAD_FAILURE = 'could not load MCP servers';
 
+/**
+ * Whether a daemon error says "the input you gave me is wrong" rather than
+ * "something here is broken".
+ *
+ * `daemon-api.ts` formats every failure as
+ * `daemon <METHOD> <path> failed (<status>): <detail>`, so the status is the
+ * one machine-readable thing the renderer gets. A 4xx is the daemon refusing
+ * the request it was handed; a 5xx, a timeout or a transport error is not
+ * about the plugin path at all.
+ */
+function isInputRefusal(message: string): boolean {
+  const status = /failed \((\d{3})\)/.exec(message)?.[1];
+  return status !== undefined && status.startsWith('4');
+}
+
 /** One node's servers, as the inspector reads them. */
 export interface NodeMcpState {
   /** Undefined until something has answered for this node. */
   listing: AgentMcpListing | undefined;
+  /**
+   * Why the plugin directory this node names cannot be used, or null.
+   *
+   * Split OUT of {@link listing}'s `unavailableReason`, which also carries
+   * "this CLI is not installed" and raw transport failures. Rendering those
+   * as a field error would put a red validation message under a path that is
+   * perfectly valid, and hide the section explaining the real cause. Only the
+   * daemon REFUSING the input it was given (a 4xx) is about the path.
+   */
+  invalidPluginDir: string | null;
   loading: boolean;
 }
 
@@ -54,7 +79,8 @@ export function useNodeMcp(
   const [answered, setAnswered] = useState<{
     scope: string;
     listing: AgentMcpListing | undefined;
-  }>({ scope: '', listing: undefined });
+    invalidPluginDir: string | null;
+  }>({ scope: '', listing: undefined, invalidPluginDir: null });
   const [pending, setPending] = useState(false);
   // NUL-joined, the one byte neither an agent kind nor a path can contain —
   // the same key shape the daemon's own caches use.
@@ -62,7 +88,7 @@ export function useNodeMcp(
 
   useEffect(() => {
     if (agentsApi === null || agent === null) {
-      setAnswered({ scope, listing: undefined });
+      setAnswered({ scope, listing: undefined, invalidPluginDir: null });
       setPending(false);
       return;
     }
@@ -81,7 +107,7 @@ export function useNodeMcp(
         })
         .then((listing) => {
           if (!stale) {
-            setAnswered({ scope, listing });
+            setAnswered({ scope, listing, invalidPluginDir: null });
           }
         })
         .catch((err: unknown) => {
@@ -90,16 +116,19 @@ export function useNodeMcp(
           // unusable --plugin-dir silently — so discarding it here would
           // re-create the exact failure the validation exists to prevent, with
           // a typo reading as "Not checked" until a run is refused.
+          //
+          // But only a REFUSAL is about the path. The same catch also sees a
+          // missing CLI and a dead daemon, and rendering those under the field
+          // would put a red validation error on a perfectly valid path while
+          // hiding the section that explains the real cause.
           if (!stale) {
+            const message =
+              err instanceof Error && err.message ? err.message : LOAD_FAILURE;
             setAnswered({
               scope,
-              listing: {
-                servers: [],
-                unavailableReason:
-                  err instanceof Error && err.message
-                    ? err.message
-                    : LOAD_FAILURE,
-              },
+              listing: { servers: [], unavailableReason: message },
+              invalidPluginDir:
+                pluginDir && isInputRefusal(message) ? message : null,
             });
           }
         })
@@ -115,8 +144,10 @@ export function useNodeMcp(
     };
   }, [agentsApi, agent, pluginDir, scope]);
 
+  const current = answered.scope === scope;
   return {
-    listing: answered.scope === scope ? answered.listing : undefined,
+    listing: current ? answered.listing : undefined,
+    invalidPluginDir: current ? answered.invalidPluginDir : null,
     loading: pending,
   };
 }

@@ -240,4 +240,64 @@ describe('useNodeMcp', () => {
       pluginDir: '/opt/plugins',
     });
   });
+
+  it('treats a daemon REFUSAL of the path as a field error', async () => {
+    // The daemon rejects an unusable --plugin-dir with a 4xx, and that is the
+    // only signal the user gets: the CLI itself ignores such a directory
+    // silently. It has to reach the FIELD, not just the servers list.
+    const api = {
+      listAgentMcpServers: vi.fn(() =>
+        Promise.reject(
+          new Error(
+            'daemon GET /v1/agents/mcp failed (400): plugin directory does not exist',
+          ),
+        ),
+      ),
+    } as unknown as DaemonApis['agents'];
+
+    const { latest } = mount(api, 'claude', '/nope');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(latest().invalidPluginDir).toContain('does not exist');
+  });
+
+  it('does NOT blame the path for a dead CLI or an unreachable daemon', async () => {
+    // The same catch sees both. Rendering a 5xx or a transport failure under
+    // the field puts a red validation error on a perfectly valid path and
+    // hides the section explaining the real cause — so the reason still
+    // reaches the listing, but the field stays clean.
+    const api = {
+      listAgentMcpServers: vi.fn(() =>
+        Promise.reject(
+          new Error('daemon GET /v1/agents/mcp failed (500): claude not found'),
+        ),
+      ),
+    } as unknown as DaemonApis['agents'];
+
+    const { latest } = mount(api, 'claude', '/opt/plugins');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(latest().invalidPluginDir).toBeNull();
+    expect(latest().listing?.unavailableReason).toContain('claude not found');
+  });
+
+  it('never blames a path the node does not name', async () => {
+    // A refusal with no pluginDir in play cannot be about one.
+    const api = {
+      listAgentMcpServers: vi.fn(() =>
+        Promise.reject(new Error('daemon GET /v1/agents/mcp failed (400): no')),
+      ),
+    } as unknown as DaemonApis['agents'];
+
+    const { latest } = mount(api, 'claude', null);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(latest().invalidPluginDir).toBeNull();
+  });
 });

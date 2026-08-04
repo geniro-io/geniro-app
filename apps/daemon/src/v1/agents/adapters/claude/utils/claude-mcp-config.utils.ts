@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  chmodSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -42,12 +43,7 @@ export function writeTurnMcpConfig(
   dir: string,
   endpoint: NonNullable<AgentTurnInput['mcpEndpoint']>,
 ): string {
-  // 0700, not the 0755 `mkdirSync` defaults to. The FILE is already 0600,
-  // but the directory sits at a predictable path under the OS tmpdir on a
-  // shared machine — world-readable, it lets any local account enumerate
-  // which turns are live and when. The mode applies only when this call
-  // creates the directory; an existing one keeps whatever it has.
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dir);
   const path = join(
     dir,
     `${CLAUDE_MCP_CONFIG_PREFIX}${randomUUID()}${CLAUDE_MCP_CONFIG_SUFFIX}`,
@@ -112,8 +108,7 @@ export function writeTurnSettings(
     // be one more thing that can be malformed for no gain.
     return null;
   }
-  // 0700 for the same reason the config file's directory is — see above.
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dir);
   const path = join(
     dir,
     `${CLAUDE_SETTINGS_PREFIX}${randomUUID()}${CLAUDE_SETTINGS_SUFFIX}`,
@@ -201,6 +196,26 @@ export function definesGeniroServer(
     return homeFile;
   }
   return null;
+}
+
+/**
+ * Create the per-turn secret directory 0700, tightening one that already
+ * exists.
+ *
+ * The files inside are 0600, so what a laxer directory leaks is the listing:
+ * which turns are live and when each started. `mode` on `mkdirSync` applies
+ * only to a directory this call CREATES, and the daemon's is
+ * `<userData>/tmp` — long-lived, and 0755 on any install made before this
+ * change. The `chmod` is what reaches those.
+ */
+function ensurePrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    // Not ours to tighten (a shared parent, an odd filesystem). The files
+    // themselves are still written 0600, which is the part that matters.
+  }
 }
 
 /** A file's text, or null for absent / unreadable / a directory. */

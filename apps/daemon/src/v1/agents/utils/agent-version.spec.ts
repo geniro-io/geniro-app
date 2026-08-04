@@ -229,4 +229,42 @@ describe('resolveAgentVersion', () => {
     expect(await resolveAgentVersion('claude', { execFileFn })).toBe('v2');
     expect(forks).toBe(2);
   });
+
+  it('keeps the forced answer when an ordinary read already in flight lands after it', async () => {
+    // Refresh does not arrive on an idle daemon: the panel's own listing read
+    // forks `--version` first, so the ordinary read is still out when the user
+    // clicks. Whichever child exits LAST writes the memo, so the pre-upgrade
+    // version can overwrite the forced one and be served for the whole TTL —
+    // the user asked for a re-read and got the reading they asked to replace,
+    // with every downstream cache re-keyed to the old binary.
+    const pending: ExecCallback[] = [];
+    const execFileFn = ((
+      _cmd: string,
+      _args: string[],
+      _opts: unknown,
+      cb: ExecCallback,
+    ) => {
+      pending.push(cb);
+      return { pid: 1 } as ReturnType<typeof execFile>;
+    }) as unknown as typeof execFile;
+    const neverForks = (() => {
+      throw new Error('served a stale memo instead of the forced answer');
+    }) as unknown as typeof execFile;
+
+    const ordinary = resolveAgentVersion('claude', { execFileFn });
+    const forced = resolveAgentVersion('claude', {
+      execFileFn,
+      forceRefresh: true,
+    });
+    expect(pending).toHaveLength(2);
+
+    pending[1]!(null, '2.2.0 (upgraded)', '');
+    expect(await forced).toBe('2.2.0 (upgraded)');
+    pending[0]!(null, '2.1.0 (pre-upgrade)', '');
+    expect(await ordinary).toBe('2.1.0 (pre-upgrade)');
+
+    expect(
+      await resolveAgentVersion('claude', { execFileFn: neverForks }),
+    ).toBe('2.2.0 (upgraded)');
+  });
 });

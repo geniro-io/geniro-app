@@ -139,11 +139,12 @@ export function ContextMeter({
         onMouseLeave={() => setHovered(false)}>
         <ProgressRing
           fraction={fraction}
-          // Smaller and heavier than it was: with the percentage gone from the
-          // middle the arc no longer has to frame two or three glyphs, so it
-          // can read as a gauge rather than as a badge with a number in it.
-          size={18}
-          strokeWidth={3}
+          // Sized to sit INSIDE a line of 12px text rather than beside it.
+          // With the percentage gone from the middle the arc frames no glyphs,
+          // so it can read as a gauge; at 18px it was still setting the height
+          // of every row it shared — which is what pushed the agent card's
+          // context readout onto a line of its own.
+          size={14}
           // Decorative HERE, unlike every other use: the button around it
           // already carries the reading as its accessible name, and labelling
           // both makes a screen reader announce the figure twice.

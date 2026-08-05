@@ -24,6 +24,7 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  FollowUpMessage,
   HandoffInput,
   HandoffResult,
   InstalledApprovalSupport,
@@ -807,6 +808,24 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Encode a user message sent while the turn is STILL RUNNING, as the stdin
+   * line this CLI expects. Default undefined — "this CLI cannot be told
+   * anything more once its prompt is in", which makes
+   * `AgentTurnHandle.sendUserMessage` return false and leaves the caller to
+   * queue the message for the next turn.
+   *
+   * It is a MECHANISM rather than a config value: the payload is this CLI's
+   * own wire shape, the same reason `buildApprovalResponse` is a method. An
+   * adapter that overrides it must also keep stdin open for the turn
+   * (`keepStdinOpen`), or the line has nowhere to go.
+   */
+  protected buildFollowUpPayload(
+    _message: FollowUpMessage,
+  ): string | undefined {
+    return undefined;
+  }
+
+  /**
    * Materialize turn-scoped resources BEFORE the spawn; the returned disposer
    * runs when the turn settles (any path). Default: nothing. The Claude
    * adapter writes its per-turn MCP config file here so `buildArgs` can
@@ -842,6 +861,7 @@ export abstract class AgentAdapter {
         keepStdinOpen: this.keepStdinOpen(input),
         buildApprovalResponse: (id, allow, updatedInput) =>
           driver.buildApprovalResponse?.(id, allow, updatedInput),
+        buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
         mapper: (obj) => driver.onMessage(obj),
         onStdinReady: (io) => driver.onStdinReady?.(io),
         // The mappers are pure module-scope functions, so a control message

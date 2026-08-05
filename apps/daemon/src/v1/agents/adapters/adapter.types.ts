@@ -232,6 +232,19 @@ export interface TurnImage {
 }
 
 /**
+ * A message the user sent while a turn was ALREADY running, for delivery into
+ * that running turn rather than the next one.
+ *
+ * The same two fields a turn starts with, and deliberately no more: a follow-up
+ * changes what the agent is asked, never how it runs. Model, approval mode,
+ * cwd and the call surface all belong to the turn that is already in flight.
+ */
+export interface FollowUpMessage {
+  text: string;
+  images?: TurnImage[];
+}
+
+/**
  * One model a CLI will accept for `--model`, as that CLI reports it.
  *
  * `id` is passed through verbatim — never normalized, since only the CLI knows
@@ -712,6 +725,24 @@ export interface AgentTurnHandle {
    * protocol.
    */
   respondApproval(id: string, allow: boolean, updatedInput?: unknown): boolean;
+  /**
+   * Hand the RUNNING turn another user message. Returns whether it was
+   * actually delivered — false once the turn has settled, and false for a CLI
+   * with no such channel, so a caller can fall back to queueing it for the
+   * next turn without asking the adapter what kind it is.
+   *
+   * Probe-verified on claude 2.1.222: a second `{"type":"user"}` line written
+   * to a still-open stream-json stdin is picked up at the next tool boundary
+   * of the turn already in flight — a message sent 8s into a 20s command was
+   * answered at 29s, in the same process and under the same `result` line.
+   * That is what the CLI itself does with a follow-up typed mid-turn, and it
+   * is why "queued" here means seconds rather than "after everything finishes".
+   *
+   * ACP has no equivalent: `session/prompt` is one request per turn, and the
+   * protocol gives a client no way to add to a prompt already accepted. Its
+   * adapter therefore answers false and the caller keeps the message queued.
+   */
+  sendUserMessage(message: FollowUpMessage): boolean;
 }
 
 /** One question a CLI asked the user, projected out of its own tool payload. */

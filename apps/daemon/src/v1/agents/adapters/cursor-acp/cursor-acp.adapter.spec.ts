@@ -431,6 +431,25 @@ describe('CursorAcpAdapter permission round-trip', () => {
   });
 });
 
+describe('CursorAcpAdapter — no mid-turn user message', () => {
+  it('refuses one rather than writing a frame the protocol has no place for', () => {
+    // ACP's `session/prompt` is ONE request per turn, and the protocol gives a
+    // client no way to add to a prompt already accepted. Reporting false is
+    // what keeps the caller's queue correct: the message waits for the next
+    // turn instead of being dropped as delivered. Claude's stdin answers true
+    // here, and the two must stay tellable apart by the ANSWER, not by the
+    // caller checking which CLI it is talking to.
+    const child = new FakeChild();
+    const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
+    const handle = new CursorAcpAdapter({ spawn }).start(
+      { ...BASE, prompt: 'go' },
+      () => {},
+    );
+
+    expect(handle.sendUserMessage({ text: 'and also this' })).toBe(false);
+  });
+});
+
 describe('CursorAcpAdapter misuse', () => {
   it('fails loudly if the stateless mapper path is ever reached', () => {
     // ACP state cannot live on the adapter (one instance serves N concurrent

@@ -397,9 +397,22 @@ const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
 /**
  * The collapsed group's one-line summary, Claude/Cursor-style:
  * "Used 5 tools · ran 2 commands · edited 1 file".
+ *
+ * The tool TOTAL is dropped when the breakdown already accounts for every call
+ * in the group, because otherwise the same work is counted twice in one line:
+ * a group holding one `Bash` read "Used 1 tool · ran 1 command", two figures
+ * for a single action. Once some call falls outside the named buckets (a Read,
+ * a Grep, an MCP tool) the total is the only thing that reports it, so it comes
+ * back.
+ *
+ * `accounted` counts CALLS, while the two file figures count DISTINCT paths —
+ * three edits to one file are three accounted tools and one edited file, and
+ * comparing the displayed numbers instead would have kept the total on exactly
+ * the groups that need it least.
  */
 export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   let commands = 0;
+  let accounted = 0;
   const edited = new Set<string>();
   const created = new Set<string>();
   for (const { call } of pairs) {
@@ -411,15 +424,18 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
         : null;
     if (name === 'Bash') {
       commands += 1;
+      accounted += 1;
     } else if (EDIT_TOOLS.has(name) && file) {
       edited.add(file);
+      accounted += 1;
     } else if (name === 'Write' && file) {
       created.add(file);
+      accounted += 1;
     }
   }
   const count = (n: number, noun: string): string =>
     `${n} ${noun}${n === 1 ? '' : 's'}`;
-  const parts = [`Used ${count(pairs.length, 'tool')}`];
+  const parts: string[] = [];
   if (commands > 0) {
     parts.push(`ran ${count(commands, 'command')}`);
   }
@@ -429,7 +445,15 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   if (created.size > 0) {
     parts.push(`created ${count(created.size, 'file')}`);
   }
-  return parts.join(' · ');
+  if (parts.length === 0 || accounted < pairs.length) {
+    parts.unshift(`Used ${count(pairs.length, 'tool')}`);
+    return parts.join(' · ');
+  }
+  // The breakdown is now the whole line, so it opens the sentence.
+  const [first, ...rest] = parts;
+  return [first!.charAt(0).toUpperCase() + first!.slice(1), ...rest].join(
+    ' · ',
+  );
 }
 
 /** One-line argument preview for a tool row (the command, the path, …). */
@@ -639,15 +663,32 @@ function liveEntry(
  * The owner is read off the entry rather than passed in: two sources for one
  * value that must agree is how a row ends up attached to a block it does not
  * belong to.
+ *
+ * Only the LAST entry is a candidate, and that is the whole correctness of it.
+ * A live row describes what is happening RIGHT NOW, so it belongs after
+ * everything already on screen — but the fold breaks a turn block on every
+ * user message, `turn_complete` divider and approval card, which leaves the
+ * agent's previous block sitting further up. Searching backwards for it put
+ * the row INSIDE that older block, and the three reported symptoms are all
+ * that one walk:
+ *
+ * - press stop, send again, and the new turn's "Thinking…" appears above the
+ *   message that started it;
+ * - answer a question and the streaming reply renders above the answer, then
+ *   snaps below it the moment the text goes durable (the durable item's seq
+ *   puts it after the verdict, where it always belonged);
+ * - the same for the `turn_complete` divider between two turns.
+ *
+ * When the last entry is not this agent's block, a NEW block is opened at the
+ * end. That is also what makes the row's position stable across the
+ * live→durable seam: both land after the same divider.
  */
 function attach(out: TranscriptEntry[], entry: ItemEntry): void {
   const nodeId = entry.item.nodeId;
-  for (let i = out.length - 1; i >= 0; i -= 1) {
-    const block = out[i];
-    if (block?.type === 'turn-block' && block.nodeId === nodeId) {
-      out[i] = { ...block, entries: [...block.entries, entry] };
-      return;
-    }
+  const last = out[out.length - 1];
+  if (last?.type === 'turn-block' && last.nodeId === nodeId) {
+    out[out.length - 1] = { ...last, entries: [...last.entries, entry] };
+    return;
   }
   out.push({
     type: 'turn-block',

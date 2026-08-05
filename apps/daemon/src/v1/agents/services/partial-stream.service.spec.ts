@@ -105,6 +105,46 @@ describe('PartialStreamService — thinking is scoped to ONE stretch', () => {
     expect(last().thinkingStretch).toBe(2);
   });
 
+  it('a tool call ends the stretch, even though it carries no words', () => {
+    // Probe-measured on claude 2.1.222: a model that thinks and then calls a
+    // tool with nothing to say first emits no text delta at all, so `append`
+    // never fires and the row claimed "Thinking… 74 tokens" for the whole
+    // command (3.5s on that turn; a `sleep 40` would hold it for 40).
+    service.thinking(RUN, OWNER, null, 74);
+    expect(last().thinkingStretch).toBe(1);
+
+    service.endThinking(RUN, OWNER, null);
+
+    expect(last().thinkingTokens).toBeNull();
+    expect(last().thinkingStretch).toBeNull();
+  });
+
+  it('the tool call’s NEXT stretch is a new row, not a continuation', () => {
+    // The second half of the same defect: with the stretch left open, the
+    // CLI's next reasoning merged into it, so a fresh wait inherited the
+    // previous one's clock and token count instead of starting over.
+    service.thinking(RUN, OWNER, null, 74);
+    service.endThinking(RUN, OWNER, null);
+
+    service.thinking(RUN, OWNER, null, 50);
+
+    expect(last().thinkingStretch).toBe(2);
+    expect(last().thinkingTokens).toBe(50);
+  });
+
+  it('ending a stretch that is already closed puts nothing on the wire', () => {
+    // It is called on EVERY durable event, so a turn of a hundred tool rows
+    // must not mean a hundred identical events.
+    service.thinking(RUN, OWNER, null, 10);
+    service.endThinking(RUN, OWNER, null);
+    const count = published.length;
+
+    service.endThinking(RUN, OWNER, null);
+    service.endThinking(RUN, OWNER, null);
+
+    expect(published).toHaveLength(count);
+  });
+
   it('the TURN boundary resets it', () => {
     service.thinking(RUN, OWNER, null, 300);
     service.clearRun(RUN);
@@ -224,6 +264,8 @@ describe('PartialStreamService — every method stays total', () => {
     expect(() => fragile.thinking(RUN, OWNER, null, 1)).not.toThrow();
     expect(() => fragile.context(RUN, OWNER, null, 1)).not.toThrow();
     expect(() => fragile.retire(RUN, OWNER, null)).not.toThrow();
+    // Called on EVERY durable event, so this one is on the hottest path of all.
+    expect(() => fragile.endThinking(RUN, OWNER, null)).not.toThrow();
   });
 });
 

@@ -83,11 +83,12 @@ base before writing an override.** The one sanctioned exception is
 CLI-named field of the capability bag carries the verdict.
 
 The optional hooks — `buildStdinPayload`, `buildEnv`, `keepStdinOpen`,
-`buildApprovalResponse`, `prepareTurn`, `createTurnDriver`, `questionFrom`,
-`withAnswer`, `readMcpFolderFacts` — each carry their contract in their doc
+`buildApprovalResponse`, `buildFollowUpPayload`, `prepareTurn`,
+`createTurnDriver`, `questionFrom`, `withAnswer`, `readMcpFolderFacts` — each
+carry their contract in their doc
 block. Override one only
 when your CLI needs it; each default is the "this CLI has no such thing"
-answer. Two deserve naming here:
+answer. Three deserve naming here:
 
 - **`prepareTurn`** — only when a turn needs a resource materialized BEFORE the
   spawn and torn down when it settles. Return a disposer; the base runs it on
@@ -103,6 +104,18 @@ answer. Two deserve naming here:
   adapter** — one adapter instance serves N concurrent turns under graph
   fan-out, so an adapter field would cross-wire them. A driver may also open
   the conversation (`onStdinReady(io)`) and encode approval verdicts.
+- **`buildFollowUpPayload`** — only when the CLI accepts a user message into a
+  turn that is ALREADY running, which is what makes a queued follow-up go in
+  seconds rather than after the process exits. Claude's stream-json stdin is a
+  conversation, so a second `{"type":"user"}` line on a still-open stdin is
+  acted on at the next tool boundary (probe-verified on 2.1.222). ACP has no
+  equivalent — `session/prompt` is one request per turn — so `CursorAcpAdapter`
+  leaves the default and `AgentTurnHandle.sendUserMessage` answers false, which
+  the chat service turns into the same RUN_BUSY the renderer already queues on.
+  **The answer must be honest in both directions**: a true for a write that
+  never reached the agent has the caller drop the message from its queue. An
+  adapter overriding this must also keep stdin open for the turn
+  (`keepStdinOpen`), or the line has nowhere to go.
 
 `start()` is the single spawn path for a turn, `runCommand()` for everything
 else. An adapter never reaches for `spawn` or `execFile`, and every child is

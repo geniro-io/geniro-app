@@ -33,5 +33,8 @@ export function childProcessHandle(
         ? killProcessGroup(child.pid, 'SIGKILL', () => child.kill('SIGKILL'))
         : void child.kill('SIGKILL'),
     respondApproval: () => false,
+    // A utility child (a `--version` probe, an `mcp list`) is not a
+    // conversation — there is no turn for a user message to join.
+    sendUserMessage: () => false,
   };
 }

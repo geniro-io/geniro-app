@@ -677,6 +677,10 @@ export class GraphExecutorService {
       // Approvals route through the ApprovalRegistry per request, not the
       // aggregate — a run-level respond has no single target turn.
       respondApproval: () => false,
+      // Same reason, and it is why a workflow composer is disabled: a run
+      // fanning out over N nodes has no ONE conversation a follow-up belongs
+      // to, and picking a node for it would be an invention.
+      sendUserMessage: () => false,
     };
     this.registry.register(runId, aggregateHandle);
 
@@ -1102,6 +1106,11 @@ export class GraphExecutorService {
               return;
             }
           }
+          // Anything durable ends a silent reasoning stretch — the tool call
+          // the model went quiet to prepare carries no text delta to close it
+          // (see `PartialStreamService.endThinking`). Kept in step with the
+          // chat path, which does the same at its own persist seam.
+          this.partials.endThinking(runId, node.id, node.id);
           const mapped = mapEventToItem(event);
           if (mapped) {
             // A callee sub-turn tags every streamed item with its callId so

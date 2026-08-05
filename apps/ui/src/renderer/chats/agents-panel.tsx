@@ -12,6 +12,7 @@ import { McpSection } from '../components/mcp-section';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Dialog } from '../components/ui/dialog';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
 import { type AgentDisplay, type AgentThread } from './agent-activity';
@@ -35,15 +36,21 @@ import { mcpScopeKey } from './use-agent-mcp';
  */
 /**
  * The MCP control: an icon button beside the terminal one, opening the server
- * list in its own popup.
+ * list in a MODAL DIALOG.
  *
- * A BUTTON in the card's header rather than a band across the bottom of the
- * card. The two things a user reaches for on an agent — its shell and its
- * tools — now sit together and open the same way, instead of one being a
- * header icon and the other a full-width disclosure that pushed the card's
- * own content down whenever it was open.
+ * A dialog and not a popover, which is the third placement this list has had
+ * and the first one sized for what it actually holds. It was a full-width band
+ * across the card, which pushed the agents themselves off the bottom whenever
+ * it was open; then a popover anchored to this button, which is a tooltip-sized
+ * surface hung off a 24px trigger inside a 280px panel — ten server rows, each
+ * able to carry a paragraph of connection-failure text, do not fit in one, and
+ * it closed on the first pointer press that landed anywhere else. Toggling a
+ * server on and off is deliberate work, so it gets the surface deliberate work
+ * gets: a centered card with room, a backdrop, Escape, and focus that stays put
+ * until it is dismissed.
  */
 function McpDisclosure({
+  agentName,
   open,
   onOpenChange,
   listing,
@@ -51,6 +58,8 @@ function McpDisclosure({
   onRefresh,
   onSetEnabled,
 }: {
+  /** Names the dialog, so several open one at a time stay tellable apart. */
+  agentName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   listing: AgentMcpListing | undefined;
@@ -58,12 +67,10 @@ function McpDisclosure({
   onRefresh?: () => void;
   onSetEnabled?: (server: string, enabled: boolean) => void;
 }): React.JSX.Element {
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const count = listing?.servers?.length ?? 0;
   return (
-    <span className="relative flex shrink-0 items-center">
+    <>
       <Button
-        ref={triggerRef}
         type="button"
         variant="ghost"
         size="icon"
@@ -80,26 +87,23 @@ function McpDisclosure({
         <Plug aria-hidden="true" className="size-3.5 shrink-0" />
         {count > 0 ? <span className="sr-only">{count} servers</span> : null}
       </Button>
-      <Popover
+      <Dialog
         open={open}
         onClose={() => onOpenChange(false)}
-        triggerRef={triggerRef}
-        side="bottom"
-        align="end"
-        label="MCP servers"
-        className="max-h-80 w-[22rem] overflow-y-auto">
+        title={`MCP servers — ${agentName}`}
+        className="max-w-lg">
         <McpSection
           listing={listing}
           loading={loading}
           onRefresh={onRefresh}
           onSetEnabled={onSetEnabled}
-          // The popover IS the section's chrome here, so the card-band edges
+          // The dialog IS the section's chrome here, so the card-band edges
           // (a top rule, the card's own padding) would draw a stray line
           // across a panel that is already bounded.
           className="border-t-0"
         />
-      </Popover>
-    </span>
+      </Dialog>
+    </>
   );
 }
 
@@ -412,9 +416,12 @@ export function AgentsPanel({
                         onClick: () => toggleExpanded(agent.id),
                       })}
                   className={cn(
-                    'flex flex-col gap-1 rounded-lg px-2.5 py-2 text-left',
+                    'flex flex-col rounded-lg px-2.5 pt-1.5 text-left',
                     !soleThread && 'transition-colors hover:bg-accent/50',
                   )}>
+                  {/* Line 1 — WHO this is: the name, and which CLI drives it.
+                      Nothing actionable, so the whole line can stay part of
+                      the expand button without swallowing a control's press. */}
                   <span className="flex items-center gap-1.5">
                     {soleThread ? null : (
                       <ChevronRight
@@ -431,6 +438,43 @@ export function AgentsPanel({
                     {agent.agent ? (
                       <Badge variant="muted">{agent.agent}</Badge>
                     ) : null}
+                  </span>
+                </Header>
+                {/* Line 2 — WHAT it is doing, and what you can do about it:
+                    status, how full its context is, and its two controls.
+                    Everything that used to take three lines (status; a context
+                    meter alone on the next; controls up beside the name) reads
+                    as one row, which is what makes the card compact.
+
+                    OUTSIDE `Header`, deliberately and for two reasons. `Header`
+                    is a <button> for any agent with more than one thread, so a
+                    nested button here is invalid DOM and every press meant for
+                    a control would also toggle the thread list. And the meter
+                    is itself a button. */}
+                <div className="flex items-center gap-1 px-2.5 pt-0.5 pb-1.5 text-xs">
+                  <RunStatusIcon status={agent.status} />
+                  <span className={RUN_STATUS_META[agent.status].className}>
+                    {agent.status}
+                  </span>
+                  {agent.threads.length > 0 && soleThread === null ? (
+                    <span className="truncate text-muted-foreground">
+                      · {agent.activeTurns} active · {agent.threads.length}{' '}
+                      {agent.threads.length === 1 ? 'thread' : 'threads'}
+                    </span>
+                  ) : soleThread !== null && agent.activeTurns > 0 ? (
+                    // The thread COUNT is noise when there is only one, but
+                    // how many turns are live on it is not — an agent can
+                    // run several at once on its own conversation.
+                    <span className="truncate text-muted-foreground">
+                      · {agent.activeTurns} active
+                    </span>
+                  ) : null}
+                  <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                    <ContextMeter
+                      contextTokens={agent.contextTokens}
+                      contextWindowTokens={agent.contextWindowTokens}
+                      spentUsd={agent.spentUsd}
+                    />
                     {soleThreadTerminal ? (
                       <OpenInCliButton
                         agent={agent}
@@ -442,6 +486,7 @@ export function AgentsPanel({
                     ) : null}
                     {mcpByScope && mcpKind !== null && mcpScope !== null ? (
                       <McpDisclosure
+                        agentName={agent.name}
                         open={openMcp === agent.id}
                         onOpenChange={(next) => openMcpFor(agent.id, next)}
                         listing={mcpByScope.get(mcpScope)}
@@ -456,37 +501,6 @@ export function AgentsPanel({
                       />
                     ) : null}
                   </span>
-                  <span className="flex items-center gap-1 text-xs">
-                    <RunStatusIcon status={agent.status} />
-                    <span className={RUN_STATUS_META[agent.status].className}>
-                      {agent.status}
-                    </span>
-                    {agent.threads.length > 0 && soleThread === null ? (
-                      <span className="text-muted-foreground">
-                        · {agent.activeTurns} active · {agent.threads.length}{' '}
-                        {agent.threads.length === 1 ? 'thread' : 'threads'}
-                      </span>
-                    ) : soleThread !== null && agent.activeTurns > 0 ? (
-                      // The thread COUNT is noise when there is only one, but
-                      // how many turns are live on it is not — an agent can
-                      // run several at once on its own conversation.
-                      <span className="text-muted-foreground">
-                        · {agent.activeTurns} active
-                      </span>
-                    ) : null}
-                  </span>
-                </Header>
-                {/* OUTSIDE the header, deliberately. `Header` is a <button>
-                    for any agent with more than one thread, and the meter is
-                    now a button of its own: nested that way it is invalid DOM
-                    AND every press meant to read the figures also toggled the
-                    thread list underneath it. */}
-                <div className="flex items-center justify-end px-2.5 pb-2">
-                  <ContextMeter
-                    contextTokens={agent.contextTokens}
-                    contextWindowTokens={agent.contextWindowTokens}
-                    spentUsd={agent.spentUsd}
-                  />
                 </div>
                 {isExpanded && soleThread === null ? (
                   <ul className="m-0 flex list-none flex-col gap-0.5 border-t border-border px-2 py-1.5">

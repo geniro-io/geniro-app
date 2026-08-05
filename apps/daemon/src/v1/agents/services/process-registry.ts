@@ -93,6 +93,24 @@ export class ProcessRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * The run's in-flight turn handle, or null.
+   *
+   * Null covers two states that callers must NOT tell apart by asking twice:
+   * no turn at all, and a turn that is only CLAIMED — reserved by
+   * {@link tryClaim} but not yet spawned, so it has no stdin to write to. Both
+   * mean "there is nothing running you can talk to right now".
+   *
+   * Deliberately narrow. This is not a general accessor for the process table:
+   * it exists so a follow-up message can reach the turn it is meant for, and
+   * the handle's own guards decide whether the write lands (a turn that
+   * settled between this read and the write reports false rather than
+   * accepting it). Cancel and shutdown keep going through this class.
+   */
+  runningHandle(runId: string): AgentTurnHandle | null {
+    return this.active.get(runId) ?? null;
+  }
+
+  /**
    * Resolves once the run's registered handle has settled — the wait a delete
    * needs when finalization rides the handle itself (the graph executor's
    * aggregate handle resolves only after the run's LAST write; a chat turn's

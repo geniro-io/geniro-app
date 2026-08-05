@@ -2,7 +2,6 @@ import {
   ArrowUp,
   Clock,
   FolderOpen,
-  ListPlus,
   Plus,
   Square,
   Trash2,
@@ -68,7 +67,12 @@ import { ComposerCard } from './composer-card';
 import { ComposerChipRow } from './composer-chip-row';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
-import { applyLiveText, CHAT_LIVE_KEY, type LiveState } from './live-text';
+import {
+  applyLiveText,
+  CHAT_LIVE_KEY,
+  type LiveState,
+  liveTextKey,
+} from './live-text';
 import { AttachmentLoaderContext } from './message-attachments';
 import { ModelSelect } from './model-select';
 import { formatClockTime } from './relative-time';
@@ -1145,10 +1149,19 @@ export function Chats({
     drainQueueRef.current = (runId) => void drainQueue(runId);
   }, [drainQueue]);
 
-  /** The open transcript's composer: a follow-up into the ACTIVE chat run —
-   *  never a run start (workflow runs take one task; their composer is off).
-   *  While the agent is still working, the message QUEUES instead: it shows
-   *  above the composer and sends automatically when the turn ends. */
+  /**
+   * The open transcript's composer: a follow-up into the ACTIVE chat run —
+   * never a run start (workflow runs take one task; their composer is off).
+   *
+   * While the agent is working the message is still SENT, not parked. The
+   * daemon hands it to the turn already in flight when the CLI has a channel
+   * for one (claude's stream-json stdin does; it acts on it at the next tool
+   * boundary), and answers RUN_BUSY when it does not — only then does the
+   * message join the queue and wait for the turn to end. Trying first is the
+   * whole change: parking unconditionally, as this did, turned "send this
+   * next" into "send this after everything finishes", which on a long turn is
+   * minutes of the agent working on a request the user has already replaced.
+   */
   const sendFollowUp = useCallback(async (): Promise<void> => {
     const text = input.trim();
     const images = attachments.toWire();
@@ -1156,13 +1169,10 @@ export function Chats({
     if ((!text && images.length === 0) || !runId) {
       return;
     }
-    if (streaming) {
-      // Queueing is a chat-run concept — the workflow composer is disabled.
-      if (runsRef.current.find((r) => r.id === runId)?.workflowId == null) {
-        enqueueMessage(runId, { text, images });
-        setInput('');
-        attachments.clear();
-      }
+    // Queueing is a chat-run concept — the workflow composer is disabled.
+    const queueable =
+      runsRef.current.find((r) => r.id === runId)?.workflowId == null;
+    if (streaming && !queueable) {
       return;
     }
     try {
@@ -1172,8 +1182,20 @@ export function Chats({
       // so a retry needs no re-paste, exactly as it keeps the text.
       attachments.clear();
     } catch (err) {
+      if (streaming && queueable && String(err).includes('RUN_BUSY')) {
+        // The CLI cannot be told anything mid-turn (or the turn settled as
+        // this was in flight). Queue it — the composer shows it pending and
+        // the drain sends it the moment the turn ends. Not an error: this is
+        // the documented fallback, and a red banner for it would report a
+        // failure the user has no action for.
+        enqueueMessage(runId, { text, images });
+        attachments.clear();
+        return;
+      }
       setError(String(err));
-      setStreaming(false);
+      if (!streaming) {
+        setStreaming(false);
+      }
       // Mirror drainQueue's restoreHead: a failed follow-up keeps the text.
       setInput((current) => (current.length === 0 ? text : current));
     }
@@ -1241,6 +1263,59 @@ export function Chats({
   // sub-turn settling from the node's own turn ending, and saw nothing at all
   // for a turn that failed before it started. The daemon knows both.
   const unanswerableIds = useMemo(() => unanswerableRequestIds(items), [items]);
+  /**
+   * The agents holding an approval card nobody has answered yet.
+   *
+   * The SAME three exclusions the card itself renders with (a persisted
+   * verdict, a request its turn took down with it, a verdict_ack that came
+   * back dead) — read from the one place they already live rather than
+   * re-derived, so a card that shows as answered can never still count as
+   * waiting here.
+   */
+  const awaitingAnswer = useMemo(() => {
+    const keys = new Set<string>();
+    for (const item of items) {
+      if (item.kind !== 'approval_request') {
+        continue;
+      }
+      const id = payloadString(item.payload, 'id');
+      if (
+        id === null ||
+        verdicts.has(id) ||
+        unanswerableIds.has(id) ||
+        deadRequestKeys.has(`${item.runId}:${id}`)
+      ) {
+        continue;
+      }
+      keys.add(liveTextKey(item.nodeId));
+    }
+    return keys;
+  }, [items, verdicts, unanswerableIds, deadRequestKeys]);
+
+  /**
+   * When the turn currently in flight started — the header's running clock.
+   *
+   * Derived from the TRANSCRIPT rather than remembered when the send fires, so
+   * it survives a reload, a tab switch and a reconnect mid-turn: all three
+   * would otherwise restart the clock at zero and report a long turn as brand
+   * new. A run-level terminal item clears it; the next user message opens the
+   * next one.
+   */
+  const turnStartedAt = useMemo(() => {
+    let startedAt: string | null = null;
+    for (const item of items) {
+      if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
+        startedAt = null;
+      } else if (
+        startedAt === null &&
+        item.kind === 'message' &&
+        item.role === 'user'
+      ) {
+        startedAt = item.createdAt;
+      }
+    }
+    return startedAt;
+  }, [items]);
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
   /**
@@ -1468,15 +1543,24 @@ export function Chats({
       if (streaming || activeRun.status === 'running') {
         keys.add(CHAT_LIVE_KEY);
       }
-      return keys;
-    }
-    for (const [nodeId, nodeActivity] of activity) {
-      if (nodeId !== CHAT_AGENT_KEY && nodeActivity.activeTurns > 0) {
-        keys.add(nodeId);
+    } else {
+      for (const [nodeId, nodeActivity] of activity) {
+        if (nodeId !== CHAT_AGENT_KEY && nodeActivity.activeTurns > 0) {
+          keys.add(nodeId);
+        }
       }
     }
+    // An agent parked on a question is NOT working — it is waiting on the
+    // person reading the card. Its turn is genuinely still in flight, so every
+    // signal above says "running", and the fallback drew a spinning
+    // "Working… 4m 12s" directly under the question it was waiting for an
+    // answer to. Removing it leaves the card as the only thing on screen,
+    // which is the truth: nothing moves until it is answered.
+    for (const key of awaitingAnswer) {
+      keys.delete(key);
+    }
     return keys;
-  }, [activeRun, activity, streaming]);
+  }, [activeRun, activity, awaitingAnswer, streaming]);
   /**
    * The DURABLE fold, memoized on the items alone.
    *
@@ -1991,6 +2075,7 @@ export function Chats({
                   agentKind={activeRun.agentKind}
                   status={activeRun.status}
                   lastActivityAt={activeRun.updatedAt}
+                  turnStartedAt={turnStartedAt}
                   // The header shows the FOCUSED agent's context. For a 1:1 chat
                   // that is the only agent; for a workflow the panel is where
                   // per-node figures live, so the header stays quiet.
@@ -2210,10 +2295,17 @@ export function Chats({
                                 type="button"
                                 size="icon"
                                 className="size-8 rounded-full"
-                                aria-label="Queue"
-                                title="Send automatically when the current turn ends"
+                                // It SENDS. The message goes into the turn
+                                // already running whenever the agent's CLI can
+                                // take one mid-turn, and only falls back to the
+                                // queue when it cannot — so a label promising
+                                // "later" was wrong for the common case, and
+                                // the queue strip above the composer is what
+                                // says when the fallback happened.
+                                aria-label="Send"
+                                title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
                                 onClick={() => void sendFollowUp()}>
-                                <ListPlus className="size-4 shrink-0" />
+                                <ArrowUp className="size-4 shrink-0" />
                               </Button>
                             ) : null}
                             <Button

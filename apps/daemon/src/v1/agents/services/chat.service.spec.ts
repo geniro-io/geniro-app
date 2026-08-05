@@ -207,6 +207,7 @@ function fakeAdapter(kind: AgentKind): {
   handles: {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
+    sendUserMessage: ReturnType<typeof vi.fn>;
   }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
@@ -216,6 +217,7 @@ function fakeAdapter(kind: AgentKind): {
   const handles: {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
+    sendUserMessage: ReturnType<typeof vi.fn>;
   }[] = [];
   const start = vi.fn(
     (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
@@ -233,6 +235,10 @@ function fakeAdapter(kind: AgentKind): {
         cancel: vi.fn(() => resolveDone?.()),
         // A live turn delivers verdicts — true is the realistic default.
         respondApproval: vi.fn(() => true),
+        // Same for a follow-up: a running claude turn takes one on its still-open
+        // stream-json stdin (probe-verified). A spec about the CLI that cannot
+        // overrides it to false.
+        sendUserMessage: vi.fn(() => true),
       };
       handles.push(handle);
       return handle;
@@ -513,12 +519,67 @@ describe('ChatService', () => {
     });
   });
 
-  it('rejects a concurrent turn on the same run with RUN_BUSY', async () => {
+  it('hands a mid-turn message to the running turn instead of refusing it', async () => {
+    // Probe-verified on claude 2.1.222: a second user line on a still-open
+    // stream-json stdin is picked up at the next tool boundary of the turn
+    // already in flight. Refusing (as this used to) meant the message waited
+    // for the CLI PROCESS to exit — minutes on a long turn, for a request the
+    // user had already replaced.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first'); // turn in flight, not finished
+
+    const item = await service.sendMessage(run.id, 'actually, do this instead');
+
+    expect(claude.handles[0]!.sendUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'actually, do this instead' }),
+    );
+    // A SECOND CLI must not have been spawned — it joined the running turn.
+    expect(claude.start).toHaveBeenCalledTimes(1);
+    // And it is in the transcript, after everything the turn has written.
+    expect(item.kind).toBe('message');
+    expect(item.role).toBe('user');
+    const rows = itemDao.items.filter((row) => row.runId === run.id);
+    expect(item.seq).toBe(Math.max(...rows.map((row) => row.seq)));
+
+    claude.finish();
+    await drain();
+  });
+
+  it('refuses with RUN_BUSY when the running turn cannot take one', async () => {
+    // ACP's `session/prompt` is one request per turn, so its adapter reports
+    // false — and the refusal has to be the SAME RUN_BUSY the caller already
+    // queues on, or a CLI without the channel needs special handling upstream.
     const { service, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+    claude.handles[0]!.sendUserMessage.mockReturnValue(false);
 
-    await service.sendMessage(run.id, 'first'); // turn in flight, not finished
-    await expect(service.sendMessage(run.id, 'second')).rejects.toThrow();
+    await expect(service.sendMessage(run.id, 'second')).rejects.toMatchObject({
+      errorCode: 'RUN_BUSY',
+    });
+
+    claude.finish();
+    await drain();
+  });
+
+  it('writes nothing to the transcript when the delivery is refused', async () => {
+    // Order matters: the CLI gets it first, and only a delivery it CONFIRMED
+    // is recorded. The reverse leaves a user message on screen that no agent
+    // ever received — the silent failure this path exists to replace.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+    claude.handles[0]!.sendUserMessage.mockReturnValue(false);
+    const before = itemDao.items.filter((row) => row.runId === run.id).length;
+
+    await expect(service.sendMessage(run.id, 'lost?')).rejects.toMatchObject({
+      errorCode: 'RUN_BUSY',
+    });
+
+    expect(itemDao.items.filter((row) => row.runId === run.id)).toHaveLength(
+      before,
+    );
 
     claude.finish();
     await drain();
@@ -726,6 +787,7 @@ describe('ChatService', () => {
       done: Promise.resolve(),
       cancel: cancelled,
       respondApproval: () => false,
+      sendUserMessage: () => false,
     });
 
     await expect(service.cancel(run.id)).rejects.toThrow(
@@ -1087,6 +1149,34 @@ describe('ChatService — approval modes (parity M1)', () => {
       effort: 'ultracode',
     });
     expect(updated.effort).toBe('ultracode');
+  });
+
+  it('stops claiming the agent is thinking the moment a tool call lands', async () => {
+    // The full path for the reported "Thinking… stays up between tool calls".
+    // A model that thinks and then calls a tool with nothing to say first emits
+    // no text delta, so `append` never fired and the stretch stayed open for
+    // the whole command — measured at 3.5s on one turn, unbounded in general.
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+
+    claude.emit({ type: 'thinking_progress', tokens: 74 });
+    await drain();
+    expect(deltas.at(-1)?.thinkingStretch).toBe(1);
+
+    claude.emit({
+      type: 'tool_call',
+      id: 't1',
+      name: 'Bash',
+      input: { command: 'sleep 40' },
+    });
+    await drain();
+
+    expect(deltas.at(-1)?.thinkingStretch).toBeNull();
+    expect(deltas.at(-1)?.thinkingTokens).toBeNull();
+
+    claude.finish();
+    await drain();
   });
 
   it('scales the live meter from the FIRST request once a model’s window is known', async () => {

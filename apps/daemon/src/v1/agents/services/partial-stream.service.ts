@@ -182,6 +182,38 @@ export class PartialStreamService {
   }
 
   /**
+   * Report that the agent is no longer reasoning — anything else it does ends
+   * the stretch.
+   *
+   * `append` closes a stretch too, because words arriving are the commonest way
+   * one ends. They are not the only way: a model that thinks and then calls a
+   * tool without saying anything first emits no delta at all, so the stretch
+   * stayed open for the whole tool call and the transcript claimed the agent
+   * was "Thinking… 74 tokens" while it was running Bash — measured at 3.5s on
+   * one turn here, and unbounded in general (a `sleep 40` would hold it for the
+   * whole command). Worse, the CLI's NEXT stretch then merged into the open one
+   * instead of opening a fresh row, so its clock and its token count both
+   * carried the previous wait's numbers.
+   *
+   * Called on every DURABLE event, which is the honest rule: the moment
+   * something reaches the transcript, whatever the agent was silently doing
+   * before it is over. Idempotent — a stretch that is already closed publishes
+   * nothing, so calling it per event costs no traffic.
+   */
+  endThinking(runId: string, ownerKey: string, nodeId: string | null): void {
+    try {
+      const state = this.stateOf(runId, ownerKey);
+      if (state.thinkingCurrent === null) {
+        return;
+      }
+      state.thinkingCurrent = null;
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+    } catch (err) {
+      this.warn('endThinking', err);
+    }
+  }
+
+  /**
    * Report how full the window is as of the turn's most recent request.
    *
    * Mid-turn, unlike the `turn_complete` figure the meter used to wait for:

@@ -416,11 +416,11 @@ describe('AgentsPanel — MCP servers', () => {
     ],
   };
 
-  it('puts the MCP control beside the terminal one, in the card header', () => {
-    // Where the user asked for it: the two things you reach for on an agent —
-    // its shell and its tools — sit together and open the same way. It used to
-    // be a full-width band across the bottom of the card that pushed the
-    // card's own content down whenever it was open.
+  it('puts both agent controls on the status line, not on a line of their own', () => {
+    // The card is two lines: WHO (name + kind) and WHAT (status, context, the
+    // two controls). The two things you reach for on an agent — its terminal
+    // and its tools — sit together on the second, beside the context readout
+    // that used to occupy a third line by itself.
     const el = render(
       <AgentsPanel
         interactiveTerminalAgents={INTERACTIVE}
@@ -431,12 +431,18 @@ describe('AgentsPanel — MCP servers', () => {
       />,
     );
 
-    const header = cardFor(el, 'Orchestrator').querySelector('div, button')!;
-    const controls = [...header.querySelectorAll('button')].map((b) =>
-      b.getAttribute('aria-label'),
-    );
-    expect(controls).toContain('Open terminal for Orchestrator');
-    expect(controls).toContain('MCP servers');
+    const card = cardFor(el, 'Orchestrator');
+    const terminal = card.querySelector(
+      'button[aria-label="Open terminal for Orchestrator"]',
+    )!;
+    const mcp = card.querySelector('button[aria-label="MCP servers"]')!;
+    // The same row, which is the claim — not merely "both present somewhere".
+    // Read as the nearest enclosing <div>, since the terminal control carries
+    // its own positioning <span> for the hover hint and the MCP one does not.
+    const row = terminal.closest('div')!;
+    expect(mcp.closest('div')).toBe(row);
+    // And that row is the status line, not a strip of its own.
+    expect(row.textContent).toContain('running');
   });
 
   it('opening the MCP popup does not also expand the thread list', () => {

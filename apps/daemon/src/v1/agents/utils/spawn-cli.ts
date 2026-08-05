@@ -3,6 +3,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import type {
   AgentEvent,
   AgentTurnHandle,
+  FollowUpMessage,
   TurnIo,
 } from '../adapters/adapter.types';
 import { buildChildEnv } from './child-env';
@@ -76,6 +77,12 @@ export interface RunCliOptions {
     allow: boolean,
     updatedInput?: unknown,
   ) => string | undefined;
+  /**
+   * Encode a user message sent while THIS turn is still running, as the stdin
+   * line the CLI expects. Undefined = this CLI cannot be told anything more
+   * once its prompt is in, and `sendUserMessage` is a no-op.
+   */
+  buildFollowUpPayload?: (message: FollowUpMessage) => string | undefined;
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
   /**
@@ -191,7 +198,12 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       message: `failed to spawn ${opts.command}: ${errorMessage(err)}`,
     });
     settle();
-    return { done, cancel: () => {}, respondApproval: () => false };
+    return {
+      done,
+      cancel: () => {},
+      respondApproval: () => false,
+      sendUserMessage: () => false,
+    };
   }
 
   const buffer = new NdjsonBuffer({
@@ -338,6 +350,19 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         return false;
       }
       const line = opts.buildApprovalResponse?.(id, allow, updatedInput);
+      if (line === undefined) {
+        return false;
+      }
+      return writeStdin(line);
+    },
+    sendUserMessage: (message) => {
+      // Guarded like the verdict above, and for the same reason: a write that
+      // lands after the turn settled would be reported as delivered while the
+      // agent never sees it, and the caller would drop it from its queue.
+      if (settled || terminalEmitted) {
+        return false;
+      }
+      const line = opts.buildFollowUpPayload?.(message);
       if (line === undefined) {
         return false;
       }

@@ -19,8 +19,10 @@ import type {
   AgentMcpServersInput,
   AgentModel,
   AgentTurnInput,
+  FollowUpMessage,
   InstalledApprovalSupport,
   InstalledCapabilities,
+  TurnImage,
 } from '../adapter.types';
 import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
@@ -627,6 +629,35 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   protected override buildStdinPayload(input: AgentTurnInput): string {
+    return this.userMessageLine(input.prompt, input.images);
+  }
+
+  /**
+   * A message typed while this turn was already running, delivered INTO it.
+   *
+   * The same line the turn opened with, which is the whole trick: the CLI's
+   * stream-json stdin is a conversation, not a one-shot argument, so a second
+   * `{"type":"user"}` on a still-open stdin is picked up at the next tool
+   * boundary of the turn in flight. Probe-verified on 2.1.222 — a message sent
+   * 8 seconds into a 20-second command was acted on at 29 seconds, in the same
+   * process. Holding it until the process exits instead (which is what a queue
+   * draining on settle does) turns "as soon as possible" into "after
+   * everything finishes", and the CLI itself does not behave that way.
+   *
+   * Reachable only while stdin is open — `keepStdinOpen` is true for every
+   * chat turn, since `allowUserQuestions` is set there. A turn spawned without
+   * it writes into a closed pipe and `sendUserMessage` reports false, which is
+   * exactly the answer the caller needs to keep the message queued.
+   */
+  protected override buildFollowUpPayload(message: FollowUpMessage): string {
+    return this.userMessageLine(message.text, message.images);
+  }
+
+  /** The CLI's stream-json user line — one encoder, so the two cannot drift. */
+  private userMessageLine(
+    text: string,
+    images: TurnImage[] | undefined,
+  ): string {
     return `${JSON.stringify({
       type: 'user',
       message: {
@@ -636,10 +667,7 @@ export class ClaudeAdapter extends AgentAdapter {
         // SEES the image directly (probe-verified on claude 2.1.220, in either
         // block order). Handing over a path instead would cost a Read
         // round-trip and put an image behind the permission gate.
-        content: [
-          ...buildImageBlocks(input.images),
-          { type: 'text', text: input.prompt },
-        ],
+        content: [...buildImageBlocks(images), { type: 'text', text }],
       },
     })}\n`;
   }

@@ -1941,3 +1941,47 @@ describe('ClaudeAdapter geniro-key collision', () => {
     expect(captured.args).toContain('--mcp-config');
   });
 });
+
+describe('ClaudeAdapter — a message sent into a turn already running', () => {
+  it('writes the same user line the turn opened with, onto the open stdin', () => {
+    // Probe-verified on 2.1.222: a second `{"type":"user"}` on a still-open
+    // stream-json stdin is acted on at the next tool boundary of the turn in
+    // flight. Holding it until the process exits — which is what a queue
+    // draining on settle does — turns "as soon as possible" into "after
+    // everything finishes".
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      // A chat turn: `allowUserQuestions` is what keeps stdin open.
+      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      () => {},
+    );
+    const openingBytes = child.stdin.written.length;
+
+    expect(handle.sendUserMessage({ text: 'actually, do this' })).toBe(true);
+
+    const follow = child.stdin.written.slice(openingBytes);
+    expect(JSON.parse(follow)).toEqual({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'actually, do this' }],
+      },
+    });
+    // One JSON line, newline-terminated — the CLI reads NDJSON.
+    expect(follow.endsWith('\n')).toBe(true);
+    expect(follow.trimEnd().includes('\n')).toBe(false);
+  });
+
+  it('reports false once the turn has settled, rather than dropping it silently', () => {
+    // The caller keeps the message queued on false. A true here would have it
+    // discarded while the agent never saw it.
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      () => {},
+    );
+    child.emit('close', 0, null);
+
+    expect(handle.sendUserMessage({ text: 'too late' })).toBe(false);
+  });
+});

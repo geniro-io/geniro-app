@@ -26,6 +26,7 @@ import type {
   ApprovalResolution,
   InstalledApprovalSupport,
   InstalledCapabilities,
+  TerminalCommandInput,
   TerminalCommandResult,
   TurnDriver,
 } from './adapter.types';
@@ -245,19 +246,27 @@ export abstract class AgentAdapter {
    * launch: opening the CLI without a resume target would show an unrelated
    * fresh conversation while claiming to mirror the run.
    */
-  terminalCommand(sessionId: string | null): TerminalCommandResult {
+  terminalCommand(input: TerminalCommandInput): TerminalCommandResult {
     const terminal = this.getConfig().terminal;
     if (!terminal) {
       return { ok: false, reason: 'unsupported' };
     }
-    const trimmed = sessionId?.trim();
+    const trimmed = input.sessionId?.trim();
     if (!trimmed || !terminal.sessionIdPattern.test(trimmed)) {
       return { ok: false, reason: 'no-session' };
     }
+    // The run's OWN model, when the CLI can be told. A mirror that opened on
+    // the CLI's default was a different model with a different window beside
+    // the chat it was supposed to be mirroring.
+    const model = input.model?.trim();
     return {
       ok: true,
       command: this.command,
-      args: [terminal.resumeFlag, trimmed],
+      args: [
+        ...(model ? [terminal.modelFlag, model] : []),
+        terminal.resumeFlag,
+        trimmed,
+      ],
     };
   }
 

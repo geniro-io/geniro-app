@@ -69,6 +69,27 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     terminals: terminalApi,
   })),
 }));
+// Counts how many times each turn block actually re-rendered, so a test can
+// assert that a live delta does NOT rebuild the blocks it did not touch.
+const turnBlockRenders = vi.hoisted(() => ({
+  byId: new Map<string, number>(),
+}));
+vi.mock('./turn-block', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./turn-block')>();
+  const { createElement, memo } = await import('react');
+  // Memoized like the real one, so what the counter observes is exactly what
+  // the real component's memo would have decided.
+  return {
+    ...actual,
+    TurnBlock: memo(function CountingTurnBlock(
+      props: Parameters<typeof actual.TurnBlock>[0],
+    ) {
+      const id = props.block.id;
+      turnBlockRenders.byId.set(id, (turnBlockRenders.byId.get(id) ?? 0) + 1);
+      return createElement(actual.TurnBlock, props);
+    }),
+  };
+});
 vi.mock('../terminals/terminal-panel', () => ({
   TerminalPanel: (props: { title: string; onClose: () => void }) => (
     <div data-testid="terminal-panel">
@@ -211,6 +232,7 @@ function makeClient(): {
  */
 const LIVE_DELTA_REST = {
   thinkingSince: null,
+  thinkingStretch: null,
   contextTokens: null,
   contextWindowTokens: null,
 };
@@ -696,12 +718,107 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: '',
-        thinkingTokens: 300,
         ...LIVE_DELTA_REST,
+        thinkingTokens: 300,
+        thinkingSince: Date.now(),
+        thinkingStretch: 1,
       });
     });
     expect(container.textContent).toContain('Thinking');
     expect(container.textContent).toContain('300');
+  });
+
+  it('does NOT re-render settled turn blocks on every live delta', async () => {
+    // The visible blink. `Chats` holds the DURABLE fold in its own memo keyed
+    // on `items` alone; folding both halves in one memo rebuilt every block
+    // object per delta — several a second while streaming — giving every
+    // memoized block fresh prop identity and re-rendering the whole
+    // transcript. Merging those two memos back together makes this fail.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'first question'),
+      msg(1, 'assistant', 'a settled answer'),
+      msg(2, 'user', 'second question'),
+      msg(3, 'assistant', 'the turn being written'),
+    ]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The settled block is the assistant turn ABOVE the live one.
+    const settledId = 'i1';
+    turnBlockRenders.byId.clear();
+
+    for (const text of ['one', 'one two', 'one two three']) {
+      await act(async () => {
+        emitLiveText({
+          runId: 'r1',
+          nodeId: null,
+          text,
+          thinkingTokens: null,
+          ...LIVE_DELTA_REST,
+        });
+      });
+    }
+
+    expect(turnBlockRenders.byId.get(settledId) ?? 0).toBe(0);
+  });
+
+  it('reads each reasoning stretch’s own anchor and count', async () => {
+    // The turn-scoped row this replaces kept one line whose timer ran for the
+    // whole turn — "it didnt clean time and just continued to update tools
+    // from top". This pins the daemon's per-stretch anchor and count reaching
+    // the row; the row IDENTITY that makes each wait a separate row is pinned
+    // in transcript-groups.spec.ts (a fold-level fact, not a render-level one).
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const started = Date.now();
+    await act(async () => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: '',
+        ...LIVE_DELTA_REST,
+        thinkingTokens: 300,
+        thinkingSince: started - 40_000,
+        thinkingStretch: 1,
+      });
+    });
+    expect(container.textContent).toContain('40s');
+
+    // A second stretch: fresh anchor, fresh count. The row must read the NEW
+    // stretch's elapsed — carrying the first one's 40s forward is the defect.
+    await act(async () => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: '',
+        ...LIVE_DELTA_REST,
+        thinkingTokens: 15,
+        thinkingSince: started - 2_000,
+        thinkingStretch: 2,
+      });
+    });
+    expect(container.textContent).toContain('2s');
+    expect(container.textContent).not.toContain('40s');
+    expect(container.textContent).toContain('15');
+  });
+
+  it('shows an inline working row while a turn runs with nothing to say yet', async () => {
+    // Between a tool batch finishing and the next words the live plane carries
+    // nothing at all, and the transcript used to go silent — leaving the chat
+    // HEADER as the only place saying the agent was still working.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running', activity: null });
+    });
+    expect(container.textContent).toContain('Working');
   });
 
   it('replaces the thinking line with words the moment they start arriving', async () => {
@@ -2916,14 +3033,18 @@ describe('Chats run composer chips', () => {
     });
   });
 
-  it('locks the model chip mid-turn — the daemon 409s a change while a turn runs', async () => {
-    // History with no terminal item on a running run = a live turn.
+  it('keeps the model chip usable mid-turn, applying the pick to the next message', async () => {
+    // History with no terminal item on a running run = a live turn. The chip
+    // used to lock here, matching a daemon 409 that has since gone: the write
+    // only ever described the NEXT turn, so refusing it made the user wait to
+    // express a choice that was going to apply later anyway.
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(modelTrigger(container).disabled).toBe(true);
+    expect(modelTrigger(container).disabled).toBe(false);
+    expect(modelTrigger(container).title).toContain('next message');
   });
 
   it('a workflow run shows workflow + folder + trigger chips and a disabled send', async () => {

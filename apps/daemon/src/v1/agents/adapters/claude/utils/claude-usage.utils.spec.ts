@@ -128,6 +128,7 @@ describe('readClaudeUsage', () => {
       outputTokens: null,
       contextTokens: null,
       contextWindowTokens: null,
+      contextModel: null,
       costUsd: null,
     });
   });

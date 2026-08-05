@@ -93,11 +93,8 @@ export class TerminalsService implements OnApplicationShutdown {
       );
     }
     const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
-    const { agentKind, stateNodeId, wireNodeId } = await this.resolveNode(
-      run,
-      nodeId,
-      em,
-    );
+    const { agentKind, stateNodeId, wireNodeId, model } =
+      await this.resolveNode(run, nodeId, em);
     const resumeSessionId =
       input.sessionId ??
       (await this.nodeStateDao.getByRunNode(run.id, stateNodeId, em))
@@ -109,7 +106,7 @@ export class TerminalsService implements OnApplicationShutdown {
       return inFlight;
     }
     const create = this.doCreateForRun(
-      { ...input, nodeId: wireNodeId, agentKind, resumeSessionId },
+      { ...input, nodeId: wireNodeId, agentKind, resumeSessionId, model },
       run,
     ).finally(() => {
       this.pending.delete(key);
@@ -124,6 +121,8 @@ export class TerminalsService implements OnApplicationShutdown {
       nodeId: string | null;
       agentKind: AgentKind;
       resumeSessionId: string | null;
+      /** The model this thread chats as — the mirror opens on the same one. */
+      model: string | null;
       cols?: number;
       rows?: number;
     },
@@ -144,9 +143,13 @@ export class TerminalsService implements OnApplicationShutdown {
       );
     }
     const cwd = resolveValidCwd(run.cwd);
+    // The thread's own model rides along: a mirror that opened on the CLI's
+    // default was a different model with a different context window sitting
+    // beside the chat it was supposed to be mirroring.
     const { command, args } = this.resolveInvocation(
       input.agentKind,
       input.resumeSessionId,
+      input.model,
     );
     return this.pty.create({
       runId: run.id,
@@ -178,10 +181,11 @@ export class TerminalsService implements OnApplicationShutdown {
   private resolveInvocation(
     agentKind: AgentKind,
     resumeSessionId: string | null,
+    model: string | null,
   ): Extract<TerminalCommandResult, { ok: true }> {
     const resolved = this.adapters
       .for(agentKind)
-      .terminalCommand(resumeSessionId);
+      .terminalCommand({ sessionId: resumeSessionId, model });
     if (resolved.ok) {
       return resolved;
     }
@@ -212,6 +216,7 @@ export class TerminalsService implements OnApplicationShutdown {
     agentKind: AgentKind;
     stateNodeId: string;
     wireNodeId: string | null;
+    model: string | null;
   }> {
     if (!run.workflowId) {
       if (!run.agentKind) {
@@ -224,6 +229,7 @@ export class TerminalsService implements OnApplicationShutdown {
         agentKind: run.agentKind,
         stateNodeId: SINGLE_AGENT_NODE,
         wireNodeId: null,
+        model: run.model,
       };
     }
     if (!nodeId) {
@@ -232,10 +238,17 @@ export class TerminalsService implements OnApplicationShutdown {
         `run ${run.id} is a workflow run — pass the nodeId to mirror`,
       );
     }
-    const stamped = (await this.nodeStateDao.getByRunNode(run.id, nodeId, em))
-      ?.agentKind;
+    const state = await this.nodeStateDao.getByRunNode(run.id, nodeId, em);
+    const stamped = state?.agentKind;
     if (stamped) {
-      return { agentKind: stamped, stateNodeId: nodeId, wireNodeId: nodeId };
+      // Both read from the STAMP, never from the current YAML: an edited
+      // workflow must not re-write what a finished run actually ran as.
+      return {
+        agentKind: stamped,
+        stateNodeId: nodeId,
+        wireNodeId: nodeId,
+        model: state?.model ?? null,
+      };
     }
     const { workflow } = await this.workflowStore.get(run.workflowId);
     const node = workflow.nodes.find((n) => n.id === nodeId);
@@ -252,6 +265,11 @@ export class TerminalsService implements OnApplicationShutdown {
         `node ${nodeId} is a ${node.kind} node — only agent nodes have a terminal`,
       );
     }
-    return { agentKind: node.agent, stateNodeId: nodeId, wireNodeId: nodeId };
+    return {
+      agentKind: node.agent,
+      stateNodeId: nodeId,
+      wireNodeId: nodeId,
+      model: node.model ?? null,
+    };
   }
 }

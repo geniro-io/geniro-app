@@ -6,6 +6,7 @@ import { PartialStreamService } from './partial-stream.service';
 
 const RUN = 'run-1';
 const OWNER = 'agent';
+const AGENT = 'claude';
 
 let published: RunDeltaEvent[];
 let service: PartialStreamService;
@@ -23,22 +24,26 @@ function last(): RunDeltaEvent {
   return published[published.length - 1]!;
 }
 
-describe('PartialStreamService — thinking accumulates over the TURN', () => {
-  it('carries a finished stretch forward instead of restarting the count', () => {
-    // The CLI's `estimated_tokens` restarts per reasoning stretch, so a turn
-    // that thinks, writes, then thinks again used to show the second stretch's
-    // number alone — the count visibly went backwards mid-turn.
+describe('PartialStreamService — thinking is scoped to ONE stretch', () => {
+  it('starts a new stretch, with its own count, after the agent writes', () => {
+    // The CLI's `estimated_tokens` restarts per reasoning stretch and so does
+    // the row: a turn that thinks, writes, then thinks again is two separate
+    // waits. Carrying the first stretch's total into the second is what made
+    // one endless "thinking" row whose number never returned to zero.
     service.thinking(RUN, OWNER, null, 300);
     expect(last().thinkingTokens).toBe(300);
+    expect(last().thinkingStretch).toBe(1);
 
     service.append(RUN, OWNER, null, 'some words');
     expect(last().thinkingTokens).toBeNull(); // not reasoning right now
+    expect(last().thinkingStretch).toBeNull();
 
     service.thinking(RUN, OWNER, null, 120);
-    expect(last().thinkingTokens).toBe(420);
+    expect(last().thinkingTokens).toBe(120);
+    expect(last().thinkingStretch).toBe(2);
   });
 
-  it('reports when the turn started thinking, and keeps that anchor', () => {
+  it('more deltas about the SAME stretch keep its identity and its clock', () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-07-29T00:00:00Z'));
@@ -46,12 +51,31 @@ describe('PartialStreamService — thinking accumulates over the TURN', () => {
       const started = last().thinkingSince;
       expect(started).toBe(Date.parse('2026-07-29T00:00:00Z'));
 
-      // A later stretch measures elapsed from the FIRST one, so the row reads
-      // "this turn has been thinking for a while", not "for 2 seconds".
+      // No `append` between them, so the stretch never closed — the anchor must
+      // not move, or the row's elapsed time would restart on every delta.
+      vi.setSystemTime(new Date('2026-07-29T00:00:30Z'));
+      service.thinking(RUN, OWNER, null, 40);
+      expect(last().thinkingSince).toBe(started);
+      expect(last().thinkingStretch).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a REOPENED stretch gets a fresh clock, not the previous one', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-29T00:00:00Z'));
+      service.thinking(RUN, OWNER, null, 10);
+
+      // Words closed the stretch; the next one is a new wait and its elapsed
+      // time starts now. Reading 30s here is the "it never cleans the time"
+      // defect this reset exists to fix.
       vi.setSystemTime(new Date('2026-07-29T00:00:30Z'));
       service.append(RUN, OWNER, null, 'words');
       service.thinking(RUN, OWNER, null, 5);
-      expect(last().thinkingSince).toBe(started);
+      expect(last().thinkingSince).toBe(Date.parse('2026-07-29T00:00:30Z'));
+      expect(last().thinkingStretch).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -61,18 +85,21 @@ describe('PartialStreamService — thinking accumulates over the TURN', () => {
     service.thinking(RUN, OWNER, null, 10);
     service.append(RUN, OWNER, null, 'words');
     expect(last().thinkingSince).toBeNull();
+    expect(last().thinkingStretch).toBeNull();
   });
 
-  it('a durable message does NOT reset the turn total — only the tail', () => {
-    // `retire` fires per message, and a turn routinely lands several. Resetting
-    // the accumulation there would restore exactly the bug above.
+  it('a durable message closes the stretch but does not restart the counter', () => {
+    // `retire` fires per message, and a turn routinely lands several. The
+    // stretch counter is what tells the NEXT stretch apart from this one, so
+    // resetting it here would give two different waits the same identity.
     service.thinking(RUN, OWNER, null, 300);
     service.append(RUN, OWNER, null, 'first paragraph');
     service.retire(RUN, OWNER, null);
     expect(last().text).toBe('');
 
     service.thinking(RUN, OWNER, null, 50);
-    expect(last().thinkingTokens).toBe(350);
+    expect(last().thinkingTokens).toBe(50);
+    expect(last().thinkingStretch).toBe(2);
   });
 
   it('the TURN boundary resets it', () => {
@@ -80,9 +107,10 @@ describe('PartialStreamService — thinking accumulates over the TURN', () => {
     service.clearRun(RUN);
     service.thinking(RUN, OWNER, null, 25);
     expect(last().thinkingTokens).toBe(25);
+    expect(last().thinkingStretch).toBe(1);
   });
 
-  it('still skips the tail past the 64 KB cap, banking the stretch anyway', () => {
+  it('still closes the stretch past the 64 KB cap', () => {
     // The cap's early return used to skip the thinking null-out too; the
     // accounting must not silently stop just because the tail is full.
     service.thinking(RUN, OWNER, null, 10);
@@ -91,24 +119,34 @@ describe('PartialStreamService — thinking accumulates over the TURN', () => {
     expect(capped).toBe(64 * 1024);
     // The words ended the stretch, so the live indicator clears — this is the
     // assertion the title promises, and without it the cap's early return
-    // skipped the banking entirely: past 64 KB the "thinking" row never
-    // cleared again for that agent.
+    // left the stretch open: past 64 KB the "thinking" row never cleared again
+    // for that agent.
     expect(last().thinkingTokens).toBeNull();
 
-    // A second stretch still accumulates ON TOP of the banked one while capped,
-    // rather than restarting or being lost.
+    // A second stretch still opens while capped, rather than being lost.
     service.thinking(RUN, OWNER, null, 7);
-    expect(last().thinkingTokens).toBe(17);
+    expect(last().thinkingTokens).toBe(7);
+    expect(last().thinkingStretch).toBe(2);
 
     service.append(RUN, OWNER, null, 'more');
     expect(last().text.length).toBe(capped);
     expect(last().thinkingTokens).toBeNull();
   });
 
+  it('reports a stretch that has spent no tokens yet, rather than hiding it', () => {
+    // A stretch's first delta can carry 0. The row must still appear — the
+    // wait is the thing being shown, and `thinkingStretch` is what says it is
+    // happening, so a zero count cannot be mistaken for "not thinking".
+    service.thinking(RUN, OWNER, null, 0);
+    expect(last().thinkingTokens).toBe(0);
+    expect(last().thinkingStretch).toBe(1);
+    expect(last().thinkingSince).not.toBeNull();
+  });
+
   it('does not re-publish the capped tail for deltas that change nothing', () => {
     // The cap exists to stop pushing an unbounded string across the wire on
-    // every delta. Banking the stretch there must not reinstate that: once the
-    // bank is empty, a further delta has nothing new to say and a 64 KB
+    // every delta. Closing the stretch there must not reinstate that: with no
+    // stretch open, a further delta has nothing new to say and a 64 KB
     // byte-identical event per delta would lock the renderer on a long dump.
     service.append(RUN, OWNER, null, 'x'.repeat(64 * 1024 + 10));
     const afterCap = published.length;
@@ -180,5 +218,131 @@ describe('PartialStreamService — every method stays total', () => {
     expect(() => fragile.thinking(RUN, OWNER, null, 1)).not.toThrow();
     expect(() => fragile.context(RUN, OWNER, null, 1)).not.toThrow();
     expect(() => fragile.retire(RUN, OWNER, null)).not.toThrow();
+  });
+});
+
+describe('PartialStreamService — the window is a property of the MODEL', () => {
+  it('scales a run’s FIRST request from a window learned in an earlier run', () => {
+    // The window rides the `result` line only, so a brand-new chat had nothing
+    // to scale against until its first turn finished — and the meter fell back
+    // to an assumed 200k, which is how a 1M-window model came to be shown a
+    // fifth full before it had said anything.
+    service.useModel('run-old', AGENT, 'claude-opus-5[1m]');
+    service.rememberWindow('run-old', 1_000_000, 'claude-opus-5[1m]');
+
+    service.useModel('run-new', AGENT, 'claude-opus-5[1m]');
+    service.context('run-new', OWNER, null, 26_000);
+    expect(last().contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('says nothing rather than guessing for a model never seen before', () => {
+    // Unknown must stay unknown: the renderer shows a bare token count for a
+    // null window, where a substituted default would state a denominator
+    // nobody reported.
+    service.useModel(RUN, AGENT, 'some-model-we-have-never-run');
+    service.context(RUN, OWNER, null, 26_000);
+    expect(last().contextWindowTokens).toBeNull();
+  });
+
+  it('keeps the run’s own window across turns while the model is unchanged', () => {
+    // The run's own `result` line describes the conversation actually on
+    // screen, so re-announcing the SAME model at the next turn's start must not
+    // reset the meter to whatever the per-model memory happens to hold.
+    service.useModel(RUN, AGENT, 'a-model');
+    service.rememberWindow(RUN, 1_000_000, 'a-model');
+
+    service.useModel(RUN, AGENT, 'a-model');
+    service.context(RUN, OWNER, null, 10);
+    expect(last().contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('does NOT file a fallback model’s window under the announced one', () => {
+    // A turn can fall back to a second model, and `result.modelUsage` then
+    // reports THAT model's window. Filing it under the model the turn asked for
+    // poisons every later chat on the requested model for the life of the
+    // process — the 1M-shown-as-200k defect, cached.
+    service.useModel(RUN, AGENT, 'big-model');
+    service.rememberWindow(RUN, 200_000, 'a-smaller-fallback-model');
+
+    service.useModel('run-next', AGENT, 'big-model');
+    service.context('run-next', OWNER, null, 10);
+    expect(last().contextWindowTokens).toBeNull();
+  });
+
+  it('does not share a window between two CLIs that name the same model', () => {
+    // `.claude/rules/agent-adapters.md`: per-agent state is keyed by agent,
+    // never by the thing it is about. A window measured through one CLI says
+    // nothing about another that happens to accept the same model id.
+    service.useModel(RUN, 'claude', 'shared-name');
+    service.rememberWindow(RUN, 1_000_000, 'shared-name');
+
+    service.useModel('run-other', 'cursor-agent', 'shared-name');
+    service.context('run-other', OWNER, null, 10);
+    expect(last().contextWindowTokens).toBeNull();
+  });
+
+  it('keeps the per-model memory when a run is deleted', () => {
+    // The window describes the model, not the chat — deleting a conversation
+    // is no reason for the next one to start guessing again.
+    service.useModel(RUN, AGENT, 'a-model');
+    service.rememberWindow(RUN, 1_000_000, 'a-model');
+    service.forgetRun(RUN);
+
+    service.useModel('run-next', AGENT, 'a-model');
+    service.context('run-next', OWNER, null, 10);
+    expect(last().contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('rescales when the chat switches to a model with a different window', () => {
+    // A chat is free to change model between turns, and the window is a
+    // property of the MODEL. The run-scoped memory below was learned from the
+    // PREVIOUS model's result line, so preferring it here measures the new
+    // model's context against the old model's window for the whole turn — a
+    // 300k request on a 1M model reading "300k / 200k · 150%", which is the
+    // very "wrong context" the per-model memory exists to prevent.
+    service.useModel(RUN, AGENT, 'small-window-model');
+    service.rememberWindow(RUN, 200_000, 'small-window-model');
+    // The big model's window was learned from another chat this session.
+    service.useModel('run-elsewhere', AGENT, 'big-window-model');
+    service.rememberWindow('run-elsewhere', 1_000_000, 'big-window-model');
+
+    // This chat's next turn announces the big model at session start.
+    service.useModel(RUN, AGENT, 'big-window-model');
+    service.context(RUN, OWNER, null, 300_000);
+
+    expect(last().contextWindowTokens).toBe(1_000_000);
+  });
+});
+
+describe('PartialStreamService — a settled turn stops claiming to be live', () => {
+  it('withdraws a tail the finalizer handed to a durable partial item', () => {
+    // The cancel/failure path: `takeTail` gives the watched-but-undurable words
+    // to a `partial`-flagged message row, then `clearRun` ends the turn.
+    // Neither says so on the wire, so the client is still holding those same
+    // words as a LIVE tail and shows the sentence twice — once as the live row,
+    // once as the durable item that was written to replace it. The whole point
+    // of publishing the WHOLE tail is that the last event is authoritative;
+    // here the last event is a lie the moment the flush lands.
+    service.append(RUN, OWNER, null, 'half a senten');
+    expect(last().text).toBe('half a senten');
+
+    expect(service.takeTail(RUN, OWNER, null)).toBe('half a senten');
+    service.clearRun(RUN);
+
+    expect(last().text).toBe('');
+  });
+
+  it('closes a reasoning stretch that was open when the turn ended', () => {
+    // Stop pressed while the agent is reasoning: the tail is empty, so the
+    // flush above never fires and `clearRun` is the only thing that runs. With
+    // no event to withdraw it, the last word on the wire still names an OPEN
+    // stretch — and the transcript keeps a spinning "Thinking… 4m 12s" row,
+    // clock ticking, under a chat whose turn stopped minutes ago.
+    service.thinking(RUN, OWNER, null, 300);
+    expect(last().thinkingStretch).toBe(1);
+
+    service.clearRun(RUN);
+
+    expect(last().thinkingStretch).toBeNull();
   });
 });

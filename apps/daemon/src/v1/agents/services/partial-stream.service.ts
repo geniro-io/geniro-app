@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-import type { RunDeltaEvent } from '../chat.types';
+import { type RunDeltaEvent, SINGLE_AGENT_NODE } from '../chat.types';
 import { AgentEventBus } from './agent-events.bus';
 
 /**
@@ -15,18 +15,19 @@ interface LiveState {
   /** Words streamed since that agent's last durable item. */
   text: string;
   /**
-   * Reasoning tokens from stretches of THIS TURN that have already ended.
+   * How many reasoning stretches this turn has OPENED, counting from 1.
    *
-   * The CLI's `estimated_tokens` is a running total per reasoning STRETCH, not
-   * per turn, so a turn that thinks, writes, then thinks again reports a fresh
-   * count the second time. Carrying the finished stretches here is what makes
-   * the number the user sees cumulative over the turn instead of restarting
-   * every time the agent pauses to type.
+   * The number itself means nothing to a reader — it exists so a client can
+   * tell one stretch from the next. A turn reasons, writes, reasons again;
+   * without an identity on the wire those two stretches are indistinguishable
+   * from one long one, and a renderer showing "thinking" has no way to know it
+   * should start a fresh row with a fresh clock rather than keep growing the
+   * old one.
    */
-  thinkingBase: number;
+  thinkingStretch: number;
   /** The CURRENT stretch's running total, or null when not reasoning. */
   thinkingCurrent: number | null;
-  /** When this turn's FIRST reasoning began (epoch ms), or null. */
+  /** When the CURRENT stretch began (epoch ms), or null when not reasoning. */
   thinkingSince: number | null;
   /** Prompt-side tokens as of the turn's most recent request, or null. */
   contextTokens: number | null;
@@ -68,6 +69,34 @@ export class PartialStreamService {
    * see an unscaled number for the rest of it.
    */
   private readonly windows = new Map<string, number>();
+  /**
+   * model id -> the window that model reported, learned from any run.
+   *
+   * The per-RUN map above cannot help a run's FIRST turn: the window rides the
+   * `result` line only, so until one turn finished there was nothing to scale
+   * against and the meter fell back to an assumed 200k — which is how a
+   * 1M-window model came to be shown as a fifth full before it had said
+   * anything. A window is a property of the MODEL, not of the conversation, so
+   * remembering it by model makes every later chat on that model correct from
+   * its first request.
+   *
+   * Process-lifetime only, and deliberately so: it is a cache of something the
+   * CLI will report again, never a source of truth. A model whose window has
+   * not been observed this session stays unknown rather than assumed.
+   */
+  private readonly windowsByModel = new Map<string, number>();
+  /**
+   * runId -> the model key its current turn announced, for the lookup above.
+   *
+   * Also what makes the run-scoped window above INVALIDATABLE: a chat may
+   * switch model between turns (the composer's chips are editable mid-run), and
+   * a window learned from the previous model would otherwise be kept for the
+   * whole next turn — a 300k request on a 1M model reading "300k / 200k".
+   */
+  private readonly runModels = new Map<
+    string,
+    { key: string; model: string }
+  >();
 
   constructor(private readonly bus: AgentEventBus) {}
 
@@ -82,16 +111,13 @@ export class PartialStreamService {
       const state = this.stateOf(runId, ownerKey);
       // Words are arriving, so the reasoning STRETCH is over — otherwise the
       // indicator would sit under the growing text for the rest of the turn.
-      // Its tokens are banked rather than discarded: the turn's total is what
-      // the user is being shown, and it must not restart at the next pause.
       //
-      // Banked BEFORE the cap check, not after: the cap stops the tail from
+      // Closed BEFORE the cap check, not after: the cap stops the tail from
       // growing, not the turn from progressing. Returning first left the
       // stretch open forever once a turn crossed 64 KB, so the "thinking" row
       // never cleared for that agent again — the exact defect this plane was
       // reworked to fix.
       const endedAStretch = state.thinkingCurrent !== null;
-      state.thinkingBase += state.thinkingCurrent ?? 0;
       state.thinkingCurrent = null;
       if (state.text.length >= MAX_TAIL_CHARS) {
         // Publish ONLY when this delta actually changed something — i.e. it
@@ -119,11 +145,17 @@ export class PartialStreamService {
   ): void {
     try {
       const state = this.stateOf(runId, ownerKey);
+      // A null current total means no stretch is open, so this delta OPENS one:
+      // new identity, new clock. Both are per stretch rather than per turn
+      // because a stretch is what the user is watching — a turn that thinks,
+      // runs three tools, then thinks again is two separate waits, and showing
+      // the first one's clock still running through the second read as a
+      // counter that never resets under rows that kept piling up above it.
+      if (state.thinkingCurrent === null) {
+        state.thinkingStretch += 1;
+        state.thinkingSince = Date.now();
+      }
       state.thinkingCurrent = tokens;
-      // Elapsed is measured from the turn's FIRST reasoning, so it reads as
-      // "how long this turn has been thinking" rather than resetting to zero
-      // every time the agent breaks off to write a sentence.
-      state.thinkingSince ??= Date.now();
       this.publish(this.eventOf(runId, nodeId, state));
     } catch (err) {
       this.warn('thinking', err);
@@ -159,14 +191,68 @@ export class PartialStreamService {
    * run's next turn is overwhelmingly the same model — so a turn's first
    * `assistant` line, which carries no window of its own, can still be scaled.
    */
-  rememberWindow(runId: string, contextWindowTokens: number | null): void {
+  rememberWindow(
+    runId: string,
+    contextWindowTokens: number | null,
+    model: string | null = null,
+  ): void {
     try {
-      if (contextWindowTokens !== null && contextWindowTokens > 0) {
-        this.windows.set(runId, contextWindowTokens);
+      if (contextWindowTokens === null || contextWindowTokens <= 0) {
+        return;
+      }
+      this.windows.set(runId, contextWindowTokens);
+      // Cached under the model the WINDOW ITSELF came from, never under
+      // whatever the turn announced at startup. A turn that fell back to a
+      // second model reports that model's window, and filing it under the
+      // requested one poisons every later chat on the requested model — the
+      // 1M-shown-as-200k defect, cached for the life of the process.
+      const announced = this.runModels.get(runId);
+      if (announced && model !== null && announced.model === model) {
+        this.windowsByModel.set(announced.key, contextWindowTokens);
       }
     } catch (err) {
       this.warn('rememberWindow', err);
     }
+  }
+
+  /**
+   * The turn named the model it is running as — apply that model's window if
+   * one has been seen before, so the meter is scaled from the FIRST request
+   * rather than from the first completed turn.
+   *
+   * A window already remembered for THIS run wins while the model is
+   * unchanged: it came from this run's own `result` line and so describes the
+   * conversation on screen. A model CHANGE drops it — the composer's chips are
+   * editable mid-run, so switching model between turns is a first-class flow,
+   * and the previous model's window would otherwise scale the whole next turn.
+   */
+  useModel(runId: string, agent: string, model: string): void {
+    try {
+      const key = this.modelKey(agent, model);
+      if (this.runModels.get(runId)?.key !== key) {
+        this.runModels.set(runId, { key, model });
+        this.windows.delete(runId);
+      }
+      const known = this.windowsByModel.get(key);
+      if (known !== undefined && !this.windows.has(runId)) {
+        this.windows.set(runId, known);
+      }
+    } catch (err) {
+      this.warn('useModel', err);
+    }
+  }
+
+  /**
+   * The per-model cache key, keyed by AGENT as well.
+   *
+   * Two CLIs can name the same model, and a window measured through one says
+   * nothing about the other — `.claude/rules/agent-adapters.md` states the rule
+   * flatly: per-agent state is keyed by agent, never by the thing it is about.
+   * Only claude reports a window today, so nothing collides yet; that is an
+   * accident of which adapter emits the event, not a property of the key.
+   */
+  private modelKey(agent: string, model: string): string {
+    return `${agent} ${model}`;
   }
 
   private stateOf(runId: string, ownerKey: string): LiveState {
@@ -174,7 +260,7 @@ export class PartialStreamService {
     this.tails.set(runId, byOwner);
     const state = byOwner.get(ownerKey) ?? {
       text: '',
-      thinkingBase: 0,
+      thinkingStretch: 0,
       thinkingCurrent: null,
       thinkingSince: null,
       contextTokens: null,
@@ -189,19 +275,17 @@ export class PartialStreamService {
     nodeId: string | null,
     state: LiveState,
   ): RunDeltaEvent {
+    // All three reasoning fields are null while NOT reasoning — that is what
+    // hides the indicator, and publishing them as one group is what stops a
+    // client seeing a stretch id without the clock that belongs to it.
+    const reasoning = state.thinkingCurrent !== null;
     return {
       runId,
       nodeId,
       text: state.text,
-      // Null while NOT reasoning — that is what hides the indicator. The
-      // banked total is deliberately not shown between stretches: there is no
-      // "thinking" row to put it in.
-      thinkingTokens:
-        state.thinkingCurrent === null
-          ? null
-          : state.thinkingBase + state.thinkingCurrent,
-      thinkingSince:
-        state.thinkingCurrent === null ? null : state.thinkingSince,
+      thinkingTokens: state.thinkingCurrent,
+      thinkingSince: reasoning ? state.thinkingSince : null,
+      thinkingStretch: reasoning ? state.thinkingStretch : null,
       contextTokens: state.contextTokens,
       contextWindowTokens: this.windows.get(runId) ?? null,
     };
@@ -216,7 +300,7 @@ export class PartialStreamService {
    * writing. (The doc block here used to describe the opposite — a retire for
    * every persisted item — which the caller has never done.)
    *
-   * The turn-scoped accounting SURVIVES: a turn's thinking total and context
+   * The turn-scoped accounting SURVIVES: the stretch counter and the context
    * figure belong to the turn, not to one block of its text, and a turn
    * routinely lands several messages. `clearRun` is what ends the turn.
    */
@@ -227,7 +311,6 @@ export class PartialStreamService {
         return;
       }
       state.text = '';
-      state.thinkingBase += state.thinkingCurrent ?? 0;
       state.thinkingCurrent = null;
       this.publish(this.eventOf(runId, nodeId, state));
     } catch (err) {
@@ -241,13 +324,30 @@ export class PartialStreamService {
    * tail is consumed, so a second call yields nothing and the flush can never
    * be written twice.
    */
-  takeTail(runId: string, ownerKey: string): string | null {
+  takeTail(
+    runId: string,
+    ownerKey: string,
+    nodeId: string | null,
+  ): string | null {
     try {
-      const tail = this.tails.get(runId)?.get(ownerKey)?.text ?? '';
-      if (!tail) {
+      const state = this.tails.get(runId)?.get(ownerKey);
+      const tail = state?.text ?? '';
+      if (!state || !tail) {
         return null;
       }
       this.tails.get(runId)?.delete(ownerKey);
+      // Announced, not merely forgotten. These words are about to be written as
+      // a durable `partial` item; without an event saying the live copy is gone
+      // the client keeps rendering it too, and the user reads the same
+      // half-sentence twice — once as the tail they watched appear, once as the
+      // row written to replace it.
+      this.publish(
+        this.eventOf(runId, nodeId, {
+          ...state,
+          text: '',
+          thinkingCurrent: null,
+        }),
+      );
       return tail;
     } catch (err) {
       this.warn('takeTail', err);
@@ -257,8 +357,17 @@ export class PartialStreamService {
 
   /**
    * Forget a whole run's live state (its turn settled, or the run is
-   * terminal). This is the TURN boundary, so it is what resets the thinking
-   * accumulation — the next turn starts counting from zero.
+   * terminal). This is the TURN boundary, so it is what resets the stretch
+   * counter — the next turn starts counting its stretches from one.
+   *
+   * It ANNOUNCES the clear before forgetting it, one empty event per owner.
+   * Deleting the state locally says nothing on the wire, so the client stayed
+   * on whatever the last delta claimed: the words `takeTail` just handed to a
+   * durable `partial` item rendered a second time as a live tail, and a
+   * reasoning stretch that was open when the turn stopped kept a "Thinking…"
+   * row whose clock ticked on under a settled chat. The whole point of
+   * publishing the WHOLE tail is that the last event is authoritative — so
+   * the last event has to be the empty one.
    *
    * The remembered context window deliberately survives: it describes the
    * model, not the turn, and the next turn's first `assistant` line needs it
@@ -266,17 +375,40 @@ export class PartialStreamService {
    */
   clearRun(runId: string): void {
     try {
+      const byOwner = this.tails.get(runId);
       this.tails.delete(runId);
+      if (!byOwner) {
+        return;
+      }
+      for (const [ownerKey, state] of byOwner) {
+        // Owner keys and node ids coincide for every producer of this plane:
+        // the chat's single agent uses the sentinel and publishes nodeId null,
+        // a graph node uses its own id for both.
+        const nodeId = ownerKey === SINGLE_AGENT_NODE ? null : ownerKey;
+        this.publish(
+          this.eventOf(runId, nodeId, {
+            ...state,
+            text: '',
+            thinkingCurrent: null,
+          }),
+        );
+      }
     } catch (err) {
       this.warn('clearRun', err);
     }
   }
 
-  /** Drop everything remembered for a run — used when the run itself is gone. */
+  /**
+   * Drop everything remembered for a run — used when the run itself is gone.
+   *
+   * The per-MODEL windows survive: they describe models, not this run, and a
+   * deleted chat is no reason for the next one to start guessing again.
+   */
   forgetRun(runId: string): void {
     try {
       this.tails.delete(runId);
       this.windows.delete(runId);
+      this.runModels.delete(runId);
     } catch (err) {
       this.warn('forgetRun', err);
     }

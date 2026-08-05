@@ -55,6 +55,14 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
         if (commands.length > 0) {
           events.push({ type: 'slash_commands', commands });
         }
+        // The only line before `result` that names the model. `assistant`
+        // lines carry the CANONICAL id (`claude-opus-5`), which is not the key
+        // `result.modelUsage` is keyed by (`claude-opus-5[1m]`) — so init's is
+        // the one that can match a remembered window. Verified on 2.1.220.
+        const model = asString(root.model);
+        if (model) {
+          events.push({ type: 'turn_model', model });
+        }
         return events;
       }
       return [];

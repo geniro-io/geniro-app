@@ -28,13 +28,14 @@ const DEFAULT_LABEL = 'default model';
  * will actually be passed instead of silently showing the default.
  *
  * The same chip serves an OPEN chat, where it switches the model the next turn
- * runs as — locked mid-turn, matching the daemon's 409.
+ * runs as — including while a turn is in flight, which {@link nextTurnOnly}
+ * says out loud.
  */
 export function ModelSelect({
   agentKind,
   models,
   value,
-  disabled = false,
+  nextTurnOnly = false,
   onChange,
   className,
 }: {
@@ -42,8 +43,8 @@ export function ModelSelect({
   models: AgentModel[];
   /** The chosen model id, or null for the CLI's default. */
   value: string | null;
-  /** Locked while a turn is running (matches the daemon's 409 RUN_BUSY). */
-  disabled?: boolean;
+  /** A turn is running — this pick lands on the NEXT one. */
+  nextTurnOnly?: boolean;
   onChange: (model: string | null) => void;
   className?: string;
 }): React.JSX.Element {
@@ -56,8 +57,11 @@ export function ModelSelect({
     <Select
       variant="ghost"
       aria-label="Model"
-      title={`Model for ${agentKind}`}
-      disabled={disabled}
+      title={
+        nextTurnOnly
+          ? `Model for ${agentKind} — applies to your next message`
+          : `Model for ${agentKind}`
+      }
       className={className}
       searchPlaceholder={rows.length > 8 ? 'Search models…' : undefined}
       leadingIcon={<Sparkles />}

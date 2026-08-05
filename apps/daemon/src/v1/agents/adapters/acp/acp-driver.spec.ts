@@ -682,6 +682,7 @@ describe('AcpTurnDriver turn completion', () => {
           outputTokens: null,
           contextTokens: null,
           contextWindowTokens: null,
+          contextModel: null,
           costUsd: null,
         },
         stopReason: 'end_turn',
@@ -731,6 +732,7 @@ describe('AcpTurnDriver turn completion', () => {
         outputTokens: 20,
         contextTokens: 4200,
         contextWindowTokens: null,
+        contextModel: null,
         costUsd: 0.42,
       },
     });

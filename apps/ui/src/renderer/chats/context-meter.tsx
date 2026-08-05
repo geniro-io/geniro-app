@@ -1,10 +1,6 @@
 import { ProgressRing } from '../components/ui/progress-ring';
 import { cn } from '../components/ui/utils';
-import {
-  DEFAULT_CONTEXT_WINDOW_TOKENS,
-  formatTokens,
-  formatUsd,
-} from './agent-activity';
+import { formatTokens, formatUsd } from './agent-activity';
 
 /**
  * Fraction above which the ring warns, then alarms. Below `WARN_AT` it is
@@ -40,20 +36,23 @@ export function ContextMeter({
   spentUsd?: number | null;
   className?: string;
 }): React.JSX.Element | null {
-  // The model's OWN window when its CLI named one — the same figure must scale
-  // the ring and label the denominator, or a 1M-window model reads as full at
-  // a fifth of its context.
+  // The model's OWN window, or NOTHING. A window of 0 is rejected here, not
+  // just upstream: this is the ONE place that divides by it, and the result
+  // ("Context Infinity% full") would land in the accessible name.
   //
-  // A window of 0 is rejected here, not just upstream: this is the ONE place
-  // that divides by it, `?? DEFAULT` passes 0 straight through, and the result
-  // ("Context Infinity% full") lands in the accessible name — so the guard
-  // belongs where the division is, whatever any caller hands in.
+  // There is deliberately no assumed fallback. Substituting a flat 200k made
+  // the meter state a denominator nobody had reported — so a 1M-window model
+  // read as a fifth full before it had said anything, which is precisely the
+  // "wrong context" this shows. When the window is unknown the count is shown
+  // bare and the ring is withheld: "26k used" is true, "26k / 200k · 13%" was
+  // not.
   const window =
     contextWindowTokens !== null && contextWindowTokens > 0
       ? contextWindowTokens
-      : DEFAULT_CONTEXT_WINDOW_TOKENS;
-  const fraction = contextTokens !== null ? contextTokens / window : null;
-  if (fraction === null && spentUsd === null) {
+      : null;
+  const fraction =
+    contextTokens !== null && window !== null ? contextTokens / window : null;
+  if (contextTokens === null && spentUsd === null) {
     return null;
   }
   const percent = fraction === null ? null : Math.round(fraction * 100);
@@ -64,8 +63,14 @@ export function ContextMeter({
         className,
       )}>
       {contextTokens !== null ? (
-        <span title="Context of the latest turn / the model's window">
-          ctx {formatTokens(contextTokens)} / {formatTokens(window)}
+        <span
+          title={
+            window === null
+              ? "Context of the latest turn — the model's window has not been reported yet"
+              : "Context of the latest turn / the model's window"
+          }>
+          ctx {formatTokens(contextTokens)}
+          {window === null ? null : ` / ${formatTokens(window)}`}
         </span>
       ) : null}
       {spentUsd !== null ? (

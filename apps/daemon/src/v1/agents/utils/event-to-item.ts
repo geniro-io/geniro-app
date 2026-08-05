@@ -16,6 +16,8 @@ export function mapEventToItem(
       return null; // captured into node_state, not a transcript item
     case 'slash_commands':
       return null; // captured into the skill-harvest store, not a transcript item
+    case 'turn_model':
+      return null; // seeds the live plane's window lookup, not a transcript item
     case 'unhandled_control':
       return null; // logged and dropped by AgentAdapter.start — a diagnostic, not a row
     case 'thinking_progress':

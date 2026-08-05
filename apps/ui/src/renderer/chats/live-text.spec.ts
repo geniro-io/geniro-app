@@ -14,6 +14,7 @@ const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
   text: '',
   thinkingTokens: null,
   thinkingSince: null,
+  thinkingStretch: null,
   contextTokens: null,
   contextWindowTokens: null,
   ...over,
@@ -27,6 +28,7 @@ describe('parseLiveText', () => {
         nodeId: 'node-a',
         text: 'hello',
         thinkingTokens: 120,
+        thinkingStretch: 2,
         contextTokens: 45_200,
         contextWindowTokens: 200_000,
       }),
@@ -36,6 +38,7 @@ describe('parseLiveText', () => {
       text: 'hello',
       thinkingTokens: 120,
       thinkingSince: null,
+      thinkingStretch: 2,
       contextTokens: 45_200,
       contextWindowTokens: 200_000,
     });
@@ -50,8 +53,8 @@ describe('parseLiveText', () => {
       runId: 'run-1',
       nodeId: null,
       text: '',
-      thinkingTokens: 0,
       thinkingSince: -1,
+      thinkingStretch: 0,
       contextTokens: 0,
       contextWindowTokens: 0,
     });
@@ -61,9 +64,26 @@ describe('parseLiveText', () => {
       text: '',
       thinkingTokens: null,
       thinkingSince: null,
+      thinkingStretch: null,
       contextTokens: null,
       contextWindowTokens: null,
     });
+  });
+
+  it('KEEPS a zero token count — a stretch may not have spent any yet', () => {
+    // The one field on this event whose zero is a real answer. Reading it as
+    // "not reported" would hide the thinking row for exactly as long as the
+    // agent had nothing to show for the wait; `thinkingStretch` is what says
+    // whether the agent is thinking, so this field does not have to.
+    const parsed = parseLiveText({
+      runId: 'run-1',
+      nodeId: null,
+      text: '',
+      thinkingTokens: 0,
+      thinkingStretch: 1,
+    });
+    expect(parsed?.thinkingTokens).toBe(0);
+    expect(parsed?.thinkingStretch).toBe(1);
   });
 
   it('rejects a payload with no run id, and a non-string node id', () => {
@@ -95,14 +115,21 @@ describe('applyLiveText', () => {
     expect(stored(applyLiveText(seeded, event()))).toBeUndefined();
   });
 
-  it('keeps an entry that has words, or a reasoning total, alone', () => {
+  it('keeps an entry that has words, or an open reasoning stretch, alone', () => {
     expect(stored(applyLiveText(new Map(), event({ text: 'hi' })))?.text).toBe(
       'hi',
     );
-    expect(
-      stored(applyLiveText(new Map(), event({ thinkingTokens: 12 })))
-        ?.thinkingTokens,
-    ).toBe(12);
+    // Retention keys on the STRETCH, not the token count: a stretch that has
+    // spent nothing yet is still a wait the transcript has to show, and
+    // keying on tokens would drop it.
+    const thinking = stored(
+      applyLiveText(
+        new Map(),
+        event({ thinkingStretch: 1, thinkingTokens: 0 }),
+      ),
+    );
+    expect(thinking?.thinkingStretch).toBe(1);
+    expect(thinking?.thinkingTokens).toBe(0);
   });
 
   it('keys a graph node separately from the single-agent chat', () => {

@@ -14,8 +14,16 @@
  * transcript, which is never missing anything a delta was carrying.
  */
 
-/** The agent key used for a 1:1 chat, whose items carry no node id. */
-export const CHAT_LIVE_KEY = 'agent';
+/**
+ * The map key used for a 1:1 chat's agent, whose items carry no node id.
+ *
+ * NUL-prefixed so it cannot collide with a real one. A workflow node id is any
+ * non-empty string, so `agent` is a legal — and obvious — node name; while the
+ * sentinel was that same word, `liveTextKey` and its inverse stopped being
+ * inverses for such a node, and its streamed words were torn out of its own
+ * block and rendered in a phantom one at the bottom of the transcript.
+ */
+export const CHAT_LIVE_KEY = '\u0000chat';
 
 /** One `agent_delta` payload, as read defensively off an untyped WS event. */
 export interface LiveTextEvent {
@@ -23,12 +31,18 @@ export interface LiveTextEvent {
   nodeId: string | null;
   text: string;
   /**
-   * Reasoning tokens spent so far THIS TURN, or null when not thinking.
-   * Cumulative across the turn's reasoning stretches, not per stretch.
+   * Reasoning tokens spent in the CURRENT stretch, or null when not thinking.
+   * Per stretch, not cumulative over the turn.
    */
   thinkingTokens: number | null;
-  /** Epoch ms this turn's first reasoning began, or null when not thinking. */
+  /** Epoch ms the CURRENT stretch began, or null when not thinking. */
   thinkingSince: number | null;
+  /**
+   * Which reasoning stretch of this turn the two fields above describe
+   * (counting from 1), or null when not thinking. Only its CHANGE matters: a
+   * new number means a new wait, which gets its own row and its own clock.
+   */
+  thinkingStretch: number | null;
   /** Prompt-side tokens as of the turn's latest request, or null. */
   contextTokens: number | null;
   /** The window those tokens are measured against, or null if unreported. */
@@ -40,6 +54,7 @@ export interface LiveState {
   text: string;
   thinkingTokens: number | null;
   thinkingSince: number | null;
+  thinkingStretch: number | null;
   contextTokens: number | null;
   contextWindowTokens: number | null;
 }
@@ -62,8 +77,14 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
     runId,
     nodeId: typeof nodeId === 'string' ? nodeId : null,
     text,
-    thinkingTokens: positiveNumber(record.thinkingTokens),
+    // Zero is a real answer here and nowhere else on this event: a stretch's
+    // very first delta can legitimately report no tokens yet, and reading that
+    // as "not thinking" would hide the row for exactly as long as the agent
+    // had nothing to show for the wait. Whether the agent IS thinking is
+    // `thinkingStretch`'s job, not this field's.
+    thinkingTokens: nonNegativeNumber(record.thinkingTokens),
     thinkingSince: positiveNumber(record.thinkingSince),
+    thinkingStretch: positiveNumber(record.thinkingStretch),
     contextTokens: positiveNumber(record.contextTokens),
     contextWindowTokens: positiveNumber(record.contextWindowTokens),
   };
@@ -72,6 +93,11 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
 /** A positive number off an untyped field, else null — the defensive default. */
 function positiveNumber(value: unknown): number | null {
   return typeof value === 'number' && value > 0 ? value : null;
+}
+
+/** Same, for a count whose zero is meaningful rather than absent. */
+function nonNegativeNumber(value: unknown): number | null {
+  return typeof value === 'number' && value >= 0 ? value : null;
 }
 
 /** Which agent's bubble a delta belongs to. */
@@ -96,7 +122,7 @@ export function applyLiveText(
   // entry with nothing at all to say is dropped.
   if (
     event.text === '' &&
-    event.thinkingTokens === null &&
+    event.thinkingStretch === null &&
     event.contextTokens === null
   ) {
     next.delete(key);
@@ -105,6 +131,7 @@ export function applyLiveText(
       text: event.text,
       thinkingTokens: event.thinkingTokens,
       thinkingSince: event.thinkingSince,
+      thinkingStretch: event.thinkingStretch,
       contextTokens: event.contextTokens,
       contextWindowTokens: event.contextWindowTokens,
     });

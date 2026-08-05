@@ -45,8 +45,18 @@ export interface AgentCallThread {
   sessionId: string | null;
 }
 
-/** The activity-map key for single-agent chat items (their nodeId is null). */
-export const CHAT_AGENT_KEY = 'agent';
+/**
+ * The activity-map key for single-agent chat items (their nodeId is null).
+ *
+ * NUL-prefixed so it cannot collide with a real node id. A workflow node id is
+ * any non-empty string, so `agent` is a legal — and obvious — node name; while
+ * the sentinel was that same word, such a node was read as "the chat's agent"
+ * and every site that excludes the sentinel (`nodeId !== CHAT_AGENT_KEY`)
+ * silently excluded the node too, dropping it from the working-agents set and
+ * from the panel's extras list. Same defect, and same fix, as
+ * `CHAT_LIVE_KEY` on the live plane (`live-text.ts`).
+ */
+export const CHAT_AGENT_KEY = '\u0000chat';
 
 /**
  * One agent as the agents panel displays it — workflow node metadata merged
@@ -72,8 +82,9 @@ export interface AgentDisplay {
   contextTokens: number | null;
   /**
    * The window {@link contextTokens} is measured against, as the CLI reported
-   * it for the model it ran. Null falls back to
-   * {@link DEFAULT_CONTEXT_WINDOW_TOKENS}.
+   * it for the model it ran. Null means UNREPORTED, and is rendered as such —
+   * the meter shows the count without a denominator rather than measuring
+   * against a window nobody named.
    */
   contextWindowTokens: number | null;
   spentUsd: number | null;
@@ -266,16 +277,6 @@ export function computeAgentActivity(
   }
   return byAgent;
 }
-
-/**
- * The window used when the CLI reported none — cursor-agent never does, and
- * neither does a turn that failed before its result line.
- *
- * Only a fallback: claude reports the real window per model (1M for
- * `claude-opus-5[1m]`, 200k elsewhere), and measuring one of those against a
- * flat 200k is what pinned the fill ring full on a chat using 3% of its window.
- */
-export const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 
 /** Compact token count: 950 → "950", 12_400 → "12.4k", 1_200_000 → "1.2M". */
 export function formatTokens(count: number): string {

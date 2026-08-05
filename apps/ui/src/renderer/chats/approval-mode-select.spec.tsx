@@ -124,16 +124,22 @@ describe('ApprovalModeSelect', () => {
     expect(el.children).toHaveLength(0);
   });
 
-  it('disables the select while a turn is running', () => {
+  it('LOCKS while a turn is running, unlike the model and effort chips', () => {
+    // The odd one out among the composer chips, deliberately: this is the
+    // permission control, so the daemon 409s a mid-turn change rather than ACK
+    // a safety posture the running turn will not honour. A usable chip here
+    // would let the user flip `auto → ask`, see the chip read `ask`, and have
+    // the turn run fully auto-approved anyway.
     const el = render(
       <ApprovalModeSelect
         agentKind="claude"
         value="ask"
         planSupported={false}
-        disabled
+        lockedMidTurn
         onChange={() => {}}
       />,
     );
     expect(trigger(el).disabled).toBe(true);
+    expect(trigger(el).title).toContain('locked while a turn is running');
   });
 });

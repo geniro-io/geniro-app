@@ -53,10 +53,20 @@ export interface AgentUsage {
   /**
    * The window that context is measured against, as the CLI reports it for the
    * model it actually ran (claude: 1M for `claude-opus-5[1m]`, 200k for the
-   * rest). Null when the CLI says nothing — the consumer then falls back to a
-   * default rather than claiming a window nobody confirmed.
+   * rest). Null when the CLI says nothing — the consumer then shows the count
+   * with no denominator rather than claiming a window nobody confirmed.
    */
   contextWindowTokens: number | null;
+  /**
+   * WHICH model {@link contextWindowTokens} describes, when the CLI named one.
+   *
+   * A turn can touch more than one model — a small one runs side errands, and a
+   * turn can fall back — so the window belongs to a specific model rather than
+   * to the turn. Reported so a consumer caching windows per model can tell that
+   * the figure describes the model the turn announced, and decline to file a
+   * fallback model's window under the requested one.
+   */
+  contextModel: string | null;
   costUsd: number | null;
 }
 
@@ -157,6 +167,25 @@ export type AgentEvent =
        */
       type: 'slash_commands';
       commands: string[];
+    }
+  | {
+      /**
+       * The model this turn is actually running as, named by the CLI at
+       * session start (claude's `system/init` `model` — verified live on
+       * 2.1.220, where it reads `claude-opus-5[1m]`).
+       *
+       * Reported because the WINDOW is not: no line before the turn's `result`
+       * carries one, so a run's first turn had nothing to scale its live
+       * context figure against and fell back to an assumed 200k — which is
+       * how a 1M-window model came to be shown measuring against a fifth of
+       * its context. Naming the model is enough: the window learned when a
+       * turn of that same model finished can be applied from the start.
+       *
+       * EPHEMERAL — never a transcript row. The durable record of what a turn
+       * ran as is the run row itself.
+       */
+      type: 'turn_model';
+      model: string;
     }
   | {
       /**
@@ -706,6 +735,14 @@ export interface AdapterQuestion {
   options: string[];
 }
 
+/** What the mirror is being opened ON — one run's one thread. */
+export interface TerminalCommandInput {
+  /** The session to reopen, or null when the thread has produced none yet. */
+  sessionId: string | null;
+  /** The model the run is chatting as, or null for the CLI's own default. */
+  model: string | null;
+}
+
 /** What resolving a terminal-mirror invocation produced. */
 export type TerminalCommandResult =
   | { ok: true; command: string; args: string[] }
@@ -924,6 +961,21 @@ export interface AdapterConfig {
   readonly terminal: {
     /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
     readonly resumeFlag: string;
+    /**
+     * The flag naming the model, so a mirror opens on the SAME model the chat
+     * is running.
+     *
+     * Without it the TUI resumes under the CLI's own default, which is a
+     * different model with a different window — so the mirror of a 1M-window
+     * chat reported a 200k context beside it and read as a different
+     * conversation entirely.
+     *
+     * Required, not nullable: a CLI whose TUI cannot be told a model would
+     * declare that by having no `terminal` block worth resuming into at all.
+     * A real one re-adds the null arm with its reason, and a test that enters
+     * it.
+     */
+    readonly modelFlag: string;
     /**
      * What a resumable session id looks like for this CLI. A value produced by
      * a DIFFERENT CLI must not be handed to this one's TUI.

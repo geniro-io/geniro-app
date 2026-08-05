@@ -109,7 +109,10 @@ describe('useNodeMcp', () => {
       await new Promise((r) => setTimeout(r, 600));
     });
 
-    expect(listAgentMcpServers).toHaveBeenCalledWith({ agent: 'claude' });
+    expect(listAgentMcpServers).toHaveBeenCalledWith(
+      { agent: 'claude' },
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it('never asks while there is no agent selected', async () => {
@@ -235,10 +238,13 @@ describe('useNodeMcp', () => {
     });
 
     expect(listAgentMcpServers).toHaveBeenCalledTimes(1);
-    expect(listAgentMcpServers).toHaveBeenCalledWith({
-      agent: 'claude',
-      pluginDir: '/opt/plugins',
-    });
+    expect(listAgentMcpServers).toHaveBeenCalledWith(
+      {
+        agent: 'claude',
+        pluginDir: '/opt/plugins',
+      },
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it('treats a daemon REFUSAL of the path as a field error', async () => {

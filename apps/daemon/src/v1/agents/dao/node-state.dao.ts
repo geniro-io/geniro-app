@@ -52,6 +52,8 @@ export class NodeStateDao extends BaseDao<NodeState> {
       error?: string | null;
       /** Stamped at turn start so run history survives workflow YAML edits. */
       agentKind?: AgentKind;
+      /** Stamped beside {@link agentKind}, and for the same reason. */
+      model?: string | null;
     },
     txEm?: EntityManager,
   ): Promise<void> {

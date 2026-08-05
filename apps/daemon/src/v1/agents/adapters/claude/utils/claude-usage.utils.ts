@@ -27,12 +27,14 @@ export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
   const usage = asRecord(root.usage);
   const iterations = usage ? asArray(usage.iterations) : [];
   const lastRequest = asRecord(iterations[iterations.length - 1]);
+  const context = readContextWindow(root);
   return {
     // Cumulative by nature and labelled as such — the turn's billed input.
     inputTokens: usage ? asNumber(usage.input_tokens) : null,
     outputTokens: usage ? asNumber(usage.output_tokens) : null,
     contextTokens: promptSideTokens(lastRequest),
-    contextWindowTokens: readContextWindow(root),
+    contextWindowTokens: context.window,
+    contextModel: context.model,
     costUsd: asNumber(root.total_cost_usd),
   };
 }
@@ -83,14 +85,18 @@ function promptSideTokens(
  * the one the context figure above belongs to — matching by name would mean
  * this file knowing model ids, which is exactly what asking the CLI avoids.
  */
-function readContextWindow(root: Record<string, unknown>): number | null {
+function readContextWindow(root: Record<string, unknown>): {
+  window: number | null;
+  model: string | null;
+} {
   const modelUsage = asRecord(root.modelUsage);
   if (!modelUsage) {
-    return null;
+    return { window: null, model: null };
   }
   let window: number | null = null;
+  let model: string | null = null;
   let best = -1;
-  for (const value of Object.values(modelUsage)) {
+  for (const [id, value] of Object.entries(modelUsage)) {
     const entry = asRecord(value);
     const contextWindow = entry ? asNumber(entry.contextWindow) : null;
     if (!entry || contextWindow === null) {
@@ -103,7 +109,11 @@ function readContextWindow(root: Record<string, unknown>): number | null {
     if (spent > best) {
       best = spent;
       window = contextWindow;
+      // The KEY, which is the id `system/init` announces
+      // (`claude-opus-5[1m]`) — not the entry's `canonicalModel`, which drops
+      // the variant and so cannot tell a 1M model from its 200k sibling.
+      model = id;
     }
   }
-  return window;
+  return { window, model };
 }

@@ -72,8 +72,7 @@ const agents: AgentDisplay[] = [
     status: 'running',
     activeTurns: 3,
     contextTokens: 12_000,
-    // Reported nothing — measured against the 200k default.
-    contextWindowTokens: null,
+    contextWindowTokens: 200_000,
     spentUsd: 0.004,
     threads: [
       {
@@ -222,7 +221,7 @@ describe('AgentsPanel', () => {
       status: 'completed',
       activeTurns: 0,
       contextTokens,
-      contextWindowTokens: null,
+      contextWindowTokens: 200_000,
       spentUsd: null,
       threads: [],
     });

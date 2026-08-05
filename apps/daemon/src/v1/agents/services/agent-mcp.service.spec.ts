@@ -506,7 +506,11 @@ describe('AgentMcpService.list', () => {
     const result = await service.list(AgentKind.Claude, cwd);
 
     expect(result.servers).toEqual([]);
-    expect(result.unavailableReason).not.toBeNull();
+    // The thrown message is CARRIED, not replaced. This arm only fires when an
+    // adapter broke its contract, which is exactly when the flat sentence
+    // leaves nobody able to tell a missing binary from a deadline — the panel
+    // is the only place it surfaces and it has room for the line.
+    expect(result.unavailableReason).toContain('boom');
   });
 
   it('carries an adapter’s declared absence through instead of asking it', async () => {

@@ -170,8 +170,9 @@ describe('Select', () => {
   });
 
   it('does not open while disabled', () => {
-    // The approval chip locks mid-turn (the daemon 409s a flip); a menu that
-    // still opened would offer a choice that cannot be committed.
+    // `disabled` is a real state on this primitive (a chip whose choice is
+    // genuinely unavailable); a menu that still opened would offer a choice
+    // that cannot be committed.
     const el = render(
       <Select
         groups={AGENTS}

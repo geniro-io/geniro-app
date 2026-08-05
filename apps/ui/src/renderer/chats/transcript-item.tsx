@@ -5,6 +5,7 @@ import { CodeBlock } from '../components/ui/code-block';
 import { AlertRow } from './alert-row';
 import { messageAttachments } from './attachment-payload';
 import { DiffView } from './diff-view';
+import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -21,6 +22,17 @@ export function payloadString(payload: unknown, key: string): string | null {
   if (payload && typeof payload === 'object' && key in payload) {
     const value = (payload as Record<string, unknown>)[key];
     if (typeof value === 'string') {
+      return value;
+    }
+  }
+  return null;
+}
+
+/** Read a numeric field out of an item's payload, defensively. */
+function payloadNumber(payload: unknown, key: string): number | null {
+  if (payload && typeof payload === 'object' && key in payload) {
+    const value = (payload as Record<string, unknown>)[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
       return value;
     }
   }
@@ -65,7 +77,23 @@ export const TranscriptItem = memo(function TranscriptItem({
         </MessageBubble>
       );
     }
-    case 'reasoning':
+    case 'reasoning': {
+      // A LIVE row describes what is happening right now and owns its own
+      // clock; a durable one is text the daemon persisted. Only the synthetic
+      // rows carry the marker, so a persisted reasoning item can never be
+      // mistaken for one.
+      const live = liveRowKind(item.payload);
+      if (live === 'working') {
+        return <WorkingRow />;
+      }
+      if (live === 'thinking') {
+        return (
+          <ThinkingRow
+            since={payloadNumber(item.payload, 'thinkingSince') ?? Date.now()}
+            tokens={payloadNumber(item.payload, 'thinkingTokens') ?? 0}
+          />
+        );
+      }
       return (
         <MessageBubble variant="reasoning" role="thinking">
           <div className="whitespace-pre-wrap italic">
@@ -73,6 +101,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           </div>
         </MessageBubble>
       );
+    }
     case 'tool_call': {
       // The UNGROUPED path — an orphan call whose pair never formed still
       // lands here, and must not read worse than a grouped row.

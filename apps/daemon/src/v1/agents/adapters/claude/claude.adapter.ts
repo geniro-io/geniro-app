@@ -215,6 +215,7 @@ export class ClaudeAdapter extends AgentAdapter {
       },
       terminal: {
         resumeFlag: CLAUDE_RESUME_FLAG,
+        modelFlag: CLAUDE_MODEL_FLAG,
         /**
          * What a resumable claude session id looks like. A missing or
          * foreign-shaped id is not a mirror target — opening the TUI without

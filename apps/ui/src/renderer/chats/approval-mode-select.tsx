@@ -31,7 +31,7 @@ export function ApprovalModeSelect({
   agentKind,
   value,
   planSupported,
-  disabled = false,
+  lockedMidTurn = false,
   onChange,
   className,
 }: {
@@ -39,8 +39,16 @@ export function ApprovalModeSelect({
   /** Current mode; null = legacy run created before the selector existed. */
   value: ChatApprovalMode | null;
   planSupported: boolean;
-  /** Locked while a turn is running (matches the daemon's 409 RUN_BUSY). */
-  disabled?: boolean;
+  /**
+   * A turn is running, so this chip is LOCKED.
+   *
+   * The odd one out among the composer chips, and deliberately: the daemon
+   * 409s an approval change mid-turn because this is the permission control,
+   * and an ACK that the running turn will not honour would state a safety
+   * posture the user does not have. Model and effort carry no such risk and
+   * stay editable, applying to the next turn.
+   */
+  lockedMidTurn?: boolean;
   onChange: (mode: ChatApprovalMode) => void;
   className?: string;
 }): React.JSX.Element | null {
@@ -55,10 +63,10 @@ export function ApprovalModeSelect({
       variant="ghost"
       value={value}
       placeholder="cli default"
-      disabled={disabled}
       aria-label="Tool-approval mode"
+      disabled={lockedMidTurn}
       title={
-        disabled
+        lockedMidTurn
           ? 'The approval mode is locked while a turn is running'
           : 'Tool-approval mode'
       }

@@ -96,6 +96,24 @@ describe('TerminalsService', () => {
     expect(wire.status).toBe('running');
   });
 
+  it('opens the mirror on the run’s OWN model, not the CLI default', async () => {
+    // A mirror that resumed under claude's default was a different model with
+    // a different context window sitting beside the chat it mirrors — which is
+    // what put a 200k readout next to a 1M-window conversation.
+    const { service, pty } = build({
+      run: { ...CHAT_RUN, model: 'claude-opus-5[1m]' },
+      nodeState: { agentSessionId: 'sess-9' },
+    });
+
+    await service.createForRun({ runId: 'run-1' });
+
+    expect(pty.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ['--model', 'claude-opus-5[1m]', '--resume', 'sess-9'],
+      }),
+    );
+  });
+
   it('re-injects the inherited Anthropic credential for the claude-only mirror', async () => {
     // buildChildEnv strips the credential from every child; the terminal
     // mirror is definitionally claude (cursor's adapter answers unsupported), so
@@ -160,7 +178,11 @@ describe('TerminalsService', () => {
     // past runs' terminals. The stamped agent_kind row is the record.
     const { service, pty, workflowStore } = build({
       run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
-      nodeState: { agentSessionId: 'sess-n', agentKind: 'claude' },
+      nodeState: {
+        agentSessionId: 'sess-n',
+        agentKind: 'claude',
+        model: 'claude-opus-5[1m]',
+      },
       workflow: { nodes: [] },
     });
 
@@ -170,7 +192,10 @@ describe('TerminalsService', () => {
       expect.objectContaining({
         nodeId: 'agent-1',
         command: 'claude',
-        args: ['--resume', 'sess-n'],
+        // The MODEL comes from the stamp too — reading the current YAML would
+        // re-write what a finished run actually ran as, which is the drift the
+        // stamp exists to prevent.
+        args: ['--model', 'claude-opus-5[1m]', '--resume', 'sess-n'],
       }),
     );
     // The stamp fully replaces the YAML lookup — the current definition is

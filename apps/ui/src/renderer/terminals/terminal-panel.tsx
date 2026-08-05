@@ -175,6 +175,16 @@ export function TerminalPanel({
           ) : null}
           <div ref={containerRef} className="h-full bg-card p-2" />
         </div>
+        {/* What the mirror IS, said once rather than left to be inferred.
+            It resumes this run's own session, but as a SEPARATE interactive
+            process — so the CLI runs its own startup, which on a folder it has
+            not been told to trust means a "do you trust this folder?" prompt
+            standing where the conversation was expected. Answering it here is
+            the user's call to make, and once made the transcript appears. */}
+        <footer className="border-t border-border px-4 py-1.5 text-[11px] text-muted-foreground">
+          A separate interactive session on this run’s conversation — answer
+          anything the CLI asks on startup and your messages appear.
+        </footer>
       </div>
     </div>
   );

@@ -809,9 +809,9 @@ export function Chats({
   );
 
   /**
-   * Change an open chat's settings between turns (the daemon 409s mid-turn).
-   * One path for every chip: the model, the approval mode and the reasoning
-   * effort are the same kind of choice — what the NEXT turn runs as.
+   * Change an open chat's settings, mid-turn included. One path for every
+   * chip: the model, the approval mode and the reasoning effort are the same
+   * kind of choice — what the NEXT turn runs as.
    */
   const changeRunSettings = useCallback(
     async (patch: {
@@ -1400,9 +1400,54 @@ export function Chats({
     }
     return map;
   }, [wfNodes]);
+  // Live per-agent state for the agents panel, derived purely from the
+  // transcript (status items count parallel turns; call items list threads;
+  // turn_complete usage carries context/spend).
+  const activity = useMemo(() => computeAgentActivity(items), [items]);
+  /**
+   * The agents whose turn is in flight — the transcript draws each of them a
+   * row even when they have nothing to say yet, so the flow never goes silent
+   * between a tool batch and the next words.
+   *
+   * A chat's one agent is running when the run is; a workflow node is running
+   * when it has an unsettled turn. Both are read from state the transcript
+   * already derives, so nothing new has to be tracked to answer it.
+   */
+  const workingAgents = useMemo(() => {
+    const keys = new Set<string>();
+    if (!activeRun) {
+      return keys;
+    }
+    if (!activeRun.workflowId) {
+      if (streaming || activeRun.status === 'running') {
+        keys.add(CHAT_LIVE_KEY);
+      }
+      return keys;
+    }
+    for (const [nodeId, nodeActivity] of activity) {
+      if (nodeId !== CHAT_AGENT_KEY && nodeActivity.activeTurns > 0) {
+        keys.add(nodeId);
+      }
+    }
+    return keys;
+  }, [activeRun, activity, streaming]);
+  /**
+   * The DURABLE fold, memoized on the items alone.
+   *
+   * Kept separate from the live overlay below on purpose. Folding both in one
+   * memo rebuilt every block, tool group and call block object on each delta —
+   * several times a second while streaming — so every memoized child got fresh
+   * prop identity and the whole transcript re-rendered, which is the visible
+   * blink. `withLiveText` copies only the ONE block it appends to, so with the
+   * fold held stable here every other block keeps its identity and its memo.
+   */
+  const durableEntries = useMemo(
+    () => buildTurnBlocks(groupTranscript(items)),
+    [items],
+  );
   const transcriptEntries = useMemo(
-    () => withLiveText(buildTurnBlocks(groupTranscript(items)), liveText),
-    [items, liveText],
+    () => withLiveText(durableEntries, liveText, workingAgents),
+    [durableEntries, liveText, workingAgents],
   );
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
@@ -1410,10 +1455,6 @@ export function Chats({
   // them), never on "how many agents happened to speak so far" — that would
   // make the frame pop in mid-run as a second node starts.
   const soloAgent = activeRun !== null && activeRun.workflowId === null;
-  // Live per-agent state for the agents panel, derived purely from the
-  // transcript (status items count parallel turns; call items list threads;
-  // turn_complete usage carries context/spend).
-  const activity = useMemo(() => computeAgentActivity(items), [items]);
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const toggleAgentsPanel = useCallback(
     () => setAgentsPanelOpen((open) => !open),
@@ -2134,17 +2175,28 @@ export function Chats({
                       {activeRun &&
                       activeRun.workflowId === null &&
                       activeRun.agentKind ? (
-                        // Both interactive between turns; the daemon 409s a
-                        // mid-turn change, so they lock while streaming.
-                        // Unlike the agent and folder above, neither is run
-                        // identity: a chat can switch model mid-conversation
-                        // exactly as the CLIs themselves allow.
+                        /* Editable at ANY time, including mid-turn. Unlike the
+                        agent and folder above, none of these is run identity:
+                        a chat can switch model mid-conversation exactly as the
+                        CLIs themselves allow.
+
+                        A running turn's argv is fixed at spawn and no adapter
+                        can mutate it in flight, so a change made now takes
+                        effect on the NEXT turn — which model and effort say
+                        while a turn streams, because a control that silently
+                        did nothing for the thing you are watching would be
+                        worse than one that is disabled.
+
+                        Approval is the exception and LOCKS: it is the
+                        permission control, and the daemon 409s a mid-turn
+                        change rather than ACK a safety posture the running
+                        turn will not honour. */
                         <>
                           <ModelSelect
                             agentKind={activeRun.agentKind}
                             models={agentModels}
                             value={activeRun.model}
-                            disabled={streaming}
+                            nextTurnOnly={streaming}
                             onChange={(model) =>
                               void changeRunSettings({ model })
                             }
@@ -2152,7 +2204,7 @@ export function Chats({
                           <EffortSelect
                             efforts={agentEfforts}
                             value={activeRun.effort}
-                            disabled={streaming}
+                            nextTurnOnly={streaming}
                             onChange={(effort) =>
                               void changeRunSettings({ effort })
                             }
@@ -2163,7 +2215,7 @@ export function Chats({
                             planSupported={
                               capabilities?.claudeModes.plan === 'pass'
                             }
-                            disabled={streaming}
+                            lockedMidTurn={streaming}
                             onChange={(approval) =>
                               void changeRunSettings({ approval })
                             }

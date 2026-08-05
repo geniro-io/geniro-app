@@ -29,6 +29,20 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'string', nullable: true })
   agentKind: AgentKind | null = null;
 
+  /**
+   * The model that turn actually ran as, stamped beside the agent kind and for
+   * the same reason: run history must not depend on the live workflow YAML.
+   *
+   * Without it the terminal mirror of a workflow node had nothing to open on
+   * and fell back to the CLI's own default — a different model with a
+   * different context window sitting beside the transcript it mirrors. Reading
+   * the CURRENT definition instead is exactly the drift `agentKind` is stamped
+   * to prevent. Null on a pre-existing row, and null for a node that names no
+   * model (the CLI's default is then the honest answer).
+   */
+  @Property({ type: 'string', nullable: true })
+  model: string | null = null;
+
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;
 

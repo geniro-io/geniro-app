@@ -250,10 +250,24 @@ export class ChatService {
 
   /**
    * PATCH /v1/chats/:runId/settings — change what the NEXT turn runs as: the
-   * approval mode, the model, the reasoning effort, or any combination. 409
-   * while a turn is in flight (the daemon-side contract matching the disabled
-   * selectors), 400 for a non-auto mode on a cursor chat or an effort level
-   * the run's CLI does not accept.
+   * approval mode, the model, the reasoning effort, or any combination. 400
+   * for a non-auto mode on a cursor chat or an effort level the run's CLI does
+   * not accept.
+   *
+   * `model` and `effort` are accepted WHILE A TURN IS RUNNING, deliberately.
+   * This route has only ever described the next turn: a running turn's argv was
+   * fixed when it spawned and no adapter can mutate it in flight, so a 409
+   * refused a write whose meaning was unchanged either way — it only made the
+   * user wait to express a choice that was going to apply later regardless.
+   *
+   * `approval` is the EXCEPTION, and 409s exactly as it used to. It is the
+   * app's only permission control: `auto` is what makes the daemon
+   * auto-approve every tool request. Accepting the write unconditionally meant
+   * a user could flip `auto → ask`, get a 200 and a chip reading `ask`, then
+   * send — and the turn that claimed the run in the window before the write
+   * committed would run fully auto-approved under a UI that said otherwise.
+   * For the two cosmetic fields an ACK that the NEXT turn honours is the whole
+   * promise; for this one, ACK has to mean applied.
    *
    * `model: null` / `effort: null` are real values — they clear the run back
    * to the CLI's own default (no `--model` / `--effort` flag), which an
@@ -280,32 +294,29 @@ export class ChatService {
       ...(patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
     };
-    // Captured before the write: BaseDao.updateById mutates this same
-    // identity-mapped entity, so `run.approval` reflects the NEW value the
-    // moment updateById returns — the revert path below needs the old one.
-    const previous = {
-      approval: run.approval,
-      model: run.model,
-      effort: run.effort,
-    };
-    if (this.registry.has(runId)) {
+    // Captured before the write: `updateById` mutates this same
+    // identity-mapped entity, so `run.approval` is already the NEW value by the
+    // time it returns — the revert below needs the old one.
+    const previousApproval = run.approval;
+    if (patch.approval !== undefined && this.registry.has(runId)) {
       throw new ConflictException(
         'RUN_BUSY',
-        'a turn is in flight — chat settings are locked until it settles',
+        'a turn is in flight — the approval mode is locked until it settles',
       );
     }
     await this.runDao.updateById(runId, changes, em);
-    // A turn may have claimed the run DURING the write above — after our
-    // pre-check but before the flush. sendMessage snapshots the run row in
-    // its own fork, so that turn may already be spawning under the pre-write
-    // settings. Refuse rather than ACK settings the in-flight turn won't
-    // honor: revert and 409. (A PATCH that fully lands BEFORE the claim is
-    // still honored — sendMessage re-reads the committed row after it claims.)
-    if (this.registry.has(runId)) {
-      await this.runDao.updateById(runId, previous, em);
+    // A turn may have claimed the run DURING the write — after the pre-check
+    // but before the flush — and `sendMessage` snapshots the row in its own
+    // fork, so that turn may already be spawning under the OLD mode. ACKing
+    // here would tell the user a permission mode the in-flight turn will not
+    // honour, so the approval half is reverted and refused. The model/effort
+    // half of the same PATCH is left applied: it only ever described the next
+    // turn, so nothing about it is untrue.
+    if (patch.approval !== undefined && this.registry.has(runId)) {
+      await this.runDao.updateById(runId, { approval: previousApproval }, em);
       throw new ConflictException(
         'RUN_BUSY',
-        'a turn started while the settings change was in flight — retry once it settles',
+        'a turn started while the approval change was in flight — retry once it settles',
       );
     }
     Object.assign(run, changes);
@@ -706,13 +717,28 @@ export class ChatService {
               );
               return;
             }
+            if (event.type === 'turn_model') {
+              // Named at session start, before any usage exists — this is what
+              // lets a run's FIRST request be scaled against the real window
+              // rather than an assumed one, provided some turn of that model
+              // has finished at least once this session.
+              this.partials.useModel(
+                runId,
+                adapter.getConfig().kind,
+                event.model,
+              );
+              return;
+            }
             if (event.type === 'turn_complete') {
               // The ONLY line carrying the model's window. Remembered so the
               // next turn's live context figure has something to scale
-              // against from its very first request.
+              // against from its very first request — under the model that
+              // REPORTED it, so a turn that fell back to a second model
+              // cannot file that model's window under the requested one.
               this.partials.rememberWindow(
                 runId,
                 event.usage?.contextWindowTokens ?? null,
+                event.usage?.contextModel ?? null,
               );
             }
             if (event.type === 'slash_commands') {
@@ -907,7 +933,7 @@ export class ChatService {
           // written but that no durable item covers. Persist it once, flagged,
           // so an afterSeq replay shows the same transcript they saw. The only
           // item row the live plane is ever allowed to create.
-          const tail = this.partials.takeTail(runId, SINGLE_AGENT_NODE);
+          const tail = this.partials.takeTail(runId, SINGLE_AGENT_NODE, null);
           if (tail !== null) {
             await this.persist(em, runId, seq++, 'message', 'assistant', {
               text: tail,

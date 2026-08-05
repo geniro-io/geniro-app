@@ -16,13 +16,33 @@ import {
  * button, a run start) hangs forever with no feedback.
  *
  * It must stay ABOVE the daemon's own slowest bounded route, or the client
- * aborts first and throws away the daemon's own explanation. Today that is the
- * MCP listing: a 5s version probe plus `CLAUDE_MCP_LIST_TIMEOUT_MS` (20s) —
- * 25s, so there is 5s of headroom. Lowering this without lowering that one
- * costs the user the daemon's stated reason for a slow read. No test spans the
- * two packages, so this note is the link.
+ * aborts first and throws away the daemon's own explanation. Every route
+ * except the MCP ones clears that comfortably; the MCP routes do not, and they
+ * carry {@link MCP_ROUTE_TIMEOUT_MS} instead.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The budget for the MCP routes, which are the one exception to the ceiling
+ * above.
+ *
+ * Reading a folder's MCP servers is not a lookup: the CLI HEALTH-CHECKS,
+ * dialling every configured server — which means STARTING it. A `docker run`
+ * or a `uvx` server that has to fetch first routinely takes tens of seconds,
+ * so the daemon allows `CLAUDE_MCP_LIST_TIMEOUT_MS` (45s) for it. Against the
+ * flat 30s above the CLIENT aborted first: the daemon's own sentence about
+ * what went wrong never arrived, and the panel showed a bare transport failure
+ * for a folder whose servers were merely slow.
+ *
+ * Deliberately ABOVE that daemon deadline, so the daemon always gives up first
+ * and the reason the user reads is the specific one it produced. It belongs
+ * HERE rather than at a call site because three call sites reach these routes
+ * — the chat panel's listing, the builder's, and the enable/disable write,
+ * whose handler re-dials on a lapsed cache — and giving only one of them the
+ * budget leaves the other two reproducing the defect. No test spans the two
+ * packages, so this note is the link.
+ */
+export const MCP_ROUTE_TIMEOUT_MS = 60_000;
 
 /** `/v1/chats/r1/items?afterSeq=3` — what the uniform error names. */
 const routeOf = (url: string): string => {

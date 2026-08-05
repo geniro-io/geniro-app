@@ -45,6 +45,31 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('reports the model init names, so a window can be applied before turn end', () => {
+    // The whole per-model window feature hangs off this one field. `assistant`
+    // lines carry the CANONICAL id (`claude-opus-5`), which is not the key
+    // `result.modelUsage` uses (`claude-opus-5[1m]`) and so cannot match a
+    // remembered window — init's is the one that can. A wrong field name here
+    // ships green and leaves the feature inert.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-1',
+        model: 'claude-opus-5[1m]',
+      }),
+    ).toEqual([
+      { type: 'session', sessionId: 'sess-1' },
+      { type: 'turn_model', model: 'claude-opus-5[1m]' },
+    ]);
+  });
+
+  it('says nothing about the model when init names none', () => {
+    expect(
+      mapClaudeMessage({ type: 'system', subtype: 'init', model: 42 }),
+    ).toEqual([]);
+  });
+
   it('ignores non-init system events (hook_*, post_turn_summary)', () => {
     expect(
       mapClaudeMessage({ type: 'system', subtype: 'hook_started' }),
@@ -141,6 +166,7 @@ describe('mapClaudeMessage', () => {
           // The final request's prompt (4 + 12 + 996), not the 2_812 roll-up.
           contextTokens: 1012,
           contextWindowTokens: 1_000_000,
+          contextModel: expect.any(String),
           costUsd: 0.14,
         },
         stopReason: 'end_turn',

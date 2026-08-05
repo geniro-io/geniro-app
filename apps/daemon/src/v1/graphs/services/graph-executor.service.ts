@@ -816,9 +816,14 @@ export class GraphExecutorService {
         await this.nodeStateDao.setStatus(
           runId,
           node.id,
-          // agentKind stamps which CLI runs this turn — the terminal mirror
-          // must resume against it even after the workflow YAML is edited.
-          { status: 'running', startedAt: Date.now(), agentKind: node.agent },
+          // agentKind and model stamp WHAT ran this turn — the terminal mirror
+          // must resume against both even after the workflow YAML is edited.
+          {
+            status: 'running',
+            startedAt: Date.now(),
+            agentKind: node.agent,
+            model: node.model ?? null,
+          },
           em,
         );
         await persistItem(node.id, 'status', null, {

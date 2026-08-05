@@ -3,11 +3,11 @@ import {
   ArrowRightLeft,
   ChevronDown,
   ChevronUp,
-  Loader2,
 } from 'lucide-react';
 import { memo, useState } from 'react';
 
 import { avatarTone, initialsOf } from '../components/ui/avatar';
+import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { MarkdownContent } from './markdown-content';
 import { TranscriptEntryView } from './transcript-entry';
@@ -194,12 +194,7 @@ export const CallBlock = memo(function CallBlock({
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
             {caller ? `${caller} → ${callee}` : callee}
           </span>
-          {status === 'running' ? (
-            <Loader2
-              aria-hidden="true"
-              className="size-3.5 shrink-0 animate-spin text-primary"
-            />
-          ) : null}
+          {status === 'running' ? <Spinner className="size-3.5" /> : null}
           <StatusBadge status={status} />
         </div>
         <div className="flex flex-col gap-2.5 p-3">

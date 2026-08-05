@@ -1,7 +1,8 @@
-import { ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { memo, useState } from 'react';
 
 import { CodeBlock } from '../components/ui/code-block';
+import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { DiffView } from './diff-view';
 import { toolInputBody, toolResultBody } from './tool-render';
@@ -115,12 +116,7 @@ export const ToolGroup = memo(function ToolGroup({
           )}
         />
         <span className="truncate">{toolGroupSummary(group.pairs)}</span>
-        {running ? (
-          <Loader2
-            aria-hidden="true"
-            className="size-3 shrink-0 animate-spin text-primary"
-          />
-        ) : null}
+        {running ? <Spinner /> : null}
       </button>
       {open ? (
         <div className="flex flex-col gap-1.5 text-muted-foreground">

@@ -48,9 +48,14 @@ describe('ContextMeter', () => {
     expect(container.textContent).toContain('ctx 250k / 1M');
   });
 
-  it('falls back to the assumed window only when the CLI named none', () => {
+  it('shows the count bare when the CLI named no window', () => {
+    // No assumed denominator. Substituting a flat 200k made a 1M-window model
+    // read as a fifth full before its first turn had finished — the count is
+    // true, the fraction would not have been.
     render(<ContextMeter contextTokens={100_000} contextWindowTokens={null} />);
-    expect(ringLabel()).toBe('Context 50% full');
+    expect(ringLabel()).toBeNull();
+    expect(container.textContent).toContain('ctx 100k');
+    expect(container.textContent).not.toContain('/');
   });
 
   it('treats a zero window as no window at all', () => {
@@ -59,8 +64,9 @@ describe('ContextMeter', () => {
     // any number it is given), and dividing by it puts "Infinity" in the one
     // place the figure is legible.
     render(<ContextMeter contextTokens={100_000} contextWindowTokens={0} />);
-    expect(ringLabel()).toBe('Context 50% full');
-    expect(container.textContent).toContain('ctx 100k / 200k');
+    expect(ringLabel()).toBeNull();
+    expect(container.textContent).toContain('ctx 100k');
+    expect(container.textContent).not.toContain('/');
   });
 
   it('runs green, then yellow, then red — AT the 70% and 90% marks', () => {

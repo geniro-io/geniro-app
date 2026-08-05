@@ -918,7 +918,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
   });
 
-  it('updateSettings flips the mode between turns, 409s mid-turn, and 400s a cursor plan mode', async () => {
+  it('updateSettings flips the mode between turns, LOCKS it mid-turn, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     const updated = await service.updateSettings(run.id, {
@@ -926,11 +926,18 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     expect(updated.approval).toBe('acceptEdits');
 
-    // A claimed run is a turn in flight — settings are locked.
+    // A claimed run is a turn in flight. Approval is the ONE field that still
+    // refuses: it is the permission control, so ACKing a mode the running turn
+    // cannot honour would state a safety posture the user does not have.
     expect(registry.tryClaim(run.id)).toBe(true);
     await expect(
       service.updateSettings(run.id, { approval: 'auto' }),
     ).rejects.toThrow('a turn is in flight');
+    // ...while the cosmetic fields go through on the same claimed run.
+    const midTurn = await service.updateSettings(run.id, { model: 'opus' });
+    expect(midTurn.model).toBe('opus');
+    expect(midTurn.approval).toBe('acceptEdits');
+    registry.release(run.id);
 
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
@@ -1052,32 +1059,93 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(updated.effort).toBe('ultracode');
   });
 
-  it('locks the effort mid-turn like the model — a claimed run 409s and keeps the stored level', async () => {
-    const { service, registry } = setup();
+  it('scales the live meter from the FIRST request once a model’s window is known', async () => {
+    // End to end for the per-model window: the CLI names its model at session
+    // start, the turn's result line reports that model's window, and the NEXT
+    // chat on the same model is scaled from its very first request — instead
+    // of showing an unscaled count until a turn finished.
+    const { service, claude, deltas } = setup();
+    const first = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(first.id, 'go');
+    claude.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.emit({ type: 'context_progress', contextTokens: 1_000 });
+    await drain();
+    // Nothing has reported a window yet, so the meter says so rather than
+    // inventing one.
+    expect(deltas.at(-1)?.contextWindowTokens).toBeNull();
+    claude.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        contextTokens: 1_000,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-opus-5[1m]',
+        costUsd: null,
+      },
+      stopReason: 'end_turn',
+    });
+    claude.finish();
+    await drain();
+
+    const second = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(second.id, 'go');
+    claude.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.emit({ type: 'context_progress', contextTokens: 26_000 });
+    await drain();
+    expect(deltas.at(-1)).toMatchObject({
+      runId: second.id,
+      contextTokens: 26_000,
+      contextWindowTokens: 1_000_000,
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('a mid-turn model change reaches the NEXT turn and leaves the running one alone', async () => {
+    // The whole contract behind the unlocked composer chips. The running turn's
+    // argv was fixed when it spawned and nothing can reach it — so the write is
+    // accepted, the in-flight turn keeps what it started with, and the change
+    // shows up on the turn after it.
+    const { service, claude } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
+      model: 'sonnet',
       effort: 'low',
     });
-    expect(registry.tryClaim(run.id)).toBe(true);
-    await expect(
-      service.updateSettings(run.id, { effort: 'max' }),
-    ).rejects.toThrow('a turn is in flight');
-    registry.release(run.id);
-    const after = await service.updateSettings(run.id, { model: 'opus' });
-    expect(after.effort).toBe('low');
+    await service.sendMessage(run.id, 'first');
+    const firstTurn = claude.start.mock.calls[0]![0] as AgentTurnInput;
+    expect(firstTurn.model).toBe('sonnet');
+
+    // Mid-turn: the run is claimed and the adapter is streaming.
+    const midTurn = await service.updateSettings(run.id, {
+      model: 'opus',
+      effort: 'max',
+    });
+    expect(midTurn.model).toBe('opus');
+    expect(midTurn.effort).toBe('max');
+    // The turn already in flight is untouched — the same object it spawned
+    // with, not retro-edited.
+    expect(firstTurn.model).toBe('sonnet');
+    expect(firstTurn.effort).toBe('low');
+
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'second');
+    const secondTurn = claude.start.mock.calls[1]![0] as AgentTurnInput;
+    expect(secondTurn.model).toBe('opus');
+    expect(secondTurn.effort).toBe('max');
+    claude.finish();
+    await drain();
   });
 
-  it('locks the model mid-turn like the approval mode — a claimed run 409s', async () => {
-    const { service, registry } = setup();
-    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-    expect(registry.tryClaim(run.id)).toBe(true);
-    await expect(
-      service.updateSettings(run.id, { model: 'opus' }),
-    ).rejects.toThrow('a turn is in flight');
-  });
-
-  it('reverts and 409s a settings flip when a turn claims the run during the write — never ACKs a mode the in-flight turn cannot honor', async () => {
+  it('reverts ONLY the approval half of a write that races a turn claiming the run', async () => {
+    // The claim lands between the pre-check and the flush, so the in-flight
+    // turn may already be spawning under the old mode. The approval change is
+    // refused and rolled back rather than ACKed; the model change stays
+    // applied, because it only ever described the next turn and nothing about
+    // it is untrue.
     const { service, runDao, registry } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -1085,8 +1153,6 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'auto',
       model: 'sonnet',
     });
-    // Model a concurrent sendMessage claiming the run mid-write: the claim
-    // lands after updateSettings' pre-check but before its post-check.
     const originalUpdate = runDao.updateById.bind(runDao);
     let claimedDuringWrite = false;
     runDao.updateById = async (id: string, data: Partial<Run>) => {
@@ -1097,15 +1163,18 @@ describe('ChatService — approval modes (parity M1)', () => {
       }
       return n;
     };
+
     await expect(
       service.updateSettings(run.id, { approval: 'ask', model: 'opus' }),
     ).rejects.toThrow('in flight');
-    // Reverted WHOLE: mode back to 'auto' and model back to 'sonnet'. A revert
-    // that restored only the mode would leave the in-flight turn's own run row
-    // naming a model that turn never spawned with.
-    const reverted = await runDao.getById(run.id);
-    expect(reverted?.approval).toBe('auto');
-    expect(reverted?.model).toBe('sonnet');
+    // The race the name promises actually happened — without this the
+    // monkeypatch could be deleted and the assertions below would still pass.
+    expect(claimedDuringWrite).toBe(true);
+    expect(registry.has(run.id)).toBe(true);
+
+    const stored = await runDao.getById(run.id);
+    expect(stored?.approval).toBe('auto');
+    expect(stored?.model).toBe('opus');
   });
 
   it('honors a settings flip that committed just before the claim — sendMessage re-reads the committed row after claiming', async () => {

@@ -32,7 +32,13 @@ import { ProcessRegistry } from './process-registry';
  */
 const DEFAULT_MCP_TTL_MS = 5 * 60_000;
 
-/** Shown when the adapter itself misbehaved rather than the CLI refusing. */
+/**
+ * Shown when the adapter itself misbehaved rather than the CLI refusing.
+ *
+ * The thrown error's own message is appended by {@link listingFailure}: this
+ * arm only fires when an adapter broke its contract, which is precisely the
+ * case where nobody can guess what happened from the sentence alone.
+ */
 const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
 
 /**
@@ -270,7 +276,7 @@ export class AgentMcpService {
         this.logger.warn(
           `listing ${agent} MCP servers failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return { ok: false, reason: MCP_LIST_FAILED_REASON };
+        return { ok: false, reason: this.listingFailure(err) };
       })
       .then((result) => {
         // ONLY a successful read is remembered. "No servers" is a claim about
@@ -289,6 +295,22 @@ export class AgentMcpService {
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, ask);
     return { projectDir, adapter, result: await ask };
+  }
+
+  /**
+   * The refusal for a listing that THREW, keeping what the throw said.
+   *
+   * An adapter is not supposed to throw here, so this arm only fires when one
+   * broke its contract — which is exactly the case where the flat sentence
+   * alone leaves nobody able to tell a missing binary from a deadline from a
+   * folder the CLI would not read. The panel is the only place this ever
+   * surfaces, and it has room for the line.
+   */
+  private listingFailure(err: unknown): string {
+    const detail = (err instanceof Error ? err.message : String(err)).trim();
+    return detail
+      ? `${MCP_LIST_FAILED_REASON} — ${detail}`
+      : MCP_LIST_FAILED_REASON;
   }
 
   /**

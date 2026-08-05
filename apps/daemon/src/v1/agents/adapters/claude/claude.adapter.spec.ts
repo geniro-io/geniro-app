@@ -27,6 +27,7 @@ import type {
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
+  CLAUDE_MODEL_FLAG,
   CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_RESUME_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
@@ -158,6 +159,7 @@ describe('ClaudeAdapter', () => {
           outputTokens: 1,
           contextTokens: 1,
           contextWindowTokens: null,
+          contextModel: null,
           costUsd: 0.01,
         },
         stopReason: 'end_turn',
@@ -1502,7 +1504,51 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
   });
 
   it('resumes the stored claude session', () => {
-    expect(new ClaudeAdapter().terminalCommand('sess-42')).toEqual({
+    expect(
+      new ClaudeAdapter().terminalCommand({
+        sessionId: 'sess-42',
+        model: null,
+      }),
+    ).toEqual({
+      ok: true,
+      command: 'claude',
+      args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+    });
+  });
+
+  it('opens the mirror on the run’s OWN model, not the CLI default', () => {
+    // A mirror that resumed under claude's default was a different model with
+    // a different window sitting beside the chat it mirrors — which is what
+    // put a 200k context readout next to a 1M-window conversation.
+    expect(
+      new ClaudeAdapter().terminalCommand({
+        sessionId: 'sess-42',
+        model: 'claude-opus-5[1m]',
+      }),
+    ).toEqual({
+      ok: true,
+      command: 'claude',
+      args: [
+        CLAUDE_MODEL_FLAG,
+        'claude-opus-5[1m]',
+        CLAUDE_RESUME_FLAG,
+        'sess-42',
+      ],
+    });
+  });
+
+  it('omits the model flag for a run on the CLI’s default', () => {
+    // `--model ''` is not the same request as no flag at all.
+    expect(
+      new ClaudeAdapter().terminalCommand({ sessionId: 'sess-42', model: '  ' })
+        .ok,
+    ).toBe(true);
+    expect(
+      new ClaudeAdapter().terminalCommand({
+        sessionId: 'sess-42',
+        model: '  ',
+      }),
+    ).toEqual({
       ok: true,
       command: 'claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
@@ -1512,14 +1558,18 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
   it('refuses with no-session until a resumable session id is stored', () => {
     // Not a mirror target: launching the TUI without a resume id would open an
     // unrelated fresh conversation while claiming to show the run's own.
-    expect(new ClaudeAdapter().terminalCommand(null)).toEqual({
+    expect(
+      new ClaudeAdapter().terminalCommand({ sessionId: null, model: null }),
+    ).toEqual({
       ok: false,
       reason: 'no-session',
     });
   });
 
   it('refuses a whitespace-only session id instead of building a broken resume argv', () => {
-    expect(new ClaudeAdapter().terminalCommand(' \t\n ')).toEqual({
+    expect(
+      new ClaudeAdapter().terminalCommand({ sessionId: ' \t\n ', model: null }),
+    ).toEqual({
       ok: false,
       reason: 'no-session',
     });
@@ -1527,7 +1577,9 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
 
   it('refuses a zero-width-only session id instead of an invisible resume target', () => {
     // U+200B is not trimmed as whitespace, so only the id PATTERN rejects it.
-    expect(new ClaudeAdapter().terminalCommand('\u200b')).toEqual({
+    expect(
+      new ClaudeAdapter().terminalCommand({ sessionId: '\u200b', model: null }),
+    ).toEqual({
       ok: false,
       reason: 'no-session',
     });
@@ -1537,7 +1589,12 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
     // The mirror spawns the same binary a turn would — resolved per access, so
     // a Settings cliPaths override reaches the TUI too.
     vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
-    expect(new ClaudeAdapter().terminalCommand('sess-42')).toEqual({
+    expect(
+      new ClaudeAdapter().terminalCommand({
+        sessionId: 'sess-42',
+        model: null,
+      }),
+    ).toEqual({
       ok: true,
       command: '/opt/tools/claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],

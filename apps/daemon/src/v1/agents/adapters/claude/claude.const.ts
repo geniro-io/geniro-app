@@ -209,16 +209,20 @@ export const CLAUDE_MCP_LIST_ARGS: readonly string[] = ['mcp', 'list'];
 
 /**
  * Deadline for that listing. Far above the 10s utility default because the
- * command HEALTH-CHECKS: it dials every configured server, and an unreachable
- * HTTP one is only known to be unreachable once its own connect times out.
+ * command HEALTH-CHECKS: it dials every configured server, which means
+ * STARTING it — a `docker run` or a `uvx` server that has to fetch before it
+ * can answer takes tens of seconds, and an unreachable HTTP one is only known
+ * to be unreachable once its own connect times out. Observed on 2.1.220: a
+ * warm 11-server folder took ~9s; a cold one is far slower, and 20s here
+ * reported "claude did not answer" for a listing that was merely starting up.
  *
- * Bounded ABOVE by the renderer's own 30s per-request budget
- * (`daemon-api.ts` REQUEST_TIMEOUT_MS), which starts strictly earlier and
- * covers the version probe too: at 30s here the client always aborted first,
- * so the daemon's "could not read" sentence never reached the panel and the
- * user was told "No servers" for a folder that had some.
+ * Bounded ABOVE by the renderer's per-request budget for THIS route
+ * (`use-agent-mcp.ts` MCP_LIST_TIMEOUT_MS), which is deliberately longer so the
+ * daemon always gives up first and the reason the user reads is the specific
+ * one produced here. Raising this past that budget puts the client back in
+ * front, and the panel goes back to a bare transport failure.
  */
-export const CLAUDE_MCP_LIST_TIMEOUT_MS = 20_000;
+export const CLAUDE_MCP_LIST_TIMEOUT_MS = 45_000;
 
 /**
  * Row status markers — the WORDING only, deliberately WITHOUT the glyph that

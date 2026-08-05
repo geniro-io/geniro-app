@@ -32,15 +32,15 @@ const DEFAULT_LABEL = 'default effort';
 export function EffortSelect({
   efforts,
   value,
-  disabled = false,
+  nextTurnOnly = false,
   onChange,
   className,
 }: {
   efforts: AgentEffort[];
   /** The chosen level, or null for the CLI's default. */
   value: string | null;
-  /** Locked while a turn is running (matches the daemon's 409 RUN_BUSY). */
-  disabled?: boolean;
+  /** A turn is running — this pick lands on the NEXT one. */
+  nextTurnOnly?: boolean;
   onChange: (effort: string | null) => void;
   className?: string;
 }): React.JSX.Element | null {
@@ -57,11 +57,10 @@ export function EffortSelect({
       variant="ghost"
       aria-label="Reasoning effort"
       title={
-        disabled
-          ? 'The reasoning effort is locked while a turn is running'
+        nextTurnOnly
+          ? 'Reasoning effort — applies to your next message'
           : 'Reasoning effort'
       }
-      disabled={disabled}
       className={className}
       leadingIcon={<Gauge />}
       value={value ?? CLI_DEFAULT_EFFORT}

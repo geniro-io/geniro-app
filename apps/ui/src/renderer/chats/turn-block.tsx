@@ -2,6 +2,7 @@ import { memo } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
 import { CallBlock } from './call-block';
+import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { formatClockTime } from './relative-time';
 import { ToolGroup } from './tool-group';
@@ -71,6 +72,13 @@ export const TurnBlock = memo(function TurnBlock({
       );
     }
     if (item.kind === 'reasoning') {
+      // A LIVE row (a reasoning stretch, or the agent working silently) owns
+      // its own clock and draws itself — it carries no text to flatten here,
+      // and rendering it bare would print an empty line. Only DURABLE
+      // reasoning text takes the inline path.
+      if (liveRowKind(item.payload) !== null) {
+        return <TranscriptItem key={item.id} item={item} nodes={nodes} />;
+      }
       return (
         <div key={item.id} data-role="reasoning">
           <MarkdownContent

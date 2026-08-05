@@ -418,8 +418,8 @@ export interface RunDeltaEvent {
   nodeId: string | null;
   text: string;
   /**
-   * Reasoning tokens spent so far this turn, or null when the agent is not
-   * (or no longer) thinking.
+   * Reasoning tokens spent in the CURRENT stretch, or null when the agent is
+   * not (or no longer) thinking.
    *
    * Rides the SAME event as the text tail rather than a second channel: both
    * answer "what is this agent doing right now", both are ephemeral, and one
@@ -427,20 +427,31 @@ export interface RunDeltaEvent {
    * to carry — headless claude redacts it — so a running total is the whole
    * signal.
    *
-   * CUMULATIVE OVER THE TURN, not over one reasoning stretch: the CLI restarts
-   * its own count each time the agent breaks off to write, which made the
-   * number appear to reset mid-turn.
+   * PER STRETCH, not cumulative over the turn: a turn that thinks, runs tools,
+   * then thinks again is two separate waits, and each is shown as its own row
+   * with its own count. A turn total spanning them read as one endless
+   * "thinking" whose number never went back to zero.
    */
   thinkingTokens: number | null;
   /**
-   * Epoch ms when this turn's FIRST reasoning began, or null when the agent is
-   * not reasoning right now.
+   * Epoch ms when the CURRENT reasoning stretch began, or null when the agent
+   * is not reasoning right now.
    *
    * A timestamp rather than an elapsed number so the client owns the clock: a
    * duration computed here would be frozen at publish time and would need a
    * delta per second to keep ticking.
    */
   thinkingSince: number | null;
+  /**
+   * Which reasoning stretch of this turn the two fields above describe,
+   * counting from 1 — or null when the agent is not reasoning.
+   *
+   * The value carries no meaning of its own; it exists so a client can tell a
+   * NEW stretch from more deltas about the current one. Without it, two
+   * stretches separated by tool calls are indistinguishable on the wire from
+   * one long stretch, and a renderer has nothing to key a fresh row on.
+   */
+  thinkingStretch: number | null;
   /**
    * Prompt-side tokens as of the turn's most recent request — how full the
    * window is RIGHT NOW.
@@ -452,8 +463,10 @@ export interface RunDeltaEvent {
   contextTokens: number | null;
   /**
    * The window `contextTokens` is measured against, as last reported for this
-   * run. Remembered across turns because it rides the `result` line only, so a
-   * turn's first request has none of its own. Null until a turn has completed.
+   * run. Remembered across turns AND across runs on the same model, because it
+   * rides the `result` line only and a turn's first request has none of its
+   * own. Null until some turn — this run's, or an earlier one on the same
+   * model this session — has reported one.
    */
   contextWindowTokens: number | null;
 }

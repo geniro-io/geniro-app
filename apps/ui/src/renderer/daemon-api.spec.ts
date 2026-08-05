@@ -4,6 +4,7 @@ import type { DaemonHandle } from '../shared/contracts';
 import {
   createDaemonApis,
   daemonErrorStatus,
+  MCP_ROUTE_TIMEOUT_MS,
   REQUEST_TIMEOUT_MS,
 } from './daemon-api';
 
@@ -160,5 +161,23 @@ describe('daemonErrorStatus', () => {
     ).toBeNull();
     expect(daemonErrorStatus('failed (404)')).toBeNull();
     expect(daemonErrorStatus(undefined)).toBeNull();
+  });
+});
+
+describe('the MCP route budget', () => {
+  it('exceeds the daemon’s own deadline for the same command', () => {
+    // The invariant no test could otherwise span: `CLAUDE_MCP_LIST_TIMEOUT_MS`
+    // in the daemon package is 45s, and the client must give up strictly
+    // LATER — otherwise it aborts first and the daemon's specific sentence
+    // about what went wrong never reaches the panel, which is the whole reason
+    // this route has a budget of its own. Restated here rather than imported:
+    // the renderer does not depend on the daemon package, so a change there
+    // has to be mirrored here, and this assertion is what makes the obligation
+    // visible when it is not.
+    const DAEMON_MCP_LIST_TIMEOUT_MS = 45_000;
+    expect(MCP_ROUTE_TIMEOUT_MS).toBeGreaterThan(DAEMON_MCP_LIST_TIMEOUT_MS);
+    // ...and it is genuinely an override, not the shared ceiling under a new
+    // name — the shared one is what it exists to escape.
+    expect(MCP_ROUTE_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
   });
 });

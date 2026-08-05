@@ -104,31 +104,29 @@ export interface CreateMirrorInput {
   source: Observable<string>;
 }
 
-interface Session {
+/** What both kinds carry: identity, retained output, and lifecycle. */
+interface SessionBase {
   id: string;
-  kind: TerminalKind;
   runId: string;
   nodeId: string | null;
   resumeSessionId: string | null;
   cwd: string;
-  /**
-   * The process this session mirrors, or null for a `live` session — which
-   * watches a turn someone else spawned and owns no child of its own. Every
-   * process-touching path (write, resize, kill, the group-SIGKILL escalation)
-   * is guarded on it: a null pty has no pid, and a pid-shaped default reaching
-   * `killProcessGroup` would signal the daemon's OWN group.
-   */
-  pty: PtyLike | null;
   /** Buffered output replayed to a (re)attaching client, newest-wins. */
   scrollback: CappedTextBuffer;
-  /** Unsubscribes a `live` session from its source on dispose. */
-  mirrorSub?: Subscription;
   status: TerminalStatus;
   exitCode: number | null;
   events: Subject<TerminalEvent>;
   createdAt: number;
-  killTimer?: NodeJS.Timeout;
+  /** How long an exited session's final screen stays re-attachable. */
   evictTimer?: NodeJS.Timeout;
+}
+
+/** A session over a PTY child THIS service spawned. */
+interface InteractiveSession extends SessionBase {
+  kind: 'interactive';
+  /** Always present: the kind IS the guarantee that there is a process. */
+  pty: PtyLike;
+  killTimer?: NodeJS.Timeout;
   /**
    * Set by {@link TerminalSessionsService.dispose} on a running session: the user closed
    * this mirror on purpose, so on exit it is forgotten immediately instead of
@@ -136,6 +134,24 @@ interface Session {
    */
   disposedExplicitly?: boolean;
 }
+
+/** A session over a byte stream someone else produces — no child of its own. */
+interface LiveSession extends SessionBase {
+  kind: 'live';
+  /** Unsubscribes this session from its source on settle. */
+  mirrorSub?: Subscription;
+}
+
+/**
+ * The two kinds, discriminated by `kind` — ONE discriminator, not a `kind`
+ * string beside a nullable `pty` that a reader has to keep in agreement by
+ * hand. A `live` session structurally has no `pty`, `killTimer` or
+ * `disposedExplicitly` and an `interactive` one has no `mirrorSub`, so the
+ * process-touching paths (write, resize, kill, the group-SIGKILL escalation)
+ * cannot be reached for a session with no pid to aim at — a pid-shaped default
+ * reaching `killProcessGroup` would signal the daemon's OWN group.
+ */
+type Session = InteractiveSession | LiveSession;
 
 /**
  * pnpm extracts node-pty's prebuilt `spawn-helper` without its exec bit, which
@@ -174,8 +190,8 @@ function ensureSpawnHelperExecutable(): void {
  * Named for SESSIONS rather than for PTYs because that is what it owns, and
  * because what it owns is the same for both kinds: lifecycle, scrollback
  * buffering for (re)attach replay, byte fan-out, and settling. Only
- * spawn/write/resize/kill are PTY-specific, and each is guarded on the session
- * having a process at all.
+ * spawn/write/resize/kill are PTY-specific, and each of those narrows to the
+ * `interactive` arm of {@link Session} before it can name a process.
  *
  * For the spawning half: spawn is env-stripped via
  * {@link buildChildEnv}, and every PTY child registers with
@@ -234,7 +250,7 @@ export class TerminalSessionsService {
       throw err;
     }
 
-    const session: Session = {
+    const session: InteractiveSession = {
       id,
       kind: 'interactive',
       runId: input.runId,
@@ -301,7 +317,7 @@ export class TerminalSessionsService {
    */
   createMirror(input: CreateMirrorInput): TerminalSessionWire {
     const id = randomUUID();
-    const session: Session = {
+    const session: LiveSession = {
       id,
       kind: 'live',
       runId: input.runId,
@@ -310,7 +326,6 @@ export class TerminalSessionsService {
       // pinned to any one CLI session the way an interactive `--resume` is.
       resumeSessionId: null,
       cwd: input.cwd,
-      pty: null,
       scrollback: new CappedTextBuffer(),
       status: 'running',
       exitCode: null,
@@ -387,7 +402,7 @@ export class TerminalSessionsService {
    */
   write(id: string, data: string): void {
     const session = this.session(id);
-    if (session.pty && session.status === 'running') {
+    if (session.kind === 'interactive' && session.status === 'running') {
       session.pty.write(data);
     }
   }
@@ -395,7 +410,7 @@ export class TerminalSessionsService {
   /** No-op for a `live` session: nothing is rendering to a fixed grid. */
   resize(id: string, cols: number, rows: number): void {
     const session = this.session(id);
-    if (session.pty && session.status === 'running') {
+    if (session.kind === 'interactive' && session.status === 'running') {
       session.pty.resize(clamp(cols, 1, MAX_COLS), clamp(rows, 1, MAX_ROWS));
     }
   }
@@ -434,7 +449,7 @@ export class TerminalSessionsService {
     if (!session || session.status === 'exited') {
       return;
     }
-    if (!session.pty) {
+    if (session.kind === 'live') {
       // A `live` session owns no process, so there is nothing to signal and
       // nothing to escalate against — settling it IS the kill. Guarded here
       // rather than at the call sites so the group-SIGKILL below can never be
@@ -442,9 +457,7 @@ export class TerminalSessionsService {
       this.settleMirror(session);
       return;
     }
-    // Captured now: `pty` is nullable on the session, and the escalation below
-    // runs in a later tick where that narrowing no longer holds.
-    const pty = session.pty;
+    const { pty } = session;
     try {
       pty.kill();
     } catch {
@@ -471,7 +484,7 @@ export class TerminalSessionsService {
    */
   dispose(id: string): void {
     const session = this.session(id);
-    if (!session.pty) {
+    if (session.kind === 'live') {
       // A `live` session is forgotten at once: the `closing` limbo below exists
       // to stop a reopen racing a second `--resume` onto one CLI session, and a
       // mirror spawns nothing there could be a second of. Its SOURCE keeps
@@ -523,7 +536,7 @@ export class TerminalSessionsService {
    * dispose can both land, and a second `exit` event would tell an attached
    * client the mirror ended twice.
    */
-  private settleMirror(session: Session): void {
+  private settleMirror(session: LiveSession): void {
     if (session.status === 'exited') {
       return;
     }

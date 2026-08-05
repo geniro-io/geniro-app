@@ -1,48 +1,9 @@
-import { EventEmitter } from 'node:events';
-
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { fakeSpawn } from '../__tests__/fake-child';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
-import type { SpawnedProcess, SpawnFn } from './spawn-cli';
 import { runHeadlessCli } from './spawn-cli';
-
-// ── Child fake that captures the env the spawn was given ──────────────────────
-class FakeReadable extends EventEmitter {
-  setEncoding(): this {
-    return this;
-  }
-}
-class FakeWritable extends EventEmitter {
-  write(): boolean {
-    return true;
-  }
-  end(): this {
-    return this;
-  }
-}
-class FakeChild extends EventEmitter {
-  readonly stdout = new FakeReadable();
-  readonly stderr = new FakeReadable();
-  readonly stdin = new FakeWritable();
-  kill(): boolean {
-    return true;
-  }
-}
-
-function fakeSpawn(): {
-  spawn: SpawnFn;
-  child: FakeChild;
-  captured: { env?: NodeJS.ProcessEnv };
-} {
-  const child = new FakeChild();
-  const captured: { env?: NodeJS.ProcessEnv } = {};
-  const spawn: SpawnFn = (_command, _args, options) => {
-    captured.env = options.env;
-    return child as unknown as SpawnedProcess;
-  };
-  return { spawn, child, captured };
-}
 
 // The credential-isolation boundary is a CLAUDE.md hard rule: a spawned agent
 // must never inherit the daemon's GENIRO_-prefixed config/secrets, and the

@@ -1,41 +1,8 @@
-import { EventEmitter } from 'node:events';
-
 import { describe, expect, it } from 'vitest';
 
+import { fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent } from '../adapters/adapter.types';
-import type { SpawnedProcess, SpawnFn } from './spawn-cli';
 import { runHeadlessCli } from './spawn-cli';
-
-// ── Minimal synchronous child-process fake (mirrors the sibling spawn specs) ──
-class FakeReadable extends EventEmitter {
-  setEncoding(): this {
-    return this;
-  }
-  emitData(chunk: string): void {
-    this.emit('data', chunk);
-  }
-}
-class FakeWritable extends EventEmitter {
-  write(): boolean {
-    return true;
-  }
-  end(): this {
-    return this;
-  }
-}
-class FakeChild extends EventEmitter {
-  readonly stdout = new FakeReadable();
-  readonly stderr = new FakeReadable();
-  readonly stdin = new FakeWritable();
-  kill(): boolean {
-    return true;
-  }
-}
-
-function fakeSpawn(): { spawn: SpawnFn; child: FakeChild } {
-  const child = new FakeChild();
-  return { spawn: () => child as unknown as SpawnedProcess, child };
-}
 
 describe('runHeadlessCli — the raw stdio tee', () => {
   it('tees both streams verbatim, and still parses stdout as before', async () => {

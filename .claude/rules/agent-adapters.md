@@ -154,10 +154,12 @@ or names.
 
 A helper that exists only for SPECS — a fixture, a process double, a builder —
 is not a `utils/` helper and never sits beside the code it doubles: it lives in
-a `__tests__/` directory at the level its specs share
-(`adapters/__tests__/fake-group-child.ts`, shared by the base's specs and both
-adapters'). See `daemon-module-structure.md` §`__tests__/` for why the
-directory, and not a filename suffix, is what keeps it out of `dist/`.
+a `__tests__/` directory at the level its specs share —
+`adapters/__tests__/fake-group-child.ts` (the base's specs and both adapters'),
+and `v1/agents/__tests__/fake-child.ts` one level UP, because the specs sharing
+the synchronous child double span `adapters/` AND `utils/`. See
+`daemon-module-structure.md` §`__tests__/` for why the directory, and not a
+filename suffix, is what keeps it out of `dist/`.
 
 ## Non-negotiables
 

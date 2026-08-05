@@ -1,5 +1,4 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdirSync,
@@ -15,8 +14,8 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import type { ClaudeModesCapability } from '../../chat.types';
-import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { spawnAnswering } from '../__tests__/fake-group-child';
 import type {
   AdapterConfig,
@@ -33,42 +32,14 @@ import {
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
 
-// ── Minimal synchronous child-process fake (no real I/O timing) ──────────────
-class FakeReadable extends EventEmitter {
-  setEncoding(): this {
-    return this;
-  }
-  emitData(chunk: string): void {
-    this.emit('data', chunk);
-  }
-}
-class FakeWritable extends EventEmitter {
-  written = '';
-  write(chunk: string): boolean {
-    this.written += chunk;
-    return true;
-  }
-  end(): this {
-    return this;
-  }
-}
-class FakeChild extends EventEmitter {
-  readonly stdout = new FakeReadable();
-  readonly stderr = new FakeReadable();
-  readonly stdin = new FakeWritable();
-  killSignal: NodeJS.Signals | null = null;
-  kills = 0;
-  kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
-    this.killSignal = signal;
-    this.kills += 1;
-    return true;
-  }
-}
-
 /**
  * A child that DIES when signalled, the way a real CLI does: `close` follows
  * the SIGTERM. The command probe cancels its own turn and then awaits `done`,
  * so a fake that swallowed the kill would hang the read instead of testing it.
+ *
+ * The one behavioural variant of the shared double, and it stays local because
+ * this is the only spec that needs it: `FakeChild` RECORDS what it was told and
+ * decides nothing, which is what keeps one double serviceable for six specs.
  */
 class KillableChild extends FakeChild {
   override kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
@@ -77,34 +48,6 @@ class KillableChild extends FakeChild {
     setTimeout(() => this.emit('close', null, signal), 0);
     return true;
   }
-}
-
-function fakeSpawn<C extends FakeChild = FakeChild>(
-  child: C = new FakeChild() as C,
-): {
-  spawn: SpawnFn;
-  child: C;
-  captured: {
-    command?: string;
-    args?: string[];
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  };
-} {
-  const captured: {
-    command?: string;
-    args?: string[];
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  } = {};
-  const spawn: SpawnFn = (command, args, options) => {
-    captured.command = command;
-    captured.args = args;
-    captured.cwd = options.cwd;
-    captured.env = options.env;
-    return child as unknown as SpawnedProcess;
-  };
-  return { spawn, child, captured };
 }
 
 /**

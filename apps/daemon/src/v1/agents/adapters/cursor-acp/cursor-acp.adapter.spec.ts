@@ -1,62 +1,13 @@
 import type { spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
-
-class FakeReadable extends EventEmitter {
-  setEncoding(): this {
-    return this;
-  }
-  emitData(chunk: string): void {
-    this.emit('data', chunk);
-  }
-}
-class FakeWritable extends EventEmitter {
-  written = '';
-  ended = false;
-  write(chunk: string): boolean {
-    this.written += chunk;
-    return true;
-  }
-  end(): this {
-    this.ended = true;
-    return this;
-  }
-}
-class FakeChild extends EventEmitter {
-  readonly stdout = new FakeReadable();
-  readonly stderr = new FakeReadable();
-  readonly stdin = new FakeWritable();
-  kill(): boolean {
-    return true;
-  }
-}
-
-function fakeSpawn(): {
-  spawn: SpawnFn;
-  child: FakeChild;
-  captured: { command?: string; args?: string[]; env?: NodeJS.ProcessEnv };
-} {
-  const child = new FakeChild();
-  const captured: {
-    command?: string;
-    args?: string[];
-    env?: NodeJS.ProcessEnv;
-  } = {};
-  const spawn: SpawnFn = (command, args, options) => {
-    captured.command = command;
-    captured.args = args;
-    captured.env = options.env;
-    return child as unknown as SpawnedProcess;
-  };
-  return { spawn, child, captured };
-}
 
 /** The frames the adapter wrote to the child's stdin, parsed. */
 function framesOn(child: FakeChild): Record<string, unknown>[] {

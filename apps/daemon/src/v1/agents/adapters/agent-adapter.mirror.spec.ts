@@ -1,8 +1,7 @@
-import { EventEmitter } from 'node:events';
-
 import { describe, expect, it } from 'vitest';
 
-import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
+import { fakeSpawn } from '../__tests__/fake-child';
+import type { SpawnFn } from '../utils/spawn-cli';
 import type {
   AdapterConfig,
   AgentEvent,
@@ -12,32 +11,6 @@ import type {
 } from './adapter.types';
 import { AgentAdapter } from './agent-adapter';
 import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
-
-// ── Minimal synchronous child fake (mirrors the sibling spawn specs) ──────────
-class FakeReadable extends EventEmitter {
-  setEncoding(): this {
-    return this;
-  }
-  emitData(chunk: string): void {
-    this.emit('data', chunk);
-  }
-}
-class FakeWritable extends EventEmitter {
-  write(): boolean {
-    return true;
-  }
-  end(): this {
-    return this;
-  }
-}
-class FakeChild extends EventEmitter {
-  readonly stdout = new FakeReadable();
-  readonly stderr = new FakeReadable();
-  readonly stdin = new FakeWritable();
-  kill(): boolean {
-    return true;
-  }
-}
 
 /**
  * The bare minimum an adapter author supplies. Built on `AgentAdapter` itself
@@ -99,8 +72,7 @@ const INPUT = (mirror: TurnStdioSink): AgentTurnInput => ({
 
 describe('AgentAdapter.start — the mirror contract', () => {
   it('banners the argv, tees both streams, then reports the settle', async () => {
-    const child = new FakeChild();
-    const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
+    const { spawn, child } = fakeSpawn();
     const { sink, log } = recordingSink();
 
     const handle = new BareAdapter(spawn, ['-p', '--model', 'x']).start(
@@ -143,8 +115,7 @@ describe('AgentAdapter.start — the mirror contract', () => {
     // `runHeadlessCli`, which owns the whole sink lifecycle — so the mirror is
     // told neither that a turn started nor that one ended, rather than being
     // handed a settle for a turn it was never told about.
-    const child = new FakeChild();
-    const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
+    const { spawn } = fakeSpawn();
     const { sink, log } = recordingSink();
     const adapter = new BareAdapter(spawn, [], true);
 
@@ -154,8 +125,7 @@ describe('AgentAdapter.start — the mirror contract', () => {
   });
 
   it('runs a turn with no mirror exactly as before', async () => {
-    const child = new FakeChild();
-    const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
+    const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
 
     const handle = new BareAdapter(spawn).start(

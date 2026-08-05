@@ -1,44 +1,8 @@
-import { EventEmitter } from 'node:events';
-
 import { describe, expect, it, vi } from 'vitest';
 
+import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent } from '../adapters/adapter.types';
-import type { SpawnedProcess, SpawnFn } from './spawn-cli';
 import { runHeadlessCli } from './spawn-cli';
-
-// ── Minimal synchronous child-process fake (mirrors the adapter specs) ────────
-class FakeReadable extends EventEmitter {
-  setEncoding(): this {
-    return this;
-  }
-  emitData(chunk: string): void {
-    this.emit('data', chunk);
-  }
-}
-class FakeWritable extends EventEmitter {
-  written = '';
-  write(chunk: string): boolean {
-    this.written += chunk;
-    return true;
-  }
-  end(): this {
-    return this;
-  }
-}
-class FakeChild extends EventEmitter {
-  readonly stdout = new FakeReadable();
-  readonly stderr = new FakeReadable();
-  readonly stdin = new FakeWritable();
-  kill(): boolean {
-    return true;
-  }
-}
-
-function fakeSpawn(): { spawn: SpawnFn; child: FakeChild } {
-  const child = new FakeChild();
-  const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
-  return { spawn, child };
-}
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -229,9 +193,7 @@ describe('runHeadlessCli process-group cancellation', () => {
     vi.useFakeTimers();
     const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
     try {
-      const child = new FakeChild();
-      Object.defineProperty(child, 'pid', { value: 4242 });
-      const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
+      const { spawn, child } = fakeSpawn(new FakeChild(4242));
 
       const handle = runHeadlessCli({
         command: 'claude',

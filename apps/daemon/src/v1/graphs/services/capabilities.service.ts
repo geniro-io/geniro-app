@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type {
+  AgentApprovalCapability,
   AgentPluginCapability,
   AgentTerminalCapability,
   CapabilitiesWire,
@@ -25,7 +26,20 @@ export class CapabilitiesService {
       claudeModes: this.claudeProbe.wireCapability(),
       plugins: this.pluginCapabilities(),
       interactiveTerminals: this.terminalCapabilities(),
+      approvals: this.approvalCapabilities(),
     };
+  }
+
+  /**
+   * Every registered CLI's approval modes, read off its own config — the same
+   * iterate-never-list rule as the two below, and the answer the composer's
+   * approval chip needs so it stops deciding by agent name.
+   */
+  private approvalCapabilities(): AgentApprovalCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      modes: [...adapter.getConfig().approval.modes],
+    }));
   }
 
   /**

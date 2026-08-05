@@ -19,6 +19,16 @@ export interface MenuItem {
    * separated from the choices above it ("Choose folder…").
    */
   action?: boolean;
+  /**
+   * Visible but not choosable — an option that exists and cannot be taken.
+   *
+   * Shown rather than dropped so the absence is explained instead of leaving
+   * the user to wonder where an entry went; pair it with {@link hint} carrying
+   * the reason ("not installed"). Blocked in BOTH ways a row can be taken: the
+   * native `disabled` stops the pointer, and `commit` refuses so a keyboard
+   * Enter on a highlighted row cannot slip past it.
+   */
+  disabled?: boolean;
 }
 
 /** A titled block of rows ("Recents", "Agents", "Workflows"). */
@@ -168,6 +178,9 @@ export function Menu({
   }
 
   const commit = (item: MenuItem): void => {
+    if (item.disabled) {
+      return;
+    }
     onSelect(item.value);
     onClose();
   };
@@ -267,10 +280,15 @@ export function Menu({
                       role="option"
                       title={item.title}
                       aria-selected={selected}
+                      disabled={item.disabled}
                       className={cn(
                         'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground',
                         '[&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
-                        active && 'bg-accent text-accent-foreground',
+                        active &&
+                          !item.disabled &&
+                          'bg-accent text-accent-foreground',
+                        item.disabled &&
+                          'cursor-not-allowed text-muted-foreground opacity-60',
                       )}
                       onMouseEnter={() => setHighlight(index)}
                       onClick={() => commit(item)}>

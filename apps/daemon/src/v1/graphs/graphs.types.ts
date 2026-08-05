@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-import { ClaudeModesCapabilitySchema } from '../agents/chat.types';
+import {
+  ChatApprovalModeSchema,
+  ClaudeModesCapabilitySchema,
+} from '../agents/chat.types';
 import {
   AgentKindSchema,
   type ItemKind,
@@ -445,6 +448,33 @@ export type AgentTerminalCapability = z.infer<
   typeof AgentTerminalCapabilitySchema
 >;
 
+/**
+ * The tool-approval modes ONE CLI honours — the wire home for
+ * `AdapterConfig.approval.modes`.
+ *
+ * It exists for the same reason as the two rows above, and after the same
+ * failure: with no per-CLI answer on the wire, the composer's approval chip
+ * hardcoded `agentKind === 'cursor-agent'` and rendered nothing, on the
+ * (once-true, now false) grounds that the CLI had no per-turn approval
+ * channel. ACP made `ask` and `acceptEdits` real, so the chip was hiding a
+ * control the user genuinely has — every cursor chat sat in `ask`, raising a
+ * permission card per tool, with no way to switch it off.
+ *
+ * A CLI that honours none reports an empty list, which is a fact the renderer
+ * can act on rather than a name it has to recognize.
+ */
+export const AgentApprovalCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    modes: z
+      .array(ChatApprovalModeSchema)
+      .describe('Approval modes this CLI honours, in no particular order'),
+  })
+  .meta({ id: 'AgentApprovalCapability' });
+export type AgentApprovalCapability = z.infer<
+  typeof AgentApprovalCapabilitySchema
+>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
@@ -458,6 +488,9 @@ export const CapabilitiesWireSchema = z.object({
     .describe(
       'Per-CLI interactive terminal-mirror support, one entry per known agent',
     ),
+  approvals: z
+    .array(AgentApprovalCapabilitySchema)
+    .describe('Per-CLI tool-approval modes, one entry per known agent'),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

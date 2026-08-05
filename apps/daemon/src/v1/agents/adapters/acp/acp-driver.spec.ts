@@ -1,9 +1,9 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import type { AcpDriverOptions } from './acp-driver';
 import { AcpTurnDriver, selectPermissionOption } from './acp-driver';
@@ -287,7 +287,7 @@ describe('AcpTurnDriver session resume', () => {
     ]);
     // ...and live output after the reply flows normally.
     expect(h.feed(chunk('agent_message_chunk', 'a new answer'))).toEqual([
-      { type: 'text', text: 'a new answer' },
+      { type: 'text_delta', text: 'a new answer' },
     ]);
   });
 
@@ -518,13 +518,43 @@ function chunk(kind: string, text: string): unknown {
 }
 
 describe('AcpTurnDriver session updates', () => {
-  it('maps message and thought chunks', () => {
+  it('streams a message chunk as an ephemeral delta, not a transcript row', () => {
     const h = harness();
+    // `text_delta` is EPHEMERAL by contract; `text` is the durable row. A
+    // chunk must be the former, or every word of a reply becomes its own row.
     expect(h.feed(chunk('agent_message_chunk', 'hello'))).toEqual([
+      { type: 'text_delta', text: 'hello' },
+    ]);
+  });
+
+  it('closes the answer block and opens a thought block when the agent switches', () => {
+    const h = harness();
+    h.feed(chunk('agent_message_chunk', 'hello'));
+    // The switch is the boundary: the answer is written as one row, and the
+    // thought starts a new one rather than merging into it.
+    expect(h.feed(chunk('agent_thought_chunk', 'hmm'))).toEqual([
       { type: 'text', text: 'hello' },
     ]);
-    expect(h.feed(chunk('agent_thought_chunk', 'hmm'))).toEqual([
+    expect(h.feed(chunk('agent_message_chunk', 'done'))).toEqual([
       { type: 'reasoning', text: 'hmm' },
+      { type: 'text_delta', text: 'done' },
+    ]);
+  });
+
+  it('closes the open block before a tool call, keeping the interleaving', () => {
+    const h = harness();
+    h.feed(chunk('agent_message_chunk', 'let me look'));
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-9',
+          title: 'Read',
+        }),
+      ),
+    ).toEqual([
+      { type: 'text', text: 'let me look' },
+      { type: 'tool_call', id: 't-9', name: 'Read', input: null },
     ]);
   });
 
@@ -674,7 +704,10 @@ describe('AcpTurnDriver turn completion', () => {
     const h = primed();
     h.feed(chunk('agent_message_chunk', 'part one '));
     h.feed(chunk('agent_message_chunk', 'part two'));
+    // The joined `text` row is the regression pin: a durable event per chunk
+    // put a real cursor reply into the transcript as 68 one-word rows.
     expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      { type: 'text', text: 'part one part two' },
       {
         type: 'turn_complete',
         usage: {
@@ -695,6 +728,7 @@ describe('AcpTurnDriver turn completion', () => {
     const h = primed();
     h.feed(chunk('agent_message_chunk', 'half an answer'));
     expect(h.feed({ id: 3, result: { stopReason: 'cancelled' } })).toEqual([
+      { type: 'text', text: 'half an answer' },
       { type: 'turn_cancelled' },
     ]);
   });
@@ -995,10 +1029,7 @@ describe('AcpTurnDriver image attachments', () => {
 
   /** A real file on disk — the driver reads bytes, not a fixture string. */
   function imageInput(): AgentTurnInput {
-    const path = join(
-      mkdtempSync(join(tmpdir(), 'acp-driver-images-')),
-      'a.png',
-    );
+    const path = join(tempDir('acp-driver-images-'), 'a.png');
     writeFileSync(path, PNG);
     return {
       ...BASE_INPUT,

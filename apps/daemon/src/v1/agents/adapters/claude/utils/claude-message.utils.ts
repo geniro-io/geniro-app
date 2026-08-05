@@ -5,12 +5,49 @@ import {
   asRecord,
   asString,
 } from '../../../utils/json-util';
-import type { AgentEvent } from '../../adapter.types';
+import type { AgentEvent, AgentUsage } from '../../adapter.types';
 import { CLAUDE_RUN_FAILED_MESSAGE } from '../claude.const';
 import {
   readClaudeAssistantContext,
   readClaudeUsage,
 } from './claude-usage.utils';
+
+/**
+ * Whether a `result` line reports NOTHING — no stop reason, no final text, and
+ * not one non-zero token or cost figure.
+ *
+ * The CLI emits such a line at the START of a resumed turn, seconds after the
+ * user's message and before any output of that turn (observed on 2.1.222,
+ * twice, each time on the turn following one that used `run_in_background`).
+ * Taken at face value it is a turn completion, and the damage is threefold:
+ * the transcript grows a `✓ done · $0.0000` footer directly under the user's
+ * message, the context meter reads the zeros and drops to `0 of 200k`, and —
+ * worst — the turn is marked terminated, so the REAL work that follows is
+ * never given a completion of its own and its cost never counted.
+ *
+ * A completion that reports no work is not a completion. Dropping it lets the
+ * turn run on, and `ChatService`'s no-terminal-event fallback still writes a
+ * terminal item when the process actually settles, so no client is left
+ * waiting. The test is deliberately narrow — every genuine completion observed
+ * carries `stop_reason: 'end_turn'` plus real token counts — so a legitimate
+ * result can never be silently discarded by it.
+ */
+function describesNoWork(
+  usage: AgentUsage,
+  stopReason: string | null,
+  finalText: string | null,
+): boolean {
+  if (stopReason !== null || finalText !== null) {
+    return false;
+  }
+  return (
+    !usage.inputTokens &&
+    !usage.outputTokens &&
+    !usage.costUsd &&
+    usage.contextTokens === null &&
+    usage.contextWindowTokens === null
+  );
+}
 
 /**
  * Map one parsed line of `claude -p --output-format stream-json` to normalized
@@ -179,12 +216,18 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           },
         ];
       }
+      const usage = readClaudeUsage(root);
+      const stopReason = asString(root.stop_reason);
+      const finalText = asString(root.result) ?? null;
+      if (describesNoWork(usage, stopReason, finalText)) {
+        return [];
+      }
       return [
         {
           type: 'turn_complete',
-          usage: readClaudeUsage(root),
-          stopReason: asString(root.stop_reason),
-          finalText: asString(root.result) ?? null,
+          usage,
+          stopReason,
+          finalText,
         },
       ];
     }

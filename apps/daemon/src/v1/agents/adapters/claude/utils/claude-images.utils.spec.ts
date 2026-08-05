@@ -1,15 +1,15 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { tempDir } from '../../../__tests__/temp-dir';
 import { buildImageBlocks } from './claude-images.utils';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
 const writeImage = (name: string): string => {
-  const path = join(mkdtempSync(join(tmpdir(), 'claude-images-')), name);
+  const path = join(tempDir('claude-images-'), name);
   writeFileSync(path, PNG);
   return path;
 };

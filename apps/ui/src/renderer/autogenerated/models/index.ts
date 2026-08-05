@@ -3,6 +3,27 @@
 /**
  * 
  * @export
+ * @interface AgentApprovalCapability
+ */
+export interface AgentApprovalCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentApprovalCapability
+     */
+    agent: AgentKind;
+    /**
+     * Approval modes this CLI honours, in no particular order
+     * @type {Array<ChatApprovalMode>}
+     * @memberof AgentApprovalCapability
+     */
+    modes: Array<ChatApprovalMode>;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentCount
  */
 export interface AgentCount {
@@ -378,6 +399,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     interactiveTerminals: Array<AgentTerminalCapability>;
+    /**
+     * Per-CLI tool-approval modes, one entry per known agent
+     * @type {Array<AgentApprovalCapability>}
+     * @memberof CapabilitiesDto
+     */
+    approvals: Array<AgentApprovalCapability>;
 }
 
 /**

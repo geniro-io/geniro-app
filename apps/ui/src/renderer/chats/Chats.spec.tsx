@@ -377,6 +377,17 @@ beforeEach(() => {
     switchBranch: vi
       .fn()
       .mockResolvedValue({ ok: true, branch: null, error: null }),
+    // Both CLIs present by default; a test opts into a missing one to check
+    // that the picker refuses an agent this machine cannot run.
+    detectClis: vi.fn().mockResolvedValue([
+      { kind: 'claude', found: true, path: '/bin/claude', version: '2' },
+      {
+        kind: 'cursor-agent',
+        found: true,
+        path: '/bin/cursor-agent',
+        version: '3',
+      },
+    ]),
   };
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.listRunItems.mockReset().mockResolvedValue([]);
@@ -443,6 +454,12 @@ beforeEach(() => {
         agent: 'cursor-agent',
         unavailableReason: 'cursor-agent has no interactive terminal session',
       },
+    ],
+    // Which approval modes each CLI honours — likewise the daemon's answer, so
+    // the composer's chip offers exactly these instead of deciding by name.
+    approvals: [
+      { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
+      { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
     ],
   });
   terminalApi.createTerminal.mockReset();
@@ -1669,6 +1686,40 @@ describe('Chats workflow runs', () => {
     );
   });
 
+  it('refuses an agent this machine cannot run, and says why', async () => {
+    // The picker used to offer every known CLI unconditionally, so a missing
+    // or undriveable binary looked exactly like a working one and failed only
+    // after a run existed, as "cursor-agent exited with code 1".
+    (
+      window as unknown as { geniro: { detectClis: ReturnType<typeof vi.fn> } }
+    ).geniro.detectClis.mockResolvedValue([
+      { kind: 'claude', found: true, path: '/bin/claude', version: '2' },
+      { kind: 'cursor-agent', found: false, path: null, version: null },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      targetTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    const row = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ].find((o) => o.textContent?.startsWith('cursor-agent'))!;
+
+    // Shown with its reason rather than dropped — a row that vanishes leaves
+    // the user hunting for it — and genuinely unselectable.
+    expect(row.textContent).toContain('not installed');
+    expect(row.disabled).toBe(true);
+
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(targetTrigger(container).textContent).toContain('claude');
+    expect(targetTrigger(container).textContent).not.toContain('cursor-agent');
+  });
+
   it('surfaces the workflow trigger under the composer — the entry the run starts from', async () => {
     workflowApi.listWorkflows.mockResolvedValue([
       {
@@ -2296,6 +2347,52 @@ describe('Chats composer memory & suggestions', () => {
     });
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastModels: { claude: 'opus' },
+    });
+  });
+
+  it('sends the approval mode even when capabilities land AFTER the composer mounts', async () => {
+    // The mode reaches a new run only when the composer's CLI is known to
+    // honour it, and that answer arrives asynchronously. The capability is
+    // therefore withheld until after mount here — the ONE ordering in which a
+    // create callback that captured the pre-capability value goes wrong, and
+    // it goes wrong silently: the chip reads its mode while the run is created
+    // on the daemon's default instead, raising a permission card per tool.
+    let landCapabilities = (): void => {};
+    const pending = new Promise((resolve) => {
+      landCapabilities = () =>
+        resolve({
+          claudeModes: {
+            acceptEdits: 'unknown',
+            plan: 'unknown',
+            version: null,
+            probedAt: null,
+            reason: null,
+          },
+          interactiveTerminals: [],
+          approvals: [
+            { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
+          ],
+        });
+    });
+    capabilitiesApi.getCapabilities.mockReturnValue(pending);
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    // Nothing else the callback reads changes across this line — so if the
+    // approval survives, it is because the capability was re-read.
+    await act(async () => {
+      landCapabilities();
+      await pending;
+    });
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        agentKind: 'claude',
+        approval: 'ask',
+      }),
     });
   });
 

@@ -175,6 +175,41 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('drops a result that reports no work at all', () => {
+    // The CLI emits this at the START of a resumed turn, before any output of
+    // that turn. Mapping it to a completion planted a `✓ done · $0.0000` under
+    // the user's message, zeroed the context meter, and marked the turn
+    // terminated — so the real work that followed got no completion and its
+    // cost was never counted.
+    expect(
+      mapClaudeMessage({
+        type: 'result',
+        is_error: false,
+        result: null,
+        stop_reason: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        total_cost_usd: 0,
+      }),
+    ).toEqual([]);
+  });
+
+  it('keeps a completion that reports a stop reason but no tokens', () => {
+    // The drop is narrow on purpose: only a result saying NOTHING is discarded,
+    // so a real completion can never be swallowed by it.
+    const [event] = mapClaudeMessage({
+      type: 'result',
+      is_error: false,
+      result: null,
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    expect(event).toMatchObject({
+      type: 'turn_complete',
+      stopReason: 'end_turn',
+    });
+  });
+
   it('maps an error result to an error event', () => {
     expect(
       mapClaudeMessage({

@@ -28,6 +28,7 @@ import { McpSettingsStore } from '../../agents/services/mcp-settings.store';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { TurnMirrorService } from '../../agents/services/turn-mirror.service';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
@@ -227,6 +228,7 @@ export class GraphExecutorService {
     private readonly teardown: RunTeardownService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly mcpSettings: McpSettingsStore,
+    private readonly mirrors: TurnMirrorService,
   ) {}
 
   /**
@@ -985,6 +987,10 @@ export class GraphExecutorService {
         // directories are meant to run with different tools. Already refused
         // at startRun if unusable.
         pluginDir: node.pluginDir ?? null,
+        // Tee this node's raw stdio for the live terminal mirror. Keyed by the
+        // NODE, so a fan-out's parallel agents each mirror themselves rather
+        // than interleaving into one unreadable stream.
+        mirror: this.mirrors.sink(runId, node.id),
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {

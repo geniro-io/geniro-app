@@ -268,6 +268,27 @@ export const AgentSkillDtoSourceEnum = {
 } as const;
 export type AgentSkillDtoSourceEnum = typeof AgentSkillDtoSourceEnum[keyof typeof AgentSkillDtoSourceEnum];
 
+/**
+ * 
+ * @export
+ * @interface AgentTerminalCapability
+ */
+export interface AgentTerminalCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentTerminalCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentTerminalCapability
+     */
+    unavailableReason: string | null;
+}
+
+
 
 /**
  * 
@@ -351,6 +372,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     plugins: Array<AgentPluginCapability>;
+    /**
+     * Per-CLI interactive terminal-mirror support, one entry per known agent
+     * @type {Array<AgentTerminalCapability>}
+     * @memberof CapabilitiesDto
+     */
+    interactiveTerminals: Array<AgentTerminalCapability>;
 }
 
 /**
@@ -469,6 +496,12 @@ export interface CreateTerminalDto {
     nodeId?: string;
     /**
      * 
+     * @type {TerminalKind}
+     * @memberof CreateTerminalDto
+     */
+    kind?: TerminalKind;
+    /**
+     * 
      * @type {string}
      * @memberof CreateTerminalDto
      */
@@ -486,6 +519,8 @@ export interface CreateTerminalDto {
      */
     rows?: number;
 }
+
+
 /**
  * 
  * @export
@@ -970,6 +1005,17 @@ export interface SetMcpServerEnabledDto {
 }
 
 
+
+/**
+ * 
+ * @export
+ */
+export const TerminalKind = {
+    Live: 'live',
+    Interactive: 'interactive'
+} as const;
+export type TerminalKind = typeof TerminalKind[keyof typeof TerminalKind];
+
 /**
  * 
  * @export
@@ -982,6 +1028,12 @@ export interface TerminalSessionDto {
      * @memberof TerminalSessionDto
      */
     id: string;
+    /**
+     * 
+     * @type {TerminalKind}
+     * @memberof TerminalSessionDto
+     */
+    kind: TerminalKind;
     /**
      * The chat/workflow run this terminal mirrors
      * @type {string}

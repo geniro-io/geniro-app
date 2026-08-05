@@ -1,8 +1,13 @@
+import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { TerminalEvent } from '../terminals.types';
-import { EXITED_SESSION_TTL_MS, type PtyLike, PtyService } from './pty.service';
+import {
+  EXITED_SESSION_TTL_MS,
+  type PtyLike,
+  TerminalSessionsService,
+} from './terminal-sessions.service';
 
 class FakePty implements PtyLike {
   pid = 4242;
@@ -50,7 +55,7 @@ function build(overrides: { killEscalationMs?: number } = {}) {
     args: string[];
     options: { cwd: string; env: Record<string, string> };
   }[] = [];
-  const service = new PtyService(registry, {
+  const service = new TerminalSessionsService(registry, {
     spawnPty: (command, args, options) => {
       const pty = new FakePty();
       ptys.push(pty);
@@ -70,7 +75,7 @@ const INPUT = {
   cwd: '/tmp',
 };
 
-describe('PtyService', () => {
+describe('TerminalSessionsService', () => {
   beforeEach(() => {
     process.env.GENIRO_PTY_SPEC_SECRET = 'leak-me-not';
   });
@@ -148,7 +153,7 @@ describe('PtyService', () => {
       claimed.push(key);
       return tryClaim(key);
     });
-    const service = new PtyService(registry, {
+    const service = new TerminalSessionsService(registry, {
       spawnPty: () => {
         throw new Error('posix_spawnp failed');
       },
@@ -185,7 +190,7 @@ describe('PtyService', () => {
       tryClaim: () => false,
       has: () => true,
     } as unknown as ProcessRegistry;
-    const service = new PtyService(registry, {
+    const service = new TerminalSessionsService(registry, {
       spawnPty: () => {
         throw new Error('spawn must not be reached');
       },
@@ -328,7 +333,9 @@ describe('PtyService', () => {
     expect(service.get(id).status).toBe('closing');
     // The dying PTY still counts as busy — an instant reopen for the same
     // (run, node) must get THIS session back, not a second `--resume` spawn.
-    expect(service.findRunning(INPUT.runId, INPUT.nodeId)?.id).toBe(id);
+    expect(
+      service.findRunning('interactive', INPUT.runId, INPUT.nodeId)?.id,
+    ).toBe(id);
     // Idempotent while closing: no double-kill, no premature forget.
     const killsAfterFirst = ptys[0]?.killed.length;
     service.dispose(id);
@@ -341,7 +348,9 @@ describe('PtyService', () => {
     expect(() => service.get(id)).toThrowError(
       /TERMINAL_NOT_FOUND|no terminal/,
     );
-    expect(service.findRunning(INPUT.runId, INPUT.nodeId)).toBeNull();
+    expect(
+      service.findRunning('interactive', INPUT.runId, INPUT.nodeId),
+    ).toBeNull();
   });
 
   it('a session that exits on its own is kept for the replay TTL, then evicted', () => {
@@ -371,5 +380,202 @@ describe('PtyService', () => {
     expect(() => service.get(id)).toThrowError(
       /TERMINAL_NOT_FOUND|no terminal/,
     );
+  });
+});
+
+describe('TerminalSessionsService — live mirror sessions', () => {
+  const MIRROR = { runId: 'run-1', nodeId: null, cwd: '/proj' };
+
+  it('replays the snapshot and then fans out live appends', () => {
+    const { service } = build();
+    const source = new Subject<string>();
+
+    const wire = service.createMirror({
+      ...MIRROR,
+      snapshot: 'earlier output',
+      source,
+    });
+    const seen: TerminalEvent[] = [];
+    service.stream(wire.id).subscribe((event) => seen.push(event));
+    source.next('and now');
+
+    expect(wire.kind).toBe('live');
+    // Buffered history and live appends are one stream, so a client attaching
+    // later replays both in order.
+    expect(service.scrollback(wire.id)).toBe('earlier outputand now');
+    expect(seen).toEqual([{ kind: 'data', data: 'and now' }]);
+  });
+
+  it('claims no process slot — a mirror must not make its run look busy', () => {
+    // It spawns nothing, so there is nothing for shutdown to reap; a claim
+    // would also mark the run busy for chat turns over a session running
+    // nothing.
+    const { service, registry } = build();
+    const wire = service.createMirror({
+      ...MIRROR,
+      snapshot: '',
+      source: new Subject(),
+    });
+
+    expect(registry.has(`terminal:${wire.id}`)).toBe(false);
+  });
+
+  it('ignores input and resize instead of throwing', () => {
+    // There is no process to type at. A throw would surface a stray keystroke
+    // racing a session swap as an error the user cannot act on.
+    const { service } = build();
+    const wire = service.createMirror({
+      ...MIRROR,
+      snapshot: '',
+      source: new Subject(),
+    });
+
+    expect(() => service.write(wire.id, 'hello')).not.toThrow();
+    expect(() => service.resize(wire.id, 100, 40)).not.toThrow();
+    expect(service.scrollback(wire.id)).toBe('');
+  });
+
+  it('settles — without any exit code — when its source ends', () => {
+    // A deleted run (or an evicted buffer) completes the source. The mirror
+    // must stop wearing a live badge over a buffer nothing writes to.
+    const { service } = build();
+    const source = new Subject<string>();
+    const wire = service.createMirror({ ...MIRROR, snapshot: '', source });
+    const seen: TerminalEvent[] = [];
+    service.stream(wire.id).subscribe((event) => seen.push(event));
+
+    source.complete();
+
+    expect(service.get(wire.id).status).toBe('exited');
+    // Null, not 0: nothing exited, so no code can be claimed.
+    expect(service.get(wire.id).exitCode).toBeNull();
+    expect(seen).toEqual([{ kind: 'exit', exitCode: null }]);
+  });
+
+  it('kills without reaching the process-group escalation', () => {
+    // The guard that matters most: a null pty has no pid, and a pid-shaped
+    // default reaching killProcessGroup would signal the daemon's OWN group.
+    const { service } = build();
+    const wire = service.createMirror({
+      ...MIRROR,
+      snapshot: '',
+      source: new Subject(),
+    });
+
+    expect(() => service.kill(wire.id)).not.toThrow();
+    expect(service.get(wire.id).status).toBe('exited');
+  });
+
+  it('forgets a disposed mirror at once — no `closing` limbo', () => {
+    // The limbo exists to stop a reopen racing a second `--resume` onto one
+    // CLI session, and a mirror spawns nothing there could be a second of.
+    const { service } = build();
+    const wire = service.createMirror({
+      ...MIRROR,
+      snapshot: 'x',
+      source: new Subject(),
+    });
+
+    service.dispose(wire.id);
+
+    expect(() => service.get(wire.id)).toThrow();
+    expect(service.findRunning('live', MIRROR.runId, MIRROR.nodeId)).toBeNull();
+  });
+
+  it('settles only once when kill and dispose both land', () => {
+    // The genuine double-entry: `kill` settles, then `dispose` calls
+    // `settleMirror` again. Driving it through `source.complete()` instead
+    // would prove nothing — the subject is already complete by then, so a
+    // second `next` is a no-op whether or not the guard exists.
+    const { service } = build();
+    const wire = service.createMirror({
+      ...MIRROR,
+      snapshot: '',
+      source: new Subject(),
+    });
+    const seen: TerminalEvent[] = [];
+    service.stream(wire.id).subscribe((event) => seen.push(event));
+
+    service.kill(wire.id);
+    service.dispose(wire.id);
+
+    expect(seen).toEqual([{ kind: 'exit', exitCode: null }]);
+  });
+
+  it('leaves no pending timer behind when a live mirror is disposed', () => {
+    // `settleMirror` arms the replay TTL for an ABANDONED mirror; an explicit
+    // dispose deletes the session immediately, so that timer would hold the
+    // session — scrollback and all — for half an hour to delete a key that is
+    // already gone.
+    vi.useFakeTimers();
+    try {
+      const { service } = build();
+      const wire = service.createMirror({
+        ...MIRROR,
+        snapshot: 'x',
+        source: new Subject(),
+      });
+
+      service.dispose(wire.id);
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes nothing for an empty chunk', () => {
+    // A child can flush with nothing buffered; waking every attached mirror for
+    // a zero-length write is pure noise.
+    const { service, ptys } = build();
+    const wire = service.create(INPUT);
+    const seen: TerminalEvent[] = [];
+    service.stream(wire.id).subscribe((event) => seen.push(event));
+
+    ptys[0]?.emitData('');
+
+    expect(seen).toEqual([]);
+  });
+
+  it('is found separately from an interactive session on the same target', () => {
+    // Both kinds can be open on one node at once; matching without the kind
+    // would hand a live mirror to a caller asking for the interactive one.
+    const { service } = build();
+    const interactive = service.create(INPUT);
+    const mirror = service.createMirror({
+      runId: INPUT.runId,
+      nodeId: INPUT.nodeId,
+      cwd: INPUT.cwd,
+      snapshot: '',
+      source: new Subject(),
+    });
+
+    expect(service.findRunning('live', INPUT.runId, INPUT.nodeId)?.id).toBe(
+      mirror.id,
+    );
+    expect(
+      service.findRunning('interactive', INPUT.runId, INPUT.nodeId)?.id,
+    ).toBe(interactive.id);
+  });
+
+  it('evicts a settled mirror after the exited-session TTL', () => {
+    // A settled mirror keeps its final screen re-attachable, then goes. Unlike
+    // a PTY — whose exit means a user closed a REPL — a mirror settles whenever
+    // its run is deleted, so without the TTL a routine delete would pin up to a
+    // full scrollback for the daemon's whole life.
+    vi.useFakeTimers();
+    try {
+      const { service } = build();
+      const source = new Subject<string>();
+      const wire = service.createMirror({ ...MIRROR, snapshot: 'x', source });
+
+      source.complete();
+      expect(service.get(wire.id).status).toBe('exited');
+
+      vi.advanceTimersByTime(EXITED_SESSION_TTL_MS + 1);
+      expect(() => service.get(wire.id)).toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

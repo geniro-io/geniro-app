@@ -9,22 +9,30 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { TurnMirrorService } from '../../agents/services/turn-mirror.service';
 import { claudeCredentialEnv } from '../../agents/utils/child-env';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
-import type { TerminalSessionWire } from '../terminals.types';
-import { PtyService } from './pty.service';
+import type { TerminalKind, TerminalSessionWire } from '../terminals.types';
+import { TerminalSessionsService } from './terminal-sessions.service';
 
 /**
- * Resolves "open a terminal for this run/node" into a concrete PTY spawn: the
- * run supplies the cwd, the node (workflow YAML for graph runs, the run row
- * itself for chats) supplies the agent kind, and the CLI session id comes from
- * `node_state` (the node's latest session) — or, when the caller passes an
- * explicit `sessionId`, from a specific thread of the node (a call thread's
- * resume id recorded on its `call_result` item), so every thread of an agent
- * can be mirrored, not just the most recent one.
+ * Resolves "open a terminal for this run/node" into a concrete session, of
+ * whichever kind was asked for.
+ *
+ * For an INTERACTIVE one that means a PTY spawn: the run supplies the cwd, the
+ * node (workflow YAML for graph runs, the run row itself for chats) supplies
+ * the agent kind, and the CLI session id comes from `node_state` (the node's
+ * latest session) — or, when the caller passes an explicit `sessionId`, from a
+ * specific thread of the node (a call thread's resume id recorded on its
+ * `call_result` item), so every thread of an agent can be mirrored, not just
+ * the most recent one.
+ *
+ * For a LIVE one it means almost nothing: the turn's own output is already
+ * buffered by `TurnMirrorService`, so this only validates the node and hands
+ * that buffer over.
  */
 @Injectable()
 export class TerminalsService implements OnApplicationShutdown {
@@ -33,7 +41,7 @@ export class TerminalsService implements OnApplicationShutdown {
    * In-flight creates keyed by the mirror target — `runId:nodeId:sessionId`
    * (the RESOLVED session). The daemon owns the one-running-mirror-per-target
    * invariant: without this single-flight, two concurrent POSTs (a
-   * double-click) both miss {@link PtyService.findRunning} during their awaits
+   * double-click) both miss {@link TerminalSessionsService.findRunning} during their awaits
    * and spawn two `claude --resume <same session>` REPLs — the second
    * invisible to the UI until daemon shutdown.
    */
@@ -46,8 +54,9 @@ export class TerminalsService implements OnApplicationShutdown {
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly workflowStore: WorkflowStoreService,
-    private readonly pty: PtyService,
+    private readonly sessions: TerminalSessionsService,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly mirrors: TurnMirrorService,
     bus: AgentEventBus,
   ) {
     // A mirror of a deleted run would keep a `claude --resume` child alive
@@ -55,7 +64,7 @@ export class TerminalsService implements OnApplicationShutdown {
     // called from the deleting service, because `TerminalsModule` imports
     // `AgentsModule` — the dependency only runs this way.
     this.deletedSubscription = bus.allDeleted().subscribe((runId) => {
-      const killed = this.pty.killRun(runId);
+      const killed = this.sessions.killRun(runId);
       if (killed > 0) {
         this.logger.log(
           `killed ${killed} terminal mirror(s) of deleted run ${runId}`,
@@ -78,6 +87,7 @@ export class TerminalsService implements OnApplicationShutdown {
     runId: string;
     nodeId?: string | null;
     sessionId?: string | null;
+    kind?: TerminalKind | null;
     cols?: number;
     rows?: number;
   }): Promise<TerminalSessionWire> {
@@ -93,6 +103,22 @@ export class TerminalsService implements OnApplicationShutdown {
       );
     }
     const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
+    if ((input.kind ?? 'live') === 'live') {
+      // Most of what follows does not apply to a live mirror: it spawns no CLI,
+      // so it needs no agent kind, no resumable session, no model and no cwd —
+      // which is why it is available for agents whose adapters refuse an
+      // interactive mirror outright (cursor-agent's `terminal: null`).
+      //
+      // Node IDENTITY is the exception, and is validated by the same
+      // `resolveNode` the interactive path uses. Opening a mirror CREATES its
+      // buffer, and buffers evict least-recently-touched, so accepting any
+      // string as a node id would let a caller evict a run's real turn history
+      // by opening mirrors on nodes that do not exist.
+      if (run.workflowId) {
+        await this.resolveNode(run, nodeId, em);
+      }
+      return this.createLiveMirror(run, nodeId);
+    }
     const { agentKind, stateNodeId, wireNodeId, model } =
       await this.resolveNode(run, nodeId, em);
     const resumeSessionId =
@@ -115,6 +141,38 @@ export class TerminalsService implements OnApplicationShutdown {
     return create;
   }
 
+  /**
+   * Open (or re-attach to) the live mirror of one node's own turns.
+   *
+   * Synchronous end to end — every await (the run lookup, the node validation)
+   * happens in the caller before this runs, which is what keeps it single-flight
+   * without the `pending` map the interactive path needs: two concurrent POSTs
+   * cannot interleave between {@link TerminalSessionsService.findRunning} and
+   * {@link TerminalSessionsService.createMirror}.
+   */
+  private createLiveMirror(
+    run: Run,
+    nodeId: string | null,
+  ): TerminalSessionWire {
+    const existing = this.sessions.findRunning('live', run.id, nodeId);
+    if (existing) {
+      return existing;
+    }
+    // The key the TURN side writes under: a chat's per-node state all lives
+    // under the single-agent constant, and the wire's `nodeId` is null there.
+    const mirrorNode = nodeId ?? SINGLE_AGENT_NODE;
+    return this.sessions.createMirror({
+      runId: run.id,
+      nodeId,
+      // Informational only — a live mirror runs nothing, so a run with no
+      // folder still gets one (unlike the interactive `--resume` spawn).
+      cwd: run.cwd ?? '',
+      // Read and subscribed in one synchronous tick, per the attach contract.
+      snapshot: this.mirrors.snapshot(run.id, mirrorNode),
+      source: this.mirrors.stream(run.id, mirrorNode),
+    });
+  }
+
   private async doCreateForRun(
     input: {
       runId: string;
@@ -128,7 +186,8 @@ export class TerminalsService implements OnApplicationShutdown {
     },
     run: Run,
   ): Promise<TerminalSessionWire> {
-    const existing = this.pty.findRunning(
+    const existing = this.sessions.findRunning(
+      'interactive',
       input.runId,
       input.nodeId,
       input.resumeSessionId,
@@ -151,7 +210,7 @@ export class TerminalsService implements OnApplicationShutdown {
       input.resumeSessionId,
       input.model,
     );
-    return this.pty.create({
+    return this.sessions.create({
       runId: run.id,
       nodeId: input.nodeId,
       resumeSessionId: input.resumeSessionId,

@@ -29,6 +29,7 @@ import { ProcessRegistry } from './services/process-registry';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
+import { TurnMirrorService } from './services/turn-mirror.service';
 
 /**
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
@@ -118,6 +119,7 @@ import { SkillsService } from './services/skills.service';
     PartialStreamService,
     ProcessRegistry,
     RunTeardownService,
+    TurnMirrorService,
     ItemDao,
     NodeStateDao,
     RunDao,
@@ -158,6 +160,9 @@ import { SkillsService } from './services/skills.service';
     AgentEventBus,
     ApprovalRegistry,
     PartialStreamService,
+    // Exported for the terminals module: it turns these buffers into the
+    // live mirror sessions the panel attaches to.
+    TurnMirrorService,
     ClaudeProbeService,
     ProcessRegistry,
     // Exported for the graph executor's own run delete: one teardown serves

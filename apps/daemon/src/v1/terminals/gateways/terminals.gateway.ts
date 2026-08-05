@@ -14,7 +14,7 @@ import type { Namespace, Socket } from 'socket.io';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
 import { extractStringField } from '../../agents/utils/ws-payload';
-import { PtyService } from '../services/pty.service';
+import { TerminalSessionsService } from '../services/terminal-sessions.service';
 import type { TerminalStatus } from '../terminals.types';
 
 /** Socket.IO room fanning one terminal session's bytes to attached clients. */
@@ -60,7 +60,7 @@ export class TerminalsGateway implements OnGatewayConnection {
 
   constructor(
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
-    private readonly pty: PtyService,
+    private readonly sessions: TerminalSessionsService,
   ) {}
 
   handleConnection(client: Socket): void {
@@ -87,8 +87,8 @@ export class TerminalsGateway implements OnGatewayConnection {
       return { event: 'attached', data: { terminalId: null } };
     }
     try {
-      const session = this.pty.get(terminalId);
-      const snapshot = this.pty.scrollback(terminalId);
+      const session = this.sessions.get(terminalId);
+      const snapshot = this.sessions.scrollback(terminalId);
       this.ensureFanout(terminalId);
       void client.join(terminalRoom(terminalId));
       return {
@@ -132,7 +132,7 @@ export class TerminalsGateway implements OnGatewayConnection {
     const payload = (data as { data?: unknown }).data;
     if (terminalId && typeof payload === 'string') {
       try {
-        this.pty.write(terminalId, payload);
+        this.sessions.write(terminalId, payload);
       } catch {
         // Session gone — the client learns via the missing room traffic.
       }
@@ -154,7 +154,7 @@ export class TerminalsGateway implements OnGatewayConnection {
       Number.isFinite(rows)
     ) {
       try {
-        this.pty.resize(terminalId, cols, rows);
+        this.sessions.resize(terminalId, cols, rows);
       } catch {
         // Session gone — resize is best-effort.
       }
@@ -170,7 +170,7 @@ export class TerminalsGateway implements OnGatewayConnection {
       return;
     }
     const room = terminalRoom(terminalId);
-    const subscription = this.pty.stream(terminalId).subscribe({
+    const subscription = this.sessions.stream(terminalId).subscribe({
       // Note: an already-exited session's Subject is complete, so `complete`
       // below fires synchronously DURING subscribe — before the `set` at the
       // end of this method. The `subscription.closed` guard after subscribe is

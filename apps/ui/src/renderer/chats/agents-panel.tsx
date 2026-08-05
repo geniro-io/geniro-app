@@ -109,6 +109,7 @@ export function AgentsPanel({
   onDismissMcpToggleError,
   onMcpOpenChange,
   onOpenThread,
+  interactiveTerminalAgents,
   onClose,
 }: {
   agents: AgentDisplay[];
@@ -146,6 +147,19 @@ export function AgentsPanel({
   onMcpOpenChange?: (open: boolean) => void;
   /** Open a terminal mirroring one thread of one agent. */
   onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  /**
+   * Which CLI kinds have an INTERACTIVE (`--resume`) terminal, per the daemon's
+   * own capability report. Only a CALL thread needs it: a call thread is a
+   * sub-session of the node, and the live mirror is keyed by the node, so only
+   * the interactive mirror can target one.
+   *
+   * Read rather than hardcoded, because "which CLI has one" is the adapter
+   * layer's fact (`AdapterConfig.terminal`), and a list written here is how a
+   * second CLI gaining a mirror silently keeps its threads unopenable. Absent
+   * (still loading) offers nothing, which errs toward not showing a control
+   * that would fail.
+   */
+  interactiveTerminalAgents?: ReadonlySet<string>;
   onClose: () => void;
 }): React.JSX.Element {
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
@@ -258,10 +272,9 @@ export function AgentsPanel({
               agent.threads.length === 1 && agent.threads[0]?.kind === 'main'
                 ? agent.threads[0]
                 : null;
-            const soleThreadTerminal =
-              soleThread !== null && agent.agent === 'claude'
-                ? soleThread
-                : null;
+            // No agent-kind gate: a sole thread is a main thread, and the live
+            // mirror it opens is the raw output of whatever CLI ran the turn.
+            const soleThreadTerminal = soleThread;
             const Header = soleThread ? 'div' : 'button';
             return (
               <li
@@ -364,11 +377,21 @@ export function AgentsPanel({
                       </li>
                     ) : (
                       agent.threads.map((thread) => {
-                        // Only claude has an interactive mirror; a call thread
-                        // additionally needs its recorded session id (settled).
+                        // A main thread always opens: the live mirror follows
+                        // the NODE's own turns and needs no CLI session, so it
+                        // works for every agent kind.
+                        //
+                        // A call thread is a sub-session of that node, which
+                        // only the interactive `--resume` mirror can target —
+                        // so it keeps both of that mirror's requirements: a CLI
+                        // that has one at all, and a recorded session id
+                        // (present once the call settled).
                         const canOpen =
-                          agent.agent === 'claude' &&
-                          (thread.kind === 'main' || thread.sessionId !== null);
+                          thread.kind === 'main' ||
+                          (agent.agent !== null &&
+                            interactiveTerminalAgents?.has(agent.agent) ===
+                              true &&
+                            thread.sessionId !== null);
                         return (
                           <li
                             key={thread.id}

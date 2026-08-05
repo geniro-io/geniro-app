@@ -5,7 +5,7 @@ import { ProcessRegistry } from '../agents/services/process-registry';
 import { GraphsModule } from '../graphs/graphs.module';
 import { TerminalsController } from './controllers/terminals.controller';
 import { TerminalsGateway } from './gateways/terminals.gateway';
-import { PtyService } from './services/pty.service';
+import { TerminalSessionsService } from './services/terminal-sessions.service';
 import { TerminalsService } from './services/terminals.service';
 
 /**
@@ -13,7 +13,7 @@ import { TerminalsService } from './services/terminals.service';
  * session as its original interactive TUI, bridged raw to xterm.js over the
  * `/terminals` Socket.IO namespace. Sessions are ephemeral (in-memory only —
  * a live mirror is not history); every PTY child registers with the shared
- * ProcessRegistry so cancel/shutdown reap it. PtyService is provided via a
+ * ProcessRegistry so cancel/shutdown reap it. TerminalSessionsService is provided via a
  * factory because its options bag is a test seam, not a DI token.
  */
 @Module({
@@ -21,8 +21,9 @@ import { TerminalsService } from './services/terminals.service';
   controllers: [TerminalsController],
   providers: [
     {
-      provide: PtyService,
-      useFactory: (registry: ProcessRegistry) => new PtyService(registry),
+      provide: TerminalSessionsService,
+      useFactory: (registry: ProcessRegistry) =>
+        new TerminalSessionsService(registry),
       inject: [ProcessRegistry],
     },
     TerminalsService,

@@ -27,6 +27,7 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
+import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -42,6 +43,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
+import { TurnMirrorService } from './turn-mirror.service';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -352,6 +354,9 @@ function setup(
   const efforts = new EffortsService(adapters);
   // The REAL teardown over the same fakes: `delete` is a thin caller of it, so
   // a mock here would leave every assertion below pinning the mock.
+  // A real one: it holds nothing but in-memory buffers, so a double would
+  // only hide whether the turn is actually tee'd into it.
+  const mirrors = new TurnMirrorService();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -361,6 +366,7 @@ function setup(
     callTokens,
     partials,
     attachments,
+    mirrors,
   );
   const service = new ChatService(
     em,
@@ -385,8 +391,10 @@ function setup(
         opts.mcpSettingsFile ??
         join(tmpdir(), 'geniro-chat-spec-never-written.json'),
     }),
+    mirrors,
   );
   return {
+    mirrors,
     service,
     deltas,
     partials,
@@ -449,6 +457,25 @@ describe('ChatService', () => {
       published.map((e) => `${e.item.seq}:${e.item.kind}/${e.item.role ?? ''}`),
     ).toEqual(['0:message/user', '1:message/assistant', '2:turn_complete/']);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('tees the turn into the live mirror, under the single-agent node key', async () => {
+    // The wiring the whole live terminal rests on. Nothing else in the suite
+    // fails if `mirror:` is dropped from the turn input — the chat keeps
+    // working perfectly and the panel goes permanently blank, which is the
+    // silent failure this pins.
+    const { service, claude, mirrors } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'hello');
+    const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+    startArg.mirror?.data('stdout', 'raw child output');
+
+    // Keyed by the SINGLE-AGENT node, the same constant the rest of a chat's
+    // per-node state uses — the terminals service reads it back by that key.
+    expect(mirrors.snapshot(run.id, SINGLE_AGENT_NODE)).toContain(
+      'raw child output',
+    );
   });
 
   it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {

@@ -1,9 +1,12 @@
+import type { Observable } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { TurnMirrorService } from '../../agents/services/turn-mirror.service';
 import { TerminalsService } from './terminals.service';
 
 function build(overrides: {
@@ -35,6 +38,18 @@ function build(overrides: {
   const pty = {
     findRunning: vi.fn().mockReturnValue(null),
     killRun: vi.fn().mockReturnValue(0),
+    createMirror: vi.fn((input: Record<string, unknown>) => ({
+      id: `m-${ptySeq++}`,
+      kind: 'live',
+      runId: input.runId,
+      nodeId: input.nodeId,
+      resumeSessionId: null,
+      cwd: input.cwd,
+      snapshot: input.snapshot,
+      status: 'running',
+      exitCode: null,
+      createdAt: 0,
+    })),
     create: vi.fn((input: Record<string, unknown>) => ({
       id: `t-${ptySeq++}`,
       runId: input.runId,
@@ -53,6 +68,7 @@ function build(overrides: {
     new ClaudeAdapter(),
     new CursorAcpAdapter(),
   );
+  const mirrors = new TurnMirrorService();
   const service = new TerminalsService(
     em as never,
     runDao as never,
@@ -60,9 +76,10 @@ function build(overrides: {
     workflowStore as never,
     pty as never,
     adapters,
+    mirrors,
     bus,
   );
-  return { service, runDao, nodeStateDao, workflowStore, pty, bus };
+  return { service, runDao, nodeStateDao, workflowStore, pty, bus, mirrors };
 }
 
 const CHAT_RUN = {
@@ -79,7 +96,10 @@ describe('TerminalsService', () => {
       nodeState: { agentSessionId: 'sess-9' },
     });
 
-    const wire = await service.createForRun({ runId: 'run-1' });
+    const wire = await service.createForRun({
+      kind: 'interactive',
+      runId: 'run-1',
+    });
 
     expect(nodeStateDao.getByRunNode).toHaveBeenCalledWith(
       'run-1',
@@ -105,7 +125,7 @@ describe('TerminalsService', () => {
       nodeState: { agentSessionId: 'sess-9' },
     });
 
-    await service.createForRun({ runId: 'run-1' });
+    await service.createForRun({ kind: 'interactive', runId: 'run-1' });
 
     expect(pty.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -127,7 +147,7 @@ describe('TerminalsService', () => {
         nodeState: { agentSessionId: 'sess-9' },
       });
 
-      await service.createForRun({ runId: 'run-1' });
+      await service.createForRun({ kind: 'interactive', runId: 'run-1' });
 
       expect(pty.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -148,7 +168,9 @@ describe('TerminalsService', () => {
   it('rejects until the run has a resumable CLI session id', async () => {
     const { service, pty } = build({ run: CHAT_RUN, nodeState: null });
 
-    await expect(service.createForRun({ runId: 'run-1' })).rejects.toThrow(
+    await expect(
+      service.createForRun({ kind: 'interactive', runId: 'run-1' }),
+    ).rejects.toThrow(
       /TERMINAL_SESSION_UNAVAILABLE|resumable terminal session/,
     );
 
@@ -162,7 +184,11 @@ describe('TerminalsService', () => {
       workflow: { nodes: [{ id: 'agent-1', kind: 'agent', agent: 'claude' }] },
     });
 
-    await service.createForRun({ runId: 'run-2', nodeId: 'agent-1' });
+    await service.createForRun({
+      kind: 'interactive',
+      runId: 'run-2',
+      nodeId: 'agent-1',
+    });
 
     expect(pty.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -186,7 +212,11 @@ describe('TerminalsService', () => {
       workflow: { nodes: [] },
     });
 
-    await service.createForRun({ runId: 'run-2', nodeId: 'agent-1' });
+    await service.createForRun({
+      kind: 'interactive',
+      runId: 'run-2',
+      nodeId: 'agent-1',
+    });
 
     expect(pty.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -208,9 +238,9 @@ describe('TerminalsService', () => {
       run: { id: 'run-2', workflowId: 'demo', agentKind: null, cwd: '/tmp' },
     });
 
-    await expect(service.createForRun({ runId: 'run-2' })).rejects.toThrow(
-      /TERMINAL_NODE_REQUIRED|workflow run/,
-    );
+    await expect(
+      service.createForRun({ kind: 'interactive', runId: 'run-2' }),
+    ).rejects.toThrow(/TERMINAL_NODE_REQUIRED|workflow run/);
   });
 
   it('rejects an unknown workflow node', async () => {
@@ -220,7 +250,11 @@ describe('TerminalsService', () => {
     });
 
     await expect(
-      service.createForRun({ runId: 'run-2', nodeId: 'nope' }),
+      service.createForRun({
+        kind: 'interactive',
+        runId: 'run-2',
+        nodeId: 'nope',
+      }),
     ).rejects.toThrow(/NODE_NOT_FOUND|no node/);
   });
 
@@ -230,7 +264,11 @@ describe('TerminalsService', () => {
       workflow: { nodes: [{ id: 'start', kind: 'trigger' }] },
     });
     await expect(
-      trigger.service.createForRun({ runId: 'run-2', nodeId: 'start' }),
+      trigger.service.createForRun({
+        kind: 'interactive',
+        runId: 'run-2',
+        nodeId: 'start',
+      }),
     ).rejects.toThrow(/TERMINAL_NODE_NOT_AGENT|only agent nodes/);
 
     const cursor = build({
@@ -240,7 +278,11 @@ describe('TerminalsService', () => {
       },
     });
     await expect(
-      cursor.service.createForRun({ runId: 'run-2', nodeId: 'cursor' }),
+      cursor.service.createForRun({
+        kind: 'interactive',
+        runId: 'run-2',
+        nodeId: 'cursor',
+      }),
     ).rejects.toThrow(/TERMINAL_UNSUPPORTED|no interactive terminal/);
   });
 
@@ -256,7 +298,10 @@ describe('TerminalsService', () => {
       createdAt: 0,
     });
 
-    const wire = await service.createForRun({ runId: 'run-1' });
+    const wire = await service.createForRun({
+      kind: 'interactive',
+      runId: 'run-1',
+    });
 
     expect(wire.id).toBe('t-existing');
     expect(pty.create).not.toHaveBeenCalled();
@@ -268,8 +313,8 @@ describe('TerminalsService', () => {
     // Fire both BEFORE awaiting: each would pass findRunning (nothing spawned
     // yet), so only the single-flight map prevents a double spawn.
     const [a, b] = await Promise.all([
-      service.createForRun({ runId: 'run-1' }),
-      service.createForRun({ runId: 'run-1' }),
+      service.createForRun({ kind: 'interactive', runId: 'run-1' }),
+      service.createForRun({ kind: 'interactive', runId: 'run-1' }),
     ]);
 
     expect(pty.create).toHaveBeenCalledTimes(1);
@@ -284,6 +329,7 @@ describe('TerminalsService', () => {
     });
 
     await service.createForRun({
+      kind: 'interactive',
       runId: 'run-1',
       nodeId: 'n1',
       sessionId: 'sess-call-7',
@@ -297,7 +343,12 @@ describe('TerminalsService', () => {
         resumeSessionId: 'sess-call-7',
       }),
     );
-    expect(pty.findRunning).toHaveBeenCalledWith('run-1', 'n1', 'sess-call-7');
+    expect(pty.findRunning).toHaveBeenCalledWith(
+      'interactive',
+      'run-1',
+      'n1',
+      'sess-call-7',
+    );
   });
 
   it('distinct thread sessions are distinct targets — concurrent creates both spawn', async () => {
@@ -307,8 +358,18 @@ describe('TerminalsService', () => {
     });
 
     const [a, b] = await Promise.all([
-      service.createForRun({ runId: 'run-1', nodeId: 'n1', sessionId: 's-1' }),
-      service.createForRun({ runId: 'run-1', nodeId: 'n1', sessionId: 's-2' }),
+      service.createForRun({
+        kind: 'interactive',
+        runId: 'run-1',
+        nodeId: 'n1',
+        sessionId: 's-1',
+      }),
+      service.createForRun({
+        kind: 'interactive',
+        runId: 'run-1',
+        nodeId: 'n1',
+        sessionId: 's-2',
+      }),
     ]);
 
     expect(pty.create).toHaveBeenCalledTimes(2);
@@ -319,8 +380,12 @@ describe('TerminalsService', () => {
     const { service, pty } = build({ run: CHAT_RUN });
 
     const [canonical, aliased] = await Promise.allSettled([
-      service.createForRun({ runId: 'run-1' }),
-      service.createForRun({ runId: 'run-1', nodeId: 'ignored-chat-node' }),
+      service.createForRun({ kind: 'interactive', runId: 'run-1' }),
+      service.createForRun({
+        kind: 'interactive',
+        runId: 'run-1',
+        nodeId: 'ignored-chat-node',
+      }),
     ]);
 
     expect(canonical.status).toBe('fulfilled');
@@ -334,20 +399,20 @@ describe('TerminalsService', () => {
   it('rejects a chat run that lost its agent kind', async () => {
     const { service } = build({ run: { ...CHAT_RUN, agentKind: null } });
 
-    await expect(service.createForRun({ runId: 'run-1' })).rejects.toThrow(
-      /TERMINAL_NO_AGENT|no agent kind/,
-    );
+    await expect(
+      service.createForRun({ kind: 'interactive', runId: 'run-1' }),
+    ).rejects.toThrow(/TERMINAL_NO_AGENT|no agent kind/);
   });
 
   it('rejects a missing run and a run without cwd', async () => {
     const missing = build({ run: null });
     await expect(
-      missing.service.createForRun({ runId: 'gone' }),
+      missing.service.createForRun({ kind: 'interactive', runId: 'gone' }),
     ).rejects.toThrow(/RUN_NOT_FOUND|no run/);
 
     const noCwd = build({ run: { ...CHAT_RUN, cwd: null } });
     await expect(
-      noCwd.service.createForRun({ runId: 'run-1' }),
+      noCwd.service.createForRun({ kind: 'interactive', runId: 'run-1' }),
     ).rejects.toThrow(/TERMINAL_NO_CWD|working directory/);
   });
 });
@@ -356,7 +421,7 @@ describe('TerminalsService — a deleted run takes its mirrors with it', () => {
   it('kills the run’s live mirrors when the run is deleted', () => {
     // A mirror of a deleted run would keep a `claude --resume` child alive
     // against a transcript that no longer exists. The chat service cannot
-    // call PtyService (its module sits below this one), so the signal is a
+    // call TerminalSessionsService (its module sits below this one), so the signal is a
     // subscription — deleting the subscription must break this test.
     const { pty, bus } = build({ run: null });
     pty.killRun.mockReturnValue(2);
@@ -369,5 +434,134 @@ describe('TerminalsService — a deleted run takes its mirrors with it', () => {
     service.onApplicationShutdown();
     bus.publishRunDeleted('run-gone');
     expect(pty.killRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalsService — the live mirror', () => {
+  it('is the default, and hands the PTY layer the node’s buffered output', async () => {
+    const { service, mirrors, pty } = build({ run: CHAT_RUN });
+    // What the chat's own turn wrote, under the single-agent node key.
+    mirrors.sink('run-1', SINGLE_AGENT_NODE).data('stdout', 'from the turn');
+
+    // No `kind` at all — the default is what a terminal button reaches.
+    const wire = await service.createForRun({ runId: 'run-1' });
+
+    expect(wire.kind).toBe('live');
+    expect(pty.create).not.toHaveBeenCalled();
+    expect(pty.createMirror).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        nodeId: null,
+        snapshot: 'from the turn',
+      }),
+    );
+
+    // The `source` channel too, not just the replayed snapshot: pointed at the
+    // wrong key it would replay history perfectly and then never update, which
+    // is precisely the bug this feature exists to fix.
+    const arg = pty.createMirror.mock.calls[0]?.[0] as {
+      source: Observable<string>;
+    };
+    const live: string[] = [];
+    arg.source.subscribe((chunk) => live.push(chunk));
+    mirrors.sink('run-1', SINGLE_AGENT_NODE).data('stdout', 'a later chunk');
+    expect(live).toContain('a later chunk');
+  });
+
+  it('opens for cursor-agent, which has no interactive mirror at all', async () => {
+    // The live mirror is raw bytes off whichever CLI ran the turn, so it needs
+    // neither `terminalCommand` support nor a resumable session. Asking for the
+    // interactive one still refuses, which is what makes this a real gain
+    // rather than a relabelling.
+    const cursorRun = { ...CHAT_RUN, agentKind: 'cursor-agent' };
+    const { service } = build({ run: cursorRun });
+
+    await expect(service.createForRun({ runId: 'run-1' })).resolves.toEqual(
+      expect.objectContaining({ kind: 'live' }),
+    );
+    await expect(
+      service.createForRun({ kind: 'interactive', runId: 'run-1' }),
+    ).rejects.toThrow(/TERMINAL_UNSUPPORTED|no interactive terminal/);
+  });
+
+  it('opens without a resumable session, and without a cwd', async () => {
+    // Both are `--resume` spawn requirements. A live mirror runs nothing, so a
+    // brand-new chat gets a terminal that fills in as its first turn runs.
+    const { service } = build({
+      run: { ...CHAT_RUN, cwd: null },
+      nodeState: null,
+    });
+
+    await expect(service.createForRun({ runId: 'run-1' })).resolves.toEqual(
+      expect.objectContaining({ kind: 'live' }),
+    );
+  });
+
+  it('re-attaches to an open mirror instead of opening a second one', async () => {
+    const { service, pty } = build({ run: CHAT_RUN });
+    pty.findRunning.mockReturnValue({ id: 'already-open', kind: 'live' });
+
+    const wire = await service.createForRun({ runId: 'run-1' });
+
+    expect(wire.id).toBe('already-open');
+    expect(pty.createMirror).not.toHaveBeenCalled();
+    expect(pty.findRunning).toHaveBeenCalledWith('live', 'run-1', null);
+  });
+
+  it('still demands a nodeId on a workflow run — a mirror follows ONE node', async () => {
+    const { service } = build({
+      run: { id: 'run-2', workflowId: 'wf', agentKind: null, cwd: '/tmp' },
+    });
+
+    await expect(service.createForRun({ runId: 'run-2' })).rejects.toThrow(
+      /TERMINAL_NODE_REQUIRED|workflow run/,
+    );
+  });
+
+  it('reads a workflow node’s own buffer, not the chat constant', async () => {
+    const { service, mirrors, pty } = build({
+      run: { id: 'run-2', workflowId: 'wf', agentKind: null, cwd: '/tmp' },
+      workflow: { nodes: [{ id: 'agent-1', kind: 'agent', agent: 'claude' }] },
+    });
+    mirrors.sink('run-2', 'agent-1').data('stdout', 'node output');
+
+    await service.createForRun({ runId: 'run-2', nodeId: 'agent-1' });
+
+    expect(pty.createMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: 'agent-1', snapshot: 'node output' }),
+    );
+  });
+});
+
+describe('TerminalsService — a live mirror still validates its node', () => {
+  it('rejects an unknown node instead of opening a buffer for it', async () => {
+    // Opening a mirror CREATES its buffer, and buffers evict least-recently
+    // touched. Accepting any string as a node id would let a caller age out a
+    // run's real turn history by opening mirrors on nodes that do not exist.
+    const { service, mirrors, pty } = build({
+      run: { id: 'run-2', workflowId: 'wf', agentKind: null, cwd: '/tmp' },
+      workflow: { nodes: [{ id: 'agent-1', kind: 'agent', agent: 'claude' }] },
+    });
+    mirrors.sink('run-2', 'agent-1').data('stdout', 'real history');
+
+    await expect(
+      service.createForRun({ runId: 'run-2', nodeId: 'does-not-exist' }),
+    ).rejects.toThrow(/NODE_NOT_FOUND|no node/);
+
+    expect(pty.createMirror).not.toHaveBeenCalled();
+    // And the junk id left no buffer behind to press on the ceiling.
+    expect(mirrors.snapshot('run-2', 'does-not-exist')).toBe('');
+    expect(mirrors.snapshot('run-2', 'agent-1')).toBe('real history');
+  });
+
+  it('rejects a trigger node — only agent nodes run anything to mirror', async () => {
+    const { service } = build({
+      run: { id: 'run-2', workflowId: 'wf', agentKind: null, cwd: '/tmp' },
+      workflow: { nodes: [{ id: 'start', kind: 'trigger' }] },
+    });
+
+    await expect(
+      service.createForRun({ runId: 'run-2', nodeId: 'start' }),
+    ).rejects.toThrow(/TERMINAL_NODE_NOT_AGENT|only agent nodes/);
   });
 });

@@ -51,6 +51,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
+import { TurnMirrorService } from './turn-mirror.service';
 
 function parsePayload(raw: string): unknown {
   try {
@@ -113,6 +114,7 @@ export class ChatService {
     private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
     private readonly mcpSettings: McpSettingsStore,
+    private readonly mirrors: TurnMirrorService,
   ) {}
 
   /**
@@ -680,6 +682,9 @@ export class ChatService {
             path: this.attachments.pathOf(runId, attachment.id),
             mediaType: attachment.mediaType,
           })),
+          // Tee this turn's raw stdio for the live terminal mirror. Keyed by
+          // the same single-agent node the rest of a chat's per-node state is.
+          mirror: this.mirrors.sink(runId, SINGLE_AGENT_NODE),
         },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even

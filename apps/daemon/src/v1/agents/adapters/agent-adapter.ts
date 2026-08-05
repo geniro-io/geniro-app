@@ -794,10 +794,15 @@ export abstract class AgentAdapter {
     const dispose = this.prepareTurn(input);
     let handle: AgentTurnHandle;
     try {
+      // Resolved once, INSIDE the try: `command` re-reads the binary override
+      // per access, and a `buildArgs` throw must still reach the disposer
+      // below — hoisting either one out would leak the turn-scoped resource.
+      const command = this.command;
+      const args = this.buildArgs(input);
       const driver = this.createTurnDriver(input);
       handle = runHeadlessCli({
-        command: this.command,
-        args: this.buildArgs(input),
+        command,
+        args,
         cwd: input.cwd,
         env: this.buildEnv(input),
         stdinPayload: this.buildStdinPayload(input),
@@ -819,6 +824,10 @@ export abstract class AgentAdapter {
           }
           onEvent(event);
         },
+        // Handed over whole: `runHeadlessCli` owns the argv, the raw bytes and
+        // the single settle point, which is all three moments the sink
+        // describes. Nothing about the mirror is this class's business.
+        mirror: input.mirror,
         spawn: this.options.spawn,
         logger: this.options.logger,
       });
@@ -834,6 +843,9 @@ export abstract class AgentAdapter {
           `turn resource disposer failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
         );
       }
+      // The mirror needs nothing here: a throw on this path means
+      // `runHeadlessCli` was never reached, so it announced no turn and has
+      // none to close out.
       throw err;
     }
     if (dispose) {

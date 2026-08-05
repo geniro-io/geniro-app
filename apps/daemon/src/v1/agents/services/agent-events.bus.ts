@@ -73,7 +73,7 @@ export class AgentEventBus {
    *
    * A third stream rather than a direct call, because the things that must
    * react live in modules ABOVE this one: `TerminalsModule` imports
-   * `AgentsModule`, so the chat service cannot inject `PtyService` without a
+   * `AgentsModule`, so the chat service cannot inject `TerminalSessionsService` without a
    * module cycle. Announcing the deletion downward inverts that dependency —
    * anything holding per-run state subscribes and cleans up its own, which is
    * also how a second such holder gets added later without touching the

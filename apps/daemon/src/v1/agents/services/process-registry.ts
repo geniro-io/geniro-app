@@ -5,7 +5,7 @@ import type { AgentTurnHandle } from '../adapters/adapter.types';
 /**
  * Max time graceful shutdown waits for cancelled children to exit before
  * clearing. Coupled across the process boundary: must stay ≥ the PTY SIGKILL
- * escalation (KILL_ESCALATION_MS = 3s, ../../terminals/services/pty.service.ts)
+ * escalation (KILL_ESCALATION_MS = 3s, ../../terminals/services/terminal-sessions.service.ts)
  * and < the UI's kill grace (SHUTDOWN_GRACE_MS = 7s, apps/ui …/daemon-supervisor.ts),
  * or the UI guillotines the daemon mid-drain.
  */

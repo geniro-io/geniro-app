@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { RuntimeInfo } from '../../../auth/runtime';
 import { ProcessRegistry } from '../../agents/services/process-registry';
-import { type PtyLike, PtyService } from '../services/pty.service';
+import {
+  type PtyLike,
+  TerminalSessionsService,
+} from '../services/terminal-sessions.service';
 import { TerminalsGateway } from './terminals.gateway';
 
 const runtime: RuntimeInfo = {
@@ -59,7 +62,7 @@ function fakeSocket(token: unknown) {
 
 function build() {
   const ptys: FakePty[] = [];
-  const service = new PtyService(new ProcessRegistry(), {
+  const service = new TerminalSessionsService(new ProcessRegistry(), {
     spawnPty: () => {
       const pty = new FakePty();
       ptys.push(pty);

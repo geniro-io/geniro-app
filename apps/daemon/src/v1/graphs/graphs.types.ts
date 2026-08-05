@@ -416,6 +416,35 @@ export const AgentPluginCapabilitySchema = z
   .meta({ id: 'AgentPluginCapability' });
 export type AgentPluginCapability = z.infer<typeof AgentPluginCapabilitySchema>;
 
+/**
+ * Whether ONE CLI has an INTERACTIVE terminal mirror — a `--resume` session the
+ * user can type at.
+ *
+ * The wire home for `AdapterConfig.terminal`, for exactly the reason the plugin
+ * row above exists: without it the renderer hardcodes `agent === 'claude'` to
+ * decide whether to offer the mirror picker, and a second CLI gaining one (or
+ * claude losing one) leaves the picker offering a choice the daemon answers
+ * with TERMINAL_UNSUPPORTED.
+ *
+ * Note this says nothing about the LIVE mirror, which every agent has: it is
+ * the raw stdio of whichever CLI ran the turn, so there is no per-CLI fact to
+ * report.
+ */
+export const AgentTerminalCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * Why this CLI has no interactive terminal, or null when it has one. A
+     * sentence for the same reason as the plugin row: a bare "cannot" is the
+     * silent refusal these capabilities exist to replace.
+     */
+    unavailableReason: z.string().nullable(),
+  })
+  .meta({ id: 'AgentTerminalCapability' });
+export type AgentTerminalCapability = z.infer<
+  typeof AgentTerminalCapabilitySchema
+>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
@@ -424,6 +453,11 @@ export const CapabilitiesWireSchema = z.object({
   plugins: z
     .array(AgentPluginCapabilitySchema)
     .describe('Per-CLI plugin-directory support, one entry per known agent'),
+  interactiveTerminals: z
+    .array(AgentTerminalCapabilitySchema)
+    .describe(
+      'Per-CLI interactive terminal-mirror support, one entry per known agent',
+    ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

@@ -44,6 +44,7 @@ import { PartialStreamService } from '../../agents/services/partial-stream.servi
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { TurnMirrorService } from '../../agents/services/turn-mirror.service';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
@@ -477,6 +478,7 @@ function setup(
   } as unknown as AttachmentStoreService;
   // The REAL teardown over the same fakes — `deleteRun` is a thin caller of
   // it, so a stub here would leave the delete tests pinning the stub.
+  const mirrors = new TurnMirrorService();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -486,6 +488,7 @@ function setup(
     callTokens,
     new PartialStreamService(bus, new FakeContextWindowStore().asStore()),
     attachments,
+    mirrors,
   );
   const service = new GraphExecutorService(
     em,
@@ -519,8 +522,10 @@ function setup(
         opts.mcpSettingsFile ??
         join(tmpdir(), 'geniro-exec-spec-never-written.json'),
     }),
+    mirrors,
   );
   return {
+    mirrors,
     service,
     claude,
     cursor,

@@ -89,3 +89,45 @@ describe('CapabilitiesService', () => {
     expect(byAgent.get('cursor-agent')).not.toBe('');
   });
 });
+
+describe('CapabilitiesService — the interactive terminal', () => {
+  it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
+    expect(
+      service()
+        .service.capabilitiesWire()
+        .interactiveTerminals.map((t) => t.agent),
+    ).toEqual([...registry().all().keys()]);
+  });
+
+  it('reports claude as available and cursor-agent as not', () => {
+    // The two live values, read through each adapter's own `terminalCommand`
+    // rather than restated here: cursor-acp's `terminal: null` IS the fact, and
+    // a CLI that gains a mirror must need no change in this file.
+    const byAgent = new Map(
+      service()
+        .service.capabilitiesWire()
+        .interactiveTerminals.map((t) => [t.agent, t.unavailableReason]),
+    );
+
+    expect(byAgent.get('claude')).toBeNull();
+    expect(byAgent.get('cursor-agent')).toEqual(expect.any(String));
+    expect(byAgent.get('cursor-agent')).not.toBe('');
+  });
+
+  it('does not mistake "no session yet" for "no terminal support"', () => {
+    // `terminalCommand` refuses for two different reasons and only one is
+    // permanent. Probing with a placeholder session id is what keeps a claude
+    // node that has simply not run yet from being reported as having no
+    // interactive mirror at all — which would hide the picker forever.
+    expect(
+      new ClaudeAdapter().terminalCommand({ sessionId: null, model: null }),
+    ).toEqual({ ok: false, reason: 'no-session' });
+
+    const byAgent = new Map(
+      service()
+        .service.capabilitiesWire()
+        .interactiveTerminals.map((t) => [t.agent, t.unavailableReason]),
+    );
+    expect(byAgent.get('claude')).toBeNull();
+  });
+});

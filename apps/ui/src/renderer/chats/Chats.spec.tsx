@@ -96,10 +96,21 @@ vi.mock('./turn-block', async (importOriginal) => {
   };
 });
 vi.mock('../terminals/terminal-panel', () => ({
-  TerminalPanel: (props: { title: string; onClose: () => void }) => (
+  TerminalPanel: (props: {
+    title: string;
+    onClose: () => void;
+    onSwitchKind?: (kind: string) => void;
+  }) => (
     <div data-testid="terminal-panel">
       {props.title}
       <button onClick={props.onClose}>stub-close</button>
+      {/* Rendered only when the owner supplied a switcher, so a test can tell
+          "no picker offered" from "picker offered but unused". */}
+      {props.onSwitchKind ? (
+        <button onClick={() => props.onSwitchKind?.('interactive')}>
+          stub-switch
+        </button>
+      ) : null}
     </div>
   ),
 }));
@@ -422,6 +433,17 @@ beforeEach(() => {
       probedAt: null,
       reason: null,
     },
+    // The daemon's own answer for which CLIs have an INTERACTIVE mirror. The
+    // renderer reads it rather than allowlisting an agent by name, so the
+    // fixture has to state it — an empty report means "no picker anywhere",
+    // which is the correct still-loading behaviour.
+    interactiveTerminals: [
+      { agent: 'claude', unavailableReason: null },
+      {
+        agent: 'cursor-agent',
+        unavailableReason: 'cursor-agent has no interactive terminal session',
+      },
+    ],
   });
   terminalApi.createTerminal.mockReset();
   terminalApi.listTerminals.mockReset().mockResolvedValue([]);
@@ -1703,6 +1725,7 @@ describe('Chats workflow runs', () => {
 describe('Chats terminal mirror', () => {
   const session = {
     id: 't-1',
+    kind: 'live',
     runId: 'r1',
     nodeId: null,
     resumeSessionId: null,
@@ -1754,8 +1777,10 @@ describe('Chats terminal mirror', () => {
 
     await openThreadTerminal(container, 'claude');
 
+    // `live` by default: the panel exists to show what the agent is doing,
+    // and only the live mirror follows a turn the chat is running right now.
     expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'r1' },
+      createTerminalDto: { runId: 'r1', kind: 'live' },
     });
     expect(
       container.querySelector('[data-testid="terminal-panel"]')?.textContent,
@@ -1829,14 +1854,14 @@ describe('Chats terminal mirror', () => {
     await openThreadTerminal(container, 'agent-1');
 
     expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'w1', nodeId: 'agent-1' },
+      createTerminalDto: { runId: 'w1', kind: 'live', nodeId: 'agent-1' },
     });
     expect(
       container.querySelector('[data-testid="terminal-panel"]')?.textContent,
     ).toContain('agent-1 — terminal');
   });
 
-  it('hides terminal actions for trigger and cursor-agent workflow nodes', async () => {
+  it('offers a terminal on every agent node — but never on a trigger', async () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
@@ -1890,8 +1915,9 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Mixed team');
 
-    // The panel lists cursor as a WORKING agent with its thread, but only
-    // claude gets a terminal affordance; the trigger is no agent at all.
+    // Both agents get a terminal: the live mirror is the raw output of
+    // whatever CLI ran the turn, so it needs neither a resumable CLI session
+    // nor claude specifically. A trigger runs no agent at all and gets none.
     await act(async () => {
       container
         .querySelector('button[aria-label="Open side panel"]')!
@@ -1910,9 +1936,124 @@ describe('Chats terminal mirror', () => {
     expect(
       panel.querySelector('button[aria-label="Open terminal for claude"]'),
     ).not.toBeNull();
+    // Was claude-only while the ONLY mirror was a `claude --resume` spawn.
     expect(
       panel.querySelector('button[aria-label="Open terminal for cursor"]'),
-    ).toBeNull();
+    ).not.toBeNull();
+  });
+
+  it('does not re-attach an INTERACTIVE session to a live open', async () => {
+    // The re-attach match must include the kind. Without it, asking for a live
+    // mirror hands back the `--resume` PTY that happens to be open on the same
+    // node — a read-only view of a different process.
+    terminalApi.listTerminals.mockResolvedValue([
+      { ...session, id: 'other-kind', kind: 'interactive' },
+    ]);
+    terminalApi.createTerminal.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await openThreadTerminal(container, 'claude');
+
+    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
+      createTerminalDto: { runId: 'r1', kind: 'live' },
+    });
+  });
+
+  it('offers the kind picker on a claude main thread', async () => {
+    terminalApi.createTerminal.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await openThreadTerminal(container, 'claude');
+
+    const switcher = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'stub-switch',
+    );
+    expect(switcher).toBeTruthy();
+
+    // Switching re-opens the SAME target as the other kind, and releases the
+    // outgoing live session rather than leaving it absorbing bytes.
+    terminalApi.createTerminal.mockResolvedValue({
+      ...session,
+      id: 't-2',
+      kind: 'interactive',
+    });
+    await act(async () => {
+      switcher?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(terminalApi.createTerminal).toHaveBeenLastCalledWith({
+      createTerminalDto: { runId: 'r1', kind: 'interactive' },
+    });
+    expect(terminalApi.disposeTerminal).toHaveBeenCalledWith({ id: 't-1' });
+  });
+
+  it('offers NO kind picker for a cursor-agent node — it has no interactive mirror', async () => {
+    // The picker must not list a choice that answers TERMINAL_UNSUPPORTED.
+    const wfRun: ChatRun = {
+      id: 'w1',
+      status: 'running',
+      title: 'Cursor team',
+      agentKind: null,
+      workflowId: 'cursor-team',
+      cwd: '/proj',
+      model: null,
+      approval: null,
+      effort: null,
+      createdAt: 'later',
+      updatedAt: 'later',
+      lastMessage: null,
+    };
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'cursor-team',
+      workflow: {
+        name: 'Cursor team',
+        nodes: [
+          {
+            id: 'cursor',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+        ],
+        edges: [],
+      },
+    });
+    api.listRunItems.mockResolvedValue([
+      {
+        id: 'w-s1',
+        runId: 'w1',
+        nodeId: 'cursor',
+        seq: 0,
+        kind: 'status',
+        role: null,
+        payload: { nodeId: 'cursor', status: 'running' },
+        createdAt: 'now',
+      },
+    ]);
+    terminalApi.createTerminal.mockResolvedValue({
+      ...session,
+      runId: 'w1',
+      nodeId: 'cursor',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Cursor team');
+
+    await openThreadTerminal(container, 'cursor');
+
+    // It still gets a LIVE mirror — that is the gain — just no picker.
+    expect(
+      container.querySelector('[data-testid="terminal-panel"]'),
+    ).toBeTruthy();
+    expect(
+      [...container.querySelectorAll('button')].find(
+        (b) => b.textContent === 'stub-switch',
+      ),
+    ).toBeUndefined();
   });
 
   it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
@@ -1966,23 +2107,50 @@ describe('Chats terminal mirror', () => {
     ).toBeTruthy();
   });
 
-  it('Close only DETACHES — the popup never disposes the daemon session', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
+  /** Close the open terminal panel via its stub close button. */
+  async function closePanel(container: HTMLElement): Promise<void> {
     const close = [...container.querySelectorAll('button')].find(
       (b) => b.textContent === 'stub-close',
     );
     await act(async () => {
       close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
+  }
+
+  it('Close only DETACHES an INTERACTIVE session — its child keeps running', async () => {
+    // Its whole value is the running `--resume` child; disposing on close would
+    // kill a REPL the user may be mid-conversation with, and re-opening would
+    // pay a fresh CLI startup.
+    terminalApi.createTerminal.mockResolvedValue({
+      ...session,
+      kind: 'interactive',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await openThreadTerminal(container, 'claude');
+
+    await closePanel(container);
+
     expect(terminalApi.disposeTerminal).not.toHaveBeenCalled();
     expect(
       container.querySelector('[data-testid="terminal-panel"]'),
     ).toBeNull();
+  });
+
+  it('Close RELEASES a live session — the daemon keeps the buffer either way', async () => {
+    // A live session holds only a copy of a buffer the daemon keeps anyway, so
+    // leaving it open pins that copy and keeps it absorbing every chunk into a
+    // room nobody is in. Re-opening replays from the daemon's own buffer.
+    terminalApi.createTerminal.mockResolvedValue(session);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await openThreadTerminal(container, 'claude');
+
+    await closePanel(container);
+
+    expect(terminalApi.disposeTerminal).toHaveBeenCalledWith({ id: 't-1' });
   });
 
   it('surfaces a daemon rejection (unsupported agent) in the error line', async () => {

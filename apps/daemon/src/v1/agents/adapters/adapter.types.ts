@@ -232,6 +232,39 @@ export interface TurnImage {
 }
 
 /**
+ * Where a turn's RAW child stdio is tee'd, so the terminal panel can mirror a
+ * headless turn while it runs.
+ *
+ * Deliberately byte-level and adapter-agnostic: it carries what actually
+ * crossed the pipe, never a rendering of it. The semantic plane already exists
+ * (the {@link AgentEvent} stream → transcript items + live deltas), so a
+ * second, prettified view of the same events would be that transcript
+ * duplicated in a worse medium — AND it would need a mapper per CLI, which is
+ * exactly what `.claude/rules/agent-adapters.md` keeps out of shared code.
+ * Passing bytes through means the mirror cannot drift from what the process
+ * emitted, and it surfaces `stderr`, which no other surface in the app shows.
+ *
+ * Per TURN INPUT rather than per adapter: one adapter instance serves N
+ * concurrent turns under graph fan-out, so a sink held on the adapter would
+ * cross-wire them — the same reason {@link TurnDriver} is created per turn.
+ */
+export interface TurnStdioSink {
+  /**
+   * The command line this turn spawned with — the mirror's banner. Emitted by
+   * {@link AgentAdapter.start}, the one place argv exists as data.
+   */
+  spawned(command: string, args: readonly string[]): void;
+  /** Raw child output, verbatim and unparsed. */
+  data(stream: 'stdout' | 'stderr', chunk: string): void;
+  /**
+   * This turn settled. The mirror stays open: the next turn of the same node
+   * appends to the same buffer, which is what makes the panel follow a
+   * conversation rather than a single process.
+   */
+  settled(): void;
+}
+
+/**
  * One model a CLI will accept for `--model`, as that CLI reports it.
  *
  * `id` is passed through verbatim — never normalized, since only the CLI knows
@@ -588,6 +621,14 @@ export interface AgentTurnInput {
    * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).
    */
   env?: Record<string, string>;
+  /**
+   * Tee this turn's raw stdio here (the live terminal mirror). Absent = the
+   * turn is not being mirrored and nothing is buffered.
+   *
+   * Supplied by the CALLER, because only the caller knows which run and node
+   * the turn belongs to — the adapter neither knows nor needs to.
+   */
+  mirror?: TurnStdioSink;
   /**
    * Stream this turn's assistant text as it is generated, if the CLI can.
    *

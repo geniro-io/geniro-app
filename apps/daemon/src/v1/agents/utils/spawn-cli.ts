@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   TurnIo,
+  TurnStdioSink,
 } from '../adapters/adapter.types';
 import { buildChildEnv } from './child-env';
 import { killProcessGroup } from './kill-tree';
@@ -87,6 +88,17 @@ export interface RunCliOptions {
    */
   onStdinReady?: (io: TurnIo) => void;
   onEvent: (event: AgentEvent) => void;
+  /**
+   * The live terminal mirror for this turn, or absent when nothing is watching.
+   *
+   * The WHOLE lifecycle lives here rather than at the caller, because this
+   * function already owns all three moments the sink describes: it holds the
+   * argv, it is the only place the unparsed bytes exist, and it owns the single
+   * settle point. Driving it from the adapter instead meant four touchpoints
+   * and an asymmetry — a turn that threw before the spawn announced a settle
+   * for a turn it had never announced starting.
+   */
+  mirror?: TurnStdioSink;
   spawn?: SpawnFn;
   logger?: { warn(message: string): void };
 }
@@ -127,6 +139,28 @@ function killProcessTree(child: SpawnedProcess, signal: NodeJS.Signals): void {
 export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   const spawnFn = opts.spawn ?? defaultSpawn;
 
+  // The mirror is a BYSTANDER on every path it sits on — including the stdout
+  // data handler, which owns the turn's entire output. A throwing sink must not
+  // take that down and strand the turn with no events and no terminal item.
+  // Isolated here rather than trusted to behave, because "never throws" is not
+  // enforceable across a boundary.
+  const tellMirror = (tell: () => void): void => {
+    if (!opts.mirror) {
+      return;
+    }
+    try {
+      tell();
+    } catch (err) {
+      opts.logger?.warn(
+        `${opts.command}: terminal mirror sink threw: ${errorMessage(err)}`,
+      );
+    }
+  };
+
+  // Before the spawn, so a spawn that FAILS still leaves the user looking at the
+  // command line that failed.
+  tellMirror(() => opts.mirror?.spawned(opts.command, opts.args));
+
   let settled = false;
   let resolveDone!: () => void;
   let killTimer: ReturnType<typeof setTimeout> | null = null;
@@ -140,6 +174,10 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         clearTimeout(killTimer);
         killTimer = null;
       }
+      // Every terminal path funnels through here — a clean close, a signal, a
+      // process error, a failed spawn — so the mirror is told exactly once and
+      // cannot be left showing a turn that never ends.
+      tellMirror(() => opts.mirror?.settled());
       resolveDone();
     }
   };
@@ -207,14 +245,18 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   });
 
   child.stdout?.setEncoding('utf8');
-  child.stdout?.on('data', (chunk: string | Buffer) =>
-    buffer.push(toUtf8(chunk)),
-  );
+  child.stdout?.on('data', (chunk: string | Buffer) => {
+    const text = toUtf8(chunk);
+    tellMirror(() => opts.mirror?.data('stdout', text));
+    buffer.push(text);
+  });
 
   let stderrTail = '';
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string | Buffer) => {
-    stderrTail = (stderrTail + toUtf8(chunk)).slice(-STDERR_TAIL_BYTES);
+    const text = toUtf8(chunk);
+    tellMirror(() => opts.mirror?.data('stderr', text));
+    stderrTail = (stderrTail + text).slice(-STDERR_TAIL_BYTES);
   });
 
   child.on('error', (err: Error) => {

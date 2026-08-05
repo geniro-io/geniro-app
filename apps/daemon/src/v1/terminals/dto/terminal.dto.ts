@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   MAX_COLS,
   MAX_ROWS,
+  TerminalKindSchema,
   TerminalSessionWireSchema,
 } from '../terminals.types';
 
@@ -18,6 +19,19 @@ import {
 export const createTerminalSchema = z.object({
   runId: z.string().min(1),
   nodeId: z.string().min(1).optional(),
+  /**
+   * Which mirror to open. Defaults to `live` — following the run's own turns
+   * is what a terminal on a running agent is for, and the `interactive`
+   * `--resume` session cannot do it (a separate process cannot advance while
+   * the chat's headless turn holds the conversation).
+   *
+   * `.default()` rather than `.optional()` so the default is part of the
+   * PUBLISHED schema: this is a request-only DTO, so it never faces the
+   * request/response duplication that keeps `WorkflowSchema` default-free, and
+   * without it the generated client states the field is optional while saying
+   * nothing about what omitting it means.
+   */
+  kind: TerminalKindSchema.default('live'),
   /**
    * Mirror one SPECIFIC CLI session of the node (a call thread's resume id
    * from its `call_result` item) instead of the node's latest session.

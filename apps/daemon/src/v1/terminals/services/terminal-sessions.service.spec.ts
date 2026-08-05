@@ -1,11 +1,13 @@
-import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import type { TerminalEvent } from '../terminals.types';
 import {
   EXITED_SESSION_TTL_MS,
+  LIVE_REFRESH_INTERVAL_MS,
   type PtyLike,
+  REFRESH_INPUT_GRACE_MS,
+  REFRESH_QUIET_MS,
   TerminalSessionsService,
 } from './terminal-sessions.service';
 
@@ -47,7 +49,14 @@ class FakePty implements PtyLike {
   }
 }
 
-function build(overrides: { killEscalationMs?: number } = {}) {
+function build(
+  overrides: {
+    killEscalationMs?: number;
+    refreshQuietMs?: number;
+    liveRefreshIntervalMs?: number;
+    refreshInputGraceMs?: number;
+  } = {},
+) {
   const registry = new ProcessRegistry();
   const ptys: FakePty[] = [];
   const spawns: {
@@ -63,8 +72,18 @@ function build(overrides: { killEscalationMs?: number } = {}) {
       return pty;
     },
     killEscalationMs: overrides.killEscalationMs ?? 3000,
+    ...overrides,
   });
   return { service, registry, ptys, spawns };
+}
+
+/**
+ * Drive a replacement child all the way through: it draws, then goes quiet long
+ * enough to be taken as finished and swapped in.
+ */
+function render(pty: FakePty | undefined, screen: string): void {
+  pty?.emitData(screen);
+  vi.advanceTimersByTime(REFRESH_QUIET_MS);
 }
 
 const INPUT = {
@@ -333,9 +352,7 @@ describe('TerminalSessionsService', () => {
     expect(service.get(id).status).toBe('closing');
     // The dying PTY still counts as busy — an instant reopen for the same
     // (run, node) must get THIS session back, not a second `--resume` spawn.
-    expect(
-      service.findRunning('interactive', INPUT.runId, INPUT.nodeId)?.id,
-    ).toBe(id);
+    expect(service.findRunning(INPUT.runId, INPUT.nodeId)?.id).toBe(id);
     // Idempotent while closing: no double-kill, no premature forget.
     const killsAfterFirst = ptys[0]?.killed.length;
     service.dispose(id);
@@ -348,9 +365,7 @@ describe('TerminalSessionsService', () => {
     expect(() => service.get(id)).toThrowError(
       /TERMINAL_NOT_FOUND|no terminal/,
     );
-    expect(
-      service.findRunning('interactive', INPUT.runId, INPUT.nodeId),
-    ).toBeNull();
+    expect(service.findRunning(INPUT.runId, INPUT.nodeId)).toBeNull();
   });
 
   it('a session that exits on its own is kept for the replay TTL, then evicted', () => {
@@ -383,199 +398,361 @@ describe('TerminalSessionsService', () => {
   });
 });
 
-describe('TerminalSessionsService — live mirror sessions', () => {
-  const MIRROR = { runId: 'run-1', nodeId: null, cwd: '/proj' };
-
-  it('replays the snapshot and then fans out live appends', () => {
-    const { service } = build();
-    const source = new Subject<string>();
-
-    const wire = service.createMirror({
-      ...MIRROR,
-      snapshot: 'earlier output',
-      source,
-    });
-    const seen: TerminalEvent[] = [];
-    service.stream(wire.id).subscribe((event) => seen.push(event));
-    source.next('and now');
-
-    expect(wire.kind).toBe('live');
-    // Buffered history and live appends are one stream, so a client attaching
-    // later replays both in order.
-    expect(service.scrollback(wire.id)).toBe('earlier outputand now');
-    expect(seen).toEqual([{ kind: 'data', data: 'and now' }]);
-  });
-
-  it('claims no process slot — a mirror must not make its run look busy', () => {
-    // It spawns nothing, so there is nothing for shutdown to reap; a claim
-    // would also mark the run busy for chat turns over a session running
-    // nothing.
-    const { service, registry } = build();
-    const wire = service.createMirror({
-      ...MIRROR,
-      snapshot: '',
-      source: new Subject(),
-    });
-
-    expect(registry.has(`terminal:${wire.id}`)).toBe(false);
-  });
-
-  it('ignores input and resize instead of throwing', () => {
-    // There is no process to type at. A throw would surface a stray keystroke
-    // racing a session swap as an error the user cannot act on.
-    const { service } = build();
-    const wire = service.createMirror({
-      ...MIRROR,
-      snapshot: '',
-      source: new Subject(),
-    });
-
-    expect(() => service.write(wire.id, 'hello')).not.toThrow();
-    expect(() => service.resize(wire.id, 100, 40)).not.toThrow();
-    expect(service.scrollback(wire.id)).toBe('');
-  });
-
-  it('settles — without any exit code — when its source ends', () => {
-    // A deleted run (or an evicted buffer) completes the source. The mirror
-    // must stop wearing a live badge over a buffer nothing writes to.
-    const { service } = build();
-    const source = new Subject<string>();
-    const wire = service.createMirror({ ...MIRROR, snapshot: '', source });
-    const seen: TerminalEvent[] = [];
-    service.stream(wire.id).subscribe((event) => seen.push(event));
-
-    source.complete();
-
-    expect(service.get(wire.id).status).toBe('exited');
-    // Null, not 0: nothing exited, so no code can be claimed.
-    expect(service.get(wire.id).exitCode).toBeNull();
-    expect(seen).toEqual([{ kind: 'exit', exitCode: null }]);
-  });
-
-  it('kills without reaching the process-group escalation', () => {
-    // The guard that matters most: a null pty has no pid, and a pid-shaped
-    // default reaching killProcessGroup would signal the daemon's OWN group.
-    const { service } = build();
-    const wire = service.createMirror({
-      ...MIRROR,
-      snapshot: '',
-      source: new Subject(),
-    });
-
-    expect(() => service.kill(wire.id)).not.toThrow();
-    expect(service.get(wire.id).status).toBe('exited');
-  });
-
-  it('forgets a disposed mirror at once — no `closing` limbo', () => {
-    // The limbo exists to stop a reopen racing a second `--resume` onto one
-    // CLI session, and a mirror spawns nothing there could be a second of.
-    const { service } = build();
-    const wire = service.createMirror({
-      ...MIRROR,
-      snapshot: 'x',
-      source: new Subject(),
-    });
-
-    service.dispose(wire.id);
-
-    expect(() => service.get(wire.id)).toThrow();
-    expect(service.findRunning('live', MIRROR.runId, MIRROR.nodeId)).toBeNull();
-  });
-
-  it('settles only once when kill and dispose both land', () => {
-    // The genuine double-entry: `kill` settles, then `dispose` calls
-    // `settleMirror` again. Driving it through `source.complete()` instead
-    // would prove nothing — the subject is already complete by then, so a
-    // second `next` is a no-op whether or not the guard exists.
-    const { service } = build();
-    const wire = service.createMirror({
-      ...MIRROR,
-      snapshot: '',
-      source: new Subject(),
-    });
-    const seen: TerminalEvent[] = [];
-    service.stream(wire.id).subscribe((event) => seen.push(event));
-
-    service.kill(wire.id);
-    service.dispose(wire.id);
-
-    expect(seen).toEqual([{ kind: 'exit', exitCode: null }]);
-  });
-
-  it('leaves no pending timer behind when a live mirror is disposed', () => {
-    // `settleMirror` arms the replay TTL for an ABANDONED mirror; an explicit
-    // dispose deletes the session immediately, so that timer would hold the
-    // session — scrollback and all — for half an hour to delete a key that is
-    // already gone.
+describe('TerminalSessionsService — refresh keeps the mirror in step', () => {
+  beforeEach(() => {
     vi.useFakeTimers();
-    try {
-      const { service } = build();
-      const wire = service.createMirror({
-        ...MIRROR,
-        snapshot: 'x',
-        source: new Subject(),
-      });
-
-      service.dispose(wire.id);
-
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
-  it('publishes nothing for an empty chunk', () => {
-    // A child can flush with nothing buffered; waking every attached mirror for
-    // a zero-length write is pure noise.
+  it('respawns the SAME invocation in place, on one session', () => {
+    // The defect this exists for: `claude --resume` reads the transcript once,
+    // at startup — probe-measured, an already-open TUI grew by 0 bytes while a
+    // headless turn ran on the same session — so the only way a mirror shows
+    // what the chat has since said is to start the process over.
+    const { service, ptys, spawns } = build();
+    const { id } = service.create(INPUT);
+    const events: TerminalEvent[] = [];
+    const sub = service.stream(id).subscribe((event) => events.push(event));
+
+    service.refresh(id, { immediate: true });
+    render(ptys[1], 'the conversation, re-read');
+
+    expect(spawns).toHaveLength(2);
+    expect(spawns[1]?.args).toEqual(spawns[0]?.args);
+    // Same session, still running — the client never sees it end, so its
+    // attachment and its id survive the swap.
+    expect(service.get(id).status).toBe('running');
+    expect(events.some((event) => event.kind === 'exit')).toBe(false);
+    expect(service.scrollback(id)).toContain('the conversation, re-read');
+    sub.unsubscribe();
+  });
+
+  it('keeps the CURRENT screen up until the replacement has finished drawing', () => {
+    // The reason a refresh is spawn-first. A re-read is a cold CLI start —
+    // probe-measured at ~780ms to first byte and ~3.0s to a finished screen on
+    // a 200KB transcript — so clearing the terminal when the refresh BEGINS
+    // gave the user three seconds of blank. Nothing may reach the client until
+    // there is a whole new screen to show.
     const { service, ptys } = build();
-    const wire = service.create(INPUT);
-    const seen: TerminalEvent[] = [];
-    service.stream(wire.id).subscribe((event) => seen.push(event));
+    const { id } = service.create(INPUT);
+    ptys[0]?.emitData('the conversation, as it was');
 
-    ptys[0]?.emitData('');
+    service.refresh(id, { immediate: true });
+    ptys[1]?.emitData('half a re-render');
 
-    expect(seen).toEqual([]);
+    expect(service.scrollback(id)).toBe('the conversation, as it was');
+    // ...and the child holding that screen is still alive to keep serving it.
+    expect(ptys[0]?.killed).toEqual([]);
   });
 
-  it('is found separately from an interactive session on the same target', () => {
-    // Both kinds can be open on one node at once; matching without the kind
-    // would hand a live mirror to a caller asking for the interactive one.
-    const { service } = build();
-    const interactive = service.create(INPUT);
-    const mirror = service.createMirror({
-      runId: INPUT.runId,
-      nodeId: INPUT.nodeId,
-      cwd: INPUT.cwd,
-      snapshot: '',
-      source: new Subject(),
+  it('swaps in the finished screen and retires the child it replaces', () => {
+    // The replacement renders the whole conversation from the top, so the wipe
+    // must land WITH it: without one the new render sits under the stale copy
+    // and the user reads the transcript twice.
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+    ptys[0]?.emitData('the conversation, as it was');
+
+    service.refresh(id, { immediate: true });
+    render(ptys[1], 'the conversation, re-read');
+
+    const scrollback = service.scrollback(id);
+    expect(scrollback).not.toContain('as it was');
+    // The xterm "clear saved lines" extension — `2J` alone would leave the
+    // stale render one scroll away.
+    expect(scrollback).toContain('\u001b[3J');
+    expect(scrollback).toContain('the conversation, re-read');
+    expect(ptys[0]?.killed.length).toBe(1);
+  });
+
+  it('sends the wipe and the new screen as ONE write', () => {
+    // Two writes cross the socket as two frames, and the client paints the
+    // blank between them — a flash on every re-read, which is the artifact the
+    // spawn-first swap exists to remove.
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+    const chunks: string[] = [];
+    const sub = service.stream(id).subscribe((event) => {
+      if (event.kind === 'data') {
+        chunks.push(event.data);
+      }
     });
 
-    expect(service.findRunning('live', INPUT.runId, INPUT.nodeId)?.id).toBe(
-      mirror.id,
-    );
-    expect(
-      service.findRunning('interactive', INPUT.runId, INPUT.nodeId)?.id,
-    ).toBe(interactive.id);
+    service.refresh(id, { immediate: true });
+    render(ptys[1], 'the conversation, re-read');
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toContain('the conversation, re-read');
+    sub.unsubscribe();
   });
 
-  it('evicts a settled mirror after the exited-session TTL', () => {
-    // A settled mirror keeps its final screen re-attachable, then goes. Unlike
-    // a PTY — whose exit means a user closed a REPL — a mirror settles whenever
-    // its run is deleted, so without the TTL a routine delete would pin up to a
-    // full scrollback for the daemon's whole life.
+  it('the retired child’s exit does not end the session it just handed over', () => {
+    // It is killed AFTER the handover, so its exit arrives for a session that
+    // has already moved on. Settling on it would close the panel every refresh.
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+    service.refresh(id, { immediate: true });
+    render(ptys[1], 're-read');
+
+    ptys[0]?.emitExit(0);
+
+    expect(service.get(id).status).toBe('running');
+    // ...and the promoted child is the one now feeding the session.
+    ptys[1]?.emitData(' + more');
+    expect(service.scrollback(id)).toContain('re-read + more');
+  });
+
+  it('spawns the replacement at the size the panel is NOW', () => {
+    // A resize goes to the live child, but the SPEC is what the next spawn
+    // reads: without remembering it, every refresh dropped the terminal back to
+    // 80×24 and re-wrapped the whole conversation.
+    const { service, spawns } = build();
+    const { id } = service.create({ ...INPUT, cols: 80, rows: 24 });
+    service.resize(id, 160, 50);
+
+    service.refresh(id, { immediate: true });
+
+    expect(spawns[1]?.options).toMatchObject({ cols: 160, rows: 50 });
+  });
+
+  it('resizes a replacement that is still rendering', () => {
+    // It is about to become what the user sees. Left at the old grid, the swap
+    // would show a conversation wrapped for a width the panel no longer has.
+    const { service, ptys } = build();
+    const { id } = service.create({ ...INPUT, cols: 80, rows: 24 });
+    service.refresh(id, { immediate: true });
+
+    service.resize(id, 120, 40);
+
+    expect(ptys[1]?.resized).toContainEqual([120, 40]);
+  });
+
+  it('does not stack respawns when several turns settle at once', () => {
+    // A workflow settling five nodes fires five refreshes at one mirror. Each
+    // would spawn another CLI.
+    const { service, spawns } = build();
+    const { id } = service.create(INPUT);
+
+    service.refresh(id, { immediate: true });
+    service.refresh(id, { immediate: true });
+    service.refresh(id, { immediate: true });
+
+    expect(spawns).toHaveLength(2);
+  });
+
+  it('a close DURING a refresh kills the replacement instead of promoting it', () => {
+    // Otherwise the panel the user just closed comes back: the pending
+    // replacement outlives the dispose and takes over a mirror nobody is
+    // watching — an unmanaged CLI child, which is exactly what the process
+    // registry exists to prevent.
+    const { service, ptys, spawns } = build();
+    const { id } = service.create(INPUT);
+
+    service.refresh(id, { immediate: true });
+    service.dispose(id);
+    render(ptys[1], 'a screen nobody asked for');
+    ptys[0]?.emitExit(0);
+
+    expect(spawns).toHaveLength(2);
+    expect(ptys[1]?.killed.length).toBe(1);
+    expect(() => service.get(id)).toThrowError(
+      /TERMINAL_NOT_FOUND|no terminal/,
+    );
+  });
+
+  it('keeps the working mirror when the replacement cannot be spawned', () => {
+    // A stale mirror beats a dead one. The screen the user is looking at is
+    // still being served by a live child, so failing to build its successor is
+    // not a reason to take it away.
+    const registry = new ProcessRegistry();
+    const ptys: FakePty[] = [];
+    let spawnCount = 0;
+    const service = new TerminalSessionsService(registry, {
+      spawnPty: () => {
+        if (++spawnCount > 1) {
+          throw new Error('posix_spawnp failed');
+        }
+        const pty = new FakePty();
+        ptys.push(pty);
+        return pty;
+      },
+    });
+    const { id } = service.create(INPUT);
+    const events: TerminalEvent[] = [];
+    service.stream(id).subscribe((event) => events.push(event));
+
+    service.refresh(id, { immediate: true });
+
+    expect(service.get(id).status).toBe('running');
+    expect(events.some((event) => event.kind === 'exit')).toBe(false);
+    // ...and the failure did not wedge the mirror: a later refresh is allowed.
+    service.refresh(id, { immediate: true });
+    expect(spawnCount).toBe(3);
+  });
+
+  it('keeps the working mirror when the replacement dies before it renders', () => {
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+    ptys[0]?.emitData('the conversation, as it was');
+
+    service.refresh(id, { immediate: true });
+    ptys[1]?.emitExit(1);
+
+    expect(service.get(id).status).toBe('running');
+    expect(service.scrollback(id)).toContain('as it was');
+  });
+
+  it('discards a replacement that drew nothing rather than blanking the screen', () => {
+    // The render deadline is a backstop for a CLI that never goes quiet, not a
+    // licence to swap in an empty terminal.
+    const { service, ptys } = build();
+    const { id } = service.create(INPUT);
+    ptys[0]?.emitData('the conversation, as it was');
+
+    service.refresh(id, { immediate: true });
+    vi.advanceTimersByTime(60_000);
+
+    expect(service.scrollback(id)).toContain('as it was');
+    expect(ptys[1]?.killed.length).toBe(1);
+  });
+
+  it('refreshes every mirror of one (run, node) and nothing else', () => {
+    const { service, spawns } = build();
+    const a = service.create({ ...INPUT, resumeSessionId: 'thread-a' });
+    const b = service.create({ ...INPUT, resumeSessionId: 'thread-b' });
+    const other = service.create({ ...INPUT, runId: 'run-2' });
+
+    service.refreshTarget('run-1', null, { immediate: true });
+
+    // Two threads of the node re-read; the other run's mirror is untouched.
+    expect(spawns).toHaveLength(5);
+    expect(service.get(a.id).status).toBe('running');
+    expect(service.get(b.id).status).toBe('running');
+    expect(service.get(other.id).status).toBe('running');
+  });
+});
+
+describe('TerminalSessionsService — re-reading DURING a turn', () => {
+  beforeEach(() => {
     vi.useFakeTimers();
-    try {
-      const { service } = build();
-      const source = new Subject<string>();
-      const wire = service.createMirror({ ...MIRROR, snapshot: 'x', source });
+  });
 
-      source.complete();
-      expect(service.get(wire.id).status).toBe('exited');
+  /** A session with a client attached — the state a visible panel is in. */
+  function attached(overrides: Parameters<typeof build>[0] = {}) {
+    const built = build(overrides);
+    const { id } = built.service.create(INPUT);
+    const sub = built.service.stream(id).subscribe(() => {});
+    return { ...built, id, sub };
+  }
 
-      vi.advanceTimersByTime(EXITED_SESSION_TTL_MS + 1);
-      expect(() => service.get(wire.id)).toThrow();
-    } finally {
-      vi.useRealTimers();
-    }
+  it('re-reads while the turn is still running, not only when it ends', () => {
+    // The bug the user hit: the mirror was wired to the turn's SETTLE, so a
+    // panel opened during a long turn sat frozen for its whole duration while
+    // the chat pane beside it filled up. Probe-measured, the CLI appends to its
+    // transcript as it works — a 34s turn grew 11 → 25 lines — so there is
+    // genuinely something new to read the whole way through.
+    const { service, spawns, id, sub } = attached();
+
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+    service.refresh(id);
+
+    expect(spawns).toHaveLength(2);
+    sub.unsubscribe();
+  });
+
+  it('re-reads at most once per interval however many items arrive', () => {
+    // Every transcript item asks for a re-read, and a busy turn emits them in
+    // bursts. Each one is a whole CLI process booting.
+    const { service, ptys, spawns, id, sub } = attached();
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+
+    service.refresh(id);
+    render(ptys[1], 'first re-read');
+    service.refresh(id);
+    service.refresh(id);
+    service.refresh(id);
+
+    expect(spawns).toHaveLength(2);
+    sub.unsubscribe();
+  });
+
+  it('defers the re-read the throttle refused instead of dropping it', () => {
+    // The item that arrives inside the interval is often the last one before a
+    // long tool call; dropped, the mirror stays stale for the whole of it.
+    const { service, ptys, spawns, id, sub } = attached();
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+    service.refresh(id);
+    render(ptys[1], 'first re-read');
+
+    service.refresh(id); // refused — inside the interval
+    expect(spawns).toHaveLength(2);
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+
+    expect(spawns).toHaveLength(3);
+    sub.unsubscribe();
+  });
+
+  it('does not re-read while nobody is attached', () => {
+    // A re-read is a CLI start; spending one to update a screen no client is
+    // subscribed to is pure cost.
+    const { service, spawns } = build();
+    const { id } = service.create(INPUT);
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+
+    service.refresh(id);
+
+    expect(spawns).toHaveLength(1);
+  });
+
+  it('still re-reads an unattached mirror when the turn SETTLES', () => {
+    // Once per turn, so it is cheap — and it is what makes a later attach show
+    // the finished conversation rather than the one from before the turn.
+    const { service, spawns } = build();
+    const { id } = service.create(INPUT);
+
+    service.refresh(id, { immediate: true });
+
+    expect(spawns).toHaveLength(2);
+  });
+
+  it('backs off while the user is typing into the mirror', () => {
+    // A re-spawn is a new CLI process: whatever is half-typed at the prompt
+    // goes with the old one. Someone typing has taken the conversation over by
+    // hand, and their line outranks an update they can see in the chat pane.
+    const { service, spawns, id, sub } = attached();
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+
+    service.write(id, 'a half-typed thought', { typed: true });
+    service.refresh(id);
+    service.refresh(id, { immediate: true });
+
+    expect(spawns).toHaveLength(1);
+    sub.unsubscribe();
+  });
+
+  it('is NOT paused by the emulator answering the TUI on its own', () => {
+    // The regression this pins. claude's TUI asks for Device Attributes on
+    // every render and the terminal emulator answers down the SAME input
+    // channel a keystroke uses. Treating that as typing re-armed the grace on
+    // every render, so the conversation was never re-read again — the mirror
+    // looked exactly as frozen as before any of this was built.
+    const { service, spawns, id, sub } = attached();
+    vi.advanceTimersByTime(LIVE_REFRESH_INTERVAL_MS);
+
+    service.write(id, String.fromCharCode(27) + '[?1;2c');
+    service.refresh(id);
+
+    expect(spawns).toHaveLength(2);
+    sub.unsubscribe();
+  });
+
+  it('resumes re-reading once the typing has gone stale', () => {
+    const { service, spawns, id, sub } = attached();
+    service.write(id, 'a half-typed thought', { typed: true });
+
+    vi.advanceTimersByTime(REFRESH_INPUT_GRACE_MS);
+    service.refresh(id);
+
+    expect(spawns).toHaveLength(2);
+    sub.unsubscribe();
   });
 });

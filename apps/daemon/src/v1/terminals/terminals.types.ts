@@ -11,27 +11,24 @@ export const TerminalStatusSchema = z
 export type TerminalStatus = z.infer<typeof TerminalStatusSchema>;
 
 /**
- * What a terminal session actually shows.
+ * Wire shape of a terminal session as the HTTP/WS surfaces report it.
  *
- * `live` mirrors the run's OWN turns — the raw stdio of the headless child the
- * chat is already driving, tee'd as it happens. It follows the conversation and
- * is read-only: there is no second process to type into.
+ * There is exactly ONE kind of terminal: a `--resume` CLI process under a PTY,
+ * showing the agent's own interactive TUI. A second, read-only `live` kind used
+ * to exist — the raw stdio of the headless turn, tee'd as it happened — and was
+ * deleted: it followed the conversation, but what it showed was the CLI's WIRE
+ * format (claude's stream-json), which is not a terminal in any sense the user
+ * asked for. The synchronisation it existed to provide is now
+ * {@link TerminalSessionsService.refresh} — the resumed TUI is respawned when a
+ * turn settles, so it re-reads the transcript instead of freezing at the moment
+ * it opened.
  *
- * `interactive` spawns a SEPARATE `--resume` CLI process on the same stored
- * conversation. It accepts input, but it is a different process: it replays the
- * transcript at startup and then cannot advance while the chat's own turn runs.
- * That gap is precisely what `live` exists to close, so `live` is the default
- * and `interactive` is the deliberate pick.
+ * The consequence is deliberate: a CLI whose adapter declares no terminal
+ * (cursor-agent's `terminal: null`) has no terminal at all, rather than a
+ * JSON-stream stand-in.
  */
-export const TerminalKindSchema = z
-  .enum(['live', 'interactive'])
-  .meta({ id: 'TerminalKind' });
-export type TerminalKind = z.infer<typeof TerminalKindSchema>;
-
-/** Wire shape of a terminal session as the HTTP/WS surfaces report it. */
 export const TerminalSessionWireSchema = z.object({
   id: z.string(),
-  kind: TerminalKindSchema,
   runId: z.string().describe('The chat/workflow run this terminal mirrors'),
   nodeId: z
     .string()
@@ -41,9 +38,7 @@ export const TerminalSessionWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'The CLI session an interactive mirror resumes — the node thread it ' +
-        'targets. Always null for a live mirror, which follows the node itself ' +
-        'rather than any one CLI session',
+      'The CLI session this mirror resumes — the node thread it targets',
     ),
   cwd: z.string(),
   status: TerminalStatusSchema,

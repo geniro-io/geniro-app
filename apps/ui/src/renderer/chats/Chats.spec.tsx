@@ -1776,7 +1776,6 @@ describe('Chats workflow runs', () => {
 describe('Chats terminal mirror', () => {
   const session = {
     id: 't-1',
-    kind: 'live',
     runId: 'r1',
     nodeId: null,
     resumeSessionId: null,
@@ -1831,7 +1830,7 @@ describe('Chats terminal mirror', () => {
     // `live` by default: the panel exists to show what the agent is doing,
     // and only the live mirror follows a turn the chat is running right now.
     expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'r1', kind: 'live' },
+      createTerminalDto: { runId: 'r1' },
     });
     expect(
       container.querySelector('[data-testid="terminal-panel"]')?.textContent,
@@ -1905,14 +1904,14 @@ describe('Chats terminal mirror', () => {
     await openThreadTerminal(container, 'agent-1');
 
     expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'w1', kind: 'live', nodeId: 'agent-1' },
+      createTerminalDto: { runId: 'w1', nodeId: 'agent-1' },
     });
     expect(
       container.querySelector('[data-testid="terminal-panel"]')?.textContent,
     ).toContain('agent-1 — terminal');
   });
 
-  it('offers a terminal on every agent node — but never on a trigger', async () => {
+  it('offers a terminal on a claude node — never on cursor-agent or a trigger', async () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
@@ -1966,9 +1965,9 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Mixed team');
 
-    // Both agents get a terminal: the live mirror is the raw output of
-    // whatever CLI ran the turn, so it needs neither a resumable CLI session
-    // nor claude specifically. A trigger runs no agent at all and gets none.
+    // Only claude: every mirror is that agent's own CLI resumed on the
+    // conversation, and cursor-agent has no such invocation
+    // (`terminal: null`). A trigger runs no agent at all and gets none either.
     await act(async () => {
       container
         .querySelector('button[aria-label="Open side panel"]')!
@@ -1987,62 +1986,15 @@ describe('Chats terminal mirror', () => {
     expect(
       panel.querySelector('button[aria-label="Open terminal for claude"]'),
     ).not.toBeNull();
-    // Was claude-only while the ONLY mirror was a `claude --resume` spawn.
+    // No button rather than one that answers TERMINAL_UNSUPPORTED.
     expect(
       panel.querySelector('button[aria-label="Open terminal for cursor"]'),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
-  it('does not re-attach an INTERACTIVE session to a live open', async () => {
-    // The re-attach match must include the kind. Without it, asking for a live
-    // mirror hands back the `--resume` PTY that happens to be open on the same
-    // node — a read-only view of a different process.
-    terminalApi.listTerminals.mockResolvedValue([
-      { ...session, id: 'other-kind', kind: 'interactive' },
-    ]);
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-
-    await openThreadTerminal(container, 'claude');
-
-    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'r1', kind: 'live' },
-    });
-  });
-
-  it('offers the kind picker on a claude main thread', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
-    const switcher = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'stub-switch',
-    );
-    expect(switcher).toBeTruthy();
-
-    // Switching re-opens the SAME target as the other kind, and releases the
-    // outgoing live session rather than leaving it absorbing bytes.
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
-      id: 't-2',
-      kind: 'interactive',
-    });
-    await act(async () => {
-      switcher?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(terminalApi.createTerminal).toHaveBeenLastCalledWith({
-      createTerminalDto: { runId: 'r1', kind: 'interactive' },
-    });
-    expect(terminalApi.disposeTerminal).toHaveBeenCalledWith({ id: 't-1' });
-  });
-
-  it('offers NO kind picker for a cursor-agent node — it has no interactive mirror', async () => {
-    // The picker must not list a choice that answers TERMINAL_UNSUPPORTED.
+  it('offers no terminal at all for a cursor-agent node', async () => {
+    // Its adapter declares `terminal: null` — no `--resume` TUI exists, so the
+    // panel shows no button rather than one that fails on click.
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
@@ -2094,17 +2046,17 @@ describe('Chats terminal mirror', () => {
     const container = await mount(client);
     await clickRun(container, 'Cursor team');
 
-    await openThreadTerminal(container, 'cursor');
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
 
-    // It still gets a LIVE mirror — that is the gain — just no picker.
     expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-    expect(
-      [...container.querySelectorAll('button')].find(
-        (b) => b.textContent === 'stub-switch',
-      ),
-    ).toBeUndefined();
+      panel.querySelector('button[aria-label="Open terminal for cursor"]'),
+    ).toBeNull();
+    expect(terminalApi.createTerminal).not.toHaveBeenCalled();
   });
 
   it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
@@ -2168,14 +2120,11 @@ describe('Chats terminal mirror', () => {
     });
   }
 
-  it('Close only DETACHES an INTERACTIVE session — its child keeps running', async () => {
+  it('Close only DETACHES — the `--resume` child keeps running', async () => {
     // Its whole value is the running `--resume` child; disposing on close would
     // kill a REPL the user may be mid-conversation with, and re-opening would
     // pay a fresh CLI startup.
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
-      kind: 'interactive',
-    });
+    terminalApi.createTerminal.mockResolvedValue(session);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -2187,21 +2136,6 @@ describe('Chats terminal mirror', () => {
     expect(
       container.querySelector('[data-testid="terminal-panel"]'),
     ).toBeNull();
-  });
-
-  it('Close RELEASES a live session — the daemon keeps the buffer either way', async () => {
-    // A live session holds only a copy of a buffer the daemon keeps anyway, so
-    // leaving it open pins that copy and keeps it absorbing every chunk into a
-    // room nobody is in. Re-opening replays from the daemon's own buffer.
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
-    await closePanel(container);
-
-    expect(terminalApi.disposeTerminal).toHaveBeenCalledWith({ id: 't-1' });
   });
 
   it('surfaces a daemon rejection (unsupported agent) in the error line', async () => {
@@ -3655,7 +3589,7 @@ describe('Chats sidebar list', () => {
         edges: [],
       },
     });
-    const { client, emitItem } = makeClient();
+    const { client, emitItem, emitLiveText } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'Big team');
 
@@ -3744,6 +3678,36 @@ describe('Chats sidebar list', () => {
       ),
     ).not.toBeNull();
     expect(rows.some((text) => text?.includes('start'))).toBe(false);
+
+    // A LIVE delta for one node moves that node's meter mid-turn, and only
+    // that node's. The panel read the durable half alone, so a workflow
+    // agent's meter could not move until its turn COMPLETED — and on its first
+    // turn there was no figure at all, which is the bare-number report.
+    await act(async () => {
+      emitLiveText({
+        runId: 'w1',
+        nodeId: 'w-b',
+        text: '',
+        thinkingTokens: null,
+        thinkingSince: null,
+        thinkingStretch: null,
+        contextTokens: 120_000,
+        contextWindowTokens: 200_000,
+      });
+    });
+    expect(
+      panel.querySelector(
+        'button[aria-label="Context 60% full — 120k of 200k"]',
+      ),
+    ).not.toBeNull();
+    // Worker A keeps the window ITS OWN turn reported — 1M, not Worker B's
+    // 200k. A run-scoped window would have redrawn both against whichever
+    // node reported last.
+    expect(
+      panel.querySelector(
+        'button[aria-label="Context 5% full — 45.2k of 1M, $0.23 spent"]',
+      ),
+    ).not.toBeNull();
 
     // ✕ closes the panel.
     await act(async () => {

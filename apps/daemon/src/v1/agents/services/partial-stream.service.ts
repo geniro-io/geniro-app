@@ -60,14 +60,21 @@ export class PartialStreamService {
   /** runId -> ownerKey -> what that agent is doing right now. */
   private readonly tails = new Map<string, Map<string, LiveState>>();
   /**
-   * runId -> the context window the CLI last reported for this run.
+   * (runId, ownerKey) -> the context window the CLI last reported for it.
    *
    * Remembered because the window rides the `result` line ONLY (probe-verified
-   * on claude 2.1.220: `result.modelUsage[<model>].contextWindow`, absent from
-   * every `assistant` line), while the live context figure arrives mid-turn.
-   * Without this the meter could show a token count with nothing to scale it
-   * against until the turn finished — and a client reconnecting mid-turn would
-   * see an unscaled number for the rest of it.
+   * on claude 2.1.220, and again on 2.1.x here:
+   * `result.modelUsage[<model>].contextWindow`, absent from every `assistant`
+   * line and from `system/init`), while the live context figure arrives
+   * mid-turn. Without this the meter could show a token count with nothing to
+   * scale it against until the turn finished — and a client reconnecting
+   * mid-turn would see an unscaled number for the rest of it.
+   *
+   * Keyed by OWNER, not by run. A 1:1 chat has exactly one owner so the two are
+   * the same thing there — but a workflow run is N agents that routinely run on
+   * DIFFERENT models, and a run-scoped window is whichever node reported last:
+   * an opus node's 160k would have been drawn against a haiku node's 200k. The
+   * owner is the thing a window belongs to.
    */
   private readonly windows = new Map<string, number>();
   /**
@@ -94,9 +101,10 @@ export class PartialStreamService {
    */
   private readonly windowsByModel = new Map<string, number>();
   /**
-   * runId -> the model key its current turn announced, for the lookup above.
+   * (runId, ownerKey) -> the model key its current turn announced, for the
+   * lookup above.
    *
-   * Also what makes the run-scoped window above INVALIDATABLE: a chat may
+   * Also what makes the owner-scoped window above INVALIDATABLE: a chat may
    * switch model between turns (the composer's chips are editable mid-run), and
    * a window learned from the previous model would otherwise be kept for the
    * whole next turn — a 300k request on a 1M model reading "300k / 200k".
@@ -136,12 +144,12 @@ export class PartialStreamService {
         // a byte-identical 64 KB event on the wire for every remaining delta of
         // the turn, which is the exact traffic the cap exists to stop.
         if (endedAStretch) {
-          this.publish(this.eventOf(runId, nodeId, state));
+          this.publish(this.eventOf(runId, ownerKey, nodeId, state));
         }
         return;
       }
       state.text = (state.text + delta).slice(0, MAX_TAIL_CHARS);
-      this.publish(this.eventOf(runId, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('append', err);
     }
@@ -167,7 +175,7 @@ export class PartialStreamService {
         state.thinkingSince = Date.now();
       }
       state.thinkingCurrent = tokens;
-      this.publish(this.eventOf(runId, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('thinking', err);
     }
@@ -189,21 +197,22 @@ export class PartialStreamService {
     try {
       const state = this.stateOf(runId, ownerKey);
       state.contextTokens = contextTokens;
-      this.publish(this.eventOf(runId, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('context', err);
     }
   }
 
   /**
-   * Remember the window the CLI reported for this run (from a `result` line).
+   * Remember the window the CLI reported for this owner (from a `result` line).
    *
-   * Kept per RUN rather than per owner: the window belongs to the model, and a
-   * run's next turn is overwhelmingly the same model — so a turn's first
+   * Kept per OWNER rather than per turn: the window belongs to the model, and
+   * an owner's next turn is overwhelmingly the same model — so a turn's first
    * `assistant` line, which carries no window of its own, can still be scaled.
    */
   rememberWindow(
     runId: string,
+    ownerKey: string,
     contextWindowTokens: number | null,
     model: string | null = null,
   ): void {
@@ -211,13 +220,14 @@ export class PartialStreamService {
       if (contextWindowTokens === null || contextWindowTokens <= 0) {
         return;
       }
-      this.windows.set(runId, contextWindowTokens);
+      const owner = this.ownerId(runId, ownerKey);
+      this.windows.set(owner, contextWindowTokens);
       // Cached under the model the WINDOW ITSELF came from, never under
       // whatever the turn announced at startup. A turn that fell back to a
       // second model reports that model's window, and filing it under the
       // requested one poisons every later chat on the requested model — the
       // 1M-shown-as-200k defect, cached for the life of the process.
-      const announced = this.runModels.get(runId);
+      const announced = this.runModels.get(owner);
       if (announced && model !== null && announced.model === model) {
         this.windowsByModel.set(announced.key, contextWindowTokens);
         // Written through to disk so the NEXT daemon launch already knows this
@@ -239,18 +249,24 @@ export class PartialStreamService {
    * one has been seen before, so the meter is scaled from the FIRST request
    * rather than from the first completed turn.
    *
-   * A window already remembered for THIS run wins while the model is
-   * unchanged: it came from this run's own `result` line and so describes the
+   * A window already remembered for THIS owner wins while the model is
+   * unchanged: it came from this owner's own `result` line and so describes the
    * conversation on screen. A model CHANGE drops it — the composer's chips are
    * editable mid-run, so switching model between turns is a first-class flow,
    * and the previous model's window would otherwise scale the whole next turn.
    */
-  useModel(runId: string, agent: string, model: string): void {
+  useModel(
+    runId: string,
+    ownerKey: string,
+    agent: string,
+    model: string,
+  ): void {
     try {
+      const owner = this.ownerId(runId, ownerKey);
       const key = this.modelKey(agent, model);
-      if (this.runModels.get(runId)?.key !== key) {
-        this.runModels.set(runId, { key, agent, model });
-        this.windows.delete(runId);
+      if (this.runModels.get(owner)?.key !== key) {
+        this.runModels.set(owner, { key, agent, model });
+        this.windows.delete(owner);
       }
       // A miss falls through to the persisted store — that is what makes the
       // FIRST turn after a daemon launch scaled, rather than the first turn to
@@ -263,8 +279,8 @@ export class PartialStreamService {
           known = stored;
         }
       }
-      if (known !== undefined && !this.windows.has(runId)) {
-        this.windows.set(runId, known);
+      if (known !== undefined && !this.windows.has(owner)) {
+        this.windows.set(owner, known);
       }
     } catch (err) {
       this.warn('useModel', err);
@@ -284,6 +300,17 @@ export class PartialStreamService {
     return contextWindowKey(agent, model);
   }
 
+  /**
+   * The (run, owner) key the window and model maps are filed under.
+   *
+   * NUL-joined like every other composite key in the daemon. A run id is a
+   * UUID and an owner key is either the chat sentinel or a workflow node id, so
+   * neither half can contain the byte and the pair cannot be re-partitioned.
+   */
+  private ownerId(runId: string, ownerKey: string): string {
+    return `${runId}\u0000${ownerKey}`;
+  }
+
   private stateOf(runId: string, ownerKey: string): LiveState {
     const byOwner = this.tails.get(runId) ?? new Map<string, LiveState>();
     this.tails.set(runId, byOwner);
@@ -301,6 +328,7 @@ export class PartialStreamService {
   /** Project the internal state onto the wire shape clients actually read. */
   private eventOf(
     runId: string,
+    ownerKey: string,
     nodeId: string | null,
     state: LiveState,
   ): RunDeltaEvent {
@@ -316,7 +344,8 @@ export class PartialStreamService {
       thinkingSince: reasoning ? state.thinkingSince : null,
       thinkingStretch: reasoning ? state.thinkingStretch : null,
       contextTokens: state.contextTokens,
-      contextWindowTokens: this.windows.get(runId) ?? null,
+      contextWindowTokens:
+        this.windows.get(this.ownerId(runId, ownerKey)) ?? null,
     };
   }
 
@@ -341,7 +370,7 @@ export class PartialStreamService {
       }
       state.text = '';
       state.thinkingCurrent = null;
-      this.publish(this.eventOf(runId, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('retire', err);
     }
@@ -371,7 +400,7 @@ export class PartialStreamService {
       // half-sentence twice — once as the tail they watched appear, once as the
       // row written to replace it.
       this.publish(
-        this.eventOf(runId, nodeId, {
+        this.eventOf(runId, ownerKey, nodeId, {
           ...state,
           text: '',
           thinkingCurrent: null,
@@ -415,7 +444,7 @@ export class PartialStreamService {
         // a graph node uses its own id for both.
         const nodeId = ownerKey === SINGLE_AGENT_NODE ? null : ownerKey;
         this.publish(
-          this.eventOf(runId, nodeId, {
+          this.eventOf(runId, ownerKey, nodeId, {
             ...state,
             text: '',
             thinkingCurrent: null,
@@ -436,8 +465,22 @@ export class PartialStreamService {
   forgetRun(runId: string): void {
     try {
       this.tails.delete(runId);
-      this.windows.delete(runId);
-      this.runModels.delete(runId);
+      // Swept by PREFIX, because these two are keyed per (run, owner) and a
+      // workflow run has one entry per NODE. Deleting `runId` alone was correct
+      // only while every run had exactly one owner; it now leaves a node's
+      // window behind for the life of the process, which is a leak that no
+      // later call can reach — the run it belongs to no longer exists.
+      const prefix = this.ownerId(runId, '');
+      for (const key of this.windows.keys()) {
+        if (key.startsWith(prefix)) {
+          this.windows.delete(key);
+        }
+      }
+      for (const key of this.runModels.keys()) {
+        if (key.startsWith(prefix)) {
+          this.runModels.delete(key);
+        }
+      }
     } catch (err) {
       this.warn('forgetRun', err);
     }

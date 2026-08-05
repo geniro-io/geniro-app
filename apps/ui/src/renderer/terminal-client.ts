@@ -104,9 +104,17 @@ export class TerminalClient {
     socket.on('disconnect', () => this.events.onClose?.());
   }
 
-  /** Forward keystrokes/paste from xterm to the PTY. */
-  input(data: string): void {
-    this.socket?.emit('input', { terminalId: this.terminalId, data });
+  /**
+   * Forward what xterm produces to the PTY.
+   *
+   * `typed` says a HUMAN caused this — a real key or paste event — and is what
+   * pauses the daemon's automatic re-read of the conversation. It is NOT the
+   * same as "xterm emitted something": the emulator also answers the TUI's own
+   * terminal queries down this channel (claude's TUI asks for Device Attributes
+   * on every render), and counting those as typing froze the mirror for good.
+   */
+  input(data: string, typed = false): void {
+    this.socket?.emit('input', { terminalId: this.terminalId, data, typed });
   }
 
   /** Propagate the fitted xterm dimensions to the PTY. */

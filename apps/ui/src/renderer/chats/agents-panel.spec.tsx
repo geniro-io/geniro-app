@@ -250,18 +250,17 @@ describe('AgentsPanel', () => {
     click(openMain);
     expect(onOpenThread).toHaveBeenCalledWith(agents[0], agents[0]!.threads[0]);
 
-    // Cursor's MAIN thread opens too: the live mirror is the raw output of
-    // whichever CLI ran the turn, so it needs no `--resume` support. Only the
-    // per-call-thread terminal is still claude-only (asserted below).
+    // Cursor's main thread gets NO button: every mirror is that agent's own
+    // CLI resumed on the conversation, and cursor-agent has no such
+    // invocation. A button that could only ever answer TERMINAL_UNSUPPORTED is
+    // worse than none.
     expect(
       el.querySelector('button[aria-label="Open terminal for Reviewer"]'),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
-  it('keeps a CALL thread terminal claude-only — the live mirror is per node', () => {
-    // A call thread is a sub-session of the node, and the live mirror is keyed
-    // by the node, so only the interactive `--resume` mirror can target one —
-    // which cursor-agent does not have.
+  it('offers no thread terminal for a CLI with no interactive mirror', () => {
+    // Every mirror resumes the agent's own CLI, which cursor-agent cannot do.
     const cursorCaller: AgentDisplay = {
       ...agents[1]!,
       id: 'cursor-caller',
@@ -417,10 +416,55 @@ describe('AgentsPanel — MCP servers', () => {
     ],
   };
 
+  it('puts the MCP control beside the terminal one, in the card header', () => {
+    // Where the user asked for it: the two things you reach for on an agent —
+    // its shell and its tools — sit together and open the same way. It used to
+    // be a full-width band across the bottom of the card that pushed the
+    // card's own content down whenever it was open.
+    const el = render(
+      <AgentsPanel
+        interactiveTerminalAgents={INTERACTIVE}
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const header = cardFor(el, 'Orchestrator').querySelector('div, button')!;
+    const controls = [...header.querySelectorAll('button')].map((b) =>
+      b.getAttribute('aria-label'),
+    );
+    expect(controls).toContain('Open terminal for Orchestrator');
+    expect(controls).toContain('MCP servers');
+  });
+
+  it('opening the MCP popup does not also expand the thread list', () => {
+    // The card header is itself a button for a multi-thread agent, so without
+    // stopping the press the list underneath toggles on every open.
+    const el = render(
+      <AgentsPanel
+        interactiveTerminalAgents={INTERACTIVE}
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    openMcpList(el, 'Worker');
+
+    expect(cardFor(el, 'Worker').textContent).toContain('sentry');
+    expect(cardFor(el, 'Worker').textContent).not.toContain(
+      'Write a haiku about rivers.',
+    );
+  });
+
   it('keeps the rows behind the trigger until it is pressed', () => {
     // Reading the listing health-checks each server — it launches the user's
     // own MCP processes — so a chat must not dial them just by being opened.
-    // The count is the one thing worth showing without asking.
+    // The control is an icon beside the terminal one; the rows live in the
+    // popup it opens.
     const el = render(
       <AgentsPanel
         interactiveTerminalAgents={INTERACTIVE}
@@ -433,7 +477,9 @@ describe('AgentsPanel — MCP servers', () => {
 
     const orchestrator = cardFor(el, 'Orchestrator');
     expect(orchestrator.textContent).not.toContain('sentry');
-    expect(orchestrator.textContent).toContain('MCP');
+    expect(
+      orchestrator.querySelector('button[aria-label="MCP servers"]'),
+    ).not.toBeNull();
 
     openMcpList(el);
     expect(cardFor(el, 'Orchestrator').textContent).toContain('sentry');

@@ -8,7 +8,6 @@ import { BadRequestException } from '@packages/common';
 import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
-  AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpServer,
 } from '../adapters/adapter.types';
@@ -19,7 +18,6 @@ import { resolveValidCwd } from '../utils/resolve-cwd';
 import { resolveValidPluginDir } from '../utils/resolve-plugin-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
-import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
 
 /**
@@ -124,6 +122,16 @@ interface CacheEntry {
  * servers as it goes — so two panels opening at once must not mean two rounds
  * of that.
  */
+/**
+ * Why a row carries no switch when the CLI's own config could not be read.
+ *
+ * NOT a per-CLI sentence, which is why it lives here rather than in an
+ * adapter's config: it describes geniro's own read failing, not anything about
+ * the CLI's capabilities.
+ */
+const MCP_STATE_UNREADABLE_REASON =
+  'the state of this folder’s MCP servers could not be read, so switching one could not be verified';
+
 @Injectable()
 export class AgentMcpService {
   private readonly logger = new Logger(AgentMcpService.name);
@@ -137,7 +145,6 @@ export class AgentMcpService {
   constructor(
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
-    private readonly settings: McpSettingsStore,
     private readonly versions: AgentVersionService,
     options: AgentMcpServiceOptions = {},
   ) {
@@ -316,13 +323,13 @@ export class AgentMcpService {
   /**
    * Switch one server on or off for one agent in one folder.
    *
-   * Refuses anything it cannot actually change, rather than writing a setting
-   * that would have no effect: only a project-scope server can be disabled at
-   * all, and one the user disabled in their OWN settings can never be
-   * re-enabled from here, because the CLI unions the two lists rather than
-   * letting geniro's override theirs. A silent no-op is the exact failure the
-   * design forbids — the user would watch a switch move and the next turn
-   * would ignore it.
+   * The MECHANISM belongs to the adapter — for claude, the CLI's own
+   * `projects[<cwd>].disabledMcpServers`, so the switch is the same one the
+   * user's terminal shows. This service only decides that the row may be
+   * switched at all, and refuses anything it cannot actually change rather
+   * than writing something with no effect: a silent no-op is the exact failure
+   * the design forbids, because the user watches a switch move and the next
+   * turn ignores it.
    *
    * Answers with the freshly-composed listing, so the caller renders the state
    * that actually landed rather than the one it asked for.
@@ -346,32 +353,34 @@ export class AgentMcpService {
       );
     }
     const facts = await adapter.readMcpFolderFacts(projectDir);
-    if (!facts.projectServers.includes(server)) {
-      throw new BadRequestException(
-        'MCP_SERVER_NOT_TOGGLEABLE',
-        `${server} cannot be switched in ${projectDir} — ${adapter.getConfig().mcp.notInToggleableScopeReason}`,
-      );
-    }
-    if (enabled && facts.userDisabled.includes(server)) {
+    if (enabled && facts.lockedOff.includes(server)) {
       throw new BadRequestException(
         'MCP_SERVER_DISABLED_BY_USER',
         `${server} is ${adapter.getConfig().mcp.userDisabledReason}`,
       );
     }
-    await this.settings.setDisabled(agent, projectDir, server, !enabled);
+    try {
+      await adapter.setMcpServerEnabled(projectDir, server, enabled);
+    } catch (err) {
+      // The adapter reaches the user's own config file and a real lock, so
+      // this is where a contended write or an unparseable config surfaces.
+      // Reported as a refusal with the reason, never swallowed: the panel is
+      // about to re-render, and a toggle that failed must not read as one that
+      // took.
+      throw new BadRequestException(
+        'MCP_TOGGLE_FAILED',
+        `could not switch ${server} for ${agent}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const read = await this.readServers(agent, projectDir);
-    // `facts` is REUSED across the write rather than re-read. It describes the
-    // user's OWN files (the project `.mcp.json`, their CLI settings), and the
-    // write above touched neither — geniro's disabled set lives in its own
-    // `<userData>/mcp-settings.json`, which `composeListing` reads fresh. So
-    // the second read those files got per toggle could only ever return what
-    // the validation above had already seen.
+    // Re-read rather than reusing `facts`: the write above changed exactly the
+    // half `facts` reports, so the pre-write copy would render the state the
+    // user just left.
     return this.composeListing(
       read.adapter,
       agent,
       read.projectDir,
       read.result,
-      facts,
     );
   }
 
@@ -387,43 +396,36 @@ export class AgentMcpService {
    *
    * The adapter's refusal becomes the sentence the panel shows, verbatim.
    *
-   * `knownFacts` is for a caller that has ALREADY read them in this request —
-   * only {@link setEnabled}, which must read them to validate the toggle. The
-   * disabled set is still read fresh either way; it is the half the write
-   * changes.
+   * The adapter's refusal becomes the sentence the panel shows, verbatim.
    */
   private async composeListing(
     adapter: AgentAdapter,
     agent: AgentKind,
     cwd: string,
     result: AgentMcpListingResult,
-    knownFacts?: AgentMcpFolderFacts,
   ): Promise<AgentMcpListingWire> {
     if (!result.ok) {
       return { servers: [], unavailableReason: result.reason };
     }
-    const [facts, disabledByGeniro] = await Promise.all([
-      knownFacts ??
-        adapter.readMcpFolderFacts(cwd).catch((err: unknown) => {
-          // Reading the user's own files is best-effort. Knowing nothing means
-          // every row renders read-only, which is the safe direction: a switch
-          // that cannot work is worse than no switch.
-          this.logger.warn(
-            `reading ${agent} MCP folder facts failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return { projectServers: [], userDisabled: [] };
-        }),
-      this.settings.disabled(agent, cwd),
-    ]);
-    const geniroDisabled = new Set(disabledByGeniro);
-    const userDisabled = new Set(facts.userDisabled);
-    const projectServers = new Set(facts.projectServers);
+    let factsUnavailable = false;
+    const facts = await adapter
+      .readMcpFolderFacts(cwd)
+      .catch((err: unknown) => {
+        // Reading the CLI's own config is best-effort, but the failure is not
+        // silent: every row renders read-only, which is the safe direction. A
+        // switch offered over a state nobody could read would be showing a
+        // position it never verified.
+        this.logger.warn(
+          `reading ${agent} MCP folder facts failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        factsUnavailable = true;
+        return { disabled: [], lockedOff: [] };
+      });
+    const disabled = new Set(facts.disabled);
+    const lockedOff = new Set(facts.lockedOff);
     const toggle = adapter.getConfig().mcp;
     return {
       servers: result.servers.map((server) => {
-        // A CLI that cannot be switched at all reports `unknown`, not `other`:
-        // "outside the disable-able scope" is a claim about the user's setup,
-        // and this CLI has no such scope to be outside of.
         if (toggle.toggleUnavailableReason !== null) {
           return {
             ...server,
@@ -437,25 +439,32 @@ export class AgentMcpService {
             toggleUnavailableReason: toggle.toggleUnavailableReason,
           };
         }
-        const isProject = projectServers.has(server.name);
-        const disabledByUser = userDisabled.has(server.name);
+        if (factsUnavailable) {
+          return {
+            ...server,
+            scope: 'unknown' as const,
+            disabled: server.status === 'disabled',
+            toggleUnavailableReason: MCP_STATE_UNREADABLE_REASON,
+          };
+        }
+        const isLockedOff = lockedOff.has(server.name);
         return {
           ...server,
-          scope: isProject ? ('project' as const) : ('other' as const),
-          // The geniro half is gated on scope: the setting only suppresses
-          // project servers, so a stale entry for a name that has since moved
-          // to user scope would otherwise render struck-through and off while
-          // every turn still loads it — the panel stating the opposite of what
-          // the next turn does.
+          // Every scope is switchable now that the toggle writes the CLI's own
+          // per-folder list, so the distinction the field used to draw (a
+          // project server vs anything else) no longer decides anything. What
+          // still does is whether the row is locked OFF.
+          scope: isLockedOff ? ('other' as const) : ('project' as const),
+          // The listing cannot see the toggle — `claude mcp list` reports a
+          // disabled server as though it were live (probe-verified) — so the
+          // config's own list is what says whether the next turn loads it.
           disabled:
             server.status === 'disabled' ||
-            disabledByUser ||
-            (isProject && geniroDisabled.has(server.name)),
-          toggleUnavailableReason: !isProject
-            ? toggle.notInToggleableScopeReason
-            : disabledByUser
-              ? toggle.userDisabledReason
-              : null,
+            isLockedOff ||
+            disabled.has(server.name),
+          toggleUnavailableReason: isLockedOff
+            ? toggle.userDisabledReason
+            : null,
         };
       }),
       unavailableReason: null,

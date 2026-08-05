@@ -117,13 +117,17 @@ describe('TerminalClient', () => {
     const client = new TerminalClient(handle, 't-1', {});
     client.connect();
 
-    client.input('ls\r');
+    client.input('ls\r', true);
     client.resize(120, 40);
     client.close();
 
+    // `typed` rides every input: the daemon pauses its automatic re-read only
+    // for a human, and the emulator's own query replies come down this channel
+    // too. An omitted flag is what froze the mirror.
     expect(mocks.emit).toHaveBeenCalledWith('input', {
       terminalId: 't-1',
       data: 'ls\r',
+      typed: true,
     });
     expect(mocks.emit).toHaveBeenCalledWith('resize', {
       terminalId: 't-1',

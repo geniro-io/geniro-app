@@ -523,12 +523,6 @@ export interface CreateTerminalDto {
     nodeId?: string;
     /**
      * 
-     * @type {TerminalKind}
-     * @memberof CreateTerminalDto
-     */
-    kind?: TerminalKind;
-    /**
-     * 
      * @type {string}
      * @memberof CreateTerminalDto
      */
@@ -546,8 +540,6 @@ export interface CreateTerminalDto {
      */
     rows?: number;
 }
-
-
 /**
  * 
  * @export
@@ -1032,17 +1024,6 @@ export interface SetMcpServerEnabledDto {
 }
 
 
-
-/**
- * 
- * @export
- */
-export const TerminalKind = {
-    Live: 'live',
-    Interactive: 'interactive'
-} as const;
-export type TerminalKind = typeof TerminalKind[keyof typeof TerminalKind];
-
 /**
  * 
  * @export
@@ -1055,12 +1036,6 @@ export interface TerminalSessionDto {
      * @memberof TerminalSessionDto
      */
     id: string;
-    /**
-     * 
-     * @type {TerminalKind}
-     * @memberof TerminalSessionDto
-     */
-    kind: TerminalKind;
     /**
      * The chat/workflow run this terminal mirrors
      * @type {string}

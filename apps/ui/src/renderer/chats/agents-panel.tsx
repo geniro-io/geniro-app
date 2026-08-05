@@ -29,6 +29,16 @@ import { mcpScopeKey } from './use-agent-mcp';
  * The trigger is the label alone: the count and the re-dial control belong to
  * the panel it opens, which already heads its rows with both.
  */
+/**
+ * The MCP control: an icon button beside the terminal one, opening the server
+ * list in its own popup.
+ *
+ * A BUTTON in the card's header rather than a band across the bottom of the
+ * card. The two things a user reaches for on an agent — its shell and its
+ * tools — now sit together and open the same way, instead of one being a
+ * header icon and the other a full-width disclosure that pushed the card's
+ * own content down whenever it was open.
+ */
 function McpDisclosure({
   open,
   onOpenChange,
@@ -45,29 +55,27 @@ function McpDisclosure({
   onSetEnabled?: (server: string, enabled: boolean) => void;
 }): React.JSX.Element {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const count = listing?.servers?.length ?? 0;
   return (
-    <div className="relative border-t border-border px-2.5 py-1.5">
-      <button
+    <span className="relative flex shrink-0 items-center">
+      <Button
         ref={triggerRef}
         type="button"
+        variant="ghost"
+        size="icon"
         aria-expanded={open}
         aria-label="MCP servers"
-        className="flex w-full items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground"
-        onClick={() => onOpenChange(!open)}>
-        <Plug aria-hidden="true" className="size-3 shrink-0" />
-        <span className="font-medium">MCP</span>
-        {/* The COUNT lives in the panel this opens, not here. `McpSection`
-            already heads its rows with "MCP · N" and the re-dial control, so
-            repeating the number on the trigger put the same figure on screen
-            twice whenever the list was open. */}
-        <ChevronRight
-          aria-hidden="true"
-          className={cn(
-            'ml-auto size-3.5 shrink-0 transition-transform',
-            open && 'rotate-90',
-          )}
-        />
-      </button>
+        title="MCP servers this agent loads here"
+        className="size-6 shrink-0 text-muted-foreground"
+        onClick={(event) => {
+          // The card header is itself a button for a multi-thread agent, so a
+          // press here would toggle the thread list underneath as well.
+          event.stopPropagation();
+          onOpenChange(!open);
+        }}>
+        <Plug aria-hidden="true" className="size-3.5 shrink-0" />
+        {count > 0 ? <span className="sr-only">{count} servers</span> : null}
+      </Button>
       <Popover
         open={open}
         onClose={() => onOpenChange(false)}
@@ -75,7 +83,7 @@ function McpDisclosure({
         side="bottom"
         align="end"
         label="MCP servers"
-        className="max-h-80 w-full overflow-y-auto">
+        className="max-h-80 w-[22rem] overflow-y-auto">
         <McpSection
           listing={listing}
           loading={loading}
@@ -87,7 +95,7 @@ function McpDisclosure({
           className="border-t-0"
         />
       </Popover>
-    </div>
+    </span>
   );
 }
 
@@ -272,9 +280,16 @@ export function AgentsPanel({
               agent.threads.length === 1 && agent.threads[0]?.kind === 'main'
                 ? agent.threads[0]
                 : null;
-            // No agent-kind gate: a sole thread is a main thread, and the live
-            // mirror it opens is the raw output of whatever CLI ran the turn.
-            const soleThreadTerminal = soleThread;
+            // Gated on the CLI: the ONE mirror left is that agent's own CLI
+            // resumed on this conversation, so an agent whose adapter has no
+            // such invocation (cursor-agent's `terminal: null`) gets no button
+            // at all rather than one that answers TERMINAL_UNSUPPORTED.
+            const soleThreadTerminal =
+              soleThread !== null &&
+              agent.agent !== null &&
+              interactiveTerminalAgents?.has(agent.agent) === true
+                ? soleThread
+                : null;
             const Header = soleThread ? 'div' : 'button';
             return (
               <li
@@ -317,9 +332,27 @@ export function AgentsPanel({
                         className="size-6 shrink-0 text-muted-foreground"
                         aria-label={`Open terminal for ${agent.name}`}
                         title="Open a terminal on this conversation"
-                        onClick={() => onOpenThread(agent, soleThreadTerminal)}>
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenThread(agent, soleThreadTerminal);
+                        }}>
                         <TerminalIcon className="size-3.5 shrink-0" />
                       </Button>
+                    ) : null}
+                    {mcpByScope && mcpKind !== null && mcpScope !== null ? (
+                      <McpDisclosure
+                        open={openMcp === agent.id}
+                        onOpenChange={(next) => openMcpFor(agent.id, next)}
+                        listing={mcpByScope.get(mcpScope)}
+                        loading={mcpLoading}
+                        onRefresh={onRefreshMcp}
+                        onSetEnabled={
+                          onSetMcpEnabled
+                            ? (server, enabled) =>
+                                onSetMcpEnabled(mcpKind, server, enabled)
+                            : undefined
+                        }
+                      />
                     ) : null}
                   </span>
                   <span className="flex items-center gap-1 text-xs">
@@ -354,21 +387,6 @@ export function AgentsPanel({
                     spentUsd={agent.spentUsd}
                   />
                 </div>
-                {mcpByScope && mcpKind !== null && mcpScope !== null ? (
-                  <McpDisclosure
-                    open={openMcp === agent.id}
-                    onOpenChange={(next) => openMcpFor(agent.id, next)}
-                    listing={mcpByScope.get(mcpScope)}
-                    loading={mcpLoading}
-                    onRefresh={onRefreshMcp}
-                    onSetEnabled={
-                      onSetMcpEnabled
-                        ? (server, enabled) =>
-                            onSetMcpEnabled(mcpKind, server, enabled)
-                        : undefined
-                    }
-                  />
-                ) : null}
                 {isExpanded && soleThread === null ? (
                   <ul className="m-0 flex list-none flex-col gap-0.5 border-t border-border px-2 py-1.5">
                     {agent.threads.length === 0 ? (
@@ -377,21 +395,17 @@ export function AgentsPanel({
                       </li>
                     ) : (
                       agent.threads.map((thread) => {
-                        // A main thread always opens: the live mirror follows
-                        // the NODE's own turns and needs no CLI session, so it
-                        // works for every agent kind.
-                        //
-                        // A call thread is a sub-session of that node, which
-                        // only the interactive `--resume` mirror can target —
-                        // so it keeps both of that mirror's requirements: a CLI
-                        // that has one at all, and a recorded session id
-                        // (present once the call settled).
+                        // Every mirror is a `--resume` of the agent's own CLI,
+                        // so the CLI must have one. A MAIN thread needs nothing
+                        // else — the daemon resolves its session from
+                        // `node_state`. A CALL thread is a sub-session, which
+                        // can only be targeted once its own session id has been
+                        // recorded (present after the call settles).
                         const canOpen =
-                          thread.kind === 'main' ||
-                          (agent.agent !== null &&
-                            interactiveTerminalAgents?.has(agent.agent) ===
-                              true &&
-                            thread.sessionId !== null);
+                          agent.agent !== null &&
+                          interactiveTerminalAgents?.has(agent.agent) ===
+                            true &&
+                          (thread.kind === 'main' || thread.sessionId !== null);
                         return (
                           <li
                             key={thread.id}

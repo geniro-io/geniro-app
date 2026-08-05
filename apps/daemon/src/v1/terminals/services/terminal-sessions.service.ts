@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConflictException, NotFoundException } from '@packages/common';
 import { spawn as spawnNodePty } from 'node-pty';
-import { Observable, Subject, type Subscription } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 
 import type { AgentTurnHandle } from '../../agents/adapters/adapter.types';
 import { ProcessRegistry } from '../../agents/services/process-registry';
@@ -16,7 +16,6 @@ import {
   MAX_COLS,
   MAX_ROWS,
   type TerminalEvent,
-  type TerminalKind,
   type TerminalSessionWire,
   type TerminalStatus,
 } from '../terminals.types';
@@ -33,6 +32,42 @@ const KILL_ESCALATION_MS = 3000;
 export const EXITED_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+/**
+ * How long a replacement child must go quiet before its screen is taken as
+ * fully rendered and swapped in.
+ *
+ * Probe-measured on a 200KB transcript: `claude --resume` emits its first byte
+ * at ~780ms and stops at ~3.0s. The window only has to outlast the gaps WITHIN
+ * that render, not the render itself, so it is short.
+ */
+// Exported so specs drive the real window rather than a copy of it.
+export const REFRESH_QUIET_MS = 600;
+/**
+ * Give up waiting for a replacement to go quiet and swap in what it has drawn.
+ * A CLI that never stops emitting (an animation, a spinner) would otherwise
+ * hold the swap open forever and freeze the mirror for good.
+ */
+const REFRESH_RENDER_TIMEOUT_MS = 20_000;
+/**
+ * The cadence of the DURING-a-turn re-read.
+ *
+ * Probe-measured: the CLI appends to its transcript as the turn runs (a 34s
+ * turn grew 11 → 15 → 16 → 19 → 20 → 22 → 25 lines), so re-reading mid-turn
+ * genuinely shows new work — the mirror does not have to wait for the turn to
+ * end. The interval is what keeps that affordable: each re-read is a whole CLI
+ * process booting and re-rendering the conversation, so it runs on a cadence
+ * rather than per transcript item, and only while somebody is attached.
+ */
+export const LIVE_REFRESH_INTERVAL_MS = 10_000;
+/**
+ * How long an automatic refresh stays out of the way after the user types.
+ *
+ * A re-spawn is a NEW CLI process: whatever was half-typed at the prompt is
+ * gone with the old one. Someone typing into the mirror has taken the
+ * conversation over by hand, and stealing their line to show them an update
+ * they can see in the chat pane anyway is the worse trade.
+ */
+export const REFRESH_INPUT_GRACE_MS = 30_000;
 
 /**
  * The slice of node-pty's `IPty` this service depends on — narrower than the
@@ -65,6 +100,9 @@ export type PtySpawnFn = (
 export interface TerminalSessionsOptions {
   spawnPty?: PtySpawnFn;
   killEscalationMs?: number;
+  refreshQuietMs?: number;
+  liveRefreshIntervalMs?: number;
+  refreshInputGraceMs?: number;
 }
 
 export interface CreateTerminalInput {
@@ -82,30 +120,8 @@ export interface CreateTerminalInput {
   env?: Record<string, string>;
 }
 
-/**
- * A session over an EXISTING byte stream rather than a process this service
- * spawns — the live mirror of a run's own headless turns.
- *
- * The caller supplies the bytes (`snapshot` + `source`) so this service stays
- * ignorant of where they come from: it owns session lifecycle, scrollback and
- * fan-out, all of which are the same whether a PTY or a tee produced the text.
- */
-export interface CreateMirrorInput {
-  runId: string;
-  nodeId: string | null;
-  /** Informational only — a mirror spawns nothing, so nothing runs here. */
-  cwd: string;
-  /** Everything buffered before this session existed, replayed on attach. */
-  snapshot: string;
-  /**
-   * Appends from now on. Read `snapshot` and pass this in the SAME synchronous
-   * tick, or bytes fall between the two.
-   */
-  source: Observable<string>;
-}
-
-/** What both kinds carry: identity, retained output, and lifecycle. */
-interface SessionBase {
+/** One terminal session: the PTY child, its retained output, its lifecycle. */
+interface Session {
   id: string;
   runId: string;
   nodeId: string | null;
@@ -119,14 +135,29 @@ interface SessionBase {
   createdAt: number;
   /** How long an exited session's final screen stays re-attachable. */
   evictTimer?: NodeJS.Timeout;
-}
-
-/** A session over a PTY child THIS service spawned. */
-interface InteractiveSession extends SessionBase {
-  kind: 'interactive';
-  /** Always present: the kind IS the guarantee that there is a process. */
+  /** The CURRENT child. Replaced in place by {@link TerminalSessionsService.refresh}. */
   pty: PtyLike;
+  /**
+   * Everything needed to spawn the child AGAIN, kept because a refresh is
+   * literally a re-spawn of the same invocation: the CLI reads its transcript
+   * once at startup, so re-reading it means starting over.
+   */
+  spawn: SpawnSpec;
   killTimer?: NodeJS.Timeout;
+  /**
+   * A replacement child rendering off-screen, waiting to take over. Also the
+   * re-entrancy guard — a workflow settling five nodes at once, or a turn
+   * emitting five items, must not stack five respawns onto one mirror.
+   */
+  pending?: PendingRefresh;
+  /** When the last refresh STARTED — the throttle's clock. */
+  lastRefreshAt: number;
+  /** A refresh the throttle deferred rather than dropped. */
+  trailingTimer?: NodeJS.Timeout;
+  /** When the user last typed into this mirror; 0 if never. */
+  lastInputAt: number;
+  /** Resolves when the session settles FOR GOOD — never on a refresh. */
+  settle: () => void;
   /**
    * Set by {@link TerminalSessionsService.dispose} on a running session: the user closed
    * this mirror on purpose, so on exit it is forgotten immediately instead of
@@ -135,23 +166,49 @@ interface InteractiveSession extends SessionBase {
   disposedExplicitly?: boolean;
 }
 
-/** A session over a byte stream someone else produces — no child of its own. */
-interface LiveSession extends SessionBase {
-  kind: 'live';
-  /** Unsubscribes this session from its source on settle. */
-  mirrorSub?: Subscription;
+/**
+ * A replacement child rendering OFF-SCREEN while the current one stays on the
+ * user's terminal.
+ *
+ * The whole point of buffering rather than swapping immediately: a re-read is a
+ * cold CLI start — probe-measured at ~780ms to first byte and ~3.0s to a
+ * finished screen on a 200KB transcript. Clearing the terminal at the START of
+ * that gave the user three seconds of blank followed by a redraw, which is what
+ * made the mirror feel broken. Held here, the swap is a single repaint of an
+ * already-complete screen.
+ */
+interface PendingRefresh {
+  pty: PtyLike;
+  /** What the replacement has drawn so far, replayed in one write on commit. */
+  buffer: string[];
+  /** Fires once the replacement has been quiet long enough to be done. */
+  quietTimer?: NodeJS.Timeout;
+  /** Backstop for a replacement that never goes quiet. */
+  deadline?: NodeJS.Timeout;
+  /** Set once this refresh has committed or been discarded — stops buffering. */
+  done: boolean;
+}
+
+/** The invocation a session spawns, and re-spawns on every refresh. */
+interface SpawnSpec {
+  command: string;
+  args: string[];
+  cwd: string;
+  cols: number;
+  rows: number;
+  env: Record<string, string>;
 }
 
 /**
- * The two kinds, discriminated by `kind` — ONE discriminator, not a `kind`
- * string beside a nullable `pty` that a reader has to keep in agreement by
- * hand. A `live` session structurally has no `pty`, `killTimer` or
- * `disposedExplicitly` and an `interactive` one has no `mirrorSub`, so the
- * process-touching paths (write, resize, kill, the group-SIGKILL escalation)
- * cannot be reached for a session with no pid to aim at — a pid-shaped default
- * reaching `killProcessGroup` would signal the daemon's OWN group.
+ * Wipe the screen AND the scrollback, then home the cursor.
+ *
+ * Sent to attached clients immediately before a refresh's replacement child
+ * starts writing. Without it the resumed TUI's fresh render lands UNDER the
+ * previous one and the user reads the conversation twice, the stale copy first.
+ * `3J` is the xterm extension that clears the saved lines too, which is the
+ * half that matters here — `2J` alone leaves the old transcript one scroll away.
  */
-type Session = InteractiveSession | LiveSession;
+const CLEAR_SCREEN = '\u001b[2J\u001b[3J\u001b[H';
 
 /**
  * pnpm extracts node-pty's prebuilt `spawn-helper` without its exec bit, which
@@ -183,22 +240,23 @@ function ensureSpawnHelperExecutable(): void {
 }
 
 /**
- * Owns every terminal-mirror session, of both kinds: `interactive` ones it
- * SPAWNS (a `--resume` CLI child under a PTY) and `live` ones it merely WATCHES
- * (the tee of a headless turn someone else spawned — see {@link createMirror}).
+ * Owns every terminal-mirror session: a `--resume` CLI child under a PTY,
+ * bridged raw to xterm.js.
  *
- * Named for SESSIONS rather than for PTYs because that is what it owns, and
- * because what it owns is the same for both kinds: lifecycle, scrollback
- * buffering for (re)attach replay, byte fan-out, and settling. Only
- * spawn/write/resize/kill are PTY-specific, and each of those narrows to the
- * `interactive` arm of {@link Session} before it can name a process.
+ * Named for SESSIONS rather than for PTYs because a session OUTLIVES its
+ * child. {@link refresh} replaces the process in place — same session id, same
+ * event stream, same attached clients — which is what keeps the mirror in step
+ * with the chat: the CLI reads its transcript once at startup and never again,
+ * so the only way a second process learns what the chat has since said is to be
+ * started over.
  *
- * For the spawning half: spawn is env-stripped via
- * {@link buildChildEnv}, and every PTY child registers with
- * {@link ProcessRegistry} under `terminal:<id>` — the prefix keeps a mirror
- * from marking its run "busy" for chat turns — so cancel and daemon shutdown
- * reap it like any other spawned child. Sessions are in-memory only: a live
- * mirror is not history, so nothing touches SQLite.
+ * Spawn is env-stripped via {@link buildChildEnv}, and every PTY child
+ * registers with {@link ProcessRegistry} under `terminal:<id>` — the prefix
+ * keeps a mirror from marking its run "busy" for chat turns — so cancel and
+ * daemon shutdown reap it like any other spawned child. ONE registry entry
+ * covers a session for its whole life, whichever child is current, so a
+ * refreshed session can never leave an unmanaged process behind. Sessions are
+ * in-memory only: a mirror is not history, so nothing touches SQLite.
  */
 @Injectable()
 export class TerminalSessionsService {
@@ -206,6 +264,9 @@ export class TerminalSessionsService {
   private readonly sessions = new Map<string, Session>();
   private readonly spawnPty: PtySpawnFn;
   private readonly killEscalationMs: number;
+  private readonly refreshQuietMs: number;
+  private readonly liveRefreshIntervalMs: number;
+  private readonly refreshInputGraceMs: number;
 
   constructor(
     private readonly registry: ProcessRegistry,
@@ -213,6 +274,11 @@ export class TerminalSessionsService {
   ) {
     this.spawnPty = options.spawnPty ?? (spawnNodePty as PtySpawnFn);
     this.killEscalationMs = options.killEscalationMs ?? KILL_ESCALATION_MS;
+    this.refreshQuietMs = options.refreshQuietMs ?? REFRESH_QUIET_MS;
+    this.liveRefreshIntervalMs =
+      options.liveRefreshIntervalMs ?? LIVE_REFRESH_INTERVAL_MS;
+    this.refreshInputGraceMs =
+      options.refreshInputGraceMs ?? REFRESH_INPUT_GRACE_MS;
   }
 
   create(input: CreateTerminalInput): TerminalSessionWire {
@@ -236,66 +302,45 @@ export class TerminalSessionsService {
       );
     }
 
+    const spawn: SpawnSpec = {
+      command: input.command,
+      args: input.args,
+      cwd: input.cwd,
+      cols: clamp(input.cols ?? DEFAULT_COLS, 1, MAX_COLS),
+      rows: clamp(input.rows ?? DEFAULT_ROWS, 1, MAX_ROWS),
+      env: stringEnv(buildChildEnv({ TERM: 'xterm-256color', ...input.env })),
+    };
     let pty: PtyLike;
     try {
-      pty = this.spawnPty(input.command, input.args, {
-        name: 'xterm-256color',
-        cols: clamp(input.cols ?? DEFAULT_COLS, 1, MAX_COLS),
-        rows: clamp(input.rows ?? DEFAULT_ROWS, 1, MAX_ROWS),
-        cwd: input.cwd,
-        env: stringEnv(buildChildEnv({ TERM: 'xterm-256color', ...input.env })),
-      });
+      pty = this.spawnChild(spawn);
     } catch (err) {
       this.registry.release(registryKey);
       throw err;
     }
 
-    const session: InteractiveSession = {
+    let settle!: () => void;
+    const done = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const session: Session = {
       id,
-      kind: 'interactive',
       runId: input.runId,
       nodeId: input.nodeId,
       resumeSessionId: input.resumeSessionId ?? null,
       cwd: input.cwd,
       pty,
+      spawn,
+      settle,
       scrollback: new CappedTextBuffer(),
       status: 'running',
       exitCode: null,
       events: new Subject<TerminalEvent>(),
       createdAt: Date.now(),
+      lastRefreshAt: Date.now(),
+      lastInputAt: 0,
     };
     this.sessions.set(id, session);
-
-    pty.onData((data) => this.absorb(session, data));
-
-    let settle!: () => void;
-    const done = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    pty.onExit(({ exitCode }) => {
-      if (session.killTimer) {
-        clearTimeout(session.killTimer);
-        session.killTimer = undefined;
-      }
-      session.status = 'exited';
-      session.exitCode = exitCode;
-      session.events.next({ kind: 'exit', exitCode });
-      session.events.complete();
-      if (session.disposedExplicitly) {
-        // The user closed this mirror; nobody re-attaches to replay it.
-        this.sessions.delete(id);
-      } else {
-        // Keep the exited session around briefly so a re-attach can replay
-        // the final screen, then evict — without a TTL every abandoned
-        // session pins up to SCROLLBACK_CAP of memory for the daemon's
-        // lifetime.
-        session.evictTimer = setTimeout(() => {
-          this.sessions.delete(id);
-        }, EXITED_SESSION_TTL_MS);
-        session.evictTimer.unref?.();
-      }
-      settle();
-    });
+    this.wire(session);
 
     const handle: AgentTurnHandle = {
       done,
@@ -307,41 +352,299 @@ export class TerminalSessionsService {
   }
 
   /**
-   * Open a `live` session over a byte stream this service did not spawn.
+   * Re-read the conversation: start the same invocation again and swap it in
+   * once it has finished drawing.
    *
-   * Nothing is claimed in {@link ProcessRegistry} and no child exists: there is
-   * no process to reap, and claiming one would make the run look busy for chat
-   * turns over a session that runs nothing. The stream ENDING (its run deleted,
-   * its buffer evicted) settles the session exactly as a PTY exit does, so an
-   * attached client stops wearing a live badge over a dead buffer.
+   * The whole reason the mirror needed fixing. `claude --resume` loads the
+   * transcript ONCE, at startup — probe-measured: with a headless turn running
+   * on the same session, an already-open TUI grew by exactly 0 bytes — so a
+   * mirror opened before a turn shows the conversation as it was when the panel
+   * opened, forever. Re-spawning is the only mechanism the CLI offers.
+   *
+   * Everything the client holds survives: session id, event stream, attachment.
+   * The replacement renders OFF-SCREEN (see {@link PendingRefresh}) and the
+   * user's terminal changes exactly once, when there is a complete new screen
+   * to show.
+   *
+   * `immediate` skips the throttle — the caller knows the transcript is final
+   * (the turn settled) rather than merely further along. A throttled call is
+   * also gated on somebody being attached; both back off entirely while the
+   * user is typing into the mirror.
+   *
+   * Silently does nothing for a session that is not running, or one already
+   * refreshing — a workflow settling several nodes at once must not stack
+   * respawns onto one mirror.
    */
-  createMirror(input: CreateMirrorInput): TerminalSessionWire {
-    const id = randomUUID();
-    const session: LiveSession = {
-      id,
-      kind: 'live',
-      runId: input.runId,
-      nodeId: input.nodeId,
-      // A live mirror follows the NODE across every turn it runs, so it is not
-      // pinned to any one CLI session the way an interactive `--resume` is.
-      resumeSessionId: null,
-      cwd: input.cwd,
-      scrollback: new CappedTextBuffer(),
-      status: 'running',
-      exitCode: null,
-      events: new Subject<TerminalEvent>(),
-      createdAt: Date.now(),
-    };
-    this.sessions.set(id, session);
-    // Seeded BEFORE subscribing, in the same synchronous tick, so the buffered
-    // history and the live appends cannot interleave or double up.
-    this.absorb(session, input.snapshot);
-    session.mirrorSub = input.source.subscribe({
-      next: (data) => this.absorb(session, data),
-      complete: () => this.settleMirror(session),
-      error: () => this.settleMirror(session),
+  refresh(id: string, options: { immediate?: boolean } = {}): void {
+    const session = this.sessions.get(id);
+    if (!session || session.status !== 'running' || session.pending) {
+      return;
+    }
+    const now = Date.now();
+    // A re-spawn discards whatever the user has half-typed, so an automatic
+    // one backs off entirely while they are working in the mirror by hand.
+    if (now - session.lastInputAt < this.refreshInputGraceMs) {
+      return;
+    }
+    if (!options.immediate) {
+      // Nobody is looking: a re-read would burn a CLI start to update a screen
+      // no client is subscribed to. The turn's settle refresh is `immediate`,
+      // so an unattended mirror still ends up correct for a later attach.
+      if (!session.events.observed) {
+        return;
+      }
+      const since = now - session.lastRefreshAt;
+      if (since < this.liveRefreshIntervalMs) {
+        // Deferred, not dropped: the item that arrived inside the interval is
+        // often the last one before a long tool call, and dropping it outright
+        // would leave the mirror stale for the whole of it.
+        if (!session.trailingTimer) {
+          session.trailingTimer = setTimeout(() => {
+            session.trailingTimer = undefined;
+            this.refresh(id);
+          }, this.liveRefreshIntervalMs - since);
+          session.trailingTimer.unref?.();
+        }
+        return;
+      }
+    }
+    this.startRefresh(session);
+  }
+
+  /**
+   * Refresh every mirror of one (run, node) — that conversation's transcript
+   * has grown, so what the mirrors are showing is behind.
+   *
+   * Matched by FIELD SCAN for the same reason {@link killRun} is: sessions are
+   * keyed by their own id. A node can have several mirrors (one per call
+   * thread) and all of them are looking at the same conversation file, so all
+   * of them are equally stale.
+   */
+  refreshTarget(
+    runId: string,
+    nodeId: string | null,
+    options: { immediate?: boolean } = {},
+  ): void {
+    for (const session of this.sessions.values()) {
+      if (session.runId === runId && session.nodeId === nodeId) {
+        this.refresh(session.id, options);
+      }
+    }
+  }
+
+  /**
+   * Start a replacement child, off-screen. The current one keeps the user's
+   * terminal until {@link commitRefresh} has a finished screen to swap in.
+   *
+   * A spawn failure LEAVES THE SESSION ALONE. The mirror the user is looking at
+   * still works — it is merely out of date — so failing to build its successor
+   * is not a reason to take it away.
+   */
+  private startRefresh(session: Session): void {
+    session.lastRefreshAt = Date.now();
+    let next: PtyLike;
+    try {
+      next = this.spawnChild(session.spawn);
+    } catch (err) {
+      this.logger.warn(
+        `terminal ${session.id} could not be refreshed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    const pending: PendingRefresh = { pty: next, buffer: [], done: false };
+    session.pending = pending;
+    next.onData((data) => {
+      if (pending.done) {
+        return;
+      }
+      pending.buffer.push(data);
+      if (pending.quietTimer) {
+        clearTimeout(pending.quietTimer);
+      }
+      pending.quietTimer = setTimeout(
+        () => this.commitRefresh(session, pending),
+        this.refreshQuietMs,
+      );
+      pending.quietTimer.unref?.();
     });
-    return this.toWire(session);
+    next.onExit(() => {
+      if (pending.done) {
+        return;
+      }
+      // The replacement died before it could take over. Keep the child that
+      // works: a stale mirror beats a dead one.
+      this.logger.warn(
+        `terminal ${session.id}: the refreshed CLI exited before it rendered`,
+      );
+      this.endRefresh(session, pending);
+    });
+    pending.deadline = setTimeout(
+      () => this.commitRefresh(session, pending),
+      REFRESH_RENDER_TIMEOUT_MS,
+    );
+    pending.deadline.unref?.();
+  }
+
+  /**
+   * Swap the finished replacement onto the user's terminal in ONE repaint, then
+   * retire the child it replaces.
+   *
+   * Order matters: `session.pty` moves to the replacement BEFORE the old child
+   * is signalled, so the old child's exit lands on the `session.pty !== pty`
+   * guard in {@link wire} and settles nothing.
+   */
+  private commitRefresh(session: Session, pending: PendingRefresh): void {
+    if (session.pending !== pending || pending.done) {
+      return;
+    }
+    if (pending.buffer.length === 0) {
+      // Nothing was drawn — the deadline fired on a child that never spoke.
+      // Committing would replace a readable screen with an empty one.
+      this.logger.warn(
+        `terminal ${session.id}: the refreshed CLI drew nothing; keeping the current screen`,
+      );
+      this.endRefresh(session, pending);
+      return;
+    }
+    this.endRefresh(session, pending, { keepChild: true });
+    const previous = session.pty;
+    session.pty = pending.pty;
+    // The replacement rendered the whole conversation from the top, so the
+    // client's screen and the replay buffer both start over — otherwise the
+    // transcript would appear twice, the stale copy first.
+    session.scrollback = new CappedTextBuffer();
+    // ONE write, not a clear followed by a render: they cross the socket as
+    // separate frames otherwise, and the client paints the blank between them.
+    this.absorb(session, CLEAR_SCREEN + pending.buffer.join(''));
+    this.wire(session);
+    this.retireChild(previous);
+  }
+
+  /**
+   * Tear down a pending refresh's timers and detach it from the session,
+   * killing its child unless it is being promoted.
+   */
+  private endRefresh(
+    session: Session,
+    pending: PendingRefresh,
+    options: { keepChild?: boolean } = {},
+  ): void {
+    pending.done = true;
+    if (pending.quietTimer) {
+      clearTimeout(pending.quietTimer);
+      pending.quietTimer = undefined;
+    }
+    if (pending.deadline) {
+      clearTimeout(pending.deadline);
+      pending.deadline = undefined;
+    }
+    if (session.pending === pending) {
+      session.pending = undefined;
+    }
+    if (!options.keepChild) {
+      this.retireChild(pending.pty);
+    }
+  }
+
+  /**
+   * Kill one child that is no longer a session's current process — the one a
+   * refresh replaced, or a replacement that will never be shown.
+   *
+   * Separate from {@link signal} because that one targets `session.pty` and
+   * arms the session's own escalation timer; a retired child is by definition
+   * not that, and both can be in flight at once.
+   */
+  private retireChild(pty: PtyLike): void {
+    let exited = false;
+    pty.onExit(() => {
+      exited = true;
+    });
+    try {
+      pty.kill();
+    } catch {
+      return; // Already gone.
+    }
+    const timer = setTimeout(() => {
+      if (exited) {
+        return;
+      }
+      killProcessGroup(pty.pid, 'SIGKILL', () =>
+        process.kill(pty.pid, 'SIGKILL'),
+      );
+    }, this.killEscalationMs);
+    timer.unref?.();
+  }
+
+  /** Spawn one child of a session's invocation. */
+  private spawnChild(spec: SpawnSpec): PtyLike {
+    return this.spawnPty(spec.command, spec.args, {
+      name: 'xterm-256color',
+      cols: spec.cols,
+      rows: spec.rows,
+      cwd: spec.cwd,
+      env: spec.env,
+    });
+  }
+
+  /**
+   * Subscribe to the session's CURRENT child. Called for the first spawn and
+   * again for each refresh's replacement, so the two cannot drift on what a
+   * child's data and exit mean.
+   */
+  private wire(session: Session): void {
+    const { pty } = session;
+    pty.onData((data) => this.absorb(session, data));
+    pty.onExit(({ exitCode }) => {
+      if (session.killTimer) {
+        clearTimeout(session.killTimer);
+        session.killTimer = undefined;
+      }
+      // Guard on the CHILD: a refresh promotes its replacement to `session.pty`
+      // before signalling the one it replaces, so the retired child's exit
+      // arrives here for a session that has already moved on and must settle
+      // nothing.
+      if (session.pty !== pty) {
+        return;
+      }
+      this.discardPending(session);
+      session.status = 'exited';
+      session.exitCode = exitCode;
+      session.events.next({ kind: 'exit', exitCode });
+      session.events.complete();
+      if (session.disposedExplicitly) {
+        // The user closed this mirror; nobody re-attaches to replay it.
+        this.sessions.delete(session.id);
+      } else {
+        // Keep the exited session around briefly so a re-attach can replay
+        // the final screen, then evict — without a TTL every abandoned
+        // session pins up to SCROLLBACK_CAP of memory for the daemon's
+        // lifetime.
+        session.evictTimer = setTimeout(() => {
+          this.sessions.delete(session.id);
+        }, EXITED_SESSION_TTL_MS);
+        session.evictTimer.unref?.();
+      }
+      session.settle();
+    });
+  }
+
+  /**
+   * Abandon any refresh in flight and any refresh the throttle deferred.
+   *
+   * Called wherever a session stops being refreshable — it exited, or the user
+   * killed it. The replacement child is NOT covered by its own registry claim
+   * (the session's one claim covers whichever children it has), so leaving one
+   * running here is exactly the unmanaged child the process-registry rule
+   * exists to prevent.
+   */
+  private discardPending(session: Session): void {
+    if (session.trailingTimer) {
+      clearTimeout(session.trailingTimer);
+      session.trailingTimer = undefined;
+    }
+    if (session.pending) {
+      this.endRefresh(session, session.pending);
+    }
   }
 
   get(id: string): TerminalSessionWire {
@@ -357,14 +660,12 @@ export class TerminalSessionsService {
    * put two `--resume` TUIs on one CLI session file.
    */
   findRunning(
-    kind: TerminalKind,
     runId: string,
     nodeId: string | null,
     resumeSessionId: string | null = null,
   ): TerminalSessionWire | null {
     for (const session of this.sessions.values()) {
       if (
-        session.kind === kind &&
         session.runId === runId &&
         session.nodeId === nodeId &&
         session.resumeSessionId === resumeSessionId &&
@@ -395,23 +696,46 @@ export class TerminalSessionsService {
   }
 
   /**
-   * Forward input to the session's process. A `live` session has none — it
-   * watches someone else's turn — so this is a silent no-op there rather than a
-   * throw: the panel already hides its input affordances, and a stray
-   * keystroke racing a session swap must not surface as an error.
+   * Forward input to the session's process. A silent no-op once the session is
+   * no longer running — a stray keystroke racing an exit (or the brief gap
+   * while a refresh swaps children) must not surface to the user as an error.
    */
-  write(id: string, data: string): void {
+  write(id: string, data: string, options: { typed?: boolean } = {}): void {
     const session = this.session(id);
-    if (session.kind === 'interactive' && session.status === 'running') {
+    if (session.status === 'running') {
+      // `typed` — a HUMAN pressed a key — is the only thing that pauses the
+      // automatic re-read, and it can only be known at the client. A terminal
+      // emulator answers the TUI's own queries down this same channel: claude's
+      // TUI emits `ESC[c` (Device Attributes) on every render and xterm.js
+      // replies without anyone touching a key. Treating that as typing re-armed
+      // the grace on every render, so the mirror never refreshed again — the
+      // "still no sync" regression. Anything the client does not vouch for is
+      // NOT typing, so an unrecognised reply can only cost a lost keystroke's
+      // grace, never the refresh itself.
+      if (options.typed) {
+        session.lastInputAt = Date.now();
+      }
       session.pty.write(data);
     }
   }
 
-  /** No-op for a `live` session: nothing is rendering to a fixed grid. */
+  /**
+   * Resize the session's grid. The new size is REMEMBERED on the spawn spec,
+   * not just pushed to the current child: a refresh spawns the replacement at
+   * the size the user's panel actually is, rather than back at 80×24.
+   */
   resize(id: string, cols: number, rows: number): void {
     const session = this.session(id);
-    if (session.kind === 'interactive' && session.status === 'running') {
-      session.pty.resize(clamp(cols, 1, MAX_COLS), clamp(rows, 1, MAX_ROWS));
+    const safeCols = clamp(cols, 1, MAX_COLS);
+    const safeRows = clamp(rows, 1, MAX_ROWS);
+    session.spawn.cols = safeCols;
+    session.spawn.rows = safeRows;
+    if (session.status === 'running') {
+      session.pty.resize(safeCols, safeRows);
+      // The replacement is rendering at the OLD grid and is about to become
+      // what the user sees; leaving it unresized would swap in a screen wrapped
+      // for a width the panel no longer has.
+      session.pending?.pty.resize(safeCols, safeRows);
     }
   }
 
@@ -449,14 +773,19 @@ export class TerminalSessionsService {
     if (!session || session.status === 'exited') {
       return;
     }
-    if (session.kind === 'live') {
-      // A `live` session owns no process, so there is nothing to signal and
-      // nothing to escalate against — settling it IS the kill. Guarded here
-      // rather than at the call sites so the group-SIGKILL below can never be
-      // reached with no pid to aim at.
-      this.settleMirror(session);
-      return;
-    }
+    // A kill OUTRANKS a refresh: a replacement rendering off-screen is a child
+    // of a mirror the user just closed, and promoting it would resurrect the
+    // CLI they meant to stop.
+    this.discardPending(session);
+    this.signal(session);
+  }
+
+  /**
+   * Send the polite kill and arm the group-SIGKILL escalation for the session's
+   * CURRENT child — the mechanism shared by {@link kill} and {@link refresh},
+   * which differ only in what the resulting exit means.
+   */
+  private signal(session: Session): void {
     const { pty } = session;
     try {
       pty.kill();
@@ -484,22 +813,6 @@ export class TerminalSessionsService {
    */
   dispose(id: string): void {
     const session = this.session(id);
-    if (session.kind === 'live') {
-      // A `live` session is forgotten at once: the `closing` limbo below exists
-      // to stop a reopen racing a second `--resume` onto one CLI session, and a
-      // mirror spawns nothing there could be a second of. Its SOURCE keeps
-      // buffering for the run either way — closing the panel must not cost the
-      // next mirror the history it would have replayed.
-      this.settleMirror(session);
-      // `settleMirror` arms the replay TTL for an ABANDONED mirror; this one is
-      // being deleted right now, so the timer would hold the session (and its
-      // scrollback) for half an hour to delete a key that is already gone.
-      if (session.evictTimer) {
-        clearTimeout(session.evictTimer);
-      }
-      this.sessions.delete(id);
-      return;
-    }
     if (session.status === 'running') {
       this.kill(id);
       session.status = 'closing';
@@ -517,48 +830,15 @@ export class TerminalSessionsService {
 
   /**
    * Buffer one chunk into a session's scrollback and fan it out. Shared by the
-   * PTY's `onData` and the mirror's source subscription so the two cannot
-   * diverge on the emit order (buffer first, THEN publish — a subscriber that
-   * immediately re-reads the scrollback must see the chunk it was just handed).
-   * The retention rule itself is {@link CappedTextBuffer}, shared with the live
-   * mirror's own buffer so the two cannot drift on the cap.
+   * PTY's `onData` and the refresh's screen clear so the two cannot diverge on
+   * the emit order (buffer first, THEN publish — a subscriber that immediately
+   * re-reads the scrollback must see the chunk it was just handed).
    */
   private absorb(session: Session, data: string): void {
     if (!session.scrollback.push(data)) {
       return;
     }
     session.events.next({ kind: 'data', data });
-  }
-
-  /**
-   * End a `live` session: its source is gone (run deleted, buffer evicted) or
-   * the user closed it. Idempotent — the source completing and an explicit
-   * dispose can both land, and a second `exit` event would tell an attached
-   * client the mirror ended twice.
-   */
-  private settleMirror(session: LiveSession): void {
-    if (session.status === 'exited') {
-      return;
-    }
-    session.mirrorSub?.unsubscribe();
-    session.mirrorSub = undefined;
-    session.status = 'exited';
-    // Null, not 0: nothing exited. A code would claim a process outcome for a
-    // session that never had a process.
-    session.exitCode = null;
-    session.events.next({ kind: 'exit', exitCode: null });
-    session.events.complete();
-    // Same TTL as an exited PTY: the final screen stays re-attachable for a
-    // while, then goes. Without it a settled mirror would pin up to
-    // SCROLLBACK_CAP for the daemon's whole life — and unlike a PTY, whose
-    // exit is a user closing a REPL, a mirror settles whenever its run is
-    // deleted, which is a routine event.
-    if (!session.evictTimer) {
-      session.evictTimer = setTimeout(() => {
-        this.sessions.delete(session.id);
-      }, EXITED_SESSION_TTL_MS);
-      session.evictTimer.unref?.();
-    }
   }
 
   private session(id: string): Session {
@@ -575,7 +855,6 @@ export class TerminalSessionsService {
   private toWire(session: Session): TerminalSessionWire {
     return {
       id: session.id,
-      kind: session.kind,
       runId: session.runId,
       nodeId: session.nodeId,
       resumeSessionId: session.resumeSessionId,

@@ -179,28 +179,28 @@ describe('PartialStreamService — live context', () => {
     // turn's first request would report a token count with nothing to scale
     // against — the ring would sit at zero while the number climbed.
     expect(published).toHaveLength(0);
-    service.rememberWindow(RUN, 1_000_000);
+    service.rememberWindow(RUN, OWNER, 1_000_000);
     service.context(RUN, OWNER, null, 28_283);
     expect(last().contextWindowTokens).toBe(1_000_000);
   });
 
   it('keeps the window across the turn boundary that clears everything else', () => {
-    service.rememberWindow(RUN, 1_000_000);
+    service.rememberWindow(RUN, OWNER, 1_000_000);
     service.clearRun(RUN);
     service.context(RUN, OWNER, null, 100);
     expect(last().contextWindowTokens).toBe(1_000_000);
   });
 
   it('ignores a missing or nonsensical window rather than storing it', () => {
-    service.rememberWindow(RUN, 200_000);
-    service.rememberWindow(RUN, null);
-    service.rememberWindow(RUN, 0);
+    service.rememberWindow(RUN, OWNER, 200_000);
+    service.rememberWindow(RUN, OWNER, null);
+    service.rememberWindow(RUN, OWNER, 0);
     service.context(RUN, OWNER, null, 10);
     expect(last().contextWindowTokens).toBe(200_000);
   });
 
   it('forgetRun drops the window too — the run itself is gone', () => {
-    service.rememberWindow(RUN, 1_000_000);
+    service.rememberWindow(RUN, OWNER, 1_000_000);
     service.forgetRun(RUN);
     service.context(RUN, OWNER, null, 10);
     expect(last().contextWindowTokens).toBeNull();
@@ -233,10 +233,10 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
     // to scale against until its first turn finished — and the meter fell back
     // to an assumed 200k, which is how a 1M-window model came to be shown a
     // fifth full before it had said anything.
-    service.useModel('run-old', AGENT, 'claude-opus-5[1m]');
-    service.rememberWindow('run-old', 1_000_000, 'claude-opus-5[1m]');
+    service.useModel('run-old', OWNER, AGENT, 'claude-opus-5[1m]');
+    service.rememberWindow('run-old', OWNER, 1_000_000, 'claude-opus-5[1m]');
 
-    service.useModel('run-new', AGENT, 'claude-opus-5[1m]');
+    service.useModel('run-new', OWNER, AGENT, 'claude-opus-5[1m]');
     service.context('run-new', OWNER, null, 26_000);
     expect(last().contextWindowTokens).toBe(1_000_000);
   });
@@ -245,7 +245,7 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
     // Unknown must stay unknown: the renderer shows a bare token count for a
     // null window, where a substituted default would state a denominator
     // nobody reported.
-    service.useModel(RUN, AGENT, 'some-model-we-have-never-run');
+    service.useModel(RUN, OWNER, AGENT, 'some-model-we-have-never-run');
     service.context(RUN, OWNER, null, 26_000);
     expect(last().contextWindowTokens).toBeNull();
   });
@@ -254,10 +254,10 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
     // The run's own `result` line describes the conversation actually on
     // screen, so re-announcing the SAME model at the next turn's start must not
     // reset the meter to whatever the per-model memory happens to hold.
-    service.useModel(RUN, AGENT, 'a-model');
-    service.rememberWindow(RUN, 1_000_000, 'a-model');
+    service.useModel(RUN, OWNER, AGENT, 'a-model');
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'a-model');
 
-    service.useModel(RUN, AGENT, 'a-model');
+    service.useModel(RUN, OWNER, AGENT, 'a-model');
     service.context(RUN, OWNER, null, 10);
     expect(last().contextWindowTokens).toBe(1_000_000);
   });
@@ -267,10 +267,10 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
     // reports THAT model's window. Filing it under the model the turn asked for
     // poisons every later chat on the requested model for the life of the
     // process — the 1M-shown-as-200k defect, cached.
-    service.useModel(RUN, AGENT, 'big-model');
-    service.rememberWindow(RUN, 200_000, 'a-smaller-fallback-model');
+    service.useModel(RUN, OWNER, AGENT, 'big-model');
+    service.rememberWindow(RUN, OWNER, 200_000, 'a-smaller-fallback-model');
 
-    service.useModel('run-next', AGENT, 'big-model');
+    service.useModel('run-next', OWNER, AGENT, 'big-model');
     service.context('run-next', OWNER, null, 10);
     expect(last().contextWindowTokens).toBeNull();
   });
@@ -279,10 +279,10 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
     // `.claude/rules/agent-adapters.md`: per-agent state is keyed by agent,
     // never by the thing it is about. A window measured through one CLI says
     // nothing about another that happens to accept the same model id.
-    service.useModel(RUN, 'claude', 'shared-name');
-    service.rememberWindow(RUN, 1_000_000, 'shared-name');
+    service.useModel(RUN, OWNER, 'claude', 'shared-name');
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'shared-name');
 
-    service.useModel('run-other', 'cursor-agent', 'shared-name');
+    service.useModel('run-other', OWNER, 'cursor-agent', 'shared-name');
     service.context('run-other', OWNER, null, 10);
     expect(last().contextWindowTokens).toBeNull();
   });
@@ -290,11 +290,11 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
   it('keeps the per-model memory when a run is deleted', () => {
     // The window describes the model, not the chat — deleting a conversation
     // is no reason for the next one to start guessing again.
-    service.useModel(RUN, AGENT, 'a-model');
-    service.rememberWindow(RUN, 1_000_000, 'a-model');
+    service.useModel(RUN, OWNER, AGENT, 'a-model');
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'a-model');
     service.forgetRun(RUN);
 
-    service.useModel('run-next', AGENT, 'a-model');
+    service.useModel('run-next', OWNER, AGENT, 'a-model');
     service.context('run-next', OWNER, null, 10);
     expect(last().contextWindowTokens).toBe(1_000_000);
   });
@@ -306,14 +306,19 @@ describe('PartialStreamService — the window is a property of the MODEL', () =>
     // model's context against the old model's window for the whole turn — a
     // 300k request on a 1M model reading "300k / 200k · 150%", which is the
     // very "wrong context" the per-model memory exists to prevent.
-    service.useModel(RUN, AGENT, 'small-window-model');
-    service.rememberWindow(RUN, 200_000, 'small-window-model');
+    service.useModel(RUN, OWNER, AGENT, 'small-window-model');
+    service.rememberWindow(RUN, OWNER, 200_000, 'small-window-model');
     // The big model's window was learned from another chat this session.
-    service.useModel('run-elsewhere', AGENT, 'big-window-model');
-    service.rememberWindow('run-elsewhere', 1_000_000, 'big-window-model');
+    service.useModel('run-elsewhere', OWNER, AGENT, 'big-window-model');
+    service.rememberWindow(
+      'run-elsewhere',
+      OWNER,
+      1_000_000,
+      'big-window-model',
+    );
 
     // This chat's next turn announces the big model at session start.
-    service.useModel(RUN, AGENT, 'big-window-model');
+    service.useModel(RUN, OWNER, AGENT, 'big-window-model');
     service.context(RUN, OWNER, null, 300_000);
 
     expect(last().contextWindowTokens).toBe(1_000_000);
@@ -368,15 +373,15 @@ describe('PartialStreamService — the window survives a daemon restart', () => 
       }).asStore(),
     );
 
-    restarted.useModel(RUN, AGENT, 'claude-opus-5');
+    restarted.useModel(RUN, OWNER, AGENT, 'claude-opus-5');
     restarted.context(RUN, OWNER, null, 91_600);
 
     expect(last().contextWindowTokens).toBe(1_000_000);
   });
 
   it('writes a newly learned window through, so the NEXT launch already knows it', () => {
-    service.useModel(RUN, AGENT, 'claude-opus-5');
-    service.rememberWindow(RUN, 1_000_000, 'claude-opus-5');
+    service.useModel(RUN, OWNER, AGENT, 'claude-opus-5');
+    service.rememberWindow(RUN, OWNER, 1_000_000, 'claude-opus-5');
 
     expect(windowStore.writes).toEqual([
       { agent: AGENT, model: 'claude-opus-5', window: 1_000_000 },
@@ -386,8 +391,8 @@ describe('PartialStreamService — the window survives a daemon restart', () => 
   it('does NOT persist a fallback model’s window under the announced one', () => {
     // The in-memory cache already refuses this; the durable one must refuse it
     // too, or the poisoning that used to last one process would last forever.
-    service.useModel(RUN, AGENT, 'big-model');
-    service.rememberWindow(RUN, 200_000, 'a-smaller-fallback-model');
+    service.useModel(RUN, OWNER, AGENT, 'big-model');
+    service.rememberWindow(RUN, OWNER, 200_000, 'a-smaller-fallback-model');
 
     expect(windowStore.writes).toEqual([]);
   });
@@ -395,9 +400,69 @@ describe('PartialStreamService — the window survives a daemon restart', () => 
   it('still says nothing for a model the store has never seen', () => {
     // Persistence must not become a licence to guess: an unknown model stays
     // unknown, which is what keeps the meter honest rather than assuming 200k.
-    service.useModel(RUN, AGENT, 'a-model-nobody-has-run');
+    service.useModel(RUN, OWNER, AGENT, 'a-model-nobody-has-run');
     service.context(RUN, OWNER, null, 26_000);
 
     expect(last().contextWindowTokens).toBeNull();
+  });
+});
+
+describe('PartialStreamService — a window belongs to an OWNER, not to a run', () => {
+  const BIG = 'node-big';
+  const SMALL = 'node-small';
+
+  /** The last event published for one owner, which is what its meter reads. */
+  function lastFor(nodeId: string): RunDeltaEvent {
+    const own = published.filter((event) => event.nodeId === nodeId);
+    return own[own.length - 1]!;
+  }
+
+  it('gives two nodes of one run their own windows', () => {
+    // A workflow run is N agents, and they routinely run on DIFFERENT models. A
+    // run-scoped window is whichever node reported LAST, so the 1M node's
+    // 800k-token conversation was drawn against the 200k node's window — a ring
+    // pinned at 100% on an agent with three quarters of its context free.
+    service.useModel(RUN, BIG, AGENT, 'big-window-model');
+    service.rememberWindow(RUN, BIG, 1_000_000, 'big-window-model');
+    service.useModel(RUN, SMALL, AGENT, 'small-window-model');
+    service.rememberWindow(RUN, SMALL, 200_000, 'small-window-model');
+
+    service.context(RUN, BIG, BIG, 800_000);
+    service.context(RUN, SMALL, SMALL, 100_000);
+
+    expect(lastFor(BIG).contextWindowTokens).toBe(1_000_000);
+    expect(lastFor(SMALL).contextWindowTokens).toBe(200_000);
+  });
+
+  it('does not let one node’s model change reset another node’s window', () => {
+    // `useModel` drops the remembered window when the model changes. Keyed by
+    // run, a second node announcing a different model wiped the FIRST node's
+    // window mid-turn, and its ring vanished with the number still climbing.
+    service.useModel(RUN, BIG, AGENT, 'big-window-model');
+    service.rememberWindow(RUN, BIG, 1_000_000, 'big-window-model');
+
+    service.useModel(RUN, SMALL, AGENT, 'some-other-model');
+
+    service.context(RUN, BIG, BIG, 10);
+    expect(lastFor(BIG).contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('forgetRun sweeps EVERY node of that run, and no other run', () => {
+    // The maps are keyed per (run, owner), so deleting the bare run id leaves a
+    // workflow's per-node entries behind for the life of the process — a leak
+    // nothing can reach again, the run they belong to being gone.
+    service.rememberWindow(RUN, BIG, 1_000_000);
+    service.rememberWindow(RUN, SMALL, 200_000);
+    service.rememberWindow('another-run', BIG, 500_000);
+
+    service.forgetRun(RUN);
+
+    service.context(RUN, BIG, BIG, 10);
+    expect(lastFor(BIG).contextWindowTokens).toBeNull();
+    service.context(RUN, SMALL, SMALL, 10);
+    expect(lastFor(SMALL).contextWindowTokens).toBeNull();
+    // The sweep is by PREFIX, so it must not be a substring match on the id.
+    service.context('another-run', BIG, BIG, 10);
+    expect(lastFor(BIG).contextWindowTokens).toBe(500_000);
   });
 });

@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -27,7 +27,6 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
-import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -38,12 +37,10 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
-import { McpSettingsStore } from './mcp-settings.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
-import { TurnMirrorService } from './turn-mirror.service';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -361,7 +358,6 @@ function setup(
   // a mock here would leave every assertion below pinning the mock.
   // A real one: it holds nothing but in-memory buffers, so a double would
   // only hide whether the turn is actually tee'd into it.
-  const mirrors = new TurnMirrorService();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -371,7 +367,6 @@ function setup(
     callTokens,
     partials,
     attachments,
-    mirrors,
   );
   const service = new ChatService(
     em,
@@ -391,15 +386,8 @@ function setup(
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
-    new McpSettingsStore({
-      file:
-        opts.mcpSettingsFile ??
-        join(tmpdir(), 'geniro-chat-spec-never-written.json'),
-    }),
-    mirrors,
   );
   return {
-    mirrors,
     service,
     deltas,
     partials,
@@ -467,25 +455,6 @@ describe('ChatService', () => {
       published.map((e) => `${e.item.seq}:${e.item.kind}/${e.item.role ?? ''}`),
     ).toEqual(['0:message/user', '1:message/assistant', '2:turn_complete/']);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
-  });
-
-  it('tees the turn into the live mirror, under the single-agent node key', async () => {
-    // The wiring the whole live terminal rests on. Nothing else in the suite
-    // fails if `mirror:` is dropped from the turn input — the chat keeps
-    // working perfectly and the panel goes permanently blank, which is the
-    // silent failure this pins.
-    const { service, claude, mirrors } = setup();
-    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-
-    await service.sendMessage(run.id, 'hello');
-    const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
-    startArg.mirror?.data('stdout', 'raw child output');
-
-    // Keyed by the SINGLE-AGENT node, the same constant the rest of a chat's
-    // per-node state uses — the terminals service reads it back by that key.
-    expect(mirrors.snapshot(run.id, SINGLE_AGENT_NODE)).toContain(
-      'raw child output',
-    );
   });
 
   it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {
@@ -2155,84 +2124,5 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     claude.finish();
     await drain();
-  });
-});
-
-describe('ChatService — the MCP switch reaches the turn', () => {
-  /** A real store file for this test only. */
-  function settingsFile(): string {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-seam-')));
-    return join(dir, 'mcp-settings.json');
-  }
-
-  it('hands the turn the servers the user switched off in that folder', async () => {
-    // THE seam this whole feature rests on. Delete the store read in
-    // ChatService and every switch in the panel becomes a control that moves
-    // and changes nothing — with no other test objecting.
-    const file = settingsFile();
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-cwd-')));
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, cwd, 'sentry', true);
-
-    const ctx = setup({ mcpSettingsFile: file });
-    const run = await ctx.service.createChat({
-      agentKind: AgentKind.Claude,
-      cwd,
-    });
-    await ctx.service.sendMessage(run.id, 'hi');
-
-    const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
-    expect(startArg.disabledMcpServers).toEqual(['sentry']);
-
-    rmSync(dirname(file), { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
-  });
-
-  it('hands the turn nothing when that folder has no switches', async () => {
-    // Pins the KEY, not just the read: a store keyed loosely (or read with the
-    // wrong cwd) would leak another folder's switches into this turn.
-    const file = settingsFile();
-    const disabledCwd = realpathSync(
-      mkdtempSync(join(tmpdir(), 'chat-mcp-a-')),
-    );
-    const otherCwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-b-')));
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, disabledCwd, 'sentry', true);
-
-    const ctx = setup({ mcpSettingsFile: file });
-    const run = await ctx.service.createChat({
-      agentKind: AgentKind.Claude,
-      cwd: otherCwd,
-    });
-    await ctx.service.sendMessage(run.id, 'hi');
-
-    const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
-    expect(startArg.disabledMcpServers).toEqual([]);
-
-    rmSync(dirname(file), { recursive: true, force: true });
-    rmSync(disabledCwd, { recursive: true, force: true });
-    rmSync(otherCwd, { recursive: true, force: true });
-  });
-
-  it('does not hand a cursor turn claude’s switches', async () => {
-    // One folder is routinely used by both CLIs; keying loosely would switch
-    // off a server for an agent the user never touched.
-    const file = settingsFile();
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-both-')));
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, cwd, 'sentry', true);
-
-    const ctx = setup({ mcpSettingsFile: file });
-    const run = await ctx.service.createChat({
-      agentKind: AgentKind.CursorAgent,
-      cwd,
-    });
-    await ctx.service.sendMessage(run.id, 'hi');
-
-    const startArg = ctx.cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
-    expect(startArg.disabledMcpServers).toEqual([]);
-
-    rmSync(dirname(file), { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
   });
 });

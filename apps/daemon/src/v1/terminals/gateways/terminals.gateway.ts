@@ -130,9 +130,13 @@ export class TerminalsGateway implements OnGatewayConnection {
     }
     const terminalId = extractTerminalId(data);
     const payload = (data as { data?: unknown }).data;
+    // Only a client that VOUCHES for a keystroke pauses the auto-refresh; the
+    // same channel also carries the emulator's own answers to the TUI's
+    // queries, which no one typed. Absent or malformed → not typed.
+    const typed = (data as { typed?: unknown }).typed === true;
     if (terminalId && typeof payload === 'string') {
       try {
-        this.sessions.write(terminalId, payload);
+        this.sessions.write(terminalId, payload, { typed });
       } catch {
         // Session gone — the client learns via the missing room traffic.
       }

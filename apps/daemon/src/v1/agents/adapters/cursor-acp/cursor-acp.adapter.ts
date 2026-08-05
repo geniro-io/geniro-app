@@ -164,7 +164,6 @@ export class CursorAcpAdapter extends AgentAdapter {
          * reason above is set.
          */
         toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
-        notInToggleableScopeReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
         userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */

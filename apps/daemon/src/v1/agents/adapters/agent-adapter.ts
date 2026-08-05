@@ -336,7 +336,39 @@ export abstract class AgentAdapter {
    * feature ever writes them.
    */
   readMcpFolderFacts(_cwd: string): Promise<AgentMcpFolderFacts> {
-    return Promise.resolve({ projectServers: [], userDisabled: [] });
+    return Promise.resolve({ disabled: [], lockedOff: [] });
+  }
+
+  /**
+   * Switch one MCP server on or off for one folder — the WRITE half of
+   * {@link readMcpFolderFacts}, and the same kind of thing: a mechanism only
+   * that CLI knows, so an adapter that has one overrides this.
+   *
+   * The default REFUSES, with the config's own sentence saying why. Refusing
+   * is the honest answer for a CLI whose disable mechanism is unverified: a
+   * switch that moves and changes nothing is the exact failure this feature is
+   * written to avoid, and the caller turns the refusal into an HTTP error the
+   * panel can show.
+   *
+   * An adapter that implements it writes the CLI's OWN state, not a private
+   * one — claude edits `projects[<cwd>].disabledMcpServers` in `~/.claude.json`
+   * under the same `proper-lockfile` lock the CLI itself takes. That is a
+   * deliberate exception to "geniro writes only its own files": it is the only
+   * mechanism that reaches servers of every scope, and sharing the CLI's list
+   * means a switch flipped here is the same switch the user sees in their own
+   * terminal.
+   */
+  setMcpServerEnabled(
+    _cwd: string,
+    _server: string,
+    _enabled: boolean,
+  ): Promise<void> {
+    return Promise.reject(
+      new Error(
+        this.getConfig().mcp.toggleUnavailableReason ??
+          `${this.getConfig().kind} cannot be told which MCP servers to load`,
+      ),
+    );
   }
 
   /**
@@ -824,10 +856,6 @@ export abstract class AgentAdapter {
           }
           onEvent(event);
         },
-        // Handed over whole: `runHeadlessCli` owns the argv, the raw bytes and
-        // the single settle point, which is all three moments the sink
-        // describes. Nothing about the mirror is this class's business.
-        mirror: input.mirror,
         spawn: this.options.spawn,
         logger: this.options.logger,
       });
@@ -843,9 +871,6 @@ export abstract class AgentAdapter {
           `turn resource disposer failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
         );
       }
-      // The mirror needs nothing here: a throw on this path means
-      // `runHeadlessCli` was never reached, so it announced no turn and has
-      // none to close out.
       throw err;
     }
     if (dispose) {

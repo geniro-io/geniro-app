@@ -232,39 +232,6 @@ export interface TurnImage {
 }
 
 /**
- * Where a turn's RAW child stdio is tee'd, so the terminal panel can mirror a
- * headless turn while it runs.
- *
- * Deliberately byte-level and adapter-agnostic: it carries what actually
- * crossed the pipe, never a rendering of it. The semantic plane already exists
- * (the {@link AgentEvent} stream → transcript items + live deltas), so a
- * second, prettified view of the same events would be that transcript
- * duplicated in a worse medium — AND it would need a mapper per CLI, which is
- * exactly what `.claude/rules/agent-adapters.md` keeps out of shared code.
- * Passing bytes through means the mirror cannot drift from what the process
- * emitted, and it surfaces `stderr`, which no other surface in the app shows.
- *
- * Per TURN INPUT rather than per adapter: one adapter instance serves N
- * concurrent turns under graph fan-out, so a sink held on the adapter would
- * cross-wire them — the same reason {@link TurnDriver} is created per turn.
- */
-export interface TurnStdioSink {
-  /**
-   * The command line this turn spawned with — the mirror's banner. Emitted by
-   * {@link AgentAdapter.start}, the one place argv exists as data.
-   */
-  spawned(command: string, args: readonly string[]): void;
-  /** Raw child output, verbatim and unparsed. */
-  data(stream: 'stdout' | 'stderr', chunk: string): void;
-  /**
-   * This turn settled. The mirror stays open: the next turn of the same node
-   * appends to the same buffer, which is what makes the panel follow a
-   * conversation rather than a single process.
-   */
-  settled(): void;
-}
-
-/**
  * One model a CLI will accept for `--model`, as that CLI reports it.
  *
  * `id` is passed through verbatim — never normalized, since only the CLI knows
@@ -411,29 +378,28 @@ export type AgentMcpServerScope = 'project' | 'other' | 'unknown';
 /**
  * What a CLI's own config files say about a folder, beyond the health listing.
  *
- * Read-only knowledge: both fields come from files geniro never writes. They
- * exist because the listing alone cannot answer "may this row be toggled" —
- * `claude mcp list` prints no scope at all (probe-verified on 2.1.220).
+ * They exist because the LISTING cannot answer either question: `claude mcp
+ * list` reports a disabled server as though it were live, and prints no scope
+ * at all (probe-verified on 2.1.220/2.1.222).
  */
 export interface AgentMcpFolderFacts {
   /**
-   * Server names defined in the folder's own project MCP config. Empty means
-   * either none are, or this CLI's project config layout is unverified — the
-   * two are not distinguished here because both render the same: read-only.
-   */
-  readonly projectServers: readonly string[];
-  /**
-   * Server names the USER disabled in their OWN config, which geniro cannot
-   * re-enable.
+   * Server names this folder currently has switched OFF, as the CLI's OWN
+   * config records it — the state a `/mcp` panel in the user's terminal shows.
    *
-   * Probe-verified on claude 2.1.220: two `disabledMcpjsonServers` lists from
-   * different sources are UNIONed, never overridden. So geniro can always add
-   * a name to the union and switch a server OFF, but removing its own entry
-   * cannot pull a name back out of the user's. A row listed here therefore
-   * gets no switch — offering one would be a control that silently does
-   * nothing, which is exactly what the design forbids.
+   * The toggle geniro offers writes that same list, so this is not "what
+   * geniro turned off" but "what is off", however it got that way.
    */
-  readonly userDisabled: readonly string[];
+  readonly disabled: readonly string[];
+  /**
+   * Server names that are off in a way geniro CANNOT undo — a rejection the
+   * user (or the CLI's own trust prompt) recorded, whose every source copy is
+   * UNIONed rather than overridden (probe-verified on claude 2.1.220).
+   *
+   * A row listed here gets no switch: offering one would be a control that
+   * silently does nothing, which is exactly what the design forbids.
+   */
+  readonly lockedOff: readonly string[];
 }
 
 /** Everything an adapter needs to list what it can be invoked with. */
@@ -622,14 +588,6 @@ export interface AgentTurnInput {
    */
   env?: Record<string, string>;
   /**
-   * Tee this turn's raw stdio here (the live terminal mirror). Absent = the
-   * turn is not being mirrored and nothing is buffered.
-   *
-   * Supplied by the CALLER, because only the caller knows which run and node
-   * the turn belongs to — the adapter neither knows nor needs to.
-   */
-  mirror?: TurnStdioSink;
-  /**
    * Stream this turn's assistant text as it is generated, if the CLI can.
    *
    * Adapter-agnostic intent, like {@link allowUserQuestions}: the caller says
@@ -657,25 +615,13 @@ export interface AgentTurnInput {
    */
   trustWorkspace?: boolean;
   /**
-   * MCP servers the user switched OFF for this agent and folder, which this
-   * turn must not load.
-   *
-   * geniro's own neutral vocabulary — a set of server names — never a CLI's
-   * settings shape. Each adapter translates it into whatever its own CLI
-   * understands (claude writes a per-turn `--settings` file carrying
-   * `disabledMcpjsonServers`), so an agent with a different mechanism, or none
-   * at all, changes nothing outside its own directory.
-   */
-  disabledMcpServers?: readonly string[];
-  /**
    * A plugin directory this turn loads, and no other turn's.
    *
    * Already validated and canonicalized by the caller — an adapter puts it
    * straight into argv and must never be the thing that first checks it.
    * Session-scoped: nothing is installed and no user config is written.
    *
-   * A CLI with no plugin mechanism simply ignores the field, the same way one
-   * with no settings mechanism ignores {@link disabledMcpServers}.
+   * A CLI with no plugin mechanism simply ignores the field.
    */
   pluginDir?: string | null;
   /**
@@ -969,13 +915,12 @@ export interface AdapterConfig {
      */
     readonly toggleUnavailableReason: string | null;
     /**
-     * Why a row OUTSIDE the disable-able scope carries no switch. Names this
-     * CLI's own config file, so the sentence stays in the adapter layer rather
-     * than being composed by a service that would have to know which CLI it
-     * is holding.
+     * Why a row the user turned down in their OWN config carries no switch.
+     *
+     * The one remaining reason a switchable CLI still shows a locked row: the
+     * toggle writes the CLI's own per-folder list, which reaches every scope,
+     * but it cannot undo a rejection whose every source copy the CLI unions.
      */
-    readonly notInToggleableScopeReason: string;
-    /** Why a row the user disabled in their OWN config carries no switch. */
     readonly userDisabledReason: string;
   };
 

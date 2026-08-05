@@ -90,41 +90,77 @@ export const CLAUDE_PLUGIN_DIR_FLAG = '--plugin-dir';
  */
 export const CLAUDE_STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
 
-// ── The MCP toggle: settings merge semantics ──────────────────────────────
+// ── The MCP toggle ────────────────────────────────────────────────────────
 //
-// PROBE EVIDENCE, claude 2.1.220, captured in this container. Re-probe before
-// trusting any of it on a new claude series — every line below is an
-// observation of one build, not a documented contract.
+// PROBE EVIDENCE, claude 2.1.220 and 2.1.222, captured on this machine.
+// Re-probe before trusting any of it on a new claude series — every line below
+// is an observation of one build, not a documented contract.
 //
-// - `--settings <file-or-json>` is documented by the CLI itself as loading
-//   "additional settings", and behaves that way: a key set in the project's
-//   own `.claude/settings.json` SURVIVED a `--settings` that never mentioned
-//   it. It merges; it does not replace.
-// - `disabledMcpjsonServers` removes a project `.mcp.json` server from a real
-//   turn — the name disappears from the init message's `mcp_servers`.
-// - Two `disabledMcpjsonServers` lists from different sources are UNIONed,
-//   NOT overridden: the user's own settings disabling `a` plus `--settings`
-//   disabling `b` left BOTH gone. So geniro can always switch a server off,
-//   and can NEVER switch one back on that the user disabled themselves.
-// - `claude mcp list` accepts NO options at all (`--settings` is rejected as
-//   an unknown option), so the LISTING can never reflect a toggle. The daemon
-//   merges its own disabled set into the rows instead.
+// - `projects[<cwd>].disabledMcpServers` in the home config takes a server out
+//   of a real turn WHATEVER SCOPE DEFINED IT (2.1.222, isolated
+//   CLAUDE_CONFIG_DIR, `local`-scope server: `status: 'failed'` without the
+//   key, `status: 'disabled'` with it). This is the toggle geniro writes.
+// - `disabledMcpjsonServers` is a different list: it REJECTS a project
+//   `.mcp.json` server, and every source's copy of it is UNIONed rather than
+//   overridden — so nothing geniro writes can put such a server back.
+// - `claude mcp list` accepts NO options at all, and reports a disabled server
+//   as though it were live, so the LISTING can never reflect the toggle. The
+//   daemon merges the config's own disabled set into the rows instead.
 // - It is the TURN, not the listing, that auto-approves project servers: the
 //   same folder shows them `Pending approval` under `mcp list` while a `-p`
 //   turn reports them `connected`.
 
-/** The settings file geniro hands the CLI for one turn. Merged, never replacing. */
-export const CLAUDE_SETTINGS_FLAG = '--settings';
+/**
+ * The CLI's OWN per-folder disable list, and the mechanism geniro's toggle
+ * uses: `~/.claude.json` → `projects[<cwd>].disabledMcpServers`.
+ *
+ * PROBE-VERIFIED on 2.1.222, in an isolated `CLAUDE_CONFIG_DIR` with a
+ * `local`-scope server — the scope the old settings-file route could never
+ * reach:
+ *
+ *   without the key   → init `mcp_servers: [{name: 'probe-server', status: 'failed'}]`
+ *   with the key      → init `mcp_servers: [{name: 'probe-server', status: 'disabled'}]`
+ *
+ * It covers servers of EVERY scope, which `disabledMcpjsonServers` (below) does
+ * not — that one only rejects a project `.mcp.json` server. This is what the
+ * CLI's own `/mcp` panel writes, so a switch flipped here is the same switch
+ * the user sees in their terminal, and vice versa.
+ */
+export const CLAUDE_HOME_DISABLED_MCP_KEY = 'disabledMcpServers';
 
-/** The settings key holding project-`.mcp.json` servers to leave unloaded. */
+/**
+ * The `.mcp.json` REJECTION list, in settings and in the home config.
+ *
+ * Read-only for geniro: a name here is one the user (or the CLI's own trust
+ * prompt) turned down, and the CLI unions every source's copy of this list
+ * rather than letting a later one override — so nothing geniro writes can put
+ * such a server back. It is a different question from
+ * {@link CLAUDE_HOME_DISABLED_MCP_KEY}: approval, not loading.
+ */
 export const CLAUDE_DISABLED_MCP_SERVERS_KEY = 'disabledMcpjsonServers';
 
-/** Name parts of one turn's settings file, so a crashed launch's are sweepable. */
-export const CLAUDE_SETTINGS_PREFIX = 'geniro-settings-';
-export const CLAUDE_SETTINGS_SUFFIX = '.json';
-
-/** The folder's own MCP server definitions — the only disable-able scope. */
+/** The folder's own MCP server definitions. */
 export const CLAUDE_PROJECT_MCP_FILE = '.mcp.json';
+
+/**
+ * The lock geniro takes before editing the CLI's home config.
+ *
+ * `proper-lockfile`'s default artifact for a path is `<path>.lock`, and the CLI
+ * passes exactly that as its own `lockfilePath` — its `ELOCKED` and
+ * "Config lock compromised" strings are that package's. Naming the suffix here
+ * is what keeps the two processes on the SAME lock: a different path would
+ * still lock, and would still let both write at once.
+ */
+export const CLAUDE_CONFIG_LOCK_SUFFIX = '.lock';
+
+/**
+ * Retries while another claude process holds the config lock. Each write is a
+ * parse and a rename of a small file, so contention is brief — but a user
+ * typing in their own CLI while the panel toggles is entirely ordinary, and
+ * failing the toggle at the first collision would surface as a switch that
+ * randomly does nothing.
+ */
+export const CLAUDE_CONFIG_LOCK_RETRIES = 10;
 
 /**
  * The user's own settings files, resolved against a run's cwd. Read ONLY — a

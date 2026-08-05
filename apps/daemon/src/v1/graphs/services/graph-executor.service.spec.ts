@@ -31,6 +31,7 @@ import {
   ChatApprovalModeSchema,
   type ClaudeModesCapability,
   type CursorCallsCapability,
+  type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
@@ -40,16 +41,13 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
-import { McpSettingsStore } from '../../agents/services/mcp-settings.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
-import { TurnMirrorService } from '../../agents/services/turn-mirror.service';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
-import { AgentKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import { ApprovalModeSchema, type Workflow } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
@@ -390,7 +388,6 @@ function setup(
     mergeOk?: boolean;
     gitTracked?: boolean;
     mergeImpl?: () => Promise<unknown>;
-    mcpSettingsFile?: string;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -403,7 +400,8 @@ function setup(
   approvals: ApprovalRegistry;
   callTokens: CallTokenRegistry;
   callBroker: CallBroker;
-  mirrors: TurnMirrorService;
+  /** Every live delta the real bus carried, in order. */
+  deltas: RunDeltaEvent[];
   ensureVerdict: ReturnType<typeof vi.fn>;
   claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
@@ -486,7 +484,15 @@ function setup(
   } as unknown as AttachmentStoreService;
   // The REAL teardown over the same fakes — `deleteRun` is a thin caller of
   // it, so a stub here would leave the delete tests pinning the stub.
-  const mirrors = new TurnMirrorService();
+  // ONE instance, as DI hands out: the executor feeds this plane while a turn
+  // runs and the teardown forgets it when the run is deleted, so two instances
+  // here would let a delete test pass while leaving the real state behind.
+  const partials = new PartialStreamService(
+    bus,
+    new FakeContextWindowStore().asStore(),
+  );
+  const deltas: RunDeltaEvent[] = [];
+  bus.allDeltas().subscribe((delta) => deltas.push(delta));
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -494,9 +500,8 @@ function setup(
     bus,
     registry,
     callTokens,
-    new PartialStreamService(bus, new FakeContextWindowStore().asStore()),
+    partials,
     attachments,
-    mirrors,
   );
   const service = new GraphExecutorService(
     em,
@@ -522,18 +527,10 @@ function setup(
       startedAt: 0,
       port: runtimePort,
     },
-    new McpSettingsStore({
-      // Most tests toggle nothing, so the default points at a path that never
-      // exists — a mkdtemp per setup() would leak one directory per TEST. The
-      // tests that DO exercise the switch pass a real file.
-      file:
-        opts.mcpSettingsFile ??
-        join(tmpdir(), 'geniro-exec-spec-never-written.json'),
-    }),
-    mirrors,
+    partials,
   );
   return {
-    mirrors,
+    deltas,
     service,
     claude,
     cursor,
@@ -980,6 +977,92 @@ describe('GraphExecutorService', () => {
     const seqs = itemDao.items.map((i) => i.seq);
     expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
     expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it('reports each node’s live context, scaled by that node’s OWN model window', async () => {
+    // The executor used to drop `context_progress` and `turn_model` on the
+    // floor — only `chat.service` fed the live plane — so a workflow node's
+    // meter sat still for the whole of every turn and showed nothing at all on
+    // its first one. And the window must be per NODE: a run-scoped one is
+    // whichever node reported last, which drew a 1M node's context against a
+    // 200k node's window.
+    const { service, claude, deltas } = setup();
+    const pair: Workflow = {
+      name: 'pair',
+      nodes: [
+        {
+          id: 'big',
+          kind: 'agent',
+          agent: 'claude',
+          model: 'big-model',
+          approval: 'auto',
+        },
+        {
+          id: 'small',
+          kind: 'agent',
+          agent: 'claude',
+          model: 'small-model',
+          approval: 'auto',
+        },
+      ],
+      edges: [],
+    };
+    // Run ONE teaches both windows, the way any completed turn does.
+    await service.startRun({
+      slug: 'pair',
+      workflow: triggered(pair),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    for (const [nodeModel, window] of [
+      ['big-model', 1_000_000],
+      ['small-model', 200_000],
+    ] as const) {
+      const turn = claude.starts.find((t) => t.input.model === nodeModel)!;
+      turn.emit({ type: 'turn_model', model: nodeModel });
+      turn.emit({
+        type: 'turn_complete',
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          contextTokens: null,
+          contextWindowTokens: window,
+          contextModel: nodeModel,
+          costUsd: null,
+        },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      turn.finish();
+    }
+    await drain();
+
+    // Run TWO is scaled from its very FIRST request, per node.
+    claude.starts.length = 0;
+    await service.startRun({
+      slug: 'pair',
+      workflow: triggered(pair),
+      cwd: dir,
+      prompt: 'again',
+    });
+    await drain();
+    for (const [nodeModel, context] of [
+      ['big-model', 800_000],
+      ['small-model', 100_000],
+    ] as const) {
+      const turn = claude.starts.find((t) => t.input.model === nodeModel)!;
+      turn.emit({ type: 'turn_model', model: nodeModel });
+      turn.emit({ type: 'context_progress', contextTokens: context });
+    }
+    await drain();
+
+    const lastFor = (nodeId: string): RunDeltaEvent | undefined =>
+      deltas.filter((delta) => delta.nodeId === nodeId).at(-1);
+    expect(lastFor('big')?.contextTokens).toBe(800_000);
+    expect(lastFor('big')?.contextWindowTokens).toBe(1_000_000);
+    expect(lastFor('small')?.contextTokens).toBe(100_000);
+    expect(lastFor('small')?.contextWindowTokens).toBe(200_000);
   });
 
   it("harvests a node turn's slash_commands report for the run cwd, off the transcript", async () => {
@@ -2891,43 +2974,5 @@ describe('GraphExecutorService — deleting a workflow run', () => {
   it('404s on a run that does not exist', async () => {
     const { service } = setup();
     await expect(service.deleteRun('nope')).rejects.toThrow();
-  });
-});
-
-describe('GraphExecutorService — the MCP switch reaches a node turn', () => {
-  it('hands each node the servers switched off for ITS agent in the run folder', async () => {
-    // The graph half of the seam the whole feature rests on. Delete the store
-    // read in the executor and every switch stops applying to graph runs,
-    // silently — the panel keeps showing them off.
-    const settingsDir = realpathSync(
-      mkdtempSync(join(tmpdir(), 'exec-mcp-seam-')),
-    );
-    const file = join(settingsDir, 'mcp-settings.json');
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, dir, 'sentry', true);
-    await store.setDisabled(AgentKind.CursorAgent, dir, 'linear', true);
-
-    const { service, claude, cursor } = setup(4870, { mcpSettingsFile: file });
-    await service.startRun({
-      slug: 'two',
-      workflow: triggered({
-        name: 'two',
-        nodes: [
-          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
-          { id: 'b', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
-        ],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-
-    // Each node gets its OWN agent's switches, never the other's — one folder
-    // is routinely driven by both CLIs and their server sets are unrelated.
-    expect(claude.starts[0]?.input.disabledMcpServers).toEqual(['sentry']);
-    expect(cursor.starts[0]?.input.disabledMcpServers).toEqual(['linear']);
-
-    rmSync(settingsDir, { recursive: true, force: true });
   });
 });

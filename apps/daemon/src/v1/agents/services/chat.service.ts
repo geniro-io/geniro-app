@@ -46,12 +46,10 @@ import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
-import { McpSettingsStore } from './mcp-settings.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
-import { TurnMirrorService } from './turn-mirror.service';
 
 function parsePayload(raw: string): unknown {
   try {
@@ -113,8 +111,6 @@ export class ChatService {
     private readonly partials: PartialStreamService,
     private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
-    private readonly mcpSettings: McpSettingsStore,
-    private readonly mirrors: TurnMirrorService,
   ) {}
 
   /**
@@ -660,10 +656,6 @@ export class ChatService {
           'this chat was deleted while the turn was starting',
         );
       }
-      // Read at turn-build time, not at spawn: the adapter materializes it
-      // into whatever its own CLI reads, and a toggle made after this point
-      // belongs to the NEXT turn rather than silently changing this one.
-      const disabledMcpServers = this.mcpSettings.disabled(agentKind, cwd);
       const handle = adapter.start(
         {
           prompt: text,
@@ -677,14 +669,12 @@ export class ChatService {
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
           streamPartials,
-          disabledMcpServers,
           images: attachments.map((attachment) => ({
             path: this.attachments.pathOf(runId, attachment.id),
             mediaType: attachment.mediaType,
           })),
           // Tee this turn's raw stdio for the live terminal mirror. Keyed by
           // the same single-agent node the rest of a chat's per-node state is.
-          mirror: this.mirrors.sink(runId, SINGLE_AGENT_NODE),
         },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even
@@ -729,6 +719,7 @@ export class ChatService {
               // has finished at least once this session.
               this.partials.useModel(
                 runId,
+                SINGLE_AGENT_NODE,
                 adapter.getConfig().kind,
                 event.model,
               );
@@ -742,6 +733,7 @@ export class ChatService {
               // cannot file that model's window under the requested one.
               this.partials.rememberWindow(
                 runId,
+                SINGLE_AGENT_NODE,
                 event.usage?.contextWindowTokens ?? null,
                 event.usage?.contextModel ?? null,
               );

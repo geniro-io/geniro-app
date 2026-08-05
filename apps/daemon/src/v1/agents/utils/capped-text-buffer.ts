@@ -1,21 +1,13 @@
-/**
- * How much output either mirror retains for (re)attach replay, in chars.
- *
- * ONE constant, not two that a comment claims are equal: the live mirror's
- * buffer and the PTY session's scrollback are the same thing to a reader — the
- * history the panel replays — so a panel must not hold a different amount of it
- * depending on which kind it opened.
- */
+/** How much output a terminal session retains for (re)attach replay, in chars. */
 export const SCROLLBACK_CAP = 512 * 1024;
 
 /**
  * A bounded append-only text buffer: newest-wins, oldest chunks dropped past
  * {@link SCROLLBACK_CAP}.
  *
- * Extracted rather than written twice. It is the retention half of BOTH
- * terminal mirrors — `TurnMirrorService`'s per-(run, node) buffer and
- * `TerminalSessionsService`'s per-session scrollback — and a second copy is how the two
- * silently drift on the cap or on the trim rule.
+ * The retention half of a terminal session's scrollback
+ * (`TerminalSessionsService`), kept as its own unit because the trim rule below
+ * is worth stating once and testing directly.
  *
  * Trimming stops at ONE chunk, so a single write larger than the cap is kept
  * whole: emptying the buffer to satisfy the cap would blank a mirror whose turn

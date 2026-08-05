@@ -3,6 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { lock } from 'proper-lockfile';
+
+import { atomicWrite } from '../../../../utils/atomic-file';
 import { AgentKind } from '../../../runs/runs.types';
 import { claudeCredentialEnv } from '../../utils/child-env';
 import type {
@@ -24,6 +27,8 @@ import { AgentAdapter } from '../agent-adapter';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_BASE_ARGS,
+  CLAUDE_CONFIG_LOCK_RETRIES,
+  CLAUDE_CONFIG_LOCK_SUFFIX,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
   CLAUDE_HOME_SETTINGS_FILE,
@@ -44,10 +49,8 @@ import {
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
   CLAUDE_PLUGIN_DIR_FLAG,
-  CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
-  CLAUDE_SETTINGS_FLAG,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
@@ -55,16 +58,19 @@ import { buildImageBlocks } from './utils/claude-images.utils';
 import {
   definesGeniroServer,
   sweepStaleTurnMcpConfigs,
-  sweepStaleTurnSettings,
   writeTurnMcpConfig,
-  writeTurnSettings,
 } from './utils/claude-mcp-config.utils';
 import {
   parseDisabledServerNames,
   parseHomeDisabledServerNames,
-  parseProjectServerNames,
 } from './utils/claude-mcp-folder.utils';
 import { parseMcpList } from './utils/claude-mcp-list.utils';
+import type { ClaudeHomeConfig } from './utils/claude-mcp-toggle.utils';
+import {
+  parseHomeConfig,
+  readDisabledServers,
+  withDisabledServer,
+} from './utils/claude-mcp-toggle.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
@@ -202,10 +208,12 @@ export class ClaudeAdapter extends AgentAdapter {
          * `listMcpServers` and an empty answer really does mean an empty folder.
          */
         listingUnavailableReason: null,
-        /** Project `.mcp.json` servers can be switched off; verified live. */
+        /**
+         * Every scope can be switched off, through the CLI's own per-folder
+         * `disabledMcpServers` list — probe-verified on 2.1.222, including the
+         * `local` scope the old settings-file route could not reach.
+         */
         toggleUnavailableReason: null,
-        notInToggleableScopeReason:
-          'only servers defined in this folder\u2019s .mcp.json can be switched off',
         userDisabledReason:
           'switched off in your own claude settings, which geniro cannot re-enable',
       },
@@ -283,7 +291,6 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
-  private readonly settingsPaths = new WeakMap<AgentTurnInput, string>();
 
   constructor(private readonly claudeOptions: ClaudeAdapterOptions = {}) {
     super(claudeOptions);
@@ -298,7 +305,6 @@ export class ClaudeAdapter extends AgentAdapter {
     const dir = this.claudeOptions.mcpConfigDir;
     if (dir) {
       sweepStaleTurnMcpConfigs(dir);
-      sweepStaleTurnSettings(dir);
     }
   }
 
@@ -321,7 +327,6 @@ export class ClaudeAdapter extends AgentAdapter {
     const written: string[] = [];
     const discard = (): void => {
       this.mcpConfigPaths.delete(input);
-      this.settingsPaths.delete(input);
       for (const path of written) {
         rmSync(path, { force: true });
       }
@@ -345,14 +350,6 @@ export class ClaudeAdapter extends AgentAdapter {
         const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
         this.mcpConfigPaths.set(input, path);
         written.push(path);
-      }
-      const settingsPath = writeTurnSettings(
-        dir,
-        input.disabledMcpServers ?? [],
-      );
-      if (settingsPath !== null) {
-        this.settingsPaths.set(input, settingsPath);
-        written.push(settingsPath);
       }
     } catch (err) {
       // A throw from the SECOND write would otherwise strand the first file —
@@ -447,7 +444,6 @@ export class ClaudeAdapter extends AgentAdapter {
       }
     };
     const home = this.claudeOptions.homeDir ?? homedir();
-    const projectSource = await read(join(cwd, CLAUDE_PROJECT_MCP_FILE));
     const settingsSources = await Promise.all([
       ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) => read(join(cwd, rel))),
       read(join(home, CLAUDE_HOME_SETTINGS_FILE)),
@@ -472,10 +468,68 @@ export class ClaudeAdapter extends AgentAdapter {
       }
     }
     return {
-      projectServers:
-        projectSource === null ? [] : parseProjectServerNames(projectSource),
-      userDisabled: [...userDisabled],
+      // The CLI's OWN per-folder list — the state its `/mcp` panel shows and
+      // the one `setMcpServerEnabled` writes. Servers of every scope.
+      disabled:
+        homeConfig === null
+          ? []
+          : readDisabledServers(parseHomeConfig(homeConfig), cwd),
+      // A `.mcp.json` REJECTION, which is a different question and one geniro
+      // cannot undo: the CLI unions every source's copy of that list.
+      lockedOff: [...userDisabled],
     };
+  }
+
+  /**
+   * Switch one server for one folder by editing the CLI's own config.
+   *
+   * `projects[<cwd>].disabledMcpServers` in `~/.claude.json` — probe-verified
+   * on 2.1.222 (see `claude.const.ts`): a name there makes the next turn report
+   * that server `disabled` instead of dialling it, whatever scope defined it.
+   *
+   * Taken under `proper-lockfile` at `<config>.lock`, which is the SAME lock
+   * the CLI takes for its own writes (its `ELOCKED` / `Config lock compromised`
+   * strings are that package's). Without it a concurrent `claude` write and
+   * this one would be a read-modify-write race over a file holding the user's
+   * whole CLI state — a lost update there is real data loss, not a lost toggle.
+   */
+  override async setMcpServerEnabled(
+    cwd: string,
+    server: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const file = join(
+      this.claudeOptions.homeDir ?? homedir(),
+      CLAUDE_MODEL_CACHE_FILE,
+    );
+    const release = await lock(file, {
+      lockfilePath: `${file}${CLAUDE_CONFIG_LOCK_SUFFIX}`,
+      retries: CLAUDE_CONFIG_LOCK_RETRIES,
+    });
+    try {
+      // Re-read INSIDE the lock: whatever the panel last listed may be minutes
+      // old, and the CLI may have written since.
+      // STRICT here, unlike the reader: an unparseable config treated as
+      // empty would be rewritten as `{projects: {...}}` and take the user's
+      // entire CLI state with it. Refusing costs a toggle; guessing costs
+      // their history, their account record, and every project's settings.
+      const source = await readFile(file, 'utf8');
+      const parsed: unknown = JSON.parse(source);
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error(`${file} is not a JSON object`);
+      }
+      const config = parsed as ClaudeHomeConfig;
+      const next = withDisabledServer(config, cwd, server, enabled);
+      if (next === config) {
+        return; // already in that state — never rewrite the user's config
+      }
+      // tmp+rename, so a crash mid-write cannot truncate the file holding the
+      // user's whole CLI state. The lock covers concurrent WRITERS; this
+      // covers the process dying between them.
+      await atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`);
+    } finally {
+      await release();
+    }
   }
 
   protected buildArgs(input: AgentTurnInput): string[] {
@@ -538,13 +592,6 @@ export class ClaudeAdapter extends AgentAdapter {
         CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
         CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
       );
-    }
-    // OUTSIDE the caller-node branch below: the disabled set applies to every
-    // turn, chat and graph node alike, not only to one that carries a call
-    // surface.
-    const settingsPath = this.settingsPaths.get(input);
-    if (settingsPath) {
-      args.push(CLAUDE_SETTINGS_FLAG, settingsPath);
     }
     const mcpConfigPath = this.mcpConfigPaths.get(input);
     if (mcpConfigPath) {

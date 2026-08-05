@@ -181,6 +181,26 @@ export class AcpTurnDriver implements TurnDriver {
     costCurrency: null,
   };
   private readonly textChunks: string[] = [];
+  /**
+   * The assistant-text or thought block being streamed right now, not yet
+   * written as a transcript row.
+   *
+   * ACP delivers a message as a run of `agent_message_chunk` notifications with
+   * no "block complete" frame, so the driver has to decide where a row ends.
+   * Emitting a durable `text` per chunk — which is what this did — wrote ONE
+   * ROW PER WORD: a single short cursor reply landed as 68 `message` rows and
+   * 68 socket emissions, and the transcript rendered as a column of one-word
+   * paragraphs. The words still stream live (each chunk is a `text_delta`,
+   * EPHEMERAL by the contract in `adapter.types.ts`); only the join becomes a
+   * row, which is exactly how the claude adapter already behaves.
+   *
+   * `kind` is carried so a thought and an answer cannot merge into one row when
+   * the agent switches between them mid-turn.
+   */
+  private pendingBlock: {
+    kind: 'text' | 'reasoning';
+    parts: string[];
+  } | null = null;
   /** Tool name by ACP toolCallId, so a later update can name its result. */
   private readonly toolNames = new Map<string, string>();
   /**
@@ -629,8 +649,10 @@ export class AcpTurnDriver implements TurnDriver {
 
     if (stopReason === 'cancelled') {
       // A cancelled turn is not a completion — it must not record usage or a
-      // final answer downstream nodes would then consume.
-      return [{ type: 'turn_cancelled' }];
+      // final answer downstream nodes would then consume. What the user
+      // ALREADY SAW is a different question: the open block is still written,
+      // so cancelling does not erase the words that reached the screen.
+      return [...this.flushPending(), { type: 'turn_cancelled' }];
     }
 
     const promptUsage = root ? asRecord(root.usage) : null;
@@ -640,6 +662,9 @@ export class AcpTurnDriver implements TurnDriver {
     }
     const text = this.textChunks.join('');
     return [
+      // The turn is over, so the last block has no more chunks coming — this
+      // is the ONLY close for a reply that ended without a tool call after it.
+      ...this.flushPending(),
       {
         type: 'turn_complete',
         usage: this.buildUsage(),
@@ -647,6 +672,47 @@ export class AcpTurnDriver implements TurnDriver {
         finalText: text.length > 0 ? text : null,
       },
     ];
+  }
+
+  /**
+   * Close the open block as ONE durable event, or nothing when none is open.
+   * Idempotent: a second call before the next chunk yields nothing.
+   */
+  private flushPending(): AgentEvent[] {
+    const block = this.pendingBlock;
+    this.pendingBlock = null;
+    if (!block) {
+      return [];
+    }
+    const text = block.parts.join('');
+    if (text.length === 0) {
+      return [];
+    }
+    return [
+      block.kind === 'text'
+        ? { type: 'text', text }
+        : { type: 'reasoning', text },
+    ];
+  }
+
+  /**
+   * Add a chunk to the open block, closing a block of the OTHER kind first —
+   * an agent that thinks, answers, then thinks again produces three rows, not
+   * one merged blob.
+   */
+  private appendPending(
+    kind: 'text' | 'reasoning',
+    text: string,
+  ): AgentEvent[] {
+    const closed =
+      this.pendingBlock !== null && this.pendingBlock.kind !== kind
+        ? this.flushPending()
+        : [];
+    if (this.pendingBlock === null) {
+      this.pendingBlock = { kind, parts: [] };
+    }
+    this.pendingBlock.parts.push(text);
+    return closed;
   }
 
   private buildUsage(): AgentUsage {
@@ -792,14 +858,21 @@ export class AcpTurnDriver implements TurnDriver {
           return [];
         }
         this.textChunks.push(text);
-        return [{ type: 'text', text }];
+        // The chunk streams as an EPHEMERAL delta; the row is written when the
+        // block closes (see `pending`).
+        return [
+          ...this.appendPending('text', text),
+          { type: 'text_delta', text },
+        ];
       }
       case 'agent_thought_chunk': {
         if (this.replaying) {
           return [];
         }
         const text = textOf(update.content);
-        return text === null ? [] : [{ type: 'reasoning', text }];
+        // No ephemeral twin: `thinking_progress` carries a token COUNT, which
+        // is claude's answer to redacted thinking and cannot express text.
+        return text === null ? [] : this.appendPending('reasoning', text);
       }
       case 'tool_call': {
         if (this.replaying) {
@@ -814,6 +887,10 @@ export class AcpTurnDriver implements TurnDriver {
           this.toolInputs.set(toolCall.toolCallId, toolCall.rawInput);
         }
         return [
+          // A tool call is a transcript row, so whatever text preceded it is a
+          // finished block — closing it here is what keeps the interleaving
+          // (say something → call a tool → say something) intact.
+          ...this.flushPending(),
           {
             type: 'tool_call',
             id: toolCall.toolCallId,
@@ -833,6 +910,7 @@ export class AcpTurnDriver implements TurnDriver {
           return [];
         }
         return [
+          ...this.flushPending(),
           {
             type: 'tool_result',
             id: toolCall.toolCallId,

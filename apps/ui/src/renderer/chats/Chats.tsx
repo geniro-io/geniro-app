@@ -21,7 +21,11 @@ import {
   useState,
 } from 'react';
 
-import type { CliKind, DaemonHandle } from '../../shared/contracts';
+import type {
+  CliDetection,
+  CliKind,
+  DaemonHandle,
+} from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import type {
   AgentSkillDto as AgentSkill,
@@ -184,8 +188,16 @@ export function Chats({
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const workflowSlug = target.startsWith('wf:') ? target.slice(3) : null;
   const agentKind = (workflowSlug ? 'claude' : target) as CliKind;
-  // Approval mode for the NEXT new chat (claude only; cursor is pinned auto).
+  // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
   const [approvalMode, setApprovalMode] = useState<ChatApprovalMode>('ask');
+  /**
+   * Per-CLI detection, or null until the probe answers. Null means UNKNOWN and
+   * is rendered as "everything is offered" — refusing agents while the probe
+   * is still running would flicker a working CLI out of the picker on launch.
+   */
+  const [cliDetections, setCliDetections] = useState<CliDetection[] | null>(
+    null,
+  );
   // Per-CLI so switching agents restores that agent's model rather than
   // carrying an alias the other CLI has never heard of.
   const [models, setModels] = useState<Partial<Record<CliKind, string>>>({});
@@ -569,6 +581,30 @@ export function Chats({
       ),
     [capabilities],
   );
+  /**
+   * Approval modes per CLI, straight off the daemon's capability report.
+   * Derived for the same reason as the terminal set above: the fact lives in
+   * `AdapterConfig.approval`, and the moment the renderer decides it by agent
+   * name, a CLI that gains a permission channel keeps a hidden chip.
+   */
+  const approvalModesByAgent = useMemo(
+    () =>
+      new Map<string, readonly ChatApprovalMode[]>(
+        (capabilities?.approvals ?? []).map((row) => [row.agent, row.modes]),
+      ),
+    [capabilities],
+  );
+  /**
+   * What the NEXT chat's CLI honours, or null until capabilities land.
+   *
+   * Memoized because `createChatRun` depends on it: the `?? []` fallback would
+   * otherwise mint a fresh array every render and churn that callback's
+   * identity on each keystroke.
+   */
+  const composerApprovalModes = useMemo(
+    () => (capabilities ? (approvalModesByAgent.get(agentKind) ?? []) : null),
+    [capabilities, approvalModesByAgent, agentKind],
+  );
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
@@ -660,6 +696,11 @@ export function Chats({
       setModels(s.lastModels ?? {});
       setEfforts(s.lastEfforts ?? {});
     });
+    // Which CLIs are actually on this machine. The picker used to offer every
+    // known kind unconditionally, so an agent that is not installed — or whose
+    // binary is too old to be driven — looked exactly like a working one and
+    // failed only AFTER a run had been created, as "exited with code 1".
+    void window.geniro.detectClis().then(setCliDetections);
     refreshRuns();
     const unsubscribeItem = client.onItem(addItem);
     const unsubscribeLiveText = client.onLiveText((event) => {
@@ -816,11 +857,19 @@ export function Chats({
           // Same rule as the model: omitted entirely on the CLI default. A CLI
           // with no effort control never has an entry, since its chip is absent.
           ...(efforts[agentKind] ? { effort: efforts[agentKind] } : {}),
-          // Cursor is pinned 'auto' daemon-side; only claude sends a choice.
-          ...(agentKind === 'claude' ? { approval: approvalMode } : {}),
+          // Sent only when this CLI honours the composer's pick; otherwise
+          // omitted so the daemon applies its own default for that agent —
+          // which is also what happens while capabilities are still loading.
+          ...(composerApprovalModes?.includes(approvalMode)
+            ? { approval: approvalMode }
+            : {}),
         },
       }),
-    [agentKind, approvalMode, models, efforts, chatApi],
+    // `composerApprovalModes` belongs here: it starts null and only fills in
+    // once capabilities load, so a callback that captured the first render's
+    // value silently omitted the approval from every new run and every chat
+    // opened on the daemon's default instead of the mode the chip displayed.
+    [agentKind, approvalMode, composerApprovalModes, models, efforts, chatApi],
   );
 
   /**
@@ -1595,7 +1644,11 @@ export function Chats({
    * Open a terminal mirroring ONE thread of one agent (the panel's action).
    *
    * `live` by default: the panel exists to show what the agent is doing, and
-   * only the live mirror follows a turn the chat is running right now.
+   * only the live mirror follows a turn the chat is running right now — an
+   * interactive session is a SECOND `--resume` process that does not re-read
+   * the session file, so it shows the conversation as of the moment it opened
+   * and never advances while the chat works (measured: a headless turn on the
+   * same session left an open TUI at +0 bytes).
    */
   const openThreadTerminal = useCallback(
     async (
@@ -1873,10 +1926,29 @@ export function Chats({
                         groups={[
                           {
                             label: 'Agents',
-                            items: CLI_KINDS.map((kind) => ({
-                              value: kind,
-                              label: kind,
-                            })),
+                            // An agent the machine cannot run is SHOWN and
+                            // refused, not hidden: a row that quietly vanishes
+                            // leaves the user hunting for it, while a disabled
+                            // one with its reason beside it explains itself.
+                            // The current target is never refused — a run
+                            // already on it would otherwise have a picker that
+                            // cannot display its own value.
+                            items: CLI_KINDS.map((kind) => {
+                              const detected = cliDetections?.find(
+                                (d) => d.kind === kind,
+                              );
+                              const missing =
+                                detected !== undefined &&
+                                !detected.found &&
+                                kind !== target;
+                              return {
+                                value: kind,
+                                label: kind,
+                                ...(missing
+                                  ? { disabled: true, hint: 'not installed' }
+                                  : {}),
+                              };
+                            }),
                           },
                           ...(workflows.length > 0
                             ? [
@@ -1945,8 +2017,15 @@ export function Chats({
                         // Approval mode of the next chat — graph runs keep their
                         // per-node modes from the workflow YAML instead.
                         <ApprovalModeSelect
-                          agentKind={agentKind}
-                          value={agentKind === 'claude' ? approvalMode : 'auto'}
+                          supportedModes={composerApprovalModes}
+                          // A mode this CLI does not honour shows as the "cli
+                          // default" placeholder rather than a lie — the user
+                          // may have picked it while another agent was selected.
+                          value={
+                            composerApprovalModes?.includes(approvalMode)
+                              ? approvalMode
+                              : null
+                          }
                           planSupported={
                             capabilities?.claudeModes.plan === 'pass'
                           }
@@ -2305,7 +2384,13 @@ export function Chats({
                             }
                           />
                           <ApprovalModeSelect
-                            agentKind={activeRun.agentKind}
+                            supportedModes={
+                              capabilities
+                                ? (approvalModesByAgent.get(
+                                    activeRun.agentKind,
+                                  ) ?? [])
+                                : null
+                            }
                             value={activeRun.approval}
                             planSupported={
                               capabilities?.claudeModes.plan === 'pass'

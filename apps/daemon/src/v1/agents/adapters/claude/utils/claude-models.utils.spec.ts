@@ -1,9 +1,9 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { tempDir } from '../../../__tests__/temp-dir';
 import type { AgentModel } from '../../adapter.types';
 import { ClaudeAdapter } from '../claude.adapter';
 import { claudeModels, readClaudeModelCache } from './claude-models.utils';
@@ -17,7 +17,7 @@ const shippedFloor: readonly AgentModel[] = new ClaudeAdapter().getConfig()
   .builtinModels;
 
 const withClaudeJson = (contents: string): string => {
-  const home = mkdtempSync(join(tmpdir(), 'claude-home-'));
+  const home = tempDir('claude-home-');
   writeFileSync(join(home, '.claude.json'), contents);
   return home;
 };
@@ -57,9 +57,7 @@ describe('readClaudeModelCache', () => {
   it('survives every shape this undocumented file could take', () => {
     // It is claude's internal state, not an API: a shape change must degrade
     // to the built-in aliases, never throw or list junk.
-    expect(
-      readClaudeModelCache(mkdtempSync(join(tmpdir(), 'no-file-'))),
-    ).toEqual([]);
+    expect(readClaudeModelCache(tempDir('no-file-'))).toEqual([]);
     expect(readClaudeModelCache(withClaudeJson('{ not json'))).toEqual([]);
     expect(readClaudeModelCache(withClaudeJson('"a string"'))).toEqual([]);
     expect(
@@ -98,7 +96,7 @@ describe('claudeModels', () => {
   it('still offers the aliases when the cache is empty or unreadable', () => {
     // The aliases resolve to the latest model of each tier, so an install that
     // has never populated the cache still gets a working picker.
-    const home = mkdtempSync(join(tmpdir(), 'claude-empty-'));
+    const home = tempDir('claude-empty-');
 
     expect(claudeModels(shippedFloor, home)).toEqual([
       { id: 'opus', label: 'opus', source: 'builtin' },

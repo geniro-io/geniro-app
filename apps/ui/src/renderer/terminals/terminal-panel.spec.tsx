@@ -390,4 +390,24 @@ describe('TerminalPanel — the live mirror', () => {
 
     expect(onSwitchKind).toHaveBeenCalledWith(TerminalKind.Interactive);
   });
+
+  it('opens the kind menu DOWNWARD, so the panel does not clip it away', () => {
+    render(vi.fn(), { session: liveSession, onSwitchKind: vi.fn() });
+    const trigger = container.querySelector<HTMLElement>(
+      '[data-menu-trigger]',
+    )!;
+    act(() => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // `Menu` defaults to opening upward, which suits the composer at the
+    // bottom of the window but not a header inside an `overflow-hidden` dialog
+    // panel: the rows were laid out ABOVE the panel and clipped, so they had a
+    // bounding box, painted nothing, and could not be clicked at all —
+    // `elementFromPoint` over an option returned the modal backdrop. jsdom
+    // computes no layout, so the placement class is the observable.
+    const panel = container.querySelector<HTMLElement>('[role="listbox"]')!;
+    expect(panel.className).toContain('top-full');
+    expect(panel.className).not.toContain('bottom-full');
+  });
 });

@@ -76,6 +76,23 @@ describe('computeAgentActivity', () => {
     expect(worker?.spentUsd).toBeCloseTo(0.35);
   });
 
+  it('keeps the last real context figure when a turn reports zero', () => {
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 37_600, contextWindowTokens: 200_000 },
+        stopReason: 'end_turn',
+      }),
+      // A turn that reports nothing is not a measurement of an empty window.
+      // Taking its zero made the header read "Context 0% full — 0 of 200k"
+      // in the middle of a live conversation.
+      item('turn_complete', 'worker', {
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        stopReason: null,
+      }),
+    ]);
+    expect(activity.get('worker')?.contextTokens).toBe(37_600);
+  });
+
   it('falls back to inputTokens when a CLI reports no contextTokens', () => {
     const activity = computeAgentActivity([
       item('turn_complete', 'worker', {

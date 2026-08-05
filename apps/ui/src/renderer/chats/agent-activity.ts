@@ -258,8 +258,13 @@ export function computeAgentActivity(
         continue;
       }
       const agent = entry(key);
+      // A reported 0 is rejected for the same reason as the window below: it
+      // is not a measurement, it is a turn that reported nothing. Overwriting
+      // a real figure with it made the meter read `0 of 200k` mid-conversation
+      // — and the live plane already treats a non-positive count as absent
+      // (`live-text.ts`), so accepting it only here was the odd one out.
       const context = usage.contextTokens ?? usage.inputTokens;
-      if (typeof context === 'number') {
+      if (typeof context === 'number' && context > 0) {
         agent.contextTokens = context;
       }
       // Kept only when this turn reported a USABLE one: a CLI that stops

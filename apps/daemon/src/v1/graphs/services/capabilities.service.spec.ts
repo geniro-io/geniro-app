@@ -130,4 +130,33 @@ describe('CapabilitiesService — the interactive terminal', () => {
     );
     expect(byAgent.get('claude')).toBeNull();
   });
+
+  describe('approval modes', () => {
+    it('answers for EVERY registered CLI, so the chip never decides by name', () => {
+      expect(
+        service()
+          .service.capabilitiesWire()
+          .approvals.map((a) => a.agent)
+          .sort(),
+      ).toEqual(['claude', 'cursor-agent']);
+    });
+
+    it('reports cursor’s real ACP modes, not an empty set', () => {
+      // The composer used to render no approval chip for cursor at all, on the
+      // grounds that the CLI had no per-turn approval channel. ACP gave it one,
+      // and this is the fact that lets the renderer notice.
+      const byAgent = new Map(
+        service()
+          .service.capabilitiesWire()
+          .approvals.map((a) => [a.agent, a.modes]),
+      );
+      expect(byAgent.get('cursor-agent')).toEqual(
+        new CursorAcpAdapter().getConfig().approval.modes,
+      );
+      expect(byAgent.get('cursor-agent')).toContain('ask');
+      expect(byAgent.get('claude')).toEqual(
+        new ClaudeAdapter().getConfig().approval.modes,
+      );
+    });
+  });
 });

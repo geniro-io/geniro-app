@@ -17,8 +17,8 @@ const OVERFLOW_CHIP_WIDTH = 32;
  * without a layout engine.
  *
  * A width of **0 means that position rendered nothing** — a control the current
- * agent does not have (cursor has no approval mode and no effort levels, a
- * plain folder has no branch). It costs the row no width and no gap, and can
+ * agent does not have (cursor has no effort levels, a CLI with no approval
+ * channel has no approval chip, a plain folder has no branch). It costs the row no width and no gap, and can
  * never push a real chip into the overflow; the position is still consumed, so
  * the returned count stays an index into the caller's child list.
  */
@@ -95,9 +95,9 @@ export function ComposerChipRow({
   actions: React.ReactNode;
 }): React.JSX.Element {
   // `toArray` drops literal `null` children and keys the rest. It does NOT drop
-  // a chip COMPONENT that returns null — `<ApprovalModeSelect>` for cursor is
-  // still a child here, rendering nothing. Those positions are real entries in
-  // this list and are measured as empty below.
+  // a chip COMPONENT that returns null — an effort chip for a CLI with no
+  // effort levels is still a child here, rendering nothing. Those positions are
+  // real entries in this list and are measured as empty below.
   const chips = React.Children.toArray(children);
   const rowRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
@@ -214,7 +214,7 @@ export function ComposerChipRow({
           // `display: contents` — the chip itself stays the flex item, so a
           // slot changes no layout. It exists so that a chip which renders
           // NOTHING still holds its position among `row.children`: a component
-          // returning null (cursor's approval and effort chips, a non-repo
+          // returning null (cursor's effort chip, a non-repo
           // folder's branch chip) leaves no element behind, and without a slot
           // every later chip was measured into the WRONG cache entry — so a
           // claude→cursor switch left the row believing it still had to fit

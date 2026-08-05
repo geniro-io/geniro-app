@@ -202,6 +202,9 @@ describe('CursorAcpAdapter spawn', () => {
 
     expect(events).toEqual([
       { type: 'session', sessionId: 'sess-9' },
+      // The chunk streams as an ephemeral delta; the durable row arrives once,
+      // when the block closes at the end of the turn.
+      { type: 'text_delta', text: 'done' },
       { type: 'text', text: 'done' },
       {
         type: 'turn_complete',

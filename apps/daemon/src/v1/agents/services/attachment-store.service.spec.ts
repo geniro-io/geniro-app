@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { tempDir } from '../__tests__/temp-dir';
 import { MAX_ATTACHMENT_BYTES } from '../chat.types';
 import { AttachmentStoreService } from './attachment-store.service';
 
@@ -15,7 +15,7 @@ describe('AttachmentStoreService', () => {
   let store: AttachmentStoreService;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'attachments-'));
+    root = tempDir('attachments-');
     store = new AttachmentStoreService({ root });
   });
 

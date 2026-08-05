@@ -233,6 +233,15 @@ export function TerminalPanel({
               variant="ghost"
               aria-label="Terminal mirror"
               align="end"
+              // DOWNWARD, unlike every composer chip. `Menu` defaults to
+              // opening upward because its usual home is the composer at the
+              // bottom of the window, and it positions absolutely rather than
+              // through a portal. Here the trigger sits in the header of a
+              // dialog panel that is `overflow-hidden`, so an upward menu is
+              // laid out above the panel and CLIPPED: the rows had a bounding
+              // box but painted nothing, `elementFromPoint` returned the modal
+              // backdrop, and clicking an option was impossible with a mouse.
+              side="bottom"
               className="shrink-0"
               groups={KIND_GROUPS}
               value={session.kind}

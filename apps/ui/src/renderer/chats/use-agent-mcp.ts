@@ -115,6 +115,16 @@ export function useAgentMcp(
   agentsApi: DaemonApis['agents'],
   scopes: readonly AgentMcpScope[],
   cwd: string | null,
+  /**
+   * Whether anything is actually SHOWING this listing right now.
+   *
+   * The read is not free and it is not passive: the daemon health-checks each
+   * server, which LAUNCHES the user's own MCP servers. Doing that on mount —
+   * for a panel band nobody had asked to look at — is what made a chat greet
+   * the user with a wall of connection failures from servers they never
+   * intended to start. Gated, the launch happens when the list is opened.
+   */
+  enabled = true,
 ): AgentMcpState {
   // The answers are stored WITH the (kinds, folder) they answer for. Without
   // that pairing, switching chats leaves the previous folder's rows on screen
@@ -138,6 +148,17 @@ export function useAgentMcp(
   // show the old state; letting it land would flip the switch back while the
   // next turn honours the toggle, and nothing re-reads to correct it.
   const writeSeq = useRef(0);
+  /**
+   * Toggle writes still out.
+   *
+   * STATE, not a ref, and separate from the read's `pending`: a write outlives
+   * both the list being closed and any read that resolves meanwhile, and each
+   * of those clears `pending`. Folded into one flag, closing the popover mid
+   * write — or simply letting a cached read land — put the switch back in play
+   * while the daemon had yet to answer, reopening the double-write race the
+   * flag exists to close.
+   */
+  const [writing, setWriting] = useState(0);
   /**
    * Re-read WITHOUT bypassing the daemon's cache. A toggle is stored per
    * (agent, folder) and the daemon merges the disabled set on every exit path
@@ -166,6 +187,13 @@ export function useAgentMcp(
   const targetScopes = useMemo(() => scopes, [scopesKey]);
 
   useEffect(() => {
+    if (!enabled) {
+      // Deliberately BEFORE the token is consumed: a refresh cannot be raised
+      // while the list is closed (its control lives inside), and leaving the
+      // token unspent keeps this a pure no-op rather than a state change.
+      setPending(false);
+      return;
+    }
     const bypassCache = reloadToken > consumedToken.current;
     // Spent even when there is nothing to ask: a refresh raised with no folder
     // in scope must not be banked and then applied to whichever folder the
@@ -226,7 +254,15 @@ export function useAgentMcp(
       // panel the user has already closed.
       stale = true;
     };
-  }, [agentsApi, targetScopes, cwd, readScope, reloadToken, rereadToken]);
+  }, [
+    agentsApi,
+    targetScopes,
+    cwd,
+    readScope,
+    reloadToken,
+    rereadToken,
+    enabled,
+  ]);
 
   const refresh = useCallback(() => {
     setReloadToken((token) => token + 1);
@@ -242,6 +278,7 @@ export function useAgentMcp(
       }
       setToggleError(null);
       setPending(true);
+      setWriting((count) => count + 1);
       void agentsApi
         .setAgentMcpServerEnabled(
           {
@@ -290,7 +327,10 @@ export function useAgentMcp(
           // toggle was refused, which a generic message cannot.
           setToggleError(err instanceof Error ? err.message : TOGGLE_FAILURE);
         })
-        .finally(() => setPending(false));
+        .finally(() => {
+          setWriting((count) => count - 1);
+          setPending(false);
+        });
     },
     [agentsApi, cwd, readScope, scopes],
   );
@@ -302,12 +342,17 @@ export function useAgentMcp(
   // "Asked for, not answered yet" counts as loading. The effect runs after
   // paint, so without this the panel renders one frame of "No servers" — a
   // claim about the user's configuration — before it has asked anything.
+  //
+  // `enabled` first: with nothing showing the listing, nothing has been asked
+  // for, so there is nothing to be awaiting. Without it a closed list reports
+  // `loading` forever — a spinner on a control the user has not pressed, and a
+  // refresh button disabled before it was ever available.
   const awaitingFirstAnswer =
-    cwd !== null && scopes.length > 0 && byScope.size === 0;
+    enabled && cwd !== null && scopes.length > 0 && byScope.size === 0;
 
   return {
     byScope,
-    loading: pending || awaitingFirstAnswer,
+    loading: pending || writing > 0 || awaitingFirstAnswer,
     refresh,
     setEnabled,
     toggleError,

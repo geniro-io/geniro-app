@@ -207,6 +207,82 @@ describe('McpSection', () => {
     );
   });
 
+  it('folds a LONG failure reason, and unfolds it on request', () => {
+    // The reported symptom: a JSON-RPC 404 body is hundreds of characters of
+    // protocol envelope around one useful sentence, and several at once turned
+    // the panel into a wall of red. It is still all there — one press away —
+    // rather than truncated, because the tail is sometimes the actionable part.
+    const long = `HTTP 404: Streamable HTTP error: Error POSTing to endpoint: ${'{"type":"error"}'.repeat(20)}`;
+    const el = render({
+      listing: listing({ name: 'srv', status: 'failed', detail: long }),
+      loading: false,
+    });
+
+    const reason = el.querySelector('.text-destructive')!;
+    expect(reason.className).toContain('line-clamp-2');
+    const toggle = [...el.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Show more',
+    );
+    expect(toggle).toBeDefined();
+
+    act(() => {
+      toggle!.click();
+    });
+    expect(el.querySelector('.text-destructive')!.className).not.toContain(
+      'line-clamp-2',
+    );
+    expect(
+      [...el.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Show less',
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves a SHORT failure reason unfolded, with no toggle to press', () => {
+    // Folding a one-line reason would add a control that reveals nothing.
+    const el = render({
+      listing: listing({
+        name: 'srv',
+        status: 'failed',
+        detail: 'HTTP 502: dial failed',
+      }),
+      loading: false,
+    });
+
+    expect(el.querySelector('.text-destructive')!.className).not.toContain(
+      'line-clamp-2',
+    );
+    expect(
+      [...el.querySelectorAll('button')].some((button) =>
+        button.textContent?.startsWith('Show '),
+      ),
+    ).toBe(false);
+  });
+
+  it('wraps an unbroken failure reason instead of overflowing the panel', () => {
+    // These strings are routinely one unbroken token — a URL, or a serialized
+    // error object with no spaces. Without a wrap rule the text does not widen
+    // the panel, it runs out past its edge and is simply unreadable.
+    const el = render({
+      listing: listing({
+        name: 'srv',
+        status: 'failed',
+        detail: `https://example.invalid/${'a'.repeat(300)}`,
+      }),
+      loading: false,
+    });
+
+    // All THREE, because `break-words` alone does not stop the overflow: the
+    // text is a flex child, and a flex child's min-width defaults to its
+    // content — so without `min-w-0` on both the text and the column that
+    // holds it, the box refuses to shrink and the wrap rule never gets to
+    // apply. Asserting only the wrap class certified the wrong half.
+    const reason = el.querySelector('.text-destructive')!;
+    expect(reason.className).toContain('break-words');
+    expect(reason.className).toContain('min-w-0');
+    expect(reason.parentElement!.className).toContain('min-w-0');
+  });
+
   it('does not print a detail for a server that did not fail', () => {
     // A healthy list stays one line per server. Dropping the status guard puts
     // an explanatory sentence under rows with nothing to explain.

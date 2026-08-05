@@ -1,4 +1,5 @@
 import { Lock, Plug, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
 
 import type {
   AgentMcpListingDto as AgentMcpListing,
@@ -26,6 +27,67 @@ const MCP_STATUS_TONE: Record<AgentMcpServer['status'], McpStatusTone> = {
   disabled: 'muted',
   unknown: 'outline',
 };
+
+/**
+ * Beyond this many characters a failure reason is folded until asked for.
+ *
+ * A JSON-RPC failure body is routinely hundreds of characters of protocol
+ * envelope wrapping one useful sentence, and several of them at once turned
+ * the panel into a wall. Past this length the reason is clamped to two lines
+ * and the rest is one press away.
+ *
+ * A character count is a PROXY for the question actually being asked ("does
+ * this overflow two lines?"), which only layout can answer — so a 119-char
+ * unbroken URL can still wrap past two lines and render unfolded. Accepted
+ * deliberately: measuring would cost a ref and a layout read on every row of
+ * every listing, and the failure mode of the proxy is a slightly tall row,
+ * not a wrong or hidden reason.
+ */
+const DETAIL_FOLD_AT = 120;
+
+/**
+ * A failure reason: wrapped, folded when long, expandable.
+ *
+ * Serves both the per-server `detail` and the whole listing's
+ * `unavailableReason`, because they are the same kind of text with the same
+ * failure mode.
+ *
+ * The wrapping is not cosmetic. These strings are frequently one unbroken
+ * token — a URL, or a serialized error object with no spaces in it — and an
+ * unwrapped one does not widen the panel, it overflows it: the text ran out
+ * past the panel's edge and was simply unreadable, which is the reported
+ * "a lot of errors for mcp" symptom as much as the count was.
+ */
+function FoldedReason({
+  detail,
+  className,
+}: {
+  detail: string;
+  className?: string;
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const foldable = detail.length > DETAIL_FOLD_AT;
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5 text-xs">
+      <span
+        className={cn(
+          'min-w-0 max-w-full break-words',
+          className,
+          foldable && !expanded && 'line-clamp-2',
+        )}>
+        {detail}
+      </span>
+      {foldable ? (
+        <button
+          type="button"
+          className="shrink-0 text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          onClick={() => setExpanded((value) => !value)}>
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </span>
+  );
+}
 
 /**
  * One MCP server listing, rendered as rows.
@@ -56,10 +118,11 @@ export function McpSection({
   /**
    * Re-dial this listing's servers. Rendered in the section's own header.
    *
-   * For a surface showing ONE listing — the builder's inspector. The Agents
-   * panel shows one per CLI and puts its control in the panel header instead,
-   * because there the intent is "re-check everything" and a per-section button
-   * would be the same action offered several times.
+   * Every surface showing ONE listing at a time — the builder's inspector, and
+   * now the Agents panel, whose listings moved into per-agent popovers. While
+   * they were stacked bands of one panel the control lived in the panel header
+   * instead, because the intent there was "re-check everything" and a
+   * per-section button was the same action offered several times over.
    */
   onRefresh?: () => void;
   /**
@@ -89,7 +152,12 @@ export function McpSection({
             size="icon"
             className="ml-auto size-5 shrink-0"
             aria-label="Refresh MCP servers"
-            title="Re-check MCP server health"
+            // Named for what it DOES to a broken server, because that is what
+            // the user comes here wanting: the read re-dials each server, so
+            // this is the reconnect. The CLI has no reconnect subcommand of
+            // its own (`claude mcp` offers add/remove/login/logout/get/list,
+            // probe-verified), so re-dialling is the whole mechanism there is.
+            title="Reconnect — re-dial each server and re-check its health"
             disabled={loading}
             onClick={onRefresh}>
             <RefreshCw
@@ -102,11 +170,17 @@ export function McpSection({
         <span className="text-xs text-muted-foreground">{hint}</span>
       ) : null}
       {listing && listing.unavailableReason !== null ? (
-        // The adapter's own sentence, shown verbatim. This section never composes
-        // this, and never asks which CLI it is looking at.
-        <span className="text-xs text-muted-foreground">
-          {listing.unavailableReason}
-        </span>
+        // The adapter's own sentence, shown verbatim. This section never
+        // composes this, and never asks which CLI it is looking at.
+        //
+        // Folded on the same rule as a per-server failure, because it is the
+        // SAME kind of text and routinely the longest of it: a transport
+        // failure carries the daemon's route and query string, so this is the
+        // one line that reliably ran off the panel's edge unreadably.
+        <FoldedReason
+          className="text-muted-foreground"
+          detail={listing.unavailableReason}
+        />
       ) : servers === undefined ? (
         // Nothing has answered for this agent — which is NOT the same as it
         // having no servers. A run can carry no folder at all (`Run.cwd` is
@@ -182,7 +256,10 @@ export function McpSection({
                   never reach the sentence explaining it. Rendered only for a
                   failure, so a healthy list stays one line per server. */}
               {server.status === 'failed' && server.detail ? (
-                <span className="text-destructive">{server.detail}</span>
+                <FoldedReason
+                  className="text-destructive"
+                  detail={server.detail}
+                />
               ) : null}
             </li>
           ))}

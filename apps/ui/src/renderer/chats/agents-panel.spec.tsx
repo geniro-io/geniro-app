@@ -26,6 +26,29 @@ function render(element: React.ReactElement): HTMLDivElement {
   return container;
 }
 
+/**
+ * Open ONE card's MCP list — the named card, or the first when unnamed.
+ *
+ * The listing moved behind a per-agent disclosure, because reading it
+ * health-checks — and so launches — the user's own MCP servers, which must not
+ * happen just because a chat was opened. Every assertion about rows therefore
+ * has to press the trigger first.
+ *
+ * One, not all: the panel opens a single list at a time, because `Popover`
+ * closes on any pointer press outside its own trigger. A helper that pressed
+ * every trigger left only the last card open while reading as though it had
+ * opened them all.
+ */
+function openMcpList(el: HTMLDivElement, name?: string): void {
+  const root = name === undefined ? el : cardFor(el, name);
+  const trigger = root.querySelector<HTMLButtonElement>(
+    'button[aria-label="MCP servers"]',
+  );
+  act(() => {
+    trigger?.click();
+  });
+}
+
 afterEach(() => {
   act(() => {
     root?.unmount();
@@ -37,6 +60,23 @@ afterEach(() => {
 });
 
 function click(el: Element | null): void {
+  act(() => {
+    el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+/**
+ * A press, as a browser delivers one: `mousedown`, then `click`.
+ *
+ * Two separate acts, because a browser renders between two discrete events.
+ * `click` alone is not a press a user can make, and the popover's
+ * dismiss-on-outside-press listener runs on `mousedown` — so a spec that fires
+ * only `click` never reaches it.
+ */
+function press(el: Element | null): void {
+  act(() => {
+    el?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  });
   act(() => {
     el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
@@ -120,11 +160,13 @@ describe('AgentsPanel', () => {
 
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
     expect(worker.textContent).toContain('3 active · 2 threads');
-    expect(worker.textContent).toContain('ctx 12k / 200k');
-    expect(worker.textContent).toContain('<$0.01');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
+    // The figures are hover-only now, so the meter's accessible name is where
+    // they are legible without opening anything.
     expect(
-      worker.querySelector('svg[aria-label="Context 6% full"]'),
+      worker.querySelector(
+        'button[aria-label="Context 6% full \u2014 12k of 200k, <$0.01 spent"]',
+      ),
     ).not.toBeNull();
 
     // One main thread and nothing else: the card IS that conversation, so it
@@ -135,15 +177,20 @@ describe('AgentsPanel', () => {
     expect(orchestrator.textContent).not.toContain('1 thread');
     // The live-turn count survives the collapse — only the thread COUNT goes.
     expect(orchestrator.textContent).toContain('1 active');
-    expect(orchestrator.querySelector('button[aria-expanded]')).toBeNull();
-    // The CLI's own window, not the 200k default the sibling card falls to.
-    expect(orchestrator.textContent).toContain('ctx 45.2k / 1M');
-    expect(orchestrator.textContent).not.toContain('/ 200k');
-    // …and the ring is scaled by it: 45.2k of 1M is 5% full, of 200k is 23%.
+    // Scoped to the THREAD expander by its own label: the context meter is
+    // also an aria-expanded button now, and a bare attribute selector would
+    // match it and pass for the wrong reason.
     expect(
-      orchestrator.querySelector('svg[aria-label="Context 5% full"]'),
+      orchestrator.querySelector('button[aria-label="Orchestrator threads"]'),
+    ).toBeNull();
+    // The CLI's own window, not the 200k default the sibling card falls to —
+    // and the ring is scaled by it: 45.2k of 1M is 5% full, of 200k is 23%.
+    expect(
+      orchestrator.querySelector(
+        'button[aria-label="Context 5% full \u2014 45.2k of 1M, $0.24 spent"]',
+      ),
     ).not.toBeNull();
-    expect(orchestrator.textContent).toContain('$0.24');
+    expect(orchestrator.textContent).not.toContain('/ 200k');
 
     const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
     expect(reviewer.textContent).toContain('idle');
@@ -236,17 +283,15 @@ describe('AgentsPanel', () => {
         onClose={vi.fn()}
       />,
     );
-    const ring = (label: string): SVGElement =>
-      el.querySelector<SVGElement>(`svg[aria-label="${label}"]`)!;
-    expect(ring('Context 23% full').classList.contains('text-success')).toBe(
-      true,
-    );
-    expect(ring('Context 75% full').classList.contains('text-warning')).toBe(
-      true,
-    );
-    expect(
-      ring('Context 93% full').classList.contains('text-destructive'),
-    ).toBe(true);
+    // The ring is decorative now — the labelled node is the button around it —
+    // so it is reached through that button rather than by its own label.
+    const ring = (percent: number): SVGElement =>
+      el.querySelector<SVGElement>(
+        `button[aria-label^="Context ${percent}% full"] svg`,
+      )!;
+    expect(ring(23).classList.contains('text-success')).toBe(true);
+    expect(ring(75).classList.contains('text-warning')).toBe(true);
+    expect(ring(93).classList.contains('text-destructive')).toBe(true);
   });
 
   it('closes via the ✕ and offers the resize handle', () => {
@@ -314,6 +359,124 @@ describe('AgentsPanel — MCP servers', () => {
     ],
   };
 
+  it('keeps the rows behind the trigger until it is pressed', () => {
+    // Reading the listing health-checks each server — it launches the user's
+    // own MCP processes — so a chat must not dial them just by being opened.
+    // The count is the one thing worth showing without asking.
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const orchestrator = cardFor(el, 'Orchestrator');
+    expect(orchestrator.textContent).not.toContain('sentry');
+    expect(orchestrator.textContent).toContain('MCP');
+
+    openMcpList(el);
+    expect(cardFor(el, 'Orchestrator').textContent).toContain('sentry');
+  });
+
+  it('tells the owner when a list opens and when it closes', () => {
+    // The panel cannot gate the fetch itself — it does not own the hook — so
+    // this callback IS the lazy read. A trigger that opened the popover
+    // without reporting it would show an empty list forever.
+    const onMcpOpenChange = vi.fn();
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onMcpOpenChange={onMcpOpenChange}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const trigger = cardFor(
+      el,
+      'Orchestrator',
+    ).querySelector<HTMLButtonElement>('button[aria-label="MCP servers"]')!;
+    act(() => {
+      trigger.click();
+    });
+    expect(onMcpOpenChange).toHaveBeenLastCalledWith(true);
+
+    act(() => {
+      trigger.click();
+    });
+    expect(onMcpOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('tells the owner the lists are closed when the PANEL itself goes away', () => {
+    // The open state lives here and dies with the panel; the gate it drives
+    // lives in the owner. Unmounting without saying so leaves that gate open
+    // for the rest of the session — so the unprompted, server-launching read
+    // comes back permanently after one open/close of the panel.
+    const onMcpOpenChange = vi.fn();
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onMcpOpenChange={onMcpOpenChange}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const trigger = cardFor(
+      el,
+      'Orchestrator',
+    ).querySelector<HTMLButtonElement>('button[aria-label="MCP servers"]')!;
+    act(() => {
+      trigger.click();
+    });
+    expect(onMcpOpenChange).toHaveBeenLastCalledWith(true);
+
+    act(() => {
+      root!.unmount();
+    });
+    expect(onMcpOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('closes one agent’s list when a second agent’s is opened', () => {
+    // ONE at a time, and as a statement of fact rather than of policy:
+    // `Popover` dismisses on any pointer press outside its own trigger, so the
+    // press that opens the second card closes the first before it opens. The
+    // panel used to hold a SET of open ids, promising a side-by-side
+    // comparison the pointer could never actually reach.
+    //
+    // Pressed the way a mouse presses — `mousedown` before `click` — because
+    // that is the sequence the second card's press actually produces, and it is
+    // the one that reaches the first popover's dismiss-on-outside-press
+    // listener. A bare `.click()` fires no `mousedown`, which is why the rest
+    // of this suite could keep two lists open and never notice.
+    const el = render(
+      <AgentsPanel
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const triggerFor = (name: string): HTMLButtonElement =>
+      cardFor(el, name).querySelector<HTMLButtonElement>(
+        'button[aria-label="MCP servers"]',
+      )!;
+
+    press(triggerFor('Orchestrator'));
+    expect(triggerFor('Orchestrator').getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+
+    press(triggerFor('Worker'));
+    expect(triggerFor('Worker').getAttribute('aria-expanded')).toBe('true');
+    expect(triggerFor('Orchestrator').getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+  });
+
   it('lists one agent’s servers with the health the CLI reported', () => {
     const el = render(
       <AgentsPanel
@@ -323,6 +486,7 @@ describe('AgentsPanel — MCP servers', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     const orchestrator = cardFor(el, 'Orchestrator');
     expect(orchestrator.textContent).toContain('sentry');
@@ -343,6 +507,7 @@ describe('AgentsPanel — MCP servers', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     const failing = [
       ...cardFor(el, 'Orchestrator').querySelectorAll('li'),
@@ -378,12 +543,17 @@ describe('AgentsPanel — MCP servers', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el, 'Reviewer');
 
     const reviewer = cardFor(el, 'Reviewer');
     expect(reviewer.textContent).toContain(
       'could not read MCP servers — cursor-agent did not answer',
     );
     expect(reviewer.textContent).not.toContain('No servers');
+
+    // …and the claude agent in the SAME run still gets rows. Opened after,
+    // because one list is open at a time.
+    openMcpList(el, 'Orchestrator');
     expect(cardFor(el, 'Orchestrator').textContent).toContain('sentry');
   });
 
@@ -400,6 +570,7 @@ describe('AgentsPanel — MCP servers', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(cardFor(el, 'Orchestrator').textContent).toContain('No servers');
   });
@@ -416,6 +587,7 @@ describe('AgentsPanel — MCP servers', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     const orchestrator = cardFor(el, 'Orchestrator');
     expect(orchestrator.textContent).toContain('Not checked');
@@ -434,6 +606,7 @@ describe('AgentsPanel — MCP servers', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
     click(el.querySelector('button[aria-label="Refresh MCP servers"]'));
     expect(onRefreshMcp).toHaveBeenCalledOnce();
 
@@ -462,9 +635,19 @@ describe('AgentsPanel — MCP servers', () => {
 
   it('offers no refresh control when the owner supplies no handler', () => {
     // A control that cannot do anything is worse than no control.
+    //
+    // A listing IS passed, deliberately: without one there is no disclosure to
+    // open and no section to look at, so the assertion below held for the
+    // wrong reason — it passed with the control rendered unconditionally.
     const el = render(
-      <AgentsPanel agents={agents} onOpenThread={vi.fn()} onClose={vi.fn()} />,
+      <AgentsPanel
+        agents={agents}
+        mcpByScope={new Map([[scope('claude'), claudeListing]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
     );
+    openMcpList(el);
     expect(
       el.querySelector('button[aria-label="Refresh MCP servers"]'),
     ).toBeNull();
@@ -531,10 +714,12 @@ describe('AgentsPanel — per-node MCP scope', () => {
         onClose={vi.fn()}
       />,
     );
+    // Read one at a time — a press on the second trigger closes the first.
+    openMcpList(el, 'Reviewer');
+    expect(cardFor(el, 'Reviewer').textContent).toContain('linear');
 
-    const text = el.textContent ?? '';
-    expect(text).toContain('linear');
-    expect(text).toContain('sentry');
+    openMcpList(el, 'Writer');
+    expect(cardFor(el, 'Writer').textContent).toContain('sentry');
   });
 
   it('leaves a node with no answer for its own scope unlisted', () => {
@@ -549,6 +734,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(el.textContent ?? '').not.toContain('only-plugin-less');
   });
@@ -591,6 +777,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(1);
   });
@@ -619,6 +806,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(0);
   });
@@ -647,6 +835,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(
       cardFor(el, 'Orchestrator').querySelector(`[aria-label="${reason}"]`),
@@ -667,6 +856,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(
       switchesIn(cardFor(el, 'Orchestrator'))[0]?.getAttribute('aria-checked'),
@@ -690,6 +880,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     act(() => {
       switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
@@ -709,6 +900,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     act(() => {
       switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
@@ -727,6 +919,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(switchesIn(cardFor(el, 'Orchestrator'))).toHaveLength(0);
   });
@@ -743,6 +936,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(el.textContent).toContain('not project scope');
   });
@@ -760,6 +954,7 @@ describe('AgentsPanel — MCP toggle', () => {
         onClose={vi.fn()}
       />,
     );
+    openMcpList(el);
 
     expect(switchesIn(cardFor(el, 'Orchestrator'))[0]?.disabled).toBe(true);
   });

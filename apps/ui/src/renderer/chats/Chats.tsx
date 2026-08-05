@@ -1636,7 +1636,25 @@ export function Chats({
     }
     return [...byKey.values()];
   }, [showAgentsPanel, agents]);
-  const mcp = useAgentMcp(agentsApi, mcpScopes, activeRun?.cwd ?? null);
+  // Read only while a list is actually open. The read health-checks each
+  // server — it LAUNCHES the user's own MCP processes — so doing it on mount
+  // meant every chat started by dialling them and showing whatever failed.
+  //
+  // Holds WHICH RUN's list is open rather than a bare boolean, and the gate is
+  // derived. Remounting the panel per run is not enough on its own: switching
+  // chats changes `cwd` in the same render the flag is still raised, so the
+  // read effect fires for the NEW folder before the remount can lower it —
+  // launching that folder's servers unprompted, which is the whole defect,
+  // merely moved to the second chat. Derived, the gate is already false in
+  // that very render.
+  const [mcpOpenRunId, setMcpOpenRunId] = useState<string | null>(null);
+  const mcpOpen = mcpOpenRunId !== null && mcpOpenRunId === activeRun?.id;
+  const mcp = useAgentMcp(
+    agentsApi,
+    mcpScopes,
+    activeRun?.cwd ?? null,
+    mcpOpen,
+  );
 
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
   // content width, or a long cwd path widens the grid past the window. The
@@ -2231,6 +2249,13 @@ export function Chats({
 
           {showAgentsPanel ? (
             <AgentsPanel
+              // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
+              // agent id, and every single-agent chat's agent carries the same
+              // sentinel — so without this the list stayed open across a chat
+              // switch and the gate stayed raised, dialling the NEW folder's MCP
+              // servers unprompted. That is the very defect the disclosure exists
+              // to prevent, merely moved to the second chat.
+              key={activeRun?.id ?? 'no-run'}
               agents={agents}
               mcpByScope={mcp.byScope}
               mcpLoading={mcp.loading}
@@ -2238,6 +2263,9 @@ export function Chats({
               onSetMcpEnabled={mcp.setEnabled}
               mcpToggleError={mcp.toggleError}
               onDismissMcpToggleError={mcp.dismissToggleError}
+              onMcpOpenChange={(open) =>
+                setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
+              }
               onOpenThread={(agent, thread) =>
                 void openThreadTerminal(agent, thread)
               }

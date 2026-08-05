@@ -30,6 +30,7 @@ import type {
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
@@ -329,7 +330,10 @@ function setup(
     pathOf: (runId: string, id: string) => `/tmp/${runId}/${id}`,
     removeRun: (runId: string) => removedAttachmentRuns.push(runId),
   } as unknown as AttachmentStoreService;
-  const partials = new PartialStreamService(bus);
+  const partials = new PartialStreamService(
+    bus,
+    new FakeContextWindowStore().asStore(),
+  );
   const callTokens = new CallTokenRegistry();
   const claudeProbe = {
     capability: () => claudeModes,

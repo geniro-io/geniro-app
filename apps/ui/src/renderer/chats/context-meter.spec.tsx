@@ -29,12 +29,32 @@ function render(el: React.ReactNode): void {
   act(() => root.render(el));
 }
 
-/** The ring's accessible name, which is where its percentage is legible. */
-function ringLabel(): string | null {
+/**
+ * The meter's reading, which lives on the BUTTON around the ring.
+ *
+ * On the button rather than on the `<svg>`: the figures are hover-only for a
+ * sighted user, so the accessible name is the one place a screen-reader user
+ * gets them without opening anything. A ring labelled separately would make
+ * the same figure announce twice.
+ */
+function meterLabel(): string | null {
   return (
-    container.querySelector('svg[role="img"]')?.getAttribute('aria-label') ??
-    null
+    container
+      .querySelector('button[aria-expanded]')
+      ?.getAttribute('aria-label') ?? null
   );
+}
+
+/** The ring itself — decorative now, so it is found by tag, not by role. */
+function ring(): SVGElement | null {
+  return container.querySelector('svg');
+}
+
+function openMeter(): void {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    'button[aria-expanded]',
+  );
+  act(() => trigger?.click());
 }
 
 describe('ContextMeter', () => {
@@ -44,16 +64,65 @@ describe('ContextMeter', () => {
     render(
       <ContextMeter contextTokens={250_000} contextWindowTokens={1_000_000} />,
     );
-    expect(ringLabel()).toBe('Context 25% full');
-    expect(container.textContent).toContain('ctx 250k / 1M');
+    expect(meterLabel()).toBe('Context 25% full — 250k of 1M');
+  });
+
+  it('keeps the figures off the header until asked for them', () => {
+    // The reported complaint: `ctx 250k / 1M` beside a ring showing 25% says
+    // the same thing twice and crowds the row. The ring answers the glance;
+    // the numbers are one interaction away.
+    render(
+      <ContextMeter
+        contextTokens={250_000}
+        contextWindowTokens={1_000_000}
+        spentUsd={1.5}
+      />,
+    );
+    expect(container.textContent).toBe('');
+
+    openMeter();
+    expect(container.textContent).toContain('250k / 1M');
+    expect(container.textContent).toContain('25%');
+    expect(container.textContent).toContain('$1.50');
+  });
+
+  it('closes again on a second press, so the panel is not sticky', () => {
+    render(
+      <ContextMeter contextTokens={250_000} contextWindowTokens={1_000_000} />,
+    );
+    openMeter();
+    expect(container.textContent).toContain('250k / 1M');
+
+    openMeter();
+    expect(container.textContent).toBe('');
+  });
+
+  it('opens on keyboard focus too, not on hover alone', () => {
+    // A hover-only readout is unreachable without a pointer. Focus is the
+    // keyboard's equivalent of a hover, so it must open the same panel.
+    render(
+      <ContextMeter contextTokens={250_000} contextWindowTokens={1_000_000} />,
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    );
+    act(() => trigger?.focus());
+    expect(container.textContent).toContain('250k / 1M');
+
+    act(() => trigger?.blur());
+    expect(container.textContent).toBe('');
   });
 
   it('shows the count bare when the CLI named no window', () => {
     // No assumed denominator. Substituting a flat 200k made a 1M-window model
     // read as a fifth full before its first turn had finished — the count is
     // true, the fraction would not have been.
+    //
+    // And it stays ON SCREEN here, unlike the ring case: with no ring there is
+    // nothing to hover, so hiding it would leave the user with nothing at all.
     render(<ContextMeter contextTokens={100_000} contextWindowTokens={null} />);
-    expect(ringLabel()).toBeNull();
+    expect(meterLabel()).toBeNull();
+    expect(ring()).toBeNull();
     expect(container.textContent).toContain('ctx 100k');
     expect(container.textContent).not.toContain('/');
   });
@@ -64,7 +133,7 @@ describe('ContextMeter', () => {
     // any number it is given), and dividing by it puts "Infinity" in the one
     // place the figure is legible.
     render(<ContextMeter contextTokens={100_000} contextWindowTokens={0} />);
-    expect(ringLabel()).toBeNull();
+    expect(ring()).toBeNull();
     expect(container.textContent).toContain('ctx 100k');
     expect(container.textContent).not.toContain('/');
   });
@@ -80,9 +149,7 @@ describe('ContextMeter', () => {
           contextWindowTokens={200_000}
         />,
       );
-      return (
-        container.querySelector('svg[role="img"]')?.getAttribute('class') ?? ''
-      );
+      return ring()?.getAttribute('class') ?? '';
     };
     expect(tone(69)).toContain('text-success');
     expect(tone(70)).toContain('text-warning');
@@ -95,31 +162,13 @@ describe('ContextMeter', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('draws the percentage INSIDE the ring, units and all', () => {
-    // Everywhere the meter appears, not just the header: a ring whose figure
-    // is only in its accessible name is a decoration to a sighted user, and
-    // the bare number read as an unlabelled count of something.
+  it('leaves the ring itself unlabelled, so the figure announces once', () => {
     render(
       <ContextMeter contextTokens={50_000} contextWindowTokens={200_000} />,
     );
-    expect(container.querySelector('svg text')?.textContent).toBe('25%');
-  });
-
-  it('shrinks the label’s type so it stays inside the ring', () => {
-    // "9%" and "100%" go through the same 22px well. A fixed ratio seats the
-    // short one and spills the long one over the arc, which is what makes this
-    // worth pinning rather than eyeballing once.
-    const fontSize = (): number =>
-      Number(container.querySelector('svg text')?.getAttribute('font-size'));
-    render(
-      <ContextMeter contextTokens={2_000} contextWindowTokens={200_000} />,
-    );
-    const short = fontSize();
-    render(
-      <ContextMeter contextTokens={200_000} contextWindowTokens={200_000} />,
-    );
-    expect(container.querySelector('svg text')?.textContent).toBe('100%');
-    expect(fontSize()).toBeLessThan(short);
+    expect(ring()?.getAttribute('role')).toBeNull();
+    expect(ring()?.getAttribute('aria-hidden')).toBe('true');
+    expect(meterLabel()).toBe('Context 25% full — 50k of 200k');
   });
 });
 
@@ -141,8 +190,8 @@ describe('the header and the panel read the SAME meter', () => {
         onToggleSidePanel={vi.fn()}
       />,
     );
-    const headerLabel = ringLabel();
-    const headerText = container.textContent ?? '';
+    const headerLabel = meterLabel();
+    expect(headerLabel).toBe('Context 25% full — 250k of 1M');
 
     render(
       <AgentsPanel
@@ -171,8 +220,6 @@ describe('the header and the panel read the SAME meter', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(ringLabel()).toBe(headerLabel);
-    expect(container.textContent).toContain('ctx 250k / 1M');
-    expect(headerText).toContain('ctx 250k / 1M');
+    expect(meterLabel()).toBe(headerLabel);
   });
 });

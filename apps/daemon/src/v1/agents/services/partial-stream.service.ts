@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { type RunDeltaEvent, SINGLE_AGENT_NODE } from '../chat.types';
 import { AgentEventBus } from './agent-events.bus';
+import { contextWindowKey, ContextWindowStore } from './context-window.store';
 
 /**
  * Hard cap on one owner's live tail. A runaway block stops growing rather than
@@ -80,9 +81,16 @@ export class PartialStreamService {
    * remembering it by model makes every later chat on that model correct from
    * its first request.
    *
-   * Process-lifetime only, and deliberately so: it is a cache of something the
-   * CLI will report again, never a source of truth. A model whose window has
-   * not been observed this session stays unknown rather than assumed.
+   * The hot half of a cache whose cold half is {@link ContextWindowStore}: a
+   * miss here consults the store, which survives daemon restarts. It was
+   * process-lifetime only, and that was the defect — the window rides the
+   * `result` line, so a fresh process had nothing to scale against until a
+   * turn COMPLETED, and every chat showed a denominator-less meter for its
+   * whole first turn after each app launch.
+   *
+   * Still never assumed: a model neither this process nor the store has ever
+   * seen stays unknown, and the meter renders the count with no ring rather
+   * than measuring against a guess.
    */
   private readonly windowsByModel = new Map<string, number>();
   /**
@@ -95,10 +103,13 @@ export class PartialStreamService {
    */
   private readonly runModels = new Map<
     string,
-    { key: string; model: string }
+    { key: string; agent: string; model: string }
   >();
 
-  constructor(private readonly bus: AgentEventBus) {}
+  constructor(
+    private readonly bus: AgentEventBus,
+    private readonly windowStore: ContextWindowStore,
+  ) {}
 
   /** Extend an owner's tail and publish it. */
   append(
@@ -209,6 +220,14 @@ export class PartialStreamService {
       const announced = this.runModels.get(runId);
       if (announced && model !== null && announced.model === model) {
         this.windowsByModel.set(announced.key, contextWindowTokens);
+        // Written through to disk so the NEXT daemon launch already knows this
+        // model's window at the turn's first request, instead of relearning it
+        // only when a turn finishes.
+        this.windowStore.remember(
+          announced.agent,
+          announced.model,
+          contextWindowTokens,
+        );
       }
     } catch (err) {
       this.warn('rememberWindow', err);
@@ -230,10 +249,20 @@ export class PartialStreamService {
     try {
       const key = this.modelKey(agent, model);
       if (this.runModels.get(runId)?.key !== key) {
-        this.runModels.set(runId, { key, model });
+        this.runModels.set(runId, { key, agent, model });
         this.windows.delete(runId);
       }
-      const known = this.windowsByModel.get(key);
+      // A miss falls through to the persisted store — that is what makes the
+      // FIRST turn after a daemon launch scaled, rather than the first turn to
+      // complete in this process.
+      let known = this.windowsByModel.get(key);
+      if (known === undefined) {
+        const stored = this.windowStore.get(agent, model);
+        if (stored !== null) {
+          this.windowsByModel.set(key, stored);
+          known = stored;
+        }
+      }
       if (known !== undefined && !this.windows.has(runId)) {
         this.windows.set(runId, known);
       }
@@ -252,7 +281,7 @@ export class PartialStreamService {
    * accident of which adapter emits the event, not a property of the key.
    */
   private modelKey(agent: string, model: string): string {
-    return `${agent} ${model}`;
+    return contextWindowKey(agent, model);
   }
 
   private stateOf(runId: string, ownerKey: string): LiveState {

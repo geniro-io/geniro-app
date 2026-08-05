@@ -34,6 +34,7 @@ import type {
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
@@ -483,7 +484,7 @@ function setup(
     bus,
     registry,
     callTokens,
-    new PartialStreamService(bus),
+    new PartialStreamService(bus, new FakeContextWindowStore().asStore()),
     attachments,
   );
   const service = new GraphExecutorService(

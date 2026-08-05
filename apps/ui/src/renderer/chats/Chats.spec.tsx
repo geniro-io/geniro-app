@@ -34,6 +34,11 @@ const api = vi.hoisted(() => ({
 }));
 const agentsApi = vi.hoisted(() => ({
   listAgentSkills: vi.fn(),
+  // The one route that is not passive: the daemon health-checks each server,
+  // which LAUNCHES the user's own MCP processes. Which folder it is asked about
+  // — and whether it is asked at all — is the whole contract behind the panel's
+  // lazy disclosure.
+  listAgentMcpServers: vi.fn(),
   listAgentModels: vi.fn(),
   listAgentEfforts: vi.fn(),
 }));
@@ -371,6 +376,9 @@ beforeEach(() => {
   api.deleteChat.mockReset();
   api.updateChatSettings.mockReset();
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
+  agentsApi.listAgentMcpServers
+    .mockReset()
+    .mockResolvedValue({ servers: [], unavailableReason: null });
   // The composer's model rows come from the daemon, which asks the CLI.
   agentsApi.listAgentModels.mockReset().mockResolvedValue([
     { id: 'opus', label: 'opus', source: 'builtin' },
@@ -3462,11 +3470,13 @@ describe('Chats sidebar list', () => {
     // One of its two turns settled — one still live, usage + ring recorded.
     expect(workerRow).toContain('running');
     // The window the CLI reported on that item rides all the way to the card.
-    expect(workerRow).toContain('ctx 45.2k / 1M');
-    expect(workerRow).toContain('$0.23');
+    // Read off the meter's accessible name, not the card's text: the figures
+    // are hover-only now, and 45.2k of the reported 1M window is 5% — 23% is
+    // what the old flat 200k default gave.
     expect(
-      // 45.2k of the reported 1M window — 23% is what the old flat 200k gave.
-      panel.querySelector('svg[aria-label="Context 5% full"]'),
+      panel.querySelector(
+        'button[aria-label="Context 5% full \u2014 45.2k of 1M, $0.23 spent"]',
+      ),
     ).not.toBeNull();
     expect(rows.some((text) => text?.includes('start'))).toBe(false);
 
@@ -3804,5 +3814,67 @@ describe('Chats error strip', () => {
     expect(deleteRunButton(container)).toBeNull();
     // Still closeable — every failure is.
     expect(dismissButton(container)).not.toBeNull();
+  });
+});
+
+describe('Chats — the MCP read waits to be asked, on every chat', () => {
+  const chatIn = (id: string, title: string, cwd: string): ChatRun => ({
+    ...run1,
+    id,
+    title,
+    cwd,
+    status: 'completed',
+  });
+
+  /** Open the run's Agents panel. */
+  async function openAgentsPanel(container: HTMLElement): Promise<void> {
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  /** The Agents panel's MCP disclosure trigger. */
+  function mcpTrigger(container: HTMLElement): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>(
+      'aside[aria-label="Run agents"] button[aria-label="MCP servers"]',
+    );
+  }
+
+  it('leaves the next chat’s list closed, and its servers undialled', async () => {
+    // The disclosure is keyed by AGENT id, and every single-agent chat's agent
+    // carries the same sentinel id — so the open flag set on one chat is still
+    // set when the user moves to another. The next chat then arrives with a
+    // list it was never asked to open, and the owner's gate is still raised, so
+    // the read fires for the NEW folder and launches whatever MCP servers live
+    // there. That unprompted launch is the entire defect the disclosure exists
+    // to prevent; it just moved from "opening a chat" to "opening the second
+    // chat".
+    api.listChats.mockResolvedValue([
+      chatIn('r1', 'First chat', '/proj-a'),
+      chatIn('r2', 'Second chat', '/proj-b'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'First chat');
+    await openAgentsPanel(container);
+    await act(async () => {
+      mcpTrigger(container)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    // The folder the user DID ask about.
+    expect(agentsApi.listAgentMcpServers).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/proj-a' }),
+      expect.anything(),
+    );
+
+    agentsApi.listAgentMcpServers.mockClear();
+    await clickRun(container, 'Second chat');
+
+    expect(mcpTrigger(container)?.getAttribute('aria-expanded')).toBe('false');
+    expect(agentsApi.listAgentMcpServers).not.toHaveBeenCalled();
   });
 });

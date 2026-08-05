@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunDeltaEvent } from '../chat.types';
+import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import type { AgentEventBus } from './agent-events.bus';
 import { PartialStreamService } from './partial-stream.service';
 
@@ -10,13 +11,15 @@ const AGENT = 'claude';
 
 let published: RunDeltaEvent[];
 let service: PartialStreamService;
+let windowStore: FakeContextWindowStore;
 
 beforeEach(() => {
   published = [];
   const bus = {
     publishDelta: (event: RunDeltaEvent) => published.push(event),
   } as unknown as AgentEventBus;
-  service = new PartialStreamService(bus);
+  windowStore = new FakeContextWindowStore();
+  service = new PartialStreamService(bus, windowStore.asStore());
 });
 
 /** The most recent event on the wire. */
@@ -213,7 +216,10 @@ describe('PartialStreamService — every method stays total', () => {
         throw new Error('bus down');
       },
     } as unknown as AgentEventBus;
-    const fragile = new PartialStreamService(exploding);
+    const fragile = new PartialStreamService(
+      exploding,
+      new FakeContextWindowStore().asStore(),
+    );
     expect(() => fragile.append(RUN, OWNER, null, 'x')).not.toThrow();
     expect(() => fragile.thinking(RUN, OWNER, null, 1)).not.toThrow();
     expect(() => fragile.context(RUN, OWNER, null, 1)).not.toThrow();
@@ -344,5 +350,54 @@ describe('PartialStreamService — a settled turn stops claiming to be live', ()
     service.clearRun(RUN);
 
     expect(last().thinkingStretch).toBeNull();
+  });
+});
+
+describe('PartialStreamService — the window survives a daemon restart', () => {
+  it('scales a run’s FIRST request from a window persisted by an EARLIER launch', () => {
+    // The reported defect. Both in-memory maps start empty in a fresh process,
+    // so before the store existed a run had nothing to scale against until its
+    // own first turn COMPLETED — and on a machine where the app is restarted
+    // often that is most of what the user ever sees: `ctx 91.6k` with no ring.
+    const restarted = new PartialStreamService(
+      {
+        publishDelta: (event: RunDeltaEvent) => published.push(event),
+      } as unknown as AgentEventBus,
+      new FakeContextWindowStore({
+        [FakeContextWindowStore.key(AGENT, 'claude-opus-5')]: 1_000_000,
+      }).asStore(),
+    );
+
+    restarted.useModel(RUN, AGENT, 'claude-opus-5');
+    restarted.context(RUN, OWNER, null, 91_600);
+
+    expect(last().contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('writes a newly learned window through, so the NEXT launch already knows it', () => {
+    service.useModel(RUN, AGENT, 'claude-opus-5');
+    service.rememberWindow(RUN, 1_000_000, 'claude-opus-5');
+
+    expect(windowStore.writes).toEqual([
+      { agent: AGENT, model: 'claude-opus-5', window: 1_000_000 },
+    ]);
+  });
+
+  it('does NOT persist a fallback model’s window under the announced one', () => {
+    // The in-memory cache already refuses this; the durable one must refuse it
+    // too, or the poisoning that used to last one process would last forever.
+    service.useModel(RUN, AGENT, 'big-model');
+    service.rememberWindow(RUN, 200_000, 'a-smaller-fallback-model');
+
+    expect(windowStore.writes).toEqual([]);
+  });
+
+  it('still says nothing for a model the store has never seen', () => {
+    // Persistence must not become a licence to guess: an unknown model stays
+    // unknown, which is what keeps the meter honest rather than assuming 200k.
+    service.useModel(RUN, AGENT, 'a-model-nobody-has-run');
+    service.context(RUN, OWNER, null, 26_000);
+
+    expect(last().contextWindowTokens).toBeNull();
   });
 });

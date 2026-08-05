@@ -1,18 +1,6 @@
 import { cn } from './utils';
 
 /**
- * Font size as a share of the ring, by how many glyphs must fit inside it.
- * Stepped rather than continuous: three sizes cover every label this ring is
- * meant to hold ("9", "16%", "100%"), and a formula would invite longer ones.
- */
-function centerLabelRatio(label: string): number {
-  if (label.length <= 2) {
-    return 0.4;
-  }
-  return label.length === 3 ? 0.36 : 0.29;
-}
-
-/**
  * A small unfilled-circle progress indicator: a token-coloured track ring with
  * an arc that fills clockwise to `fraction` (0..1, clamped). The arc draws in
  * `currentColor`, so callers set its tone with a text-* class; the track reads
@@ -24,7 +12,6 @@ export function ProgressRing({
   size = 16,
   strokeWidth = 2.5,
   label,
-  centerLabel,
   className,
 }: {
   /** Fill fraction 0..1 — values outside the range are clamped. */
@@ -33,15 +20,6 @@ export function ProgressRing({
   strokeWidth?: number;
   /** Accessible name (aria-label); omit only for purely decorative rings. */
   label?: string;
-  /**
-   * Short text drawn INSIDE the ring — a percentage, typically.
-   *
-   * An SVG `<text>` rather than a `children` slot: the ring IS an `<svg>`, so
-   * arbitrary JSX cannot be nested in it, and a wrapper div positioning HTML
-   * over the circle would not scale with `size`. Keep it to a few characters;
-   * the ring has to be legible at 16px.
-   */
-  centerLabel?: string;
   className?: string;
 }): React.JSX.Element {
   const clamped = Math.min(1, Math.max(0, fraction));
@@ -75,25 +53,6 @@ export function ProgressRing({
         strokeDasharray={`${circumference * clamped} ${circumference}`}
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
       />
-      {centerLabel ? (
-        <text
-          x="50%"
-          y="50%"
-          textAnchor="middle"
-          dominantBaseline="central"
-          // `currentColor` matches the arc, and the size is derived from the
-          // ring so one prop still controls the whole component's scale.
-          fill="currentColor"
-          // Scaled by BOTH the ring and the label's length: the inner well is
-          // only `size - 2 * strokeWidth` wide, so a fixed ratio that seats
-          // "16" nicely spills "16%" — and "100%" — over the arc.
-          fontSize={size * centerLabelRatio(centerLabel)}
-          // The ring already carries the accessible name; the glyphs would
-          // otherwise be read out a second time.
-          aria-hidden>
-          {centerLabel}
-        </text>
-      ) : null}
     </svg>
   );
 }

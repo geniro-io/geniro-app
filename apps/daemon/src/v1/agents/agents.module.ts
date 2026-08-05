@@ -19,6 +19,7 @@ import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
+import { ContextWindowStore } from './services/context-window.store';
 import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
 import { McpSettingsStore } from './services/mcp-settings.store';
@@ -110,6 +111,10 @@ import { SkillsService } from './services/skills.service';
     EffortsService,
     AgentEventBus,
     ApprovalRegistry,
+    {
+      provide: ContextWindowStore,
+      useFactory: () => new ContextWindowStore(),
+    },
     PartialStreamService,
     ProcessRegistry,
     RunTeardownService,

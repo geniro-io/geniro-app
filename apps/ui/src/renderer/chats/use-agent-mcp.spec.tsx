@@ -40,10 +40,11 @@ function mount(
   agentsApi: DaemonApis['agents'],
   scopes: readonly AgentMcpScope[],
   cwd: string | null,
+  enabled = true,
 ): () => AgentMcpState {
   let latest!: AgentMcpState;
   function Probe(): null {
-    latest = useAgentMcp(agentsApi, scopes, cwd);
+    latest = useAgentMcp(agentsApi, scopes, cwd, enabled);
     return null;
   }
   container = document.createElement('div');
@@ -749,5 +750,112 @@ describe('useAgentMcp — the toggle', () => {
     const reason = get().byScope.get(scopeKey('claude'))?.unavailableReason;
     expect(reason).toContain('took too long');
     expect(reason).not.toContain('interceptors');
+  });
+});
+
+describe('useAgentMcp — the read waits until something is showing it', () => {
+  it('asks nothing at all while the listing is not on screen', async () => {
+    // The read HEALTH-CHECKS every server, which launches the user's own MCP
+    // processes. Doing that on mount is what greeted a freshly opened chat
+    // with a column of failures from servers nobody had asked to start.
+    const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
+    const get = mount(apiReturning(call), [claudeScope], '/proj', false);
+    await settle();
+
+    expect(call).not.toHaveBeenCalled();
+    expect(get().loading).toBe(false);
+    expect(get().byScope.size).toBe(0);
+  });
+
+  it('still reports a toggle as in flight after the list is closed and reopened', async () => {
+    // `loading` is what disables the switches, and the write it covers outlives
+    // the list that raised it: the popover dismisses on any outside press, so
+    // closing it mid-write is ordinary, not exotic. The reopened list's read
+    // answers off the daemon's cache in milliseconds while the write — whose
+    // handler recomposes the listing and re-dials a lapsed cache — is still
+    // out, so a `loading` that forgot the write re-arms the switch and lets a
+    // second write race the first. Whichever answer lands last is then rendered
+    // as the truth.
+    let releaseWrite!: (value: unknown) => void;
+    const api = apiReturning(
+      () => Promise.resolve(listing),
+      () =>
+        new Promise<unknown>((resolve) => {
+          releaseWrite = resolve;
+        }),
+    );
+    // Hoisted, like the case above: a fresh api or scopes array per render
+    // changes the effect's identity and re-reads forever.
+    const scopes: AgentMcpScope[] = [claudeScope];
+    let enabled = true;
+    let latest!: AgentMcpState;
+    function Probe(): null {
+      latest = useAgentMcp(api, scopes, '/proj', enabled);
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const show = (): void => {
+      act(() => {
+        root!.render(<Probe />);
+      });
+    };
+    show();
+    await settle();
+    expect(latest.loading).toBe(false);
+
+    act(() => {
+      latest.setEnabled('claude', 'sentry', false);
+    });
+    expect(latest.loading).toBe(true);
+
+    // The user presses somewhere else, then opens the list again — both while
+    // the daemon has yet to answer the toggle.
+    enabled = false;
+    show();
+    await settle();
+    enabled = true;
+    show();
+    await settle();
+
+    expect(latest.loading).toBe(true);
+
+    releaseWrite(listing);
+    await settle();
+    expect(latest.loading).toBe(false);
+  });
+
+  it('asks as soon as it IS shown, without needing anything else to change', async () => {
+    const call = vi.fn((_request: McpRequest) => Promise.resolve(listing));
+    // Built ONCE: the hook keys its effect on the api object, so a fresh one
+    // per render would re-read forever rather than test the gate.
+    const api = apiReturning(call);
+    let enabled = false;
+    let latest!: AgentMcpState;
+    function Probe(): null {
+      latest = useAgentMcp(api, [claudeScope], '/proj', enabled);
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(<Probe />);
+    });
+    await settle();
+    expect(call).not.toHaveBeenCalled();
+
+    enabled = true;
+    act(() => {
+      root!.render(<Probe />);
+    });
+    await settle();
+
+    // The folder and the scopes never changed — opening the list is the ONLY
+    // thing that happened, so the gate has to be a read trigger in its own
+    // right rather than merely a filter on the other dependencies.
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(latest.byScope.size).toBe(1);
   });
 });

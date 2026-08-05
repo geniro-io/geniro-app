@@ -205,7 +205,12 @@ function fakeAdapter(kind: AgentKind): {
   start: ReturnType<typeof vi.fn>;
   emit: (event: AgentEvent) => void;
   finish: () => void;
-  handles: { respondApproval: ReturnType<typeof vi.fn> }[];
+  /** Hold the next turn inside its pre-spawn probe until the returned fn runs. */
+  stallBeforeSpawn: () => () => void;
+  handles: {
+    respondApproval: ReturnType<typeof vi.fn>;
+    cancel: ReturnType<typeof vi.fn>;
+  }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
@@ -449,7 +454,12 @@ describe('ChatService', () => {
     expect(startArg.prompt).toBe('hello');
 
     claude.emit({ type: 'text', text: 'hi there' });
-    claude.emit({ type: 'turn_complete', usage: null, stopReason: 'end_turn' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
     claude.finish();
     await drain();
 
@@ -556,7 +566,12 @@ describe('ChatService', () => {
 
     claude.emit({ type: 'session', sessionId: 'prev-sid' }); // unchanged → skip
     claude.emit({ type: 'session', sessionId: 'new-sid' }); // changed → save
-    claude.emit({ type: 'turn_complete', usage: null, stopReason: null });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
     claude.finish();
     await drain();
 
@@ -613,7 +628,12 @@ describe('ChatService', () => {
     itemDao.failNextKind = 'turn_complete';
 
     await service.sendMessage(run.id, 'go');
-    claude.emit({ type: 'turn_complete', usage: null, stopReason: 'end_turn' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
     claude.finish();
     await drain();
 
@@ -844,7 +864,12 @@ describe('ChatService', () => {
 
     await service.sendMessage(run.id, 'first question');
     claude.emit({ type: 'text', text: 'the reply' });
-    claude.emit({ type: 'turn_complete', usage: null, stopReason: null });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
     claude.finish();
     await drain();
 
@@ -864,7 +889,12 @@ describe('ChatService', () => {
     const { service, runDao, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     await service.sendMessage(run.id, 'hello');
-    claude.emit({ type: 'turn_complete', usage: null, stopReason: null });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
     claude.finish();
     await drain();
 
@@ -1115,6 +1145,7 @@ describe('ChatService — approval modes (parity M1)', () => {
         costUsd: null,
       },
       stopReason: 'end_turn',
+      finalText: null,
     });
     claude.finish();
     await drain();
@@ -1751,7 +1782,12 @@ describe('ChatService — approval modes (parity M1)', () => {
     // Trip the event-persistence failure so the finalizer takes its early
     // return — the sweep must fire on that path too.
     itemDao.failNextKind = 'turn_complete';
-    claude.emit({ type: 'turn_complete', usage: null, stopReason: 'end_turn' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
     claude.finish();
     await drain();
     expect((await runDao.getById(run.id))?.status).toBe('failed');
@@ -2143,7 +2179,7 @@ describe('ChatService — the MCP switch reaches the turn', () => {
       agentKind: AgentKind.Claude,
       cwd,
     });
-    await ctx.service.sendMessage(run.id, { text: 'hi' });
+    await ctx.service.sendMessage(run.id, 'hi');
 
     const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
     expect(startArg.disabledMcpServers).toEqual(['sentry']);
@@ -2168,7 +2204,7 @@ describe('ChatService — the MCP switch reaches the turn', () => {
       agentKind: AgentKind.Claude,
       cwd: otherCwd,
     });
-    await ctx.service.sendMessage(run.id, { text: 'hi' });
+    await ctx.service.sendMessage(run.id, 'hi');
 
     const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
     expect(startArg.disabledMcpServers).toEqual([]);
@@ -2191,7 +2227,7 @@ describe('ChatService — the MCP switch reaches the turn', () => {
       agentKind: AgentKind.CursorAgent,
       cwd,
     });
-    await ctx.service.sendMessage(run.id, { text: 'hi' });
+    await ctx.service.sendMessage(run.id, 'hi');
 
     const startArg = ctx.cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
     expect(startArg.disabledMcpServers).toEqual([]);

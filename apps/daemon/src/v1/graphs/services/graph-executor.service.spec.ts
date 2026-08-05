@@ -27,9 +27,10 @@ import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
-import type {
-  ClaudeModesCapability,
-  CursorCallsCapability,
+import {
+  ChatApprovalModeSchema,
+  type ClaudeModesCapability,
+  type CursorCallsCapability,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
@@ -49,7 +50,8 @@ import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
-import type { Workflow } from '../graphs.types';
+import { errorOf } from '../__tests__/call-envelope';
+import { ApprovalModeSchema, type Workflow } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
 import type { WorkflowStoreService } from './workflow-store.service';
@@ -277,7 +279,6 @@ class FakeAdapter {
    * one, which would go on passing after the real config changed.
    */
   private readonly real: AgentAdapter;
-  readonly config: AdapterConfig;
   /**
    * When true the double answers the BASE default for `questionFrom` (null),
    * modelling a CLI that declares a question tool but whose adapter projects
@@ -289,7 +290,9 @@ class FakeAdapter {
   constructor(readonly kind: 'claude' | 'cursor-agent') {
     this.real =
       kind === 'claude' ? new ClaudeAdapter() : new CursorAcpAdapter();
-    this.getConfig = () => this.real.getConfig();
+  }
+  getConfig(): AdapterConfig {
+    return this.real.getConfig();
   }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);
@@ -400,10 +403,15 @@ function setup(
   approvals: ApprovalRegistry;
   callTokens: CallTokenRegistry;
   callBroker: CallBroker;
+  mirrors: TurnMirrorService;
   ensureVerdict: ReturnType<typeof vi.fn>;
   claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
+  skillHarvest: SkillHarvestStore;
+  storeGet: ReturnType<typeof vi.fn>;
+  /** Every run-status announcement the real bus carried, in order. */
+  statusEvents: { runId: string; status: string }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
 } {
@@ -1687,7 +1695,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[1]!.cancelled).toBe(true);
     const settled = await envelope;
     expect(settled.status).toBe('error');
-    expect(settled.error).toContain('CALLEE_CANCELLED');
+    expect(errorOf(settled)).toContain('CALLEE_CANCELLED');
     expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
   });
 
@@ -2613,40 +2621,21 @@ describe('GraphExecutorService — widened approval modes (parity M1)', () => {
     await drain();
   });
 
-  it("keeps a claude plan node on 'plan' even when the probe FAILED it", async () => {
-    // The graph half of the policy the adapter owns: acceptEdits degrades,
-    // plan does not — turning a no-execute mode into an executing 'ask' would
-    // invert what the author selected. Same verdict as the acceptEdits test
-    // above, opposite outcome, which is what proves the adapter is deciding
-    // rather than the executor pattern-matching a probe field.
-    const { service, claude, itemDao } = setup(4880, {
-      claudeModes: {
-        acceptEdits: 'fail',
-        plan: 'fail',
-        version: 'claude-old',
-        probedAt: 0,
-        reason: 'installed claude rejects both probed modes',
-      },
-    });
-    await service.startRun({
-      slug: 'plan-no-degrade',
-      workflow: triggered({
-        name: 'plan-no-degrade',
-        nodes: [{ id: 'p', kind: 'agent', agent: 'claude', approval: 'plan' }],
-        edges: [],
-      }),
-      cwd: dir,
-      prompt: 'go',
-    });
-    await drain();
-    expect(claude.starts[0]!.input.approvalMode).toBe('plan');
-    expect(
-      itemDao.items.some(
-        (i) => i.kind === 'system' && i.payload.includes('degrade'),
-      ),
-    ).toBe(false);
-    completeTurn(claude.starts[0]!, 'done');
-    await drain();
+  it('cannot express a plan node at all — the graph vocabulary excludes it', () => {
+    // The other half of the degrade policy is deliberately UNREACHABLE here.
+    // `plan` is a chat-only mode: a no-execute node in a DAG whose whole point
+    // is executing would either stall the run or have to be silently promoted
+    // to an executing mode, so the workflow schema never accepts it while the
+    // chat schema does. Pinned as the asymmetry it is, on both schemas at
+    // once, because widening `ApprovalModeSchema` is the one-way door its own
+    // doc block warns about — a saved YAML carrying `plan` can never be taken
+    // back out of the library.
+    //
+    // "plan does not degrade when its probe fails" IS pinned, at the layer
+    // that owns it and can represent it: `agent-adapter.spec.ts` and
+    // `claude.adapter.spec.ts` both drive `resolveApprovalMode('plan', …)`.
+    expect(ApprovalModeSchema.safeParse('plan').success).toBe(false);
+    expect(ChatApprovalModeSchema.safeParse('plan').success).toBe(true);
   });
 
   it('waits on the mode probe only for a workflow that asks for a probed mode', async () => {

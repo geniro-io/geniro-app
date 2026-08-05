@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ItemKind } from '../../runs/runs.types';
+import { errorOf } from '../__tests__/call-envelope';
 import type {
   CalleeTurnOutcome,
   RunCallCapability,
@@ -149,8 +150,8 @@ describe('CallBroker', () => {
       message: 'm',
     });
     expect(unknown.status).toBe('error');
-    expect(unknown.error).toContain('UNKNOWN_AGENT');
-    expect(unknown.error).toContain('Helper'); // the wired list is named back
+    expect(errorOf(unknown)).toContain('UNKNOWN_AGENT');
+    expect(errorOf(unknown)).toContain('Helper'); // the wired list is named back
   });
 
   it('an ambiguous display name resolves nothing instead of guessing', async () => {
@@ -168,7 +169,7 @@ describe('CallBroker', () => {
       message: 'm',
     });
     expect(envelope.status).toBe('error');
-    expect(envelope.error).toContain('UNKNOWN_AGENT');
+    expect(errorOf(envelope)).toContain('UNKNOWN_AGENT');
     // The exact id still works.
     const byId = await broker.callAgent('run-1', 'orch', {
       agent: 'writer-2',
@@ -184,7 +185,7 @@ describe('CallBroker', () => {
       message: 'm',
     });
     expect(envelope.status).toBe('error');
-    expect(envelope.error).toContain('callable: none');
+    expect(errorOf(envelope)).toContain('callable: none');
   });
 
   it('async call returns a call_id at once; await_agent collects exactly once', async () => {
@@ -221,7 +222,7 @@ describe('CallBroker', () => {
     const again = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
     });
-    expect(again.error).toContain('UNKNOWN_CALL');
+    expect(errorOf(again)).toContain('UNKNOWN_CALL');
   });
 
   it('two concurrent await_agent waiters on one async call still collect exactly once', async () => {
@@ -267,7 +268,7 @@ describe('CallBroker', () => {
     const stolen = await broker.awaitAgent('run-1', 'writer', {
       call_id: 'call-1',
     });
-    expect(stolen.error).toContain('UNKNOWN_CALL');
+    expect(errorOf(stolen)).toContain('UNKNOWN_CALL');
     deferred[0]!.resolve({
       status: 'completed',
       finalText: '',
@@ -294,7 +295,7 @@ describe('CallBroker', () => {
     const collected = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
     });
-    expect(collected.error).toContain('UNKNOWN_CALL');
+    expect(errorOf(collected)).toContain('UNKNOWN_CALL');
   });
 
   it('caps the call chain at depth 3', async () => {
@@ -322,7 +323,7 @@ describe('CallBroker', () => {
       message: 'm',
     });
     expect(refused.status).toBe('error');
-    expect(refused.error).toContain('DEPTH_LIMIT');
+    expect(errorOf(refused)).toContain('DEPTH_LIMIT');
     for (const d of deferred) {
       d.resolve({
         status: 'completed',
@@ -349,7 +350,7 @@ describe('CallBroker', () => {
       message: 'one too many',
     });
     expect(over.status).toBe('error');
-    expect(over.error).toContain('TURN_LIMIT');
+    expect(errorOf(over)).toContain('TURN_LIMIT');
   });
 
   it('maps callee failure and cancellation into error envelopes', async () => {
@@ -364,7 +365,7 @@ describe('CallBroker', () => {
       error: 'exit 1',
       sessionId: null,
     });
-    expect((await failing).error).toContain('CALLEE_FAILED: exit 1');
+    expect(errorOf(await failing)).toContain('CALLEE_FAILED: exit 1');
 
     const cancelled = broker.callAgent('run-1', 'orch', {
       agent: 'helper',
@@ -376,7 +377,7 @@ describe('CallBroker', () => {
       error: 'run cancelled',
       sessionId: null,
     });
-    expect((await cancelled).error).toContain('CALLEE_CANCELLED');
+    expect(errorOf(await cancelled)).toContain('CALLEE_CANCELLED');
   });
 
   it('wraps a throwing launch in CALL_FAILED instead of rejecting', async () => {
@@ -386,7 +387,7 @@ describe('CallBroker', () => {
       message: 'm',
     });
     expect(envelope.status).toBe('error');
-    expect(envelope.error).toContain('CALL_FAILED: spawn exploded');
+    expect(errorOf(envelope)).toContain('CALL_FAILED: spawn exploded');
   });
 
   it('refuses calls for unregistered runs and cancelled runs', async () => {
@@ -395,7 +396,7 @@ describe('CallBroker', () => {
       agent: 'helper',
       message: 'm',
     });
-    expect(cancelled.error).toContain('RUN_CANCELLED');
+    expect(errorOf(cancelled)).toContain('RUN_CANCELLED');
 
     broker.unregisterRun('run-1');
     expect(broker.hasRun('run-1')).toBe(false);
@@ -403,11 +404,11 @@ describe('CallBroker', () => {
       agent: 'helper',
       message: 'm',
     });
-    expect(gone.error).toContain('RUN_NOT_ACTIVE');
+    expect(errorOf(gone)).toContain('RUN_NOT_ACTIVE');
     const goneAwait = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
     });
-    expect(goneAwait.error).toContain('RUN_NOT_ACTIVE');
+    expect(errorOf(goneAwait)).toContain('RUN_NOT_ACTIVE');
   });
 
   it('listCallees exposes the wiring the tool description advertises', () => {
@@ -556,7 +557,7 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
     });
     expect(final.status).toBe('error');
-    expect(final.error).toContain('QUESTION_TIMEOUT');
+    expect(errorOf(final)).toContain('QUESTION_TIMEOUT');
     expect(items.map((i) => i.kind)).toContain('call_answer');
     expect(items.find((i) => i.kind === 'call_answer')!.payload).toMatchObject({
       outcome: 'timeout',
@@ -567,7 +568,7 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
       answer: 'too late',
     });
-    expect(late.error).toContain('UNKNOWN_CALL');
+    expect(errorOf(late)).toContain('UNKNOWN_CALL');
   });
 
   it('answer_agent enforces ownership and exactly-once settlement', async () => {
@@ -578,14 +579,14 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
       answer: 'a',
     });
-    expect(early.error).toContain('NO_QUESTION');
+    expect(errorOf(early)).toContain('NO_QUESTION');
     park(broker);
     // Another node must not answer a call it does not own.
     const stolen = broker.answerAgent('run-1', 'writer', {
       call_id: 'call-1',
       answer: 'a',
     });
-    expect(stolen.error).toContain('UNKNOWN_CALL');
+    expect(errorOf(stolen)).toContain('UNKNOWN_CALL');
     expect(
       broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'a' })
         .status,
@@ -595,7 +596,7 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
       answer: 'b',
     });
-    expect(twice.error).toContain('NO_QUESTION');
+    expect(errorOf(twice)).toContain('NO_QUESTION');
     deferred[0]!.resolve({
       status: 'completed',
       finalText: '',
@@ -612,7 +613,7 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
       answer: 'a',
     });
-    expect(gone.error).toContain('DELIVERY_FAILED');
+    expect(errorOf(gone)).toContain('DELIVERY_FAILED');
     // The transcript's question row must not dangle unresolved.
     expect(items.find((i) => i.kind === 'call_answer')!.payload).toMatchObject({
       outcome: 'undelivered',
@@ -648,7 +649,7 @@ describe('CallBroker — parked questions (M4)', () => {
       error: 'cancelled',
       sessionId: null,
     });
-    expect((await sync).error).toContain('QUESTION_ORPHANED');
+    expect(errorOf(await sync)).toContain('QUESTION_ORPHANED');
   });
 
   it('a fire-and-forget call that asks is orphaned at once and never becomes awaitable', async () => {
@@ -668,7 +669,7 @@ describe('CallBroker — parked questions (M4)', () => {
     const collected = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
     });
-    expect(collected.error).toContain('UNKNOWN_CALL');
+    expect(errorOf(collected)).toContain('UNKNOWN_CALL');
     deferred[0]!.resolve({
       status: 'cancelled',
       finalText: null,
@@ -699,7 +700,7 @@ describe('CallBroker — parked questions (M4)', () => {
     const final = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
     });
-    expect(final.error).toContain('QUESTION_ORPHANED');
+    expect(errorOf(final)).toContain('QUESTION_ORPHANED');
   });
 
   it('parkQuestion refuses unknown calls and double parking', async () => {
@@ -811,7 +812,7 @@ describe('CallBroker — thread continuation', () => {
       thread: 'call-99',
     });
     expect(unknown.status).toBe('error');
-    expect(unknown.error).toContain('UNKNOWN_THREAD');
+    expect(errorOf(unknown)).toContain('UNKNOWN_THREAD');
     expect(launches).toHaveLength(0);
 
     await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
@@ -821,7 +822,7 @@ describe('CallBroker — thread continuation', () => {
       thread: 'call-1',
     });
     expect(foreign.status).toBe('error');
-    expect(foreign.error).toContain('UNKNOWN_THREAD');
+    expect(errorOf(foreign)).toContain('UNKNOWN_THREAD');
   });
 
   it('refuses continuing a thread with a different agent', async () => {
@@ -833,7 +834,7 @@ describe('CallBroker — thread continuation', () => {
       thread: 'call-1',
     });
     expect(mismatch.status).toBe('error');
-    expect(mismatch.error).toContain('THREAD_AGENT_MISMATCH');
+    expect(errorOf(mismatch)).toContain('THREAD_AGENT_MISMATCH');
   });
 
   it('refuses a thread whose turn recorded no resumable session', async () => {
@@ -845,6 +846,6 @@ describe('CallBroker — thread continuation', () => {
       thread: 'call-1',
     });
     expect(envelope.status).toBe('error');
-    expect(envelope.error).toContain('THREAD_UNAVAILABLE');
+    expect(errorOf(envelope)).toContain('THREAD_UNAVAILABLE');
   });
 });

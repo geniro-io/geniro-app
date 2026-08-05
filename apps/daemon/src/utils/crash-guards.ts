@@ -25,9 +25,26 @@ export interface CrashGuardHooks {
   exit?: (code: number) => void;
 }
 
+/**
+ * The slice of `process` the guards touch: two event registrations and a pid.
+ *
+ * Stated structurally rather than as `Pick<NodeJS.Process, 'on' | 'pid'>`,
+ * which drags in that interface's ~50 `on` overloads — nothing but the real
+ * `process` can satisfy them, so a spec could not substitute a plain
+ * `EventEmitter` and had to fall back on a cast. A cast here is not a
+ * formality: these handlers decide whether a crash reaps the daemon's spawned
+ * CLI process groups or orphans them, and installing them on the REAL process
+ * during a test run would swallow vitest's own error reporting.
+ */
+export interface CrashGuardTarget {
+  readonly pid: number;
+  on(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+  on(event: 'uncaughtException', listener: (err: Error) => void): unknown;
+}
+
 export function installCrashGuards(
   hooks: CrashGuardHooks = {},
-  target: Pick<NodeJS.Process, 'on' | 'pid'> = process,
+  target: CrashGuardTarget = process,
 ): void {
   const log =
     hooks.log ??

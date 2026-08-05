@@ -63,7 +63,7 @@ describe('NdjsonBuffer', () => {
 
     expect(objs).toEqual([{ ok: 1 }, { ok: 2 }]);
     expect(onParseError).toHaveBeenCalledTimes(1);
-    expect(onParseError.mock.calls[0][0]).toBe('not json at all');
+    expect(onParseError.mock.calls[0]?.[0]).toBe('not json at all');
   });
 
   it('never throws on a malformed line when no onParseError is given', () => {

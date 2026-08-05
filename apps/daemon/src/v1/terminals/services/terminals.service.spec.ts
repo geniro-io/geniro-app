@@ -11,7 +11,12 @@ import { TerminalsService } from './terminals.service';
 
 function build(overrides: {
   run?: Record<string, unknown> | null;
-  nodeState?: { agentSessionId: string | null; agentKind?: string } | null;
+  nodeState?: {
+    agentSessionId: string | null;
+    agentKind?: string;
+    /** The stamped model an interactive mirror reopens on. */
+    model?: string;
+  } | null;
   workflow?: {
     nodes: { id: string; kind?: string; agent?: string }[];
   };

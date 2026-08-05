@@ -12,6 +12,7 @@ function guard(callTokens = new CallTokenRegistry()): LoopbackTokenGuard {
       token: TOKEN,
       version: '0.0.0-test',
       startedAt: Date.now(),
+      port: 47615,
     },
     callTokens,
   );

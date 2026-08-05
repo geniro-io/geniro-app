@@ -52,7 +52,14 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
       obj &&
       typeof obj === 'object' &&
       (obj as { type?: string }).type === 'result'
-        ? [{ type: 'turn_complete', usage: null, stopReason: 'end_turn' }]
+        ? [
+            {
+              type: 'turn_complete',
+              usage: null,
+              stopReason: 'end_turn',
+              finalText: null,
+            },
+          ]
         : [];
 
     const handle = runHeadlessCli({
@@ -75,7 +82,12 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
         e.type === 'turn_cancelled',
     );
     expect(terminal).toEqual([
-      { type: 'turn_complete', usage: null, stopReason: 'end_turn' },
+      {
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      },
     ]);
   });
 
@@ -126,7 +138,14 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
       obj &&
       typeof obj === 'object' &&
       (obj as { type?: string }).type === 'result'
-        ? [{ type: 'turn_complete', usage: null, stopReason: 'end_turn' }]
+        ? [
+            {
+              type: 'turn_complete',
+              usage: null,
+              stopReason: 'end_turn',
+              finalText: null,
+            },
+          ]
         : [];
 
     const handle = runHeadlessCli({
@@ -150,7 +169,12 @@ describe('runHeadlessCli terminal-event de-duplication', () => {
         e.type === 'turn_cancelled',
     );
     expect(terminal).toEqual([
-      { type: 'turn_complete', usage: null, stopReason: 'end_turn' },
+      {
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      },
     ]);
   });
 
@@ -228,7 +252,14 @@ describe('runHeadlessCli stream edge cases', () => {
       obj &&
       typeof obj === 'object' &&
       (obj as { type?: string }).type === 'result'
-        ? [{ type: 'turn_complete', usage: null, stopReason: 'end_turn' }]
+        ? [
+            {
+              type: 'turn_complete',
+              usage: null,
+              stopReason: 'end_turn',
+              finalText: null,
+            },
+          ]
         : [];
 
     const handle = runHeadlessCli({
@@ -247,7 +278,12 @@ describe('runHeadlessCli stream edge cases', () => {
     await handle.done;
 
     expect(events).toEqual([
-      { type: 'turn_complete', usage: null, stopReason: 'end_turn' },
+      {
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      },
     ]);
   });
 
@@ -461,7 +497,12 @@ describe('runHeadlessCli onStdinReady', () => {
 
   it('refuses writes once the turn has settled', async () => {
     const { spawn, child } = fakeSpawn();
-    let write: ((payload: string) => boolean) | null = null;
+    // Held on an object, not a `let`: TypeScript keeps a local's
+    // initializer narrowing through a callback it cannot see run, so a plain
+    // `let write = null` reads as `null` at every use below.
+    const stdin: { write: ((payload: string) => boolean) | null } = {
+      write: null,
+    };
 
     const handle = runHeadlessCli({
       command: 'cursor-agent',
@@ -470,17 +511,17 @@ describe('runHeadlessCli onStdinReady', () => {
       keepStdinOpen: true,
       mapper: noopMapper,
       onStdinReady: (io) => {
-        write = io.write;
+        stdin.write = io.write;
       },
       onEvent: () => {},
       spawn,
     });
-    expect(write?.('{"a":1}\n')).toBe(true);
+    expect(stdin.write?.('{"a":1}\n')).toBe(true);
     child.emit('close', 0, null);
     await handle.done;
 
     const before = child.stdin.written;
-    expect(write?.('{"b":2}\n')).toBe(false);
+    expect(stdin.write?.('{"b":2}\n')).toBe(false);
     expect(child.stdin.written).toBe(before);
   });
 });

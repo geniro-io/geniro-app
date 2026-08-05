@@ -116,7 +116,11 @@ describe('CursorAcpAdapter spawn', () => {
         model: 'sonnet',
         resumeSessionId: 'prior',
         approvalMode: 'plan',
-        mcpEndpoint: { url: 'http://127.0.0.1:9/mcp', token: 'secret-token' },
+        mcpEndpoint: {
+          url: 'http://127.0.0.1:9/mcp',
+          token: 'secret-token',
+          serverName: 'geniro-run-1',
+        },
       },
       () => {},
     );
@@ -241,7 +245,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     const prompt = framesOn(child).find(
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
-    expect(prompt.prompt[0].text).toBe('You are a reviewer.\n\nship it');
+    expect(prompt.prompt[0]?.text).toBe('You are a reviewer.\n\nship it');
   });
 
   it('says so when a requested model cannot be carried', () => {

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import type { ClaudeModesCapability } from '../../chat.types';
+import type { SpawnFn } from '../../utils/spawn-cli';
 import { spawnAnswering } from '../__tests__/fake-group-child';
 import type {
   AdapterConfig,
@@ -595,6 +596,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
   const ENDPOINT = {
     url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
     token: 'call-token-1',
+    serverName: 'geniro-run-1',
   };
   const dirs: string[] = [];
 
@@ -1705,6 +1707,7 @@ describe('ClaudeAdapter geniro-key collision', () => {
   const ENDPOINT = {
     url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
     token: 'call-token-1',
+    serverName: 'geniro-run-1',
   };
   const dirs: string[] = [];
   let cwd: string;

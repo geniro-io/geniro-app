@@ -36,6 +36,7 @@ function tempDir(): string {
 const ENDPOINT = {
   url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
   token: 'call-token-1',
+  serverName: 'geniro-run-1',
 };
 
 describe('writeTurnMcpConfig', () => {

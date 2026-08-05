@@ -1,6 +1,7 @@
 import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
+import { agentNode } from '../__tests__/workflow-node';
 import type { Workflow } from '../graphs.types';
 import { parseWorkflowYaml, serializeWorkflowYaml } from './workflow-yaml';
 
@@ -27,8 +28,8 @@ describe('parseWorkflowYaml', () => {
     const wf = parseWorkflowYaml(VALID_SOURCE);
     expect(wf.name).toBe('review-team');
     expect(wf.nodes).toHaveLength(2);
-    expect(wf.nodes[0]!.approval).toBe('auto');
-    expect(wf.nodes[1]!.approval).toBe('ask');
+    expect(agentNode(wf.nodes[0]).approval).toBe('auto');
+    expect(agentNode(wf.nodes[1]).approval).toBe('ask');
     expect(wf.edges).toEqual([{ from: 'coder', to: 'reviewer', kind: 'data' }]);
   });
 
@@ -162,13 +163,13 @@ edges:
 
   it('preserves user comments when patching an existing file', () => {
     const wf = parseWorkflowYaml(VALID_SOURCE);
-    wf.nodes[0]!.model = 'opus';
+    agentNode(wf.nodes[0]).model = 'opus';
     wf.layout = { coder: { x: 0, y: 0 }, reviewer: { x: 200, y: 0 } };
     const out = serializeWorkflowYaml(wf, VALID_SOURCE);
     expect(out).toContain('# My review team');
     expect(out).toContain('# the coder writes the change');
     const back = parseWorkflowYaml(out);
-    expect(back.nodes[0]!.model).toBe('opus');
+    expect(agentNode(back.nodes[0]).model).toBe('opus');
     expect(back.layout).toEqual(wf.layout);
   });
 
@@ -209,10 +210,10 @@ edges:
 
   it('clears an optional field the canvas removed', () => {
     const wf = parseWorkflowYaml(VALID_SOURCE);
-    delete wf.nodes[0]!.role;
+    delete agentNode(wf.nodes[0]).role;
     const out = serializeWorkflowYaml(wf, VALID_SOURCE);
     const back = parseWorkflowYaml(out);
-    expect(back.nodes[0]!.role).toBeUndefined();
+    expect(agentNode(back.nodes[0]).role).toBeUndefined();
   });
 
   it('writes an agent description back into an existing file', () => {

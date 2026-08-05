@@ -28,6 +28,7 @@ function broker(): CallBroker {
       status: 'completed',
       finalText: 'research done',
       error: null,
+      sessionId: null,
     }),
     persistItem: () => {},
     isCancelled: () => false,

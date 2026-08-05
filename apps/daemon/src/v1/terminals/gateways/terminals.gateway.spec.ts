@@ -13,6 +13,7 @@ const runtime: RuntimeInfo = {
   token: 'good-token',
   version: '9.9.9',
   startedAt: 0,
+  port: 47615,
 };
 
 class FakePty implements PtyLike {

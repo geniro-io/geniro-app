@@ -63,8 +63,21 @@ const HTTP_VERBS = [
  * This guard runs only during setupSwagger (dev/test). Production skips swagger
  * entirely, so this has zero runtime cost in prod.
  */
+/**
+ * The slice of an OpenAPI document the operationId check reads.
+ *
+ * Deliberately looser than `Pick<OpenAPIObject, 'paths'>`: the scan is written
+ * defensively (it re-checks every level at runtime, since a half-built
+ * document is exactly what it exists to catch), so demanding a complete
+ * `OperationObject` — `responses` and all — claimed a precision it never used
+ * and left this unit testable only through a whole Nest app.
+ */
+export interface OperationIdScanTarget {
+  paths?: Record<string, unknown>;
+}
+
 export const validateOperationIdUniqueness = (
-  doc: Pick<OpenAPIObject, 'paths'>,
+  doc: OperationIdScanTarget,
 ): void => {
   const seen = new Map<string, string[]>();
 

@@ -1,5 +1,5 @@
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
-import type { EntityManager, SqlEntityRepository } from '@mikro-orm/postgresql';
+import type { EntityManager, SqlEntityRepository } from '@mikro-orm/sqlite';
 import { defineConfig, MikroORM } from '@mikro-orm/sqlite';
 import {
   afterAll,

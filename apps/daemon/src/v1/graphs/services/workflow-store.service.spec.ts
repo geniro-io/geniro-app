@@ -18,6 +18,7 @@ import {
 } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { agentNode } from '../__tests__/workflow-node';
 import type { Workflow } from '../graphs.types';
 import { WorkflowStoreService } from './workflow-store.service';
 
@@ -72,11 +73,11 @@ describe('WorkflowStoreService', () => {
       edges: [],
     });
     const [summary] = await store.list();
-    expect(summary.agentCounts).toEqual([
+    expect(summary?.agentCounts).toEqual([
       { kind: 'claude', count: 3 },
       { kind: 'cursor-agent', count: 1 },
     ]);
-    expect(summary.edgeCount).toBe(0);
+    expect(summary?.edgeCount).toBe(0);
   });
 
   it('counts trigger nodes in nodeCount but never in agentCounts', async () => {
@@ -219,12 +220,14 @@ describe('WorkflowStoreService', () => {
 
     const updated: Workflow = {
       ...WF,
-      nodes: [{ ...WF.nodes[0]!, model: 'opus' }, WF.nodes[1]!],
+      nodes: [{ ...agentNode(WF.nodes[0]), model: 'opus' }, WF.nodes[1]!],
     };
     await store.save('team', updated);
     const source = await readFile(path, 'utf8');
     expect(source).toContain('# my precious team');
-    expect((await store.get('team')).workflow.nodes[0]!.model).toBe('opus');
+    expect(agentNode((await store.get('team')).workflow.nodes[0]).model).toBe(
+      'opus',
+    );
   });
 
   it('rejects a cyclic workflow before touching disk', async () => {

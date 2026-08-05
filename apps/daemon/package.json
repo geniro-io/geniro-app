@@ -12,7 +12,7 @@
     "prebuild": "rm -rf ./dist || true",
     "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
     "start": "node dist/main.js",
-    "check-types": "tsc --noEmit -p tsconfig.build.json",
+    "check-types": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "test": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run",

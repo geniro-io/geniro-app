@@ -77,7 +77,7 @@ near-identical overrides.
 A subclass supplies `getConfig()`, `buildArgs`, `mapMessage` and `listModels`.
 Nothing else is required. Everything else is already concrete on the base and
 driven by config — `listSkills`, `listEfforts`, `listReportedCommands`,
-`supportsLiveStream`, `resolveApprovalMode`, `terminalCommand` — so **read the
+`supportsLiveStream`, `resolveApprovalMode`, `handoffTarget` — so **read the
 base before writing an override.** The one sanctioned exception is
 `approvalSupportFrom`: config can declare WHICH modes are probed, but not which
 CLI-named field of the capability bag carries the verdict.
@@ -109,7 +109,7 @@ else. An adapter never reaches for `spawn` or `execFile`, and every child is
 registered (`onSpawn` / `onTurn`) so shutdown can reap it.
 
 Adapters never throw HTTP exceptions. Return a discriminated result and let the
-owning module map it — see `terminalCommand` → `TerminalCommandResult`.
+owning module map it — see `handoffTarget` → `HandoffResult`.
 
 ## The call surface
 

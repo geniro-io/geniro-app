@@ -723,16 +723,27 @@ export interface AdapterQuestion {
 }
 
 /** What the mirror is being opened ON — one run's one thread. */
-export interface TerminalCommandInput {
-  /** The session to reopen, or null when the thread has produced none yet. */
+export interface HandoffInput {
+  /** The session to open, or null when the thread has produced none yet. */
   sessionId: string | null;
   /** The model the run is chatting as, or null for the CLI's own default. */
   model: string | null;
 }
 
-/** What resolving a terminal-mirror invocation produced. */
-export type TerminalCommandResult =
-  | { ok: true; command: string; args: string[] }
+/**
+ * How the user is handed THIS conversation, so they can carry it on themselves.
+ *
+ * A `command` is a shell invocation that opens the conversation in the CLI's
+ * own TUI. The union has one arm today because that is what any CLI here can
+ * actually do; the shape exists so a second delivery — a deeplink or a web
+ * session URL, once an agent offers one — is a new arm rather than a new
+ * subsystem. Nothing outside the adapter layer branches on which it is.
+ *
+ * A refusal is DATA, not an exception: the adapter layer knows nothing about
+ * HTTP, and the owning module decides how to say it.
+ */
+export type HandoffResult =
+  | { ok: true; kind: 'command'; command: string; args: string[] }
   | { ok: false; reason: 'unsupported' | 'no-session' };
 
 /**
@@ -938,34 +949,46 @@ export interface AdapterConfig {
     readonly unavailableReason: string | null;
   };
 
-  // ── Interactive terminal mirror ─────────────────────────────────────────
+  // ── Handing the conversation to the user ────────────────────────────────
   /**
-   * How to reopen an existing headless session in the CLI's own TUI, or null
-   * when this CLI has no such mode (the mirror is then refused for it, rather
-   * than opening an unrelated fresh TUI).
+   * How this CLI reopens one of ITS OWN sessions interactively, so the user can
+   * take the conversation over — or the reason it cannot.
+   *
+   * Probe-verified that the reason arm is not hypothetical: cursor-agent
+   * accepts `--resume <id>`, but an ACP session id is not in its chat store, and
+   * resuming an unknown id SILENTLY CREATES AN EMPTY CHAT rather than failing.
+   * A missing handoff there is not a gap to paper over — offering the button
+   * would drop the user into a blank conversation with no error anywhere.
    */
-  readonly terminal: {
-    /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
-    readonly resumeFlag: string;
-    /**
-     * The flag naming the model, so a mirror opens on the SAME model the chat
-     * is running.
-     *
-     * Without it the TUI resumes under the CLI's own default, which is a
-     * different model with a different window — so the mirror of a 1M-window
-     * chat reported a 200k context beside it and read as a different
-     * conversation entirely.
-     *
-     * Required, not nullable: a CLI whose TUI cannot be told a model would
-     * declare that by having no `terminal` block worth resuming into at all.
-     * A real one re-adds the null arm with its reason, and a test that enters
-     * it.
-     */
-    readonly modelFlag: string;
-    /**
-     * What a resumable session id looks like for this CLI. A value produced by
-     * a DIFFERENT CLI must not be handed to this one's TUI.
-     */
-    readonly sessionIdPattern: RegExp;
-  } | null;
+  readonly handoff:
+    | {
+        readonly kind: 'resume-command';
+        /** The flag that resumes a session id — argv is `[resumeFlag, sessionId]`. */
+        readonly resumeFlag: string;
+        /**
+         * The flag naming the model, so a mirror opens on the SAME model the chat
+         * is running.
+         *
+         * Without it the TUI resumes under the CLI's own default, which is a
+         * different model with a different window — so the mirror of a 1M-window
+         * chat reported a 200k context beside it and read as a different
+         * conversation entirely.
+         *
+         * Required, not nullable: a CLI whose TUI cannot be told a model would
+         * declare that by having no `terminal` block worth resuming into at all.
+         * A real one re-adds the null arm with its reason, and a test that enters
+         * it.
+         */
+        readonly modelFlag: string;
+        /**
+         * What a resumable session id looks like for this CLI. A value produced by
+         * a DIFFERENT CLI must not be handed to this one's TUI.
+         */
+        readonly sessionIdPattern: RegExp;
+      }
+    | {
+        readonly kind: 'unavailable';
+        /** Stated to the user verbatim, so "no button" is never unexplained. */
+        readonly reason: string;
+      };
 }

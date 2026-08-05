@@ -32,7 +32,6 @@ import type {
   ItemDto as ChatItem,
   RunDto as ChatRun,
   SendMessageDtoImagesInner,
-  TerminalSessionDto as TerminalSession,
   WorkflowAgentNode,
   WorkflowSummaryDto as WorkflowSummary,
   WorkflowTriggerNode,
@@ -112,14 +111,6 @@ const isChatApprovalMode = (value: unknown): value is ChatApprovalMode =>
   typeof value === 'string' &&
   (Object.values(ChatApprovalMode) as string[]).includes(value);
 
-// Code-split the terminal mirror: xterm.js (~250KB) must not ride the startup
-// chunk of the always-mounted Chats tab for a panel most sessions never open.
-const TerminalPanel = lazy(() =>
-  import('../terminals/terminal-panel').then((m) => ({
-    default: m.TerminalPanel,
-  })),
-);
-
 /** Kinds that mark the end of a turn (re-enable the composer). */
 const TERMINAL_KINDS = new Set<ChatItem['kind']>([
   'turn_complete',
@@ -168,7 +159,7 @@ export function Chats({
     agents: agentsApi,
     workflows: workflowApi,
     capabilities: capabilitiesApi,
-    terminals: terminalApi,
+    handoff: handoffApi,
   } = useMemo(() => createDaemonApis(handle), [handle]);
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
@@ -1377,17 +1368,6 @@ export function Chats({
     return false;
   };
 
-  // The open terminal mirror. Session-scoped, NOT run-scoped: switching to
-  // another run in the sidebar keeps the drawer open (the title names its
-  // session), so a mirror can be watched while browsing other transcripts.
-  //
-  // Closing the panel only DETACHES: the `--resume` child keeps running, so
-  // re-opening replays its screen rather than starting the CLI over.
-  const [terminal, setTerminal] = useState<{
-    session: TerminalSession;
-    title: string;
-  } | null>(null);
-
   // The active workflow's node inventory: its agent nodes (the agents panel),
   // its triggers (the run composer's inactive info chips), and every node id
   // it knows (so trigger status items are never mistaken for an unknown
@@ -1625,11 +1605,30 @@ export function Chats({
   }, [activeRun, activity, streaming, wfNodes, liveText]);
 
   /**
-   * Open a terminal mirroring ONE thread of one agent (the panel's action).
+   * Where this thread can be picked up by hand: the CLI invocation that reopens
+   * its session, or the reason there is none. Shared by the button's action and
+   * by the hint it shows on hover, so the command a user copies is exactly the
+   * one the button would run.
+   */
+  const resolveHandoff = useCallback(
+    (agent: AgentDisplay, thread: AgentThread) =>
+      handoffApi.resolveHandoff({
+        runId: activeRunIdRef.current ?? '',
+        ...(agent.id === CHAT_AGENT_KEY ? {} : { nodeId: agent.id }),
+        // A call thread names its OWN sub-session; a main thread lets the
+        // daemon resolve the node's latest from node_state.
+        ...(thread.sessionId !== null ? { sessionId: thread.sessionId } : {}),
+      }),
+    [handoffApi],
+  );
+
+  /**
+   * Hand ONE thread of one agent to the user: open that agent's own CLI on the
+   * thread's conversation, in the user's terminal.
    *
-   * One kind only: that agent's own CLI, resumed on the thread's conversation.
-   * The daemon re-spawns it whenever a turn settles, so it follows the chat
-   * rather than freezing at whatever the conversation was when it opened.
+   * The daemon resolves the invocation, the Electron main process opens it —
+   * nothing is mirrored, so nothing can fall behind. A CLI that cannot reopen
+   * its own sessions says so, and that reason is what the user sees.
    */
   const openThreadTerminal = useCallback(
     async (agent: AgentDisplay, thread: AgentThread) => {
@@ -1640,57 +1639,26 @@ export function Chats({
       const nodeId = agent.id === CHAT_AGENT_KEY ? undefined : agent.id;
       try {
         setError(null);
-        // Re-attach to a still-running mirror of this thread when one exists —
-        // the daemon keeps detached sessions alive for exactly this. A call
-        // thread matches by its recorded session id; the main thread matches
-        // any mirror of the node that is NOT one of its call threads. The
-        // daemon's createForRun is itself idempotent per target, so this
-        // pre-check is an optimization (skip a create round-trip), not the
-        // leak guard.
-        //
-        const callSessionIds = new Set(
-          agent.threads.flatMap((t) =>
-            t.kind === 'call' && t.sessionId !== null ? [t.sessionId] : [],
-          ),
-        );
-        const existing = (await terminalApi.listTerminals()).find(
-          (s) =>
-            s.runId === runId &&
-            s.nodeId === (nodeId ?? null) &&
-            s.status === 'running' &&
-            (thread.sessionId !== null
-              ? s.resumeSessionId === thread.sessionId
-              : s.resumeSessionId === null ||
-                !callSessionIds.has(s.resumeSessionId)),
-        );
-        const session =
-          existing ??
-          (await terminalApi.createTerminal({
-            createTerminalDto: {
-              runId,
-              ...(nodeId ? { nodeId } : {}),
-              // A call thread targets its OWN sub-session; a main thread lets
-              // the daemon resolve the node's latest from `node_state`.
-              ...(thread.sessionId !== null
-                ? { sessionId: thread.sessionId }
-                : {}),
-            },
-          }));
-        const run = runsRef.current.find((r) => r.id === runId);
-        const base =
-          agent.id === CHAT_AGENT_KEY ? (run?.title ?? agent.name) : agent.name;
-        setTerminal({
-          session,
-          title:
-            thread.kind === 'call'
-              ? `${base} · ${thread.id} — terminal`
-              : `${base} — terminal`,
+        const target = await resolveHandoff(agent, thread);
+        if (target.kind !== 'command' || !target.command || !target.cwd) {
+          // A refusal is the ANSWER, not a failure: cursor-agent genuinely
+          // cannot reopen one of its conversations, and the daemon says why.
+          setError(
+            target.unavailableReason ??
+              'this conversation cannot be opened in a terminal',
+          );
+          return;
+        }
+        await window.geniro.openInTerminal({
+          command: target.command,
+          args: target.args,
+          cwd: target.cwd,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [terminalApi],
+    [resolveHandoff],
   );
 
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
@@ -2415,20 +2383,6 @@ export function Chats({
                 : ''}
             </>
           </ConfirmDialog>
-
-          {/* Render only while this tab is visible — the panel is fixed-position
-          and would otherwise overlay Graphs/Settings from the hidden tab. */}
-          {active && terminal ? (
-            <Suspense fallback={null}>
-              <TerminalPanel
-                key={terminal.session.id}
-                handle={handle}
-                session={terminal.session}
-                title={terminal.title}
-                onClose={() => setTerminal(null)}
-              />
-            </Suspense>
-          ) : null}
         </div>
       </AttachmentLoaderContext.Provider>
     </CardBackedRequestsContext.Provider>

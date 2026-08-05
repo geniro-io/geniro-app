@@ -7,9 +7,9 @@ import { LoopbackTokenGuard } from './auth/token.guard';
 import { PidfileLifecycle } from './utils/pidfile.lifecycle';
 import { AgentsModule } from './v1/agents/agents.module';
 import { GraphsModule } from './v1/graphs/graphs.module';
+import { HandoffModule } from './v1/handoff/handoff.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { RunsModule } from './v1/runs/runs.module';
-import { TerminalsModule } from './v1/terminals/terminals.module';
 
 export interface AppModuleOptions {
   runtime: RuntimeInfo;
@@ -37,7 +37,7 @@ export class AppModule {
         AgentsModule,
         GraphsModule,
         NotificationsModule,
-        TerminalsModule,
+        HandoffModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

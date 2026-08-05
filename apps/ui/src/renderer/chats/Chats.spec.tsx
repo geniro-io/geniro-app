@@ -53,13 +53,10 @@ const workflowApi = vi.hoisted(() => ({
   deleteWorkflowRun: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
-// TerminalPanel is stubbed too, so opening a terminal never touches xterm or a
-// real socket; the panel stub renders its title for assertions.
-const terminalApi = vi.hoisted(() => ({
-  createTerminal: vi.fn(),
-  listTerminals: vi.fn(),
-  disposeTerminal: vi.fn(),
-}));
+// There is no terminal panel to stub any more: the daemon resolves an
+// invocation and the Electron main process opens it, so the only seams are
+// this client call and window.geniro.openInTerminal.
+const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -71,7 +68,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     agents: agentsApi,
     workflows: workflowApi,
     capabilities: capabilitiesApi,
-    terminals: terminalApi,
+    handoff: handoffApi,
   })),
 }));
 // Counts how many times each turn block actually re-rendered, so a test can
@@ -95,25 +92,6 @@ vi.mock('./turn-block', async (importOriginal) => {
     }),
   };
 });
-vi.mock('../terminals/terminal-panel', () => ({
-  TerminalPanel: (props: {
-    title: string;
-    onClose: () => void;
-    onSwitchKind?: (kind: string) => void;
-  }) => (
-    <div data-testid="terminal-panel">
-      {props.title}
-      <button onClick={props.onClose}>stub-close</button>
-      {/* Rendered only when the owner supplied a switcher, so a test can tell
-          "no picker offered" from "picker offered but unused". */}
-      {props.onSwitchKind ? (
-        <button onClick={() => props.onSwitchKind?.('interactive')}>
-          stub-switch
-        </button>
-      ) : null}
-    </div>
-  ),
-}));
 
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
 
@@ -366,6 +344,7 @@ beforeEach(() => {
       checkForUpdates: true,
     }),
     updateSettings: vi.fn().mockResolvedValue({}),
+    openInTerminal: vi.fn().mockResolvedValue(undefined),
     // Default to a plain (non-git) folder so the branch chip stays absent
     // unless a test opts into a repo.
     getGitInfo: vi.fn().mockResolvedValue({
@@ -462,9 +441,7 @@ beforeEach(() => {
       { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
     ],
   });
-  terminalApi.createTerminal.mockReset();
-  terminalApi.listTerminals.mockReset().mockResolvedValue([]);
-  terminalApi.disposeTerminal.mockReset().mockResolvedValue({ disposed: true });
+  handoffApi.resolveHandoff.mockReset();
 });
 
 afterEach(async () => {
@@ -1773,21 +1750,9 @@ describe('Chats workflow runs', () => {
   });
 });
 
-describe('Chats terminal mirror', () => {
-  const session = {
-    id: 't-1',
-    runId: 'r1',
-    nodeId: null,
-    resumeSessionId: null,
-    cwd: '/proj',
-    status: 'running',
-    exitCode: null,
-    createdAt: 0,
-  };
-
-  /** Terminals live in the agents side panel: open it, expand the agent,
-   *  click the thread's terminal action. */
-  async function openThreadTerminal(
+describe('Chats — handing a conversation to the user', () => {
+  /** The panel's action: open the side panel, expand the agent, press it. */
+  async function pressOpenInCli(
     container: HTMLElement,
     agentLabel: string,
     threadId = 'main',
@@ -1800,8 +1765,8 @@ describe('Chats terminal mirror', () => {
         toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       });
     }
-    // An agent with a SOLE main thread shows its terminal on the card; one
-    // with several threads still has to be expanded first.
+    // An agent with a SOLE main thread shows its button on the card; one with
+    // several threads still has to be expanded first.
     await act(async () => {
       container
         .querySelector(`button[aria-label="${agentLabel} threads"]`)
@@ -1819,25 +1784,35 @@ describe('Chats terminal mirror', () => {
     });
   }
 
-  it('opens a terminal panel for a claude chat run', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
+  const command = {
+    kind: 'command' as const,
+    command: 'claude',
+    args: ['--resume', 'sess-1'],
+    cwd: '/proj',
+    display: 'claude --resume sess-1',
+    unavailableReason: null,
+  };
+
+  it('opens the agent’s own CLI in the user’s terminal', async () => {
+    // The mirror is gone. What the user asked for was never "watch a second
+    // copy" — it was "let me carry this on myself", and that needs no syncing
+    // because the CLI starts when the button is pressed.
+    handoffApi.resolveHandoff.mockResolvedValue(command);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await openThreadTerminal(container, 'claude');
+    await pressOpenInCli(container, 'claude');
 
-    // `live` by default: the panel exists to show what the agent is doing,
-    // and only the live mirror follows a turn the chat is running right now.
-    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'r1' },
+    expect(handoffApi.resolveHandoff).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
+      command: 'claude',
+      args: ['--resume', 'sess-1'],
+      cwd: '/proj',
     });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
-    ).toContain('My chat — terminal');
   });
 
-  it('offers a per-node terminal on a workflow run and passes the nodeId', async () => {
+  it('names the node when the run is a workflow', async () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
@@ -1881,277 +1856,55 @@ describe('Chats terminal mirror', () => {
         payload: { nodeId: 'agent-1', status: 'running' },
         createdAt: 'now',
       },
-      {
-        id: 'w-i1',
-        runId: 'w1',
-        nodeId: 'agent-1',
-        seq: 1,
-        kind: 'message',
-        role: 'assistant',
-        payload: { text: 'planning' },
-        createdAt: 'now',
-      },
     ]);
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
-      runId: 'w1',
-      nodeId: 'agent-1',
-    });
+    handoffApi.resolveHandoff.mockResolvedValue(command);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    await openThreadTerminal(container, 'agent-1');
+    await pressOpenInCli(container, 'agent-1');
 
-    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'w1', nodeId: 'agent-1' },
-    });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
-    ).toContain('agent-1 — terminal');
-  });
-
-  it('offers a terminal on a claude node — never on cursor-agent or a trigger', async () => {
-    const wfRun: ChatRun = {
-      id: 'w1',
-      status: 'running',
-      title: 'Mixed team',
-      agentKind: null,
-      workflowId: 'mixed-team',
-      cwd: '/proj',
-      model: null,
-      approval: null,
-      effort: null,
-      createdAt: 'later',
-      updatedAt: 'later',
-      lastMessage: null,
-    };
-    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
-    workflowApi.getWorkflow.mockResolvedValue({
-      slug: 'mixed-team',
-      workflow: {
-        name: 'Mixed team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
-          {
-            id: 'cursor',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
-          {
-            id: 'claude',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-          },
-        ],
-        edges: [],
-      },
-    });
-    api.listRunItems.mockResolvedValue(
-      ['start', 'cursor', 'claude'].map((nodeId, index) => ({
-        id: `w-i${index}`,
-        runId: 'w1',
-        nodeId,
-        seq: index,
-        kind: 'status',
-        role: null,
-        payload: { nodeId, status: 'running' },
-        createdAt: 'now',
-      })),
-    );
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'Mixed team');
-
-    // Only claude: every mirror is that agent's own CLI resumed on the
-    // conversation, and cursor-agent has no such invocation
-    // (`terminal: null`). A trigger runs no agent at all and gets none either.
-    await act(async () => {
-      container
-        .querySelector('button[aria-label="Open side panel"]')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
-    expect(panel.textContent).not.toContain('start');
-    for (const agentLabel of ['cursor', 'claude']) {
-      await act(async () => {
-        panel
-          .querySelector(`button[aria-label="${agentLabel} threads"]`)
-          ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      });
-    }
-    // Each node here has one main thread, so the terminal sits on the card.
-    expect(
-      panel.querySelector('button[aria-label="Open terminal for claude"]'),
-    ).not.toBeNull();
-    // No button rather than one that answers TERMINAL_UNSUPPORTED.
-    expect(
-      panel.querySelector('button[aria-label="Open terminal for cursor"]'),
-    ).toBeNull();
-  });
-
-  it('offers no terminal at all for a cursor-agent node', async () => {
-    // Its adapter declares `terminal: null` — no `--resume` TUI exists, so the
-    // panel shows no button rather than one that fails on click.
-    const wfRun: ChatRun = {
-      id: 'w1',
-      status: 'running',
-      title: 'Cursor team',
-      agentKind: null,
-      workflowId: 'cursor-team',
-      cwd: '/proj',
-      model: null,
-      approval: null,
-      effort: null,
-      createdAt: 'later',
-      updatedAt: 'later',
-      lastMessage: null,
-    };
-    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
-    workflowApi.getWorkflow.mockResolvedValue({
-      slug: 'cursor-team',
-      workflow: {
-        name: 'Cursor team',
-        nodes: [
-          {
-            id: 'cursor',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
-        ],
-        edges: [],
-      },
-    });
-    api.listRunItems.mockResolvedValue([
-      {
-        id: 'w-s1',
-        runId: 'w1',
-        nodeId: 'cursor',
-        seq: 0,
-        kind: 'status',
-        role: null,
-        payload: { nodeId: 'cursor', status: 'running' },
-        createdAt: 'now',
-      },
-    ]);
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
+    expect(handoffApi.resolveHandoff).toHaveBeenCalledWith({
       runId: 'w1',
-      nodeId: 'cursor',
+      nodeId: 'agent-1',
     });
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'Cursor team');
-
-    await act(async () => {
-      container
-        .querySelector('button[aria-label="Open side panel"]')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
-
-    expect(
-      panel.querySelector('button[aria-label="Open terminal for cursor"]'),
-    ).toBeNull();
-    expect(terminalApi.createTerminal).not.toHaveBeenCalled();
   });
 
-  it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const root = createRoot(container);
-    roots.push(root);
-    await act(async () => {
-      root.render(<Chats client={client} handle={handle} active />);
+  it('surfaces the CLI’s own reason and opens nothing when it cannot', async () => {
+    // Probe-verified for cursor: `--resume` with an ACP session id silently
+    // opens an EMPTY chat. Opening anyway would look like it worked.
+    handoffApi.resolveHandoff.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      display: null,
+      unavailableReason: 'cursor-agent would open an empty chat',
     });
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-
-    // Hidden tab: the fixed-position drawer must NOT overlay Graphs/Settings —
-    // and hiding is a detach, never an End session.
-    await act(async () => {
-      root.render(<Chats client={client} handle={handle} active={false} />);
-    });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
-    expect(terminalApi.disposeTerminal).not.toHaveBeenCalled();
-
-    // Back to the tab: the kept session state re-mounts the panel.
-    await act(async () => {
-      root.render(<Chats client={client} handle={handle} active />);
-    });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-  });
-
-  it('re-attaches to a running session instead of creating a second one', async () => {
-    // The daemon keeps a detached session alive for exactly this re-open; a
-    // blind create() would leak one live claude REPL per open→close→open.
-    terminalApi.listTerminals.mockResolvedValue([session]);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await openThreadTerminal(container, 'claude');
+    await pressOpenInCli(container, 'claude');
 
-    expect(terminalApi.createTerminal).not.toHaveBeenCalled();
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-  });
-
-  /** Close the open terminal panel via its stub close button. */
-  async function closePanel(container: HTMLElement): Promise<void> {
-    const close = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'stub-close',
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'cursor-agent would open an empty chat',
     );
-    await act(async () => {
-      close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  }
-
-  it('Close only DETACHES — the `--resume` child keeps running', async () => {
-    // Its whole value is the running `--resume` child; disposing on close would
-    // kill a REPL the user may be mid-conversation with, and re-opening would
-    // pay a fresh CLI startup.
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
-    await closePanel(container);
-
-    expect(terminalApi.disposeTerminal).not.toHaveBeenCalled();
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
   });
 
-  it('surfaces a daemon rejection (unsupported agent) in the error line', async () => {
-    terminalApi.createTerminal.mockRejectedValue(
-      new Error('daemon POST /v1/terminals failed (400): TERMINAL_UNSUPPORTED'),
-    );
+  it('reports a failure to open rather than swallowing it', async () => {
+    handoffApi.resolveHandoff.mockResolvedValue(command);
+    (
+      window.geniro.openInTerminal as unknown as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(new Error('no terminal app'));
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await openThreadTerminal(container, 'claude');
+    await pressOpenInCli(container, 'claude');
 
-    expect(container.textContent).toContain('TERMINAL_UNSUPPORTED');
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
+    expect(container.textContent).toContain('no terminal app');
   });
 });
 

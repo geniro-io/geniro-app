@@ -120,7 +120,7 @@ describe('CapabilitiesService — the interactive terminal', () => {
     // node that has simply not run yet from being reported as having no
     // interactive mirror at all — which would hide the picker forever.
     expect(
-      new ClaudeAdapter().terminalCommand({ sessionId: null, model: null }),
+      new ClaudeAdapter().handoffTarget({ sessionId: null, model: null }),
     ).toEqual({ ok: false, reason: 'no-session' });
 
     const byAgent = new Map(

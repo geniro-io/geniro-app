@@ -221,7 +221,8 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */
         unavailableReason: null,
       },
-      terminal: {
+      handoff: {
+        kind: 'resume-command',
         resumeFlag: CLAUDE_RESUME_FLAG,
         modelFlag: CLAUDE_MODEL_FLAG,
         /**

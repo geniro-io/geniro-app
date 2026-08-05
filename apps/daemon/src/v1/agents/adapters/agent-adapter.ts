@@ -24,10 +24,10 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  HandoffInput,
+  HandoffResult,
   InstalledApprovalSupport,
   InstalledCapabilities,
-  TerminalCommandInput,
-  TerminalCommandResult,
   TurnDriver,
 } from './adapter.types';
 import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
@@ -246,13 +246,13 @@ export abstract class AgentAdapter {
    * launch: opening the CLI without a resume target would show an unrelated
    * fresh conversation while claiming to mirror the run.
    */
-  terminalCommand(input: TerminalCommandInput): TerminalCommandResult {
-    const terminal = this.getConfig().terminal;
-    if (!terminal) {
+  handoffTarget(input: HandoffInput): HandoffResult {
+    const handoff = this.getConfig().handoff;
+    if (handoff.kind === 'unavailable') {
       return { ok: false, reason: 'unsupported' };
     }
     const trimmed = input.sessionId?.trim();
-    if (!trimmed || !terminal.sessionIdPattern.test(trimmed)) {
+    if (!trimmed || !handoff.sessionIdPattern.test(trimmed)) {
       return { ok: false, reason: 'no-session' };
     }
     // The run's OWN model, when the CLI can be told. A mirror that opened on
@@ -261,10 +261,11 @@ export abstract class AgentAdapter {
     const model = input.model?.trim();
     return {
       ok: true,
+      kind: 'command',
       command: this.command,
       args: [
-        ...(model ? [terminal.modelFlag, model] : []),
-        terminal.resumeFlag,
+        ...(model ? [handoff.modelFlag, model] : []),
+        handoff.resumeFlag,
         trimmed,
       ],
     };

@@ -188,7 +188,23 @@ export class CursorAcpAdapter extends AgentAdapter {
         unavailableReason:
           'cursor-agent has no verified way to load a plugin directory',
       },
-      terminal: null,
+      /**
+       * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
+       * plain no: `cursor-agent --resume <id>` ACCEPTS an ACP session id and
+       * then opens an EMPTY chat, silently creating one under that id. ACP
+       * sessions are not in the CLI's chat store — asked for a codeword set in
+       * the ACP session, the resumed CLI answered NOTHING-HERE. Cursor's own
+       * IDE is no route either: staff confirm IDE and CLI chats are separate
+       * stores that do not sync, and no open-by-id deeplink exists.
+       *
+       * So the button must be refused rather than wired: it would look like it
+       * worked and drop the user into a blank conversation.
+       */
+      handoff: {
+        kind: 'unavailable',
+        reason:
+          'cursor-agent cannot reopen this conversation: sessions started over ACP are not in its chat store, and resuming one would silently open an empty chat',
+      },
     };
   }
 

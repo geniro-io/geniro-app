@@ -29,6 +29,7 @@ function listing(
   ...servers: {
     name: string;
     toggleUnavailableReason?: string | null;
+    signInUnavailableReason?: string | null;
     target?: string | null;
     detail?: string | null;
     status?: AgentMcpServer['status'];
@@ -45,6 +46,7 @@ function listing(
       scope: 'project',
       disabled: s.disabled ?? false,
       toggleUnavailableReason: s.toggleUnavailableReason ?? null,
+      signInUnavailableReason: s.signInUnavailableReason ?? null,
     })),
     unavailableReason: null,
   } as unknown as AgentMcpListing;
@@ -294,9 +296,9 @@ describe('McpSection', () => {
     expect(el.textContent).not.toContain('connected in 12ms');
   });
 
-  it('renders a CLI-reported disabled server struck through, with its own badge', () => {
+  it('renders a CLI-reported disabled server struck through, and never as broken', () => {
     // cursor's `mcp disable` state. It is a stated choice rather than a
-    // failure, so it must not wear the destructive badge — and the row still
+    // failure, so it must not wear the destructive tone — and the row still
     // has to be visible: before this status existed the row vanished entirely.
     const el = render({
       listing: listing({ name: 'off-srv', status: 'disabled', disabled: true }),
@@ -305,8 +307,9 @@ describe('McpSection', () => {
 
     const row = el.querySelector('li');
     expect(row?.textContent).toContain('off-srv');
-    expect(row?.textContent).toContain('disabled');
+    expect(row?.textContent).toContain('off');
     expect(row?.querySelector('.line-through')).not.toBeNull();
+    expect(row?.querySelector('.bg-destructive')).toBeNull();
   });
 
   it('shows the adapter’s own sentence rather than an empty list', () => {
@@ -375,5 +378,135 @@ describe('McpSection', () => {
       button!.click();
     });
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('McpSection — servers that need signing in', () => {
+  /** The disclosure that folds them away. */
+  function group(el: Element): HTMLButtonElement | null {
+    return el.querySelector<HTMLButtonElement>('[aria-expanded]');
+  }
+
+  it('folds them away, and still says how many there are', () => {
+    // The whole point of the group: a folder with several signed-out servers
+    // buried the ones actually running. Folded, the count is the standing
+    // statement that they exist — so the number must be on screen while the
+    // rows are not.
+    const el = render({
+      listing: listing(
+        { name: 'working' },
+        { name: 'linear', status: 'needs_auth' },
+        { name: 'notion', status: 'needs_auth' },
+      ),
+      loading: false,
+    });
+
+    expect(group(el)?.getAttribute('aria-expanded')).toBe('false');
+    expect(group(el)?.textContent).toContain('2');
+    // Present in the count, absent from the DOM until asked for.
+    expect(el.textContent).toContain('working');
+    expect(el.textContent).not.toContain('linear');
+  });
+
+  it('reveals them when the group is opened', () => {
+    const el = render({
+      listing: listing({ name: 'linear', status: 'needs_auth' }),
+      loading: false,
+    });
+
+    act(() => {
+      group(el)!.click();
+    });
+
+    expect(group(el)?.getAttribute('aria-expanded')).toBe('true');
+    expect(el.querySelector('li')?.textContent).toContain('linear');
+    // The row carries no status word of its own: the group heading above it and
+    // the button beside it already say "sign in", and a third copy is what this
+    // redesign exists to remove.
+    expect(el.querySelector('li')?.textContent).not.toContain('sign-in');
+  });
+
+  it('never folds a server that is merely broken', () => {
+    // A failure is not a sign-in, and hiding one behind a disclosure would put
+    // the reason a user needs a level further from them than it is today.
+    const el = render({
+      listing: listing({
+        name: 'broken',
+        status: 'failed',
+        detail: 'ENOENT',
+      }),
+      loading: false,
+    });
+
+    expect(group(el)).toBeNull();
+    expect(el.textContent).toContain('broken');
+  });
+
+  it('asks its owner to sign in, naming the server and nothing else', () => {
+    const onSignIn = vi.fn();
+    const el = render({
+      listing: listing({ name: 'linear', status: 'needs_auth' }),
+      loading: false,
+      onSignIn,
+    });
+    act(() => {
+      group(el)!.click();
+    });
+
+    const button = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Sign in'),
+    );
+    act(() => {
+      button!.click();
+    });
+
+    // A NAME, not an invocation: which agent and which folder belong to the
+    // caller, and resolving the command belongs to the daemon.
+    expect(onSignIn).toHaveBeenCalledWith('linear');
+  });
+
+  it('offers no sign-in on a surface with no write path', () => {
+    // The graph inspector's case — the same rule the toggle follows.
+    const el = render({
+      listing: listing({ name: 'linear', status: 'needs_auth' }),
+      loading: false,
+    });
+    act(() => {
+      group(el)!.click();
+    });
+
+    expect(
+      [...el.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Sign in'),
+      ),
+    ).toBe(false);
+  });
+
+  it('states the daemon’s reason instead of a button that would do nothing', () => {
+    // A CLI with no `mcp login` still lists the row — the server is real and
+    // its state is true — but pressing a button there would open a terminal
+    // running a subcommand the binary does not have.
+    const onSignIn = vi.fn();
+    const el = render({
+      listing: listing({
+        name: 'linear',
+        status: 'needs_auth',
+        signInUnavailableReason: 'cursor-agent cannot sign in from here',
+      }),
+      loading: false,
+      onSignIn,
+    });
+    act(() => {
+      group(el)!.click();
+    });
+
+    expect(
+      [...el.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Sign in'),
+      ),
+    ).toBe(false);
+    expect(
+      el.querySelector('[title="cursor-agent cannot sign in from here"]'),
+    ).not.toBeNull();
   });
 });

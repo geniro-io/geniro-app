@@ -391,6 +391,7 @@ describe('AgentsPanel — MCP servers', () => {
         scope: 'project' as const,
         disabled: false,
         toggleUnavailableReason: null,
+        signInUnavailableReason: null,
       },
       {
         name: 'linear',
@@ -401,6 +402,7 @@ describe('AgentsPanel — MCP servers', () => {
         scope: 'project' as const,
         disabled: false,
         toggleUnavailableReason: null,
+        signInUnavailableReason: null,
       },
       {
         name: 'unapproved',
@@ -412,6 +414,7 @@ describe('AgentsPanel — MCP servers', () => {
         disabled: false,
         toggleUnavailableReason:
           'only servers defined in this folder\u2019s .mcp.json can be switched off',
+        signInUnavailableReason: null,
       },
     ],
   };
@@ -605,8 +608,13 @@ describe('AgentsPanel — MCP servers', () => {
 
     const orchestrator = cardFor(el, 'Orchestrator');
     expect(orchestrator.textContent).toContain('sentry');
-    expect(orchestrator.textContent).toContain('connected');
     expect(orchestrator.textContent).toContain('linear');
+    // A healthy server is carried by its dot alone — repeating "connected" on
+    // every row of a healthy folder is what made the list read as a wall. The
+    // rows that are NOT simply working keep their word, and those are the ones
+    // worth reading.
+    expect(orchestrator.textContent).not.toContain('connected');
+    expect(orchestrator.querySelector('.bg-success')).not.toBeNull();
     expect(orchestrator.textContent).toContain('failed');
     expect(orchestrator.textContent).toContain('pending');
   });
@@ -804,6 +812,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
           scope: 'project' as const,
           disabled: false,
           toggleUnavailableReason: null,
+          signInUnavailableReason: null,
         },
       ],
     };
@@ -885,6 +894,7 @@ describe('AgentsPanel — MCP toggle', () => {
           scope: 'project' as const,
           disabled: false,
           toggleUnavailableReason: null,
+          signInUnavailableReason: null,
           ...server,
         },
       ],

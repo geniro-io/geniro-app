@@ -500,8 +500,8 @@ export class AgentMcpService {
     // stops the renderer inferring "signable" from a status — a stdio server
     // never needs auth, and a `needs_auth` row on a CLI without the command
     // would otherwise get a button that does nothing.
-    const signInUnavailableReason = adapter.getConfig().mcp
-      .loginUnavailableReason;
+    const signInUnavailableReason =
+      adapter.getConfig().mcp.loginUnavailableReason;
     return {
       servers: result.servers.map((server) => {
         if (toggle.toggleUnavailableReason !== null) {

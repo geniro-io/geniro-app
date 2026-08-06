@@ -10,8 +10,6 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -1803,7 +1801,6 @@ export function Chats({
       if (!runId) {
         return;
       }
-      const nodeId = agent.id === CHAT_AGENT_KEY ? undefined : agent.id;
       try {
         setError(null);
         const target = await resolveHandoff(agent, thread);
@@ -1826,6 +1823,63 @@ export function Chats({
       }
     },
     [resolveHandoff],
+  );
+
+  /**
+   * Sign one CLI in to one MCP server, in the user's own terminal.
+   *
+   * The same two steps as {@link openThreadTerminal}, and for a harder reason:
+   * `mcp login` refuses a non-TTY stdin outright — in browser mode and under
+   * `--no-browser` alike — so a terminal is not the nicer option here, it is
+   * the only one. The daemon resolves the invocation and Electron opens it.
+   *
+   * Nothing is re-read afterwards. The sign-in finishes in a window geniro does
+   * not watch, on the user's own schedule, so a refresh fired here would
+   * re-dial every server in the folder before they had reached the consent
+   * page. Reconnect, one control up, is the deliberate way back.
+   */
+  const signInToMcpServer = useCallback(
+    async (kind: CliKind, server: string) => {
+      // The RUN's folder, exactly as the listing beside it was taken in — never
+      // the composer's `folder`, which is where the NEXT chat would start. A
+      // server name resolves against the directory the CLI runs in, so signing
+      // in from the other one authenticates a different server or none.
+      const cwd = activeRun?.cwd ?? null;
+      if (!cwd) {
+        // The route needs a folder and this one has none — a run can carry no
+        // working directory at all. Said rather than swallowed: the button
+        // would otherwise do nothing at all when pressed.
+        setError(
+          `${server} is configured per folder, and this chat has no folder to sign in from`,
+        );
+        return;
+      }
+      try {
+        setError(null);
+        const target = await handoffApi.resolveMcpLogin({
+          agent: kind,
+          cwd,
+          server,
+        });
+        if (target.kind !== 'command' || !target.command || !target.cwd) {
+          // A refusal is the ANSWER — this CLI has no sign-in command — and the
+          // daemon's own sentence is what the user reads.
+          setError(
+            target.unavailableReason ??
+              `${server} cannot be signed in to from here`,
+          );
+          return;
+        }
+        await window.geniro.openInTerminal({
+          command: target.command,
+          args: target.args,
+          cwd: target.cwd,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [handoffApi, activeRun?.cwd],
   );
 
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
@@ -2535,6 +2589,7 @@ export function Chats({
               mcpLoading={mcp.loading}
               onRefreshMcp={mcp.refresh}
               onSetMcpEnabled={mcp.setEnabled}
+              onSignInMcp={signInToMcpServer}
               mcpToggleError={mcp.toggleError}
               onDismissMcpToggleError={mcp.dismissToggleError}
               onMcpOpenChange={(open) =>

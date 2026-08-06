@@ -333,12 +333,7 @@ export interface AgentSkillEntry {
  * at all and offered nothing to do.
  */
 export type AgentMcpServerStatus =
-  | 'connected'
-  | 'failed'
-  | 'pending'
-  | 'disabled'
-  | 'needs_auth'
-  | 'unknown';
+  'connected' | 'failed' | 'pending' | 'disabled' | 'needs_auth' | 'unknown';
 
 /**
  * One MCP server a CLI agent loads in a given working directory.

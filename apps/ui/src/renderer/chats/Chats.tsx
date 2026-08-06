@@ -68,8 +68,9 @@ import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
-import { ComposerChipRow } from './composer-chip-row';
 import { isComposerSendKey } from './composer-keys';
+import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
+import { ContextMeter } from './context-meter';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
 import {
@@ -1958,55 +1959,7 @@ export function Chats({
                     />
                   ) : null}
                   <ComposerCard>
-                    <AttachmentStrip
-                      attachments={attachments.attachments}
-                      onRemove={attachments.remove}
-                    />
-                    <Textarea
-                      value={input}
-                      rows={4}
-                      aria-label="Task for the new run"
-                      className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                      placeholder={
-                        workflowSlug
-                          ? 'Describe the task for the workflow team…'
-                          : 'Message the agent…'
-                      }
-                      onChange={(event) => setInput(event.target.value)}
-                      onPaste={(event) => {
-                        // Only swallow the paste when it actually carried images —
-                        // a normal text paste must keep its default behaviour.
-                        if (attachments.addFromClipboard(event.clipboardData)) {
-                          event.preventDefault();
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (handleSkillMenuKeys(event)) {
-                          return;
-                        }
-                        if (isComposerSendKey(event)) {
-                          event.preventDefault();
-                          void send();
-                        }
-                      }}
-                    />
-                    <ComposerChipRow
-                      actions={
-                        <Button
-                          type="button"
-                          size="icon"
-                          className="size-8 shrink-0 rounded-full"
-                          disabled={!hasContent || streaming}
-                          aria-label={workflowSlug ? 'Start run' : 'Send'}
-                          title={workflowSlug ? 'Start run' : 'Send'}
-                          onClick={() => void send()}>
-                          {workflowSlug ? (
-                            <Zap className="size-4 shrink-0" />
-                          ) : (
-                            <ArrowUp className="size-4 shrink-0" />
-                          )}
-                        </Button>
-                      }>
+                    <ComposerTopRow>
                       <Select
                         variant="ghost"
                         value={target}
@@ -2054,26 +2007,6 @@ export function Chats({
                         ]}
                         onValueChange={changeTarget}
                       />
-                      {!workflowSlug ? (
-                        // Only a single-agent run picks a model here — a
-                        // workflow's nodes each name their own in its YAML.
-                        <ModelSelect
-                          agentKind={agentKind}
-                          models={agentModels}
-                          value={models[agentKind] ?? null}
-                          onChange={(model) => changeModel(agentKind, model)}
-                        />
-                      ) : null}
-                      {!workflowSlug ? (
-                        // Absent, not disabled, for a CLI with no effort
-                        // control — the component decides that from an empty
-                        // list, so nothing here branches on the agent kind.
-                        <EffortSelect
-                          efforts={agentEfforts}
-                          value={efforts[agentKind] ?? null}
-                          onChange={(effort) => changeEffort(agentKind, effort)}
-                        />
-                      ) : null}
                       <FolderSelect
                         folder={folder}
                         recentFolders={recentFolders}
@@ -2121,7 +2054,77 @@ export function Chats({
                           onChange={changeApprovalMode}
                         />
                       ) : null}
-                    </ComposerChipRow>
+                    </ComposerTopRow>
+                    <AttachmentStrip
+                      attachments={attachments.attachments}
+                      onRemove={attachments.remove}
+                    />
+                    <Textarea
+                      value={input}
+                      rows={4}
+                      aria-label="Task for the new run"
+                      className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                      placeholder={
+                        workflowSlug
+                          ? 'Describe the task for the workflow team…'
+                          : 'Message the agent…'
+                      }
+                      onChange={(event) => setInput(event.target.value)}
+                      onPaste={(event) => {
+                        // Only swallow the paste when it actually carried images —
+                        // a normal text paste must keep its default behaviour.
+                        if (attachments.addFromClipboard(event.clipboardData)) {
+                          event.preventDefault();
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (handleSkillMenuKeys(event)) {
+                          return;
+                        }
+                        if (isComposerSendKey(event)) {
+                          event.preventDefault();
+                          void send();
+                        }
+                      }}
+                    />
+                    <ComposerBottomRow
+                      actions={
+                        <Button
+                          type="button"
+                          size="icon"
+                          className="size-8 shrink-0 rounded-full"
+                          disabled={!hasContent || streaming}
+                          aria-label={workflowSlug ? 'Start run' : 'Send'}
+                          title={workflowSlug ? 'Start run' : 'Send'}
+                          onClick={() => void send()}>
+                          {workflowSlug ? (
+                            <Zap className="size-4 shrink-0" />
+                          ) : (
+                            <ArrowUp className="size-4 shrink-0" />
+                          )}
+                        </Button>
+                      }>
+                      {!workflowSlug ? (
+                        // Only a single-agent run picks a model here — a
+                        // workflow's nodes each name their own in its YAML.
+                        <ModelSelect
+                          agentKind={agentKind}
+                          models={agentModels}
+                          value={models[agentKind] ?? null}
+                          onChange={(model) => changeModel(agentKind, model)}
+                        />
+                      ) : null}
+                      {!workflowSlug ? (
+                        // Absent, not disabled, for a CLI with no effort
+                        // control — the component decides that from an empty
+                        // list, so nothing here branches on the agent kind.
+                        <EffortSelect
+                          efforts={agentEfforts}
+                          value={efforts[agentKind] ?? null}
+                          onChange={(effort) => changeEffort(agentKind, effort)}
+                        />
+                      ) : null}
+                    </ComposerBottomRow>
                   </ComposerCard>
                 </div>
                 {/* The suggestion-chip row that sat here is gone. Both halves of it
@@ -2155,19 +2158,6 @@ export function Chats({
                   status={activeRun.status}
                   lastActivityAt={activeRun.updatedAt}
                   turnStartedAt={turnStartedAt}
-                  // The header shows the FOCUSED agent's context. For a 1:1 chat
-                  // that is the only agent; for a workflow the panel is where
-                  // per-node figures live, so the header stays quiet.
-                  contextTokens={
-                    activeRun.workflowId
-                      ? null
-                      : (agents[0]?.contextTokens ?? null)
-                  }
-                  contextWindowTokens={
-                    activeRun.workflowId
-                      ? null
-                      : (agents[0]?.contextWindowTokens ?? null)
-                  }
                   sidePanelOpen={agentsPanelOpen}
                   onToggleSidePanel={toggleAgentsPanel}
                 />
@@ -2329,91 +2319,7 @@ export function Chats({
                     />
                   ) : null}
                   <ComposerCard>
-                    <AttachmentStrip
-                      attachments={attachments.attachments}
-                      onRemove={attachments.remove}
-                    />
-                    <Textarea
-                      value={input}
-                      rows={2}
-                      aria-label="Message the agent"
-                      disabled={activeRun?.workflowId != null}
-                      className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                      placeholder={
-                        activeRun?.workflowId
-                          ? 'Workflow runs take one task — press + to start another.'
-                          : streaming
-                            ? 'Agent is working — your message will queue…'
-                            : 'Message the agent…'
-                      }
-                      onChange={(event) => setInput(event.target.value)}
-                      onPaste={(event) => {
-                        if (attachments.addFromClipboard(event.clipboardData)) {
-                          event.preventDefault();
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (handleSkillMenuKeys(event)) {
-                          return;
-                        }
-                        if (isComposerSendKey(event)) {
-                          event.preventDefault();
-                          void sendFollowUp();
-                        }
-                      }}
-                    />
-                    <ComposerChipRow
-                      actions={
-                        streaming ? (
-                          <>
-                            {hasContent && activeRun?.workflowId == null ? (
-                              <Button
-                                type="button"
-                                size="icon"
-                                className="size-8 rounded-full"
-                                // It SENDS. The message goes into the turn
-                                // already running whenever the agent's CLI can
-                                // take one mid-turn, and only falls back to the
-                                // queue when it cannot — so a label promising
-                                // "later" was wrong for the common case, and
-                                // the queue strip above the composer is what
-                                // says when the fallback happened.
-                                aria-label="Send"
-                                title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
-                                onClick={() => void sendFollowUp()}>
-                                <ArrowUp className="size-4 shrink-0" />
-                              </Button>
-                            ) : null}
-                            <Button
-                              type="button"
-                              // Red, not outline: Stop ABORTS the turn the user
-                              // is watching, and the one control in the composer
-                              // that destroys work should not read the same as
-                              // the pickers beside it.
-                              variant="destructive"
-                              size="icon"
-                              className="size-8 rounded-full"
-                              aria-label="Stop"
-                              title="Stop the current turn"
-                              onClick={() => void cancel()}>
-                              <Square className="size-3.5 shrink-0" />
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            type="button"
-                            size="icon"
-                            className="size-8 rounded-full"
-                            aria-label="Send"
-                            title="Send"
-                            disabled={
-                              !hasContent || activeRun?.workflowId != null
-                            }
-                            onClick={() => void sendFollowUp()}>
-                            <ArrowUp className="size-4 shrink-0" />
-                          </Button>
-                        )
-                      }>
+                    <ComposerTopRow>
                       {/* Informational run-identity chips — static Chips carrying
                       no chevron, never disabled Buttons: disabled kills hover
                       (so the cwd title tooltip could never fire) and 50%
@@ -2447,22 +2353,146 @@ export function Chats({
                       {activeRun &&
                       activeRun.workflowId === null &&
                       activeRun.agentKind ? (
-                        /* Editable at ANY time, including mid-turn. Unlike the
-                        agent and folder above, none of these is run identity:
-                        a chat can switch model mid-conversation exactly as the
-                        CLIs themselves allow.
+                        /* The permission posture belongs with what the run
+                        IS, not with how this turn thinks — and it is
+                        editable at any time, mid-turn included: the daemon
+                        hands the change to the turn already running. */
+                        <ApprovalModeSelect
+                          supportedModes={
+                            capabilities
+                              ? (approvalModesByAgent.get(
+                                  activeRun.agentKind,
+                                ) ?? [])
+                              : null
+                          }
+                          value={activeRun.approval}
+                          planSupported={
+                            capabilities?.claudeModes.plan === 'pass'
+                          }
+                          onChange={(approval) =>
+                            void changeRunSettings({ approval })
+                          }
+                        />
+                      ) : null}
+                    </ComposerTopRow>
+                    <AttachmentStrip
+                      attachments={attachments.attachments}
+                      onRemove={attachments.remove}
+                    />
+                    <Textarea
+                      value={input}
+                      rows={2}
+                      aria-label="Message the agent"
+                      disabled={activeRun?.workflowId != null}
+                      className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                      placeholder={
+                        activeRun?.workflowId
+                          ? 'Workflow runs take one task — press + to start another.'
+                          : streaming
+                            ? 'Agent is working — your message will queue…'
+                            : 'Message the agent…'
+                      }
+                      onChange={(event) => setInput(event.target.value)}
+                      onPaste={(event) => {
+                        if (attachments.addFromClipboard(event.clipboardData)) {
+                          event.preventDefault();
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (handleSkillMenuKeys(event)) {
+                          return;
+                        }
+                        if (isComposerSendKey(event)) {
+                          event.preventDefault();
+                          void sendFollowUp();
+                        }
+                      }}
+                    />
+                    <ComposerBottomRow
+                      actions={
+                        <>
+                          {/* The context readout, immediately left of the
+                          actions. It lived in the transcript header — a row
+                          the eye leaves as soon as the conversation starts —
+                          while the question it answers ("how much room is
+                          left") is asked at the moment of composing the next
+                          message, which is here. */}
+                          <ContextMeter
+                            contextTokens={
+                              activeRun?.workflowId
+                                ? null
+                                : (agents[0]?.contextTokens ?? null)
+                            }
+                            contextWindowTokens={
+                              activeRun?.workflowId
+                                ? null
+                                : (agents[0]?.contextWindowTokens ?? null)
+                            }
+                          />
+                          {streaming ? (
+                            <>
+                              {hasContent && activeRun?.workflowId == null ? (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-8 rounded-full"
+                                  // It SENDS. The message goes into the turn
+                                  // already running whenever the agent's CLI can
+                                  // take one mid-turn, and only falls back to the
+                                  // queue when it cannot — so a label promising
+                                  // "later" was wrong for the common case, and
+                                  // the queue strip above the composer is what
+                                  // says when the fallback happened.
+                                  aria-label="Send"
+                                  title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
+                                  onClick={() => void sendFollowUp()}>
+                                  <ArrowUp className="size-4 shrink-0" />
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                // Red, not outline: Stop ABORTS the turn the user
+                                // is watching, and the one control in the composer
+                                // that destroys work should not read the same as
+                                // the pickers beside it.
+                                variant="destructive"
+                                size="icon"
+                                className="size-8 rounded-full"
+                                aria-label="Stop"
+                                title="Stop the current turn"
+                                onClick={() => void cancel()}>
+                                <Square className="size-3.5 shrink-0" />
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="icon"
+                              className="size-8 rounded-full"
+                              aria-label="Send"
+                              title="Send"
+                              disabled={
+                                !hasContent || activeRun?.workflowId != null
+                              }
+                              onClick={() => void sendFollowUp()}>
+                              <ArrowUp className="size-4 shrink-0" />
+                            </Button>
+                          )}
+                        </>
+                      }>
+                      {activeRun &&
+                      activeRun.workflowId === null &&
+                      activeRun.agentKind ? (
+                        /* How THIS turn thinks — the two settings that sit
+                        below the text, beside the actions, rather than above
+                        with the run's identity.
 
                         A running turn's argv is fixed at spawn and no adapter
                         can mutate it in flight, so a change made now takes
-                        effect on the NEXT turn — which model and effort say
-                        while a turn streams, because a control that silently
-                        did nothing for the thing you are watching would be
-                        worse than one that is disabled.
-
-                        Approval is the exception and LOCKS: it is the
-                        permission control, and the daemon 409s a mid-turn
-                        change rather than ACK a safety posture the running
-                        turn will not honour. */
+                        effect on the NEXT turn — which both chips say while a
+                        turn streams, because a control that silently did
+                        nothing for the thing you are watching would be worse
+                        than one that announces the delay. */
                         <>
                           <ModelSelect
                             agentKind={activeRun.agentKind}
@@ -2481,25 +2511,9 @@ export function Chats({
                               void changeRunSettings({ effort })
                             }
                           />
-                          <ApprovalModeSelect
-                            supportedModes={
-                              capabilities
-                                ? (approvalModesByAgent.get(
-                                    activeRun.agentKind,
-                                  ) ?? [])
-                                : null
-                            }
-                            value={activeRun.approval}
-                            planSupported={
-                              capabilities?.claudeModes.plan === 'pass'
-                            }
-                            onChange={(approval) =>
-                              void changeRunSettings({ approval })
-                            }
-                          />
                         </>
                       ) : null}
-                    </ComposerChipRow>
+                    </ComposerBottomRow>
                   </ComposerCard>
                 </div>
               </div>

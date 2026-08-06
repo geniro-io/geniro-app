@@ -2624,12 +2624,71 @@ describe('Chats queued messages', () => {
     });
   });
 
-  it('keeps the composer controls on ONE line — no wrap, no shrink, no overflow', async () => {
-    // Three shapes this row has had, each a defect: the send button dropping
-    // to a line of its own; the chips wrapping and growing the card; and the
-    // chips staying put but overflowing, which ran them under the send button
-    // and squeezed the folder chip to 0px (measured, at 900px). What is left
-    // is a fixed-size row whose surplus chips move into an overflow menu.
+  it('splits the composer controls by kind — identity ABOVE the text, this turn’s settings BELOW', async () => {
+    // Four shapes this had, each a defect: the send button dropping to a line
+    // of its own; the chips wrapping and growing the card; the chips
+    // overflowing under the send button and squeezing the folder chip to 0px
+    // (measured, at 900px); and the fix for that, an overflow menu, which
+    // solved crowding by HIDING controls — and the label that vanished first
+    // was user data, routinely the folder naming where the run would happen.
+    //
+    // The split removes the pressure instead of rationing it. This test pins
+    // WHICH side each control lands on, because that is the whole mechanism:
+    // put the folder back below and the crowding returns.
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const send = composerButton(container, 'Send')!;
+    const bottomRow = send.parentElement!.parentElement!;
+    const card = bottomRow.parentElement!;
+    const topRow = card.firstElementChild!;
+    const textarea = card.querySelector('textarea')!;
+
+    // Identity above the text; per-turn settings below it.
+    const labelsIn = (root: Element): string[] =>
+      [...root.querySelectorAll('[data-menu-trigger]')].map(
+        (el) => el.getAttribute('aria-label') ?? '',
+      );
+    expect(labelsIn(topRow)).toContain('Folder for new chats');
+    expect(labelsIn(topRow)).toContain('Tool-approval mode');
+    expect(labelsIn(bottomRow)).toContain('Model');
+    expect(labelsIn(bottomRow)).not.toContain('Folder for new chats');
+
+    // The text sits BETWEEN them — not merely present somewhere in the card.
+    const order = [...card.children];
+    expect(order.indexOf(topRow)).toBeLessThan(
+      order.findIndex((el) => el.contains(textarea)),
+    );
+    expect(order.findIndex((el) => el.contains(textarea))).toBeLessThan(
+      order.indexOf(bottomRow),
+    );
+
+    // Above the text, wrapping is CORRECT — nothing shares that line, so the
+    // card grows upward with its own content instead of hiding a control.
+    expect(topRow.className).toContain('flex-wrap');
+    // Below it, the pinned actions make wrapping wrong, and they never shrink.
+    expect(bottomRow.className).not.toContain('flex-wrap');
+    expect(classesOf(send.parentElement!)).toContain('shrink-0');
+
+    // And no overflow control survives anywhere: every option is on screen.
+    expect(
+      card.querySelector(
+        '[aria-label$="more options"], [title="More options"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('lets the BOTTOM row’s chips stack rather than run under Send', async () => {
+    // Found by rendering it, not by reasoning about it: at 760px "default
+    // effort" ran clean under the Send button — the exact collision the whole
+    // redesign was meant to remove, reproduced in the new row. Forcing the
+    // chips to shrink instead truncated their chevrons away, so they stopped
+    // reading as pickers at all.
+    //
+    // Stacking is the fix, and it is only safe because the wrap happens INSIDE
+    // the chip box: the actions are its sibling, so they never move. Putting
+    // `flex-wrap` on the row itself would let Send drop to a line of its own,
+    // which is the very first shape this composer had and the first defect.
     const { client } = makeClient();
     const container = await mount(client);
 
@@ -2637,18 +2696,12 @@ describe('Chats queued messages', () => {
     const actions = send.parentElement!;
     const chipBox = actions.previousElementSibling!;
 
-    expect(chipBox.className).not.toContain('flex-wrap');
+    expect(chipBox.className).toContain('flex-wrap');
     expect(chipBox.contains(send)).toBe(false);
     expect(classesOf(actions)).toContain('shrink-0');
-
-    // No chip gives up width to make room — the row moves chips instead, and a
-    // chip that quietly shrank would report a false fit. Exact tokens, not
-    // substrings: the chip's class list carries `[&>svg]:shrink-0` for its icon.
-    const folder = chipBox.querySelector<HTMLElement>(
-      '[data-menu-trigger][aria-label="Folder for new chats"]',
-    )!;
-    expect(classesOf(folder)).toContain('shrink-0');
-    expect(classesOf(folder)).toContain('max-w-52');
+    // The chip's own `shrink-0` is overridden here — a single chip wider than
+    // the whole box has to give, or it collides again.
+    expect(chipBox.className).toContain('[&>*]:min-w-0');
   });
 
   it('drops a staged image from the next message when it is removed', async () => {

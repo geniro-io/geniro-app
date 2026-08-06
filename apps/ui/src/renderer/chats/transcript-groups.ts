@@ -393,26 +393,50 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
 
 /** File-touching tools, for the group summary's edit/create counts. */
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
+/** Tools that OPEN a named file — counted by distinct path, like the edits. */
+const READ_TOOLS = new Set(['Read', 'NotebookRead']);
+/** Tools that look through the tree without naming one file up front. */
+const SEARCH_TOOLS = new Set(['Grep', 'Glob']);
+/** Tools that leave the machine. */
+const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
+/** Tools that hand a slice of the work to another agent. */
+const AGENT_TOOLS = new Set(['Task', 'Agent']);
+/** Every MCP tool a CLI exposes is named `mcp__<server>__<tool>`. */
+const MCP_TOOL_PREFIX = 'mcp__';
 
 /**
  * The collapsed group's one-line summary, Claude/Cursor-style:
- * "Used 5 tools · ran 2 commands · edited 1 file".
+ * "Read 4 files · ran 3 commands · edited 1 file".
+ *
+ * Every bucket names what the agent DID, because a bare "Used 7 tools" is the
+ * one thing a reader cannot act on — seven reads and seven edits are the same
+ * number and completely different turns. The buckets cover the tools a coding
+ * agent actually spends its calls on: opening files, searching, running
+ * commands, editing, writing, fetching, delegating, and calling MCP servers.
  *
  * The tool TOTAL is dropped when the breakdown already accounts for every call
  * in the group, because otherwise the same work is counted twice in one line:
  * a group holding one `Bash` read "Used 1 tool · ran 1 command", two figures
- * for a single action. Once some call falls outside the named buckets (a Read,
- * a Grep, an MCP tool) the total is the only thing that reports it, so it comes
- * back.
+ * for a single action. Once some call falls outside the named buckets the total
+ * is the only thing that reports it, so it comes back.
  *
- * `accounted` counts CALLS, while the two file figures count DISTINCT paths —
- * three edits to one file are three accounted tools and one edited file, and
- * comparing the displayed numbers instead would have kept the total on exactly
- * the groups that need it least.
+ * `accounted` counts CALLS, while the file figures count DISTINCT paths — three
+ * edits to one file are three accounted tools and one edited file, and comparing
+ * the displayed numbers instead would have kept the total on exactly the groups
+ * that need it least.
+ *
+ * A file-shaped tool with no `file_path` stays unaccounted ON PURPOSE: it would
+ * otherwise be reported as an edit of nothing, and the total is the honest
+ * answer for a call this cannot describe.
  */
 export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   let commands = 0;
+  let searches = 0;
+  let fetches = 0;
+  let delegations = 0;
+  let mcpCalls = 0;
   let accounted = 0;
+  const opened = new Set<string>();
   const edited = new Set<string>();
   const created = new Set<string>();
   for (const { call } of pairs) {
@@ -425,17 +449,38 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
     if (name === 'Bash') {
       commands += 1;
       accounted += 1;
+    } else if (READ_TOOLS.has(name) && file) {
+      opened.add(file);
+      accounted += 1;
     } else if (EDIT_TOOLS.has(name) && file) {
       edited.add(file);
       accounted += 1;
     } else if (name === 'Write' && file) {
       created.add(file);
       accounted += 1;
+    } else if (SEARCH_TOOLS.has(name)) {
+      searches += 1;
+      accounted += 1;
+    } else if (WEB_TOOLS.has(name)) {
+      fetches += 1;
+      accounted += 1;
+    } else if (AGENT_TOOLS.has(name)) {
+      delegations += 1;
+      accounted += 1;
+    } else if (name.startsWith(MCP_TOOL_PREFIX)) {
+      mcpCalls += 1;
+      accounted += 1;
     }
   }
   const count = (n: number, noun: string): string =>
     `${n} ${noun}${n === 1 ? '' : 's'}`;
   const parts: string[] = [];
+  if (opened.size > 0) {
+    parts.push(`read ${count(opened.size, 'file')}`);
+  }
+  if (searches > 0) {
+    parts.push(`searched ${count(searches, 'time')}`);
+  }
   if (commands > 0) {
     parts.push(`ran ${count(commands, 'command')}`);
   }
@@ -444,6 +489,15 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   }
   if (created.size > 0) {
     parts.push(`created ${count(created.size, 'file')}`);
+  }
+  if (fetches > 0) {
+    parts.push(`fetched ${count(fetches, 'page')}`);
+  }
+  if (delegations > 0) {
+    parts.push(`delegated to ${count(delegations, 'subagent')}`);
+  }
+  if (mcpCalls > 0) {
+    parts.push(`called ${count(mcpCalls, 'MCP tool')}`);
   }
   if (parts.length === 0 || accounted < pairs.length) {
     parts.unshift(`Used ${count(pairs.length, 'tool')}`);

@@ -94,6 +94,52 @@ export class HandoffService {
   }
 
   /**
+   * How the user signs one CLI in to one MCP server, or why they cannot.
+   *
+   * Here rather than in `v1/agents` because the ANSWER is a handoff: both CLIs'
+   * `mcp login` refuse a non-TTY stdin outright (probe-verified on claude
+   * 2.1.223 — it exits non-zero ~1.6s in, before any OAuth callback could
+   * arrive), so the daemon can never run one. What it can do is what this
+   * module already does for a conversation: resolve the invocation and let the
+   * user's own terminal be the TTY. Putting it in the MCP controller would have
+   * meant a second copy of that resolution, quoting rule included.
+   *
+   * Takes no run: an MCP server belongs to a FOLDER, not to a conversation, and
+   * the panel that offers this is reachable from a workflow node with no run of
+   * its own.
+   *
+   * A refusal is a 200 carrying a reason, for the same reason {@link resolve}'s
+   * is — "this CLI has no sign-in command" is the answer to the question.
+   */
+  mcpLoginTarget(input: {
+    agent: AgentKind;
+    cwd: string;
+    server: string;
+  }): HandoffTarget {
+    const adapter = this.adapters.for(input.agent);
+    const target = adapter.mcpLoginTarget(input.server);
+    if (!target.ok) {
+      return this.unavailable(
+        adapter.getConfig().mcp.loginUnavailableReason ??
+          `${input.agent} cannot sign in to an MCP server`,
+      );
+    }
+    // Validated even though the CLI would reject a bad path itself: this string
+    // is about to become the cwd of a process the USER's terminal spawns, and a
+    // path that does not resolve here must fail as a bad request rather than as
+    // a terminal window that opens and immediately dies.
+    const cwd = resolveValidCwd(input.cwd);
+    return {
+      kind: 'command',
+      command: target.command,
+      args: target.args,
+      cwd,
+      display: shellLine(target.command, target.args),
+      unavailableReason: null,
+    };
+  }
+
+  /**
    * The CLI's OWN words for why it cannot, read from its adapter config — so a
    * new agent explains itself without this service learning its name.
    */

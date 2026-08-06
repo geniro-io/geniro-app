@@ -170,6 +170,25 @@ export type AgentEvent =
     }
   | {
       /**
+       * The MCP servers the CLI had loaded for this turn, with the connection
+       * status each was in when the turn began (claude's `system/init`
+       * `mcp_servers` — verified live on 2.1.222). Captured into the
+       * MCP-harvest store keyed by the turn's cwd and plugin directory — never
+       * a transcript item.
+       *
+       * Reported because the ALTERNATIVE is a cold re-dial: asking a CLI for
+       * its servers out of band starts every one of them to health-check it,
+       * which is what made the panel take seconds. A turn already knows.
+       *
+       * A CLI with no such report simply never emits this — there is nothing
+       * for an adapter to declare, because the harvest is an optimisation over
+       * `listMcpServers`, never the only source.
+       */
+      type: 'mcp_servers';
+      servers: AgentMcpServer[];
+    }
+  | {
+      /**
        * The model this turn is actually running as, named by the CLI at
        * session start (claude's `system/init` `model` — verified live on
        * 2.1.220, where it reads `claude-opus-5[1m]`).
@@ -303,9 +322,18 @@ export interface AgentSkillEntry {
  * `disabled` is one the user switched off in the CLI's own configuration, which
  * geniro cannot undo (cursor's `mcp disable`); it is distinct from the wire's
  * `disabled` flag, which also covers servers geniro itself suppressed.
+ *
+ * `needs_auth` is an OAuth server the CLI has no stored credentials for. It is
+ * NOT a failure and must not read as one: nothing is broken, the user has
+ * simply never signed in, and the fix is one command rather than a
+ * configuration hunt. It earned its own arm because it is the only status with
+ * an ACTION attached — see `AdapterConfig.mcp.loginArgs`. Folded into `failed`
+ * it would have been listed among things to debug; left as `unknown` (where the
+ * missing marker put it, probe-verified on claude 2.1.223) the row said nothing
+ * at all and offered nothing to do.
  */
 export type AgentMcpServerStatus =
-  'connected' | 'failed' | 'pending' | 'disabled' | 'unknown';
+  'connected' | 'failed' | 'pending' | 'disabled' | 'needs_auth' | 'unknown';
 
 /**
  * One MCP server a CLI agent loads in a given working directory.
@@ -628,6 +656,22 @@ export interface AgentTurnInput {
    */
   trustWorkspace?: boolean;
   /**
+   * This turn must load NO MCP servers of the user's.
+   *
+   * Adapter-agnostic intent, like {@link trustWorkspace}: the caller states
+   * that nothing about this turn depends on the user's servers, and each CLI
+   * decides how to arrange that. Set only by probes the daemon runs for its
+   * own bookkeeping — the reported-commands probe is cancelled before the
+   * model runs, so a server it launched could never have been used, yet
+   * launching one costs a real process and reaping it costs the user's own
+   * server on that folder.
+   *
+   * A user-project turn NEVER sets it: an agent must see the same MCP servers
+   * a fresh session in that folder sees. A CLI with no way to restrict the set
+   * ignores the field.
+   */
+  isolateMcpServers?: boolean;
+  /**
    * A plugin directory this turn loads, and no other turn's.
    *
    * Already validated and canonicalized by the caller — an adapter puts it
@@ -663,6 +707,47 @@ export interface AgentTurnInput {
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */
     toolTimeoutMs?: number;
   } | null;
+}
+
+/**
+ * One CLI process, and the turns an adapter runs on it.
+ *
+ * Every turn goes through a session — including the ordinary one-turn kind, so
+ * there is a single code path rather than a branch on which CLI is being
+ * talked to. A CLI that cannot host more than one turn per process simply
+ * yields a session whose SECOND {@link AgentSession.startTurn} answers null,
+ * which is the same answer a caller gets for a session that has died or whose
+ * argv no longer fits — and it means exactly one thing everywhere: spawn a
+ * fresh one.
+ *
+ * Why a session exists at all: a CLI boots the user's MCP servers when it
+ * starts, and an MCP server can own something expensive — a browser the user
+ * is logged into. A process per turn tears that down on every message.
+ */
+export interface AgentSession {
+  /**
+   * Open a turn on this process. Null when this session cannot serve it: the
+   * process is gone, a turn is already in flight, this CLI hosts one turn per
+   * process, or the input would need different argv than the process was
+   * spawned with (a changed model, folder or plugin directory).
+   */
+  startTurn(
+    input: AgentTurnInput,
+    onEvent: (event: AgentEvent) => void,
+  ): AgentTurnHandle | null;
+  /** Alive, with no turn in flight — ready to take another one. */
+  readonly idle: boolean;
+  /** The process has not been observed to end. */
+  readonly alive: boolean;
+  /**
+   * Terminate the process group — the CLI plus every tool/MCP grandchild.
+   *
+   * This is the ONLY thing that stops a run-scoped process, so whoever holds
+   * the session owns that obligation: nothing else will reap it.
+   */
+  close(): void;
+  /** Resolves once the process is gone. Never rejects. */
+  readonly closed: Promise<void>;
 }
 
 export type TurnStdin = (payload: string) => boolean;
@@ -743,6 +828,22 @@ export interface AgentTurnHandle {
    * adapter therefore answers false and the caller keeps the message queued.
    */
   sendUserMessage(message: FollowUpMessage): boolean;
+  /**
+   * Re-mode the tool-approval posture of the turn ALREADY RUNNING, returning
+   * whether the CLI was actually told.
+   *
+   * Honest in both directions, like {@link AgentTurnHandle.sendUserMessage} —
+   * and here the cost of a dishonest true is higher than a dropped message.
+   * This is the permission surface: ACKing a change the running turn will not
+   * honour tells the user a safety posture they do not have, which is exactly
+   * what the caller's refusal exists to prevent.
+   *
+   * False is the honest answer for a turn with no way to be told, and that is
+   * not hypothetical: a claude turn spawned under
+   * `--dangerously-skip-permissions` has no permission prompt tool wired at
+   * all, so no message could reintroduce a gate it was started without.
+   */
+  setApprovalMode(mode: AgentApprovalMode): boolean;
 }
 
 /** One question a CLI asked the user, projected out of its own tool payload. */
@@ -964,6 +1065,35 @@ export interface AdapterConfig {
      * but it cannot undo a rejection whose every source copy the CLI unions.
      */
     readonly userDisabledReason: string;
+    /**
+     * Argv that signs this CLI in to ONE MCP server, with the server's name
+     * appended — `['mcp', 'login']` for both CLIs today. Null when the CLI has
+     * no such command, and then {@link loginUnavailableReason} says so.
+     *
+     * A VALUE, not a method: what differs per CLI is the words, not the
+     * mechanism, so `AgentAdapter.mcpLoginTarget` is concrete over this.
+     *
+     * The daemon RESOLVES this and never runs it. Probe-verified on claude
+     * 2.1.223: `claude mcp login <name>` refuses outright — in browser mode AND
+     * under `--no-browser` — when stdin is not a terminal ("stdin isn't a
+     * terminal, so authentication can't be completed here"), exiting non-zero
+     * ~1.6s in, before any OAuth callback could arrive. That is an upfront
+     * refusal rather than a timeout, so no amount of waiting or piping makes a
+     * headless spawn work. The invocation therefore goes where a TTY exists:
+     * the user's own terminal, through the handoff module. Giving the daemon a
+     * PTY instead would reintroduce the native module M4 deliberately deleted.
+     */
+    readonly loginArgs: readonly string[] | null;
+    /**
+     * Why no server of this CLI can be signed in to, or null when they can.
+     *
+     * Separate from {@link toggleUnavailableReason} for the same reason that one
+     * is separate from {@link listingUnavailableReason}: signing in and
+     * switching off are different capabilities, and a CLI that gains one
+     * without the other must not be handed a sentence answering the other
+     * question.
+     */
+    readonly loginUnavailableReason: string | null;
   };
 
   // ── Plugin directory ────────────────────────────────────────────────────

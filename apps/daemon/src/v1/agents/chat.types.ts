@@ -280,9 +280,16 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe('Null when the CLI does not report one'),
     status: z
-      .enum(['connected', 'failed', 'pending', 'disabled', 'unknown'])
+      .enum([
+        'connected',
+        'failed',
+        'pending',
+        'disabled',
+        'needs_auth',
+        'unknown',
+      ])
       .describe(
-        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config',
+        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet',
       ),
     detail: z
       .string()
@@ -303,6 +310,12 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe(
         'Why this row carries no switch, or null when it does. A sentence, so the UI never has to derive one from `scope`',
+      ),
+    signInUnavailableReason: z
+      .string()
+      .nullable()
+      .describe(
+        'Why this row offers no sign-in, or null when it does. Answered for EVERY row, not just `needs_auth` ones, so the UI never infers a capability from a status',
       ),
   })
   .meta({ id: 'AgentMcpServer' });
@@ -327,16 +340,47 @@ export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
  * listing — needs a discriminator added here rather than a match on the prose.
  * Deliberately not added yet: nothing reads it, and inventing the field now
  * would be a wire commitment with no consumer to shape it.
+ *
+ * `pending` is the THIRD shape, and the reason it had to exist: a cold read
+ * dials every server the folder defines, which is measured in seconds and
+ * bounded only by the slowest one. Blocking the response on that made the panel
+ * hold an HTTP request open for up to the CLI's whole listing timeout. So a
+ * cold read now answers immediately with `pending: true` and empty rows, and
+ * the dial continues behind it — meaning `servers: []` asserts "this folder has
+ * none" only when `pending` is false. A consumer that ignores the flag would
+ * read a read-in-progress as an empty folder.
  */
 // No `.meta({ id })` on this ROOT: it is the response DTO's own schema (see
 // AgentModelWireSchema above for the dangling-$ref an id here would cause).
-export const AgentMcpListingWireSchema = z.object({
-  servers: z.array(AgentMcpServerWireSchema),
-  unavailableReason: z
-    .string()
-    .nullable()
-    .describe('Why this CLI cannot be listed at all; null when it can'),
-});
+export const AgentMcpListingWireSchema = z
+  .object({
+    servers: z.array(AgentMcpServerWireSchema),
+    unavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why this CLI cannot be listed at all; null when it can'),
+    pending: z
+      .boolean()
+      .describe(
+        'A cold read is running; these rows are not the answer yet. Ask again.',
+      ),
+  })
+  // Three fields, but only three LEGAL states — reading, refused, answered. The
+  // combinations below are representable and mean nothing, and every consumer
+  // was guarding against them by hand (each construction site spells
+  // `pending: false`). One missed guard renders a read-in-progress as "No
+  // servers", a claim about the user's configuration that nobody made.
+  //
+  // Enforced on the RESPONSE, which is where it bites: `@ZodResponse`
+  // serializes through this schema, so a daemon that ever composed an illegal
+  // envelope fails here rather than shipping it to a renderer that has to
+  // re-derive which field wins.
+  .refine(
+    (listing) =>
+      !listing.pending ||
+      (listing.unavailableReason === null && listing.servers.length === 0),
+    'a pending listing carries no rows and no reason — it is the answer not being ready yet',
+  );
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
 
 /**

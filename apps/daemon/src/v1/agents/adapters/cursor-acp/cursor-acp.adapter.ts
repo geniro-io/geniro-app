@@ -165,6 +165,21 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
         userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        /**
+         * `cursor-agent mcp login <identifier>` — "Authenticate with an MCP
+         * server configured in .cursor/mcp.json or ~/.cursor/mcp.json", read
+         * from the CLI's own `mcp --help`. Inline rather than named, per this
+         * adapter's rule: `getConfig()` is its only reader.
+         *
+         * Declared even though no cursor row can carry `needs_auth` today —
+         * `parseCursorMcpList` knows `ready` / `Error:` / `not loaded` /
+         * `disabled` and nothing that names authentication, and inventing a
+         * marker for wording never observed is how a parser silently matches
+         * nothing. The capability is real and stated here; the row that would
+         * offer it appears when the CLI's listing starts reporting one.
+         */
+        loginArgs: ['mcp', 'login'],
+        loginUnavailableReason: null,
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       plugin: {
@@ -286,6 +301,33 @@ export class CursorAcpAdapter extends AgentAdapter {
   /** ACP is a full-duplex dialogue: stdin stays open for the whole turn. */
   protected override keepStdinOpen(_input: AgentTurnInput): boolean {
     return true;
+  }
+
+  /**
+   * One process per turn, stated rather than inherited.
+   *
+   * The base already answers false, so this override changes no behaviour —
+   * it exists because "this CLI cannot keep its process between turns" and
+   * "nobody has got round to it" are the same silence otherwise, and only one
+   * of them is a fact a reader can act on. Same standard as `loginArgs` above,
+   * which is declared with its reason even though no row can use it yet.
+   *
+   * ACP has the shape for it: `session/prompt` can be sent again on a session
+   * that is already loaded, so the protocol does not forbid a kept process.
+   * What is missing is EVIDENCE. cursor-agent is not signed in on the machine
+   * this was built on, so no multi-turn ACP session has ever been observed
+   * here — and the cost of guessing is not a failed turn but a wrong one: a
+   * second prompt on a session the agent considers finished is answered with
+   * the previous turn's context, which reads as an agent ignoring what it was
+   * just asked. Keeping a process is an optimization; keeping a WRONG one is a
+   * correctness bug.
+   *
+   * Flip this to `keepStdinOpen`'s answer once a signed-in cursor-agent has
+   * been observed serving two `session/prompt` calls on one process, and the
+   * turn driver has been checked for state that assumes it dies with its turn.
+   */
+  protected override canHostSession(_input: AgentTurnInput): boolean {
+    return false;
   }
 
   /**

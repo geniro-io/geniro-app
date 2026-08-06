@@ -3,6 +3,7 @@ import {
   CLAUDE_MCP_CONNECTED_MARKER,
   CLAUDE_MCP_DETAIL_SEPARATOR,
   CLAUDE_MCP_FAILED_MARKER,
+  CLAUDE_MCP_NEEDS_AUTH_MARKER,
   CLAUDE_MCP_PENDING_MARKER,
 } from '../claude.const';
 
@@ -25,6 +26,7 @@ const STATUS_MARKERS: readonly {
   { marker: CLAUDE_MCP_CONNECTED_MARKER, status: 'connected' },
   { marker: CLAUDE_MCP_FAILED_MARKER, status: 'failed' },
   { marker: CLAUDE_MCP_PENDING_MARKER, status: 'pending' },
+  { marker: CLAUDE_MCP_NEEDS_AUTH_MARKER, status: 'needs_auth' },
 ];
 
 /**

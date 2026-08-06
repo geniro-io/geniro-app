@@ -24,6 +24,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
@@ -223,6 +224,7 @@ export class GraphExecutorService {
     private readonly callBroker: CallBroker,
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
+    private readonly mcpHarvest: McpHarvestStore,
     private readonly store: WorkflowStoreService,
     private readonly teardown: RunTeardownService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -681,6 +683,7 @@ export class GraphExecutorService {
       // fanning out over N nodes has no ONE conversation a follow-up belongs
       // to, and picking a node for it would be an invention.
       sendUserMessage: () => false,
+      setApprovalMode: () => false,
     };
     this.registry.register(runId, aggregateHandle);
 
@@ -1001,6 +1004,21 @@ export class GraphExecutorService {
             // The CLI's own invokable set for this run's cwd — feeds the
             // composer's `/` autocomplete, never the transcript.
             this.skillHarvest.record(node.agent, cwd, event.commands);
+            return;
+          }
+          if (event.type === 'mcp_servers') {
+            // What this node actually loaded — feeds the MCP panel so it need
+            // not re-dial every server to answer, never the transcript. Keyed
+            // by the NODE's plugin directory, because a plugin ships its own
+            // servers: two nodes on one CLI pointed at different ones load
+            // genuinely different sets, and filing both under the folder alone
+            // would serve each the other's answer.
+            this.mcpHarvest.record(
+              node.agent,
+              cwd,
+              node.pluginDir ?? null,
+              event.servers,
+            );
             return;
           }
           if (event.type === 'context_progress') {

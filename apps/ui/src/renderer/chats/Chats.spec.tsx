@@ -56,7 +56,10 @@ const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
 // invocation and the Electron main process opens it, so the only seams are
 // this client call and window.geniro.openInTerminal.
-const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
+const handoffApi = vi.hoisted(() => ({
+  resolveHandoff: vi.fn(),
+  resolveMcpLogin: vi.fn(),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -377,9 +380,11 @@ beforeEach(() => {
   api.deleteChat.mockReset();
   api.updateChatSettings.mockReset();
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
-  agentsApi.listAgentMcpServers
-    .mockReset()
-    .mockResolvedValue({ servers: [], unavailableReason: null });
+  agentsApi.listAgentMcpServers.mockReset().mockResolvedValue({
+    servers: [],
+    unavailableReason: null,
+    pending: false,
+  });
   // The composer's model rows come from the daemon, which asks the CLI.
   agentsApi.listAgentModels.mockReset().mockResolvedValue([
     { id: 'opus', label: 'opus', source: 'builtin' },
@@ -442,6 +447,7 @@ beforeEach(() => {
     ],
   });
   handoffApi.resolveHandoff.mockReset();
+  handoffApi.resolveMcpLogin.mockReset();
 });
 
 afterEach(async () => {
@@ -475,6 +481,13 @@ describe('Chats transcript auto-scroll', () => {
     })) {
       Object.defineProperty(scroller, key, { value, configurable: true });
     }
+    // A browser fires `scroll` on every position change, and the transcript
+    // decides whether to keep following the tail FROM that event. A fake that
+    // moved the viewport silently was testing a signal the component is never
+    // given — and could only ever pin a position-based reading, which is the
+    // one that broke: content growing pushes the bottom away without the user
+    // moving at all.
+    scroller.dispatchEvent(new Event('scroll'));
   }
 
   it('does NOT move a viewport the user scrolled up when a new item arrives', async () => {
@@ -483,6 +496,14 @@ describe('Chats transcript auto-scroll', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
+    // The user was at the tail and then scrolled UP to read history. The
+    // movement is what stops the follow — not the resting position — so the
+    // fake has to make the movement, in two steps like the real one.
+    setScrollPosition(container, {
+      scrollTop: 3600,
+      scrollHeight: 4000,
+      clientHeight: 400,
+    });
     setScrollPosition(container, {
       scrollTop: 0,
       scrollHeight: 4000,
@@ -537,6 +558,39 @@ describe('Chats transcript auto-scroll', () => {
       scrollTop: 3600,
       scrollHeight: 4000,
       clientHeight: 400,
+    });
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a long reply'));
+    });
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('keeps following after a block GROWS below the fold — the thinking-block defect', async () => {
+    // The reported bug. A thinking block fills in after its row rendered, which
+    // moves the bottom away without the user touching the scroller. Reading the
+    // position at commit time then said "not at the bottom" and gave up, so the
+    // tail stuck just above the block for the rest of the turn.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    setScrollPosition(container, {
+      scrollTop: 3600,
+      scrollHeight: 4000,
+      clientHeight: 400,
+    });
+
+    // Content growth, NOT a user scroll: a browser fires no `scroll` for this,
+    // which is exactly why the follow decision cannot be read off the position.
+    const scroller = [...container.querySelectorAll('div')].find((el) =>
+      el.className.includes('overflow-y-auto'),
+    )!;
+    Object.defineProperty(scroller, 'scrollHeight', {
+      value: 9000,
+      configurable: true,
     });
     (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
 
@@ -659,6 +713,68 @@ describe('Chats reconnect seam', () => {
       await joined;
     });
     expect(api.listRunItems).toHaveBeenCalledWith({ runId: 'r1' });
+  });
+
+  it('does not rebuild the autoscroll observer on every streamed token', async () => {
+    // `liveText` is a fresh Map per delta and the daemon coalesces nothing, so
+    // keying the observer on it cost a `disconnect()` plus one `observe()` per
+    // transcript row FOR EVERY TOKEN — on a list that is not virtualized. It
+    // was redundant too: a delta grows a row that already exists, and watching
+    // that row is exactly what the observer is for.
+    //
+    // jsdom has no ResizeObserver, so the production code takes its null branch
+    // without one — this stub is what makes the behaviour observable at all.
+    let disconnects = 0;
+    let observes = 0;
+    class CountingResizeObserver {
+      observe(): void {
+        observes += 1;
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        disconnects += 1;
+      }
+    }
+    const globals = globalThis as { ResizeObserver?: unknown };
+    const previous = globals.ResizeObserver;
+    globals.ResizeObserver = CountingResizeObserver;
+    try {
+      api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+      const { client, emitLiveText } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      // First delta: the bubble is a NEW element, so a re-point here is right.
+      await act(async () => {
+        emitLiveText({
+          runId: 'r1',
+          nodeId: null,
+          text: 'a',
+          thinkingTokens: null,
+          ...LIVE_DELTA_REST,
+        });
+      });
+      const afterFirst = { disconnects, observes };
+
+      // Twenty more tokens into the SAME bubble. No element appears, so
+      // nothing needs re-pointing.
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => {
+          emitLiveText({
+            runId: 'r1',
+            nodeId: null,
+            text: `a${'b'.repeat(i + 1)}`,
+            thinkingTokens: null,
+            ...LIVE_DELTA_REST,
+          });
+        });
+      }
+
+      expect(disconnects).toBe(afterFirst.disconnects);
+      expect(observes).toBe(afterFirst.observes);
+    } finally {
+      globals.ResizeObserver = previous;
+    }
   });
 
   it('shows the agent’s words as they are written, before any item exists', async () => {
@@ -2463,7 +2579,17 @@ describe('Chats queued messages', () => {
    * all.
    */
   const busy = (): Error =>
-    new Error('daemon POST /v1/chats/r1/messages failed (409): RUN_BUSY');
+    // The daemon's ACTUAL body, not a shorthand: a Fastify JSON error envelope.
+    // The renderer decides to queue by reading the 409 and the `code` out of
+    // this, so a fixture that only spelled the word tested a parse the daemon
+    // never asks for.
+    new Error(
+      'daemon POST /v1/chats/r1/messages failed (409): ' +
+        '{"statusCode":409,"code":"RUN_BUSY",' +
+        '"message":"a turn is already in progress for this run",' +
+        '"fullMessage":"[RUN_BUSY] a turn is already in progress for this run",' +
+        '"fields":[]}',
+    );
 
   const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
   const PNG_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
@@ -2566,12 +2692,71 @@ describe('Chats queued messages', () => {
     });
   });
 
-  it('keeps the composer controls on ONE line — no wrap, no shrink, no overflow', async () => {
-    // Three shapes this row has had, each a defect: the send button dropping
-    // to a line of its own; the chips wrapping and growing the card; and the
-    // chips staying put but overflowing, which ran them under the send button
-    // and squeezed the folder chip to 0px (measured, at 900px). What is left
-    // is a fixed-size row whose surplus chips move into an overflow menu.
+  it('splits the composer controls by kind — identity ABOVE the text, this turn’s settings BELOW', async () => {
+    // Four shapes this had, each a defect: the send button dropping to a line
+    // of its own; the chips wrapping and growing the card; the chips
+    // overflowing under the send button and squeezing the folder chip to 0px
+    // (measured, at 900px); and the fix for that, an overflow menu, which
+    // solved crowding by HIDING controls — and the label that vanished first
+    // was user data, routinely the folder naming where the run would happen.
+    //
+    // The split removes the pressure instead of rationing it. This test pins
+    // WHICH side each control lands on, because that is the whole mechanism:
+    // put the folder back below and the crowding returns.
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const send = composerButton(container, 'Send')!;
+    const bottomRow = send.parentElement!.parentElement!;
+    const card = bottomRow.parentElement!;
+    const topRow = card.firstElementChild!;
+    const textarea = card.querySelector('textarea')!;
+
+    // Identity above the text; per-turn settings below it.
+    const labelsIn = (root: Element): string[] =>
+      [...root.querySelectorAll('[data-menu-trigger]')].map(
+        (el) => el.getAttribute('aria-label') ?? '',
+      );
+    expect(labelsIn(topRow)).toContain('Folder for new chats');
+    expect(labelsIn(topRow)).toContain('Tool-approval mode');
+    expect(labelsIn(bottomRow)).toContain('Model');
+    expect(labelsIn(bottomRow)).not.toContain('Folder for new chats');
+
+    // The text sits BETWEEN them — not merely present somewhere in the card.
+    const order = [...card.children];
+    expect(order.indexOf(topRow)).toBeLessThan(
+      order.findIndex((el) => el.contains(textarea)),
+    );
+    expect(order.findIndex((el) => el.contains(textarea))).toBeLessThan(
+      order.indexOf(bottomRow),
+    );
+
+    // Above the text, wrapping is CORRECT — nothing shares that line, so the
+    // card grows upward with its own content instead of hiding a control.
+    expect(topRow.className).toContain('flex-wrap');
+    // Below it, the pinned actions make wrapping wrong, and they never shrink.
+    expect(bottomRow.className).not.toContain('flex-wrap');
+    expect(classesOf(send.parentElement!)).toContain('shrink-0');
+
+    // And no overflow control survives anywhere: every option is on screen.
+    expect(
+      card.querySelector(
+        '[aria-label$="more options"], [title="More options"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('lets the BOTTOM row’s chips stack rather than run under Send', async () => {
+    // Found by rendering it, not by reasoning about it: at 760px "default
+    // effort" ran clean under the Send button — the exact collision the whole
+    // redesign was meant to remove, reproduced in the new row. Forcing the
+    // chips to shrink instead truncated their chevrons away, so they stopped
+    // reading as pickers at all.
+    //
+    // Stacking is the fix, and it is only safe because the wrap happens INSIDE
+    // the chip box: the actions are its sibling, so they never move. Putting
+    // `flex-wrap` on the row itself would let Send drop to a line of its own,
+    // which is the very first shape this composer had and the first defect.
     const { client } = makeClient();
     const container = await mount(client);
 
@@ -2579,18 +2764,12 @@ describe('Chats queued messages', () => {
     const actions = send.parentElement!;
     const chipBox = actions.previousElementSibling!;
 
-    expect(chipBox.className).not.toContain('flex-wrap');
+    expect(chipBox.className).toContain('flex-wrap');
     expect(chipBox.contains(send)).toBe(false);
     expect(classesOf(actions)).toContain('shrink-0');
-
-    // No chip gives up width to make room — the row moves chips instead, and a
-    // chip that quietly shrank would report a false fit. Exact tokens, not
-    // substrings: the chip's class list carries `[&>svg]:shrink-0` for its icon.
-    const folder = chipBox.querySelector<HTMLElement>(
-      '[data-menu-trigger][aria-label="Folder for new chats"]',
-    )!;
-    expect(classesOf(folder)).toContain('shrink-0');
-    expect(classesOf(folder)).toContain('max-w-52');
+    // The chip's own `shrink-0` is overridden here — a single chip wider than
+    // the whole box has to give, or it collides again.
+    expect(chipBox.className).toContain('[&>*]:min-w-0');
   });
 
   it('drops a staged image from the next message when it is removed', async () => {
@@ -2885,7 +3064,10 @@ describe('Chats queued messages', () => {
     // message the UI had said was cancelled.
     vi.useFakeTimers();
     try {
-      api.sendChatMessage.mockRejectedValue(new Error('RUN_BUSY'));
+      // The shared fixture, not a bare Error: the queue is entered by reading
+      // the daemon's 409, so a message that merely says RUN_BUSY is not what
+      // this path reacts to.
+      api.sendChatMessage.mockRejectedValue(busy());
       const { client, emitItem } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
@@ -3925,6 +4107,211 @@ describe('Chats error strip', () => {
     expect(deleteRunButton(container)).toBeNull();
     // Still closeable — every failure is.
     expect(dismissButton(container)).not.toBeNull();
+  });
+});
+
+describe('Chats — the composer’s context readout', () => {
+  it('opens UPWARD, because the composer row has no space beneath it', async () => {
+    // Pinned at the CALL SITE, not on the component. `context-meter.spec.tsx`
+    // renders `<ContextMeter side="top">` directly, so it stays green with the
+    // prop deleted from Chats.tsx — while in the real app the readout is
+    // clipped away by the shell's `overflow-hidden` main, and the ring shows no
+    // figures of its own to fall back on.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The meter renders only once a turn has reported a window.
+    await act(async () => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: 'working',
+        thinkingTokens: null,
+        ...LIVE_DELTA_REST,
+        contextTokens: 120_000,
+        contextWindowTokens: 200_000,
+      });
+    });
+
+    const meter = container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Context "]',
+    );
+    expect(meter).not.toBeNull();
+    await act(async () => {
+      meter!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const panel = container.querySelector('[role="dialog"]');
+    expect(panel?.className).toContain('bottom-full');
+    expect(panel?.className).not.toContain('top-full');
+  });
+});
+
+describe('Chats — signing a server in', () => {
+  const chatIn = (id: string, title: string, cwd: string): ChatRun => ({
+    ...run1,
+    id,
+    title,
+    cwd,
+    status: 'completed',
+  });
+
+  /** One server the CLI says needs authenticating, and can be. */
+  const needsAuth = {
+    servers: [
+      {
+        name: 'linear',
+        target: null,
+        transport: null,
+        status: 'needs_auth' as const,
+        detail: null,
+        scope: 'project' as const,
+        disabled: false,
+        toggleUnavailableReason: null,
+        signInUnavailableReason: null,
+      },
+    ],
+    unavailableReason: null,
+    pending: false,
+  };
+
+  /** Open the panel, open the MCP list, and unfold the signed-out group. */
+  async function reachSignIn(
+    container: HTMLElement,
+  ): Promise<HTMLButtonElement> {
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'aside[aria-label="Run agents"] button[aria-label="MCP servers"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // The signed-out rows are folded under their own disclosure.
+    const group = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.includes('Needs sign-in'));
+    await act(async () => {
+      group!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    return [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Sign in',
+    )!;
+  }
+
+  it('signs in against the RUN’s folder, not the composer’s', async () => {
+    // The load-bearing rule, and the one nothing pinned. A server name resolves
+    // against the directory the CLI runs in, so signing in from the composer's
+    // folder — where the NEXT chat would start — authenticates a different
+    // server or none at all. This test fails if the handler is switched to it.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    handoffApi.resolveMcpLogin.mockResolvedValue({
+      kind: 'command',
+      command: 'claude',
+      args: ['mcp', 'login', 'linear'],
+      cwd: '/proj-a',
+      unavailableReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(handoffApi.resolveMcpLogin).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/proj-a',
+      server: 'linear',
+    });
+    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
+      command: 'claude',
+      args: ['mcp', 'login', 'linear'],
+      cwd: '/proj-a',
+    });
+  });
+
+  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
+    // A refusal is the ANSWER, not a failure — this CLI has no sign-in command
+    // — so the user reads the daemon's own sentence and no window opens.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    handoffApi.resolveMcpLogin.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      unavailableReason: 'cursor-agent cannot sign in to an MCP server',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'cursor-agent cannot sign in to an MCP server',
+    );
+  });
+
+  it('surfaces a failed resolve rather than pressing on', async () => {
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    handoffApi.resolveMcpLogin.mockRejectedValue(
+      new Error('daemon GET /v1/handoff/mcp-login failed (500): boom'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('boom');
+  });
+
+  it('never offers sign-in at all on a chat with no folder', async () => {
+    // The handler's no-cwd guard cannot be reached from here, and this is why:
+    // `useAgentMcp` is gated on the folder, so a run without one has no rows,
+    // no signed-out group, and no button to press. Asserting THAT is honest;
+    // asserting the guard's message would mean driving the handler directly
+    // past the UI that makes it unreachable.
+    api.listChats.mockResolvedValue([
+      { ...chatIn('r1', 'First chat', '/proj-a'), cwd: null },
+    ]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Sign in',
+      ),
+    ).toBe(false);
+    expect(agentsApi.listAgentMcpServers).not.toHaveBeenCalled();
   });
 });
 

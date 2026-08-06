@@ -33,10 +33,12 @@ import { RunDao } from '../dao/run.dao';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
+import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
@@ -208,7 +210,10 @@ function fakeAdapter(kind: AgentKind): {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    setApprovalMode: ReturnType<typeof vi.fn>;
   }[];
+  /** Every session the service opened, and whether each was closed. */
+  sessions: { closed: boolean }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
@@ -218,6 +223,7 @@ function fakeAdapter(kind: AgentKind): {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    setApprovalMode: ReturnType<typeof vi.fn>;
   }[] = [];
   const start = vi.fn(
     (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
@@ -239,11 +245,49 @@ function fakeAdapter(kind: AgentKind): {
         // stream-json stdin (probe-verified). A spec about the CLI that cannot
         // overrides it to false.
         sendUserMessage: vi.fn(() => true),
+        // A chat turn always spawns question-capable, so it always holds the
+        // permission dialogue and can always be re-moded — true is the
+        // realistic default. A spec about a turn that CANNOT overrides it.
+        setApprovalMode: vi.fn(() => true),
       };
       handles.push(handle);
       return handle;
     },
   );
+  // The double fakes the SPAWN, and a session is a spawned PROCESS — so it is
+  // faked here too, at the same seam. Each turn still goes through `start`, so
+  // every assertion counting spawns keeps counting turns; what the session adds
+  // is the lifetime around them, which is the thing a delete has to end.
+  const sessions: { closed: boolean }[] = [];
+  const startSession = vi.fn(() => {
+    const record = { closed: false };
+    sessions.push(record);
+    let inFlight = 0;
+    return {
+      startTurn: (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
+        const handle = start(input, cb);
+        inFlight += 1;
+        void handle.done.then(() => {
+          inFlight -= 1;
+        });
+        return handle;
+      },
+      get idle() {
+        return inFlight === 0;
+      },
+      get alive() {
+        return !record.closed;
+      },
+      close: () => {
+        record.closed = true;
+      },
+      // Never resolves: nothing in the daemon awaits a session's death, and a
+      // promise that resolved on its own would model a process that reaps
+      // itself — which is exactly what a run-scoped one does not do.
+      closed: new Promise<void>(() => {}),
+    };
+  });
+
   // Every CLI-fact declaration comes from the REAL adapter: the double fakes
   // the SPAWN, never the contract, so a policy this service leans on cannot
   // pass here while being absent from the adapter that ships. The whole
@@ -256,6 +300,7 @@ function fakeAdapter(kind: AgentKind): {
     adapter: {
       getConfig: () => real.getConfig(),
       start,
+      startSession,
       resolveApprovalMode: (
         requested: AgentApprovalMode,
         installed: InstalledApprovalSupport,
@@ -290,6 +335,7 @@ function fakeAdapter(kind: AgentKind): {
       return release;
     },
     handles,
+    sessions,
   };
 }
 
@@ -327,6 +373,10 @@ function setup(
     record: vi.fn(),
     get: () => null,
   } as unknown as SkillHarvestStore;
+  const mcpHarvest = {
+    record: vi.fn(),
+    get: () => null,
+  } as unknown as McpHarvestStore;
   const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
     acceptEdits: 'pass',
     plan: 'pass',
@@ -364,12 +414,16 @@ function setup(
   // a mock here would leave every assertion below pinning the mock.
   // A real one: it holds nothing but in-memory buffers, so a double would
   // only hide whether the turn is actually tee'd into it.
+  // Real, like its neighbours: it holds an in-memory map of CLI processes, and
+  // a double would hide whether a delete actually closes the run's own.
+  const sessions = new AgentSessionRegistry();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
     runDao as unknown as RunDao,
     bus,
     registry,
+    sessions,
     callTokens,
     partials,
     attachments,
@@ -381,10 +435,12 @@ function setup(
     nodeDao as unknown as NodeStateDao,
     bus,
     registry,
+    sessions,
     approvals,
     adapters,
     claudeProbe,
     skillHarvest,
+    mcpHarvest,
     attachments,
     partials,
     teardown,
@@ -411,6 +467,7 @@ function setup(
     cursor,
     claudeProbe,
     skillHarvest,
+    mcpHarvest,
   };
 }
 
@@ -637,6 +694,45 @@ describe('ChatService', () => {
     ).toEqual([]);
   });
 
+  it('records an mcp_servers report for the run cwd, off the transcript', async () => {
+    // This seam is the whole supply of the MCP harvest: without it the panel
+    // falls back to `claude mcp list`, which starts every configured server in
+    // order to health-check it. A turn already reported them, for free.
+    const { service, itemDao, claude, mcpHarvest } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const codegraph = {
+      name: 'codegraph',
+      target: null,
+      transport: null,
+      status: 'connected' as const,
+      detail: null,
+    };
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'mcp_servers', servers: [codegraph] });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    // A chat carries no plugin directory — only a graph node does — and this
+    // null must match the key the panel's own read builds, or the harvest is
+    // written somewhere nothing ever looks.
+    expect(mcpHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      null,
+      [codegraph],
+    );
+    expect(
+      itemDao.items.filter((item) => item.payload.includes('codegraph')),
+    ).toEqual([]);
+  });
+
   it('synthesizes a turn_complete when the turn ends with no terminal event', async () => {
     const { service, runDao, published, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -748,6 +844,49 @@ describe('ChatService', () => {
     await drain();
   });
 
+  it('runs a chat’s second message on the process the first one left running', async () => {
+    // The user-visible complaint behind item 11: a CLI boots the user's MCP
+    // servers when it starts, and one of them can own a browser they are
+    // logged into. A process per turn tore that down on every message —
+    // measured at two full boots of all ten servers for two messages, plus
+    // 6.5s of startup before the second turn produced a token.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'first');
+    claude.finish();
+    await drain();
+
+    await service.sendMessage(run.id, 'second');
+    claude.finish();
+    await drain();
+
+    // Two turns…
+    expect(claude.start).toHaveBeenCalledTimes(2);
+    // …on ONE process.
+    expect(claude.sessions).toHaveLength(1);
+    expect(claude.sessions[0]?.closed).toBe(false);
+  });
+
+  it('closes the chat’s CLI process when the chat is deleted', async () => {
+    // Cancelling the turn stops the WORK and deliberately leaves the process
+    // running — that is what a run-scoped session is for. So a delete that did
+    // not close it would strand a CLI, and every MCP server it started, under
+    // a run nothing can ever reach again.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+
+    expect(claude.sessions).toHaveLength(1);
+    expect(claude.sessions[0]?.closed).toBe(false);
+
+    await service.delete(run.id);
+
+    expect(claude.sessions[0]?.closed).toBe(true);
+  });
+
   it('maps a turn_cancelled event to cancelled status', async () => {
     const { service, runDao, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -788,6 +927,7 @@ describe('ChatService', () => {
       cancel: cancelled,
       respondApproval: () => false,
       sendUserMessage: () => false,
+      setApprovalMode: () => false,
     });
 
     await expect(service.cancel(run.id)).rejects.toThrow(
@@ -1010,7 +1150,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
   });
 
-  it('updateSettings flips the mode between turns, LOCKS it mid-turn, and 400s a cursor plan mode', async () => {
+  it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     const updated = await service.updateSettings(run.id, {
@@ -1018,13 +1158,14 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     expect(updated.approval).toBe('acceptEdits');
 
-    // A claimed run is a turn in flight. Approval is the ONE field that still
-    // refuses: it is the permission control, so ACKing a mode the running turn
-    // cannot honour would state a safety posture the user does not have.
+    // CLAIMED but not yet spawned: there is no process to be told, and the turn
+    // about to start has not read its settings row yet. Refused rather than
+    // ACKed — a change that reaches neither the CLI nor the snapshot the turn
+    // is about to take is a change that did not happen.
     expect(registry.tryClaim(run.id)).toBe(true);
     await expect(
       service.updateSettings(run.id, { approval: 'auto' }),
-    ).rejects.toThrow('a turn is in flight');
+    ).rejects.toThrow('cannot be changed until it settles');
     // ...while the cosmetic fields go through on the same claimed run.
     const midTurn = await service.updateSettings(run.id, { model: 'opus' });
     expect(midTurn.model).toBe('opus');
@@ -1042,6 +1183,79 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'acceptEdits',
     });
     expect(flipped.approval).toBe('acceptEdits');
+  });
+
+  it('hands an approval change to the turn ALREADY RUNNING, not to the next one', async () => {
+    // The behaviour the user asked for, in the CLI's own words: a mode switch
+    // applies as soon as possible. The CLI accepts `set_permission_mode` on a
+    // turn in flight and re-reads it in milliseconds (probe-verified on
+    // 2.1.222), so refusing here was this service's limitation, not the
+    // agent's.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.updateSettings(run.id, { approval: 'ask' });
+    await service.sendMessage(run.id, 'go');
+
+    const updated = await service.updateSettings(run.id, {
+      approval: 'acceptEdits',
+    });
+
+    expect(claude.handles[0]!.setApprovalMode).toHaveBeenCalledWith(
+      'acceptEdits',
+    );
+    expect(updated.approval).toBe('acceptEdits');
+    claude.finish();
+    await drain();
+  });
+
+  it('moves the DAEMON’s own auto-approve seam with it, not just the CLI', async () => {
+    // Two halves have to move together. The CLI decides which tools it even
+    // asks about; the daemon decides what to do with the ones it is asked. An
+    // `auto` turn switched to `ask` that only told the CLI would keep
+    // auto-approving every request the CLI still sent — the user would see the
+    // chip read `ask` while the turn approved everything for them.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.updateSettings(run.id, { approval: 'auto' });
+    await service.sendMessage(run.id, 'go');
+
+    await service.updateSettings(run.id, { approval: 'ask' });
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-1',
+      toolName: 'Bash',
+      input: {},
+    });
+    await drain();
+
+    // Parked for a human instead of auto-approved.
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    claude.finish();
+    await drain();
+  });
+
+  it('REFUSES when the running turn has no permission gate to be told through', async () => {
+    // The one case that is still genuinely unhonourable: a turn spawned under
+    // `--dangerously-skip-permissions` has no prompt tool wired, so no message
+    // can reintroduce a gate the process was started without. The handle says
+    // so, and the refusal must leave the stored mode untouched — ACKing would
+    // state a safety posture the user does not have.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.updateSettings(run.id, { approval: 'auto' });
+    await service.sendMessage(run.id, 'go');
+    claude.handles[0]!.setApprovalMode.mockReturnValue(false);
+
+    await expect(
+      service.updateSettings(run.id, { approval: 'ask' }),
+    ).rejects.toThrow('cannot be changed until it settles');
+
+    claude.finish();
+    await drain();
+    const [after] = await service.listChats();
+    expect(after?.approval).toBe('auto');
   });
 
   it('updateSettings changes the model mid-chat — the NEXT turn spawns with it', async () => {

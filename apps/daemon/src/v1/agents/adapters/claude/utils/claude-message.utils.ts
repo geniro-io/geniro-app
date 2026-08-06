@@ -5,7 +5,12 @@ import {
   asRecord,
   asString,
 } from '../../../utils/json-util';
-import type { AgentEvent, AgentUsage } from '../../adapter.types';
+import type {
+  AgentEvent,
+  AgentMcpServer,
+  AgentMcpServerStatus,
+  AgentUsage,
+} from '../../adapter.types';
 import { CLAUDE_RUN_FAILED_MESSAGE } from '../claude.const';
 import {
   readClaudeAssistantContext,
@@ -50,6 +55,70 @@ function describesNoWork(
 }
 
 /**
+ * The statuses claude's `system/init` reports a loaded MCP server in.
+ *
+ * `disabled` is one of them — a switched-off server IS still reported, it is
+ * simply reported as off. PROBE-VERIFIED on 2.1.223, isolated
+ * `CLAUDE_CONFIG_DIR`, one `local`-scope server:
+ *
+ *   without `disabledMcpServers` → `[{name:'probe-server', status:'failed'}]`
+ *   with it                      → `[{name:'probe-server', status:'disabled'}]`
+ *
+ * matching the 2.1.222 probe recorded at {@link CLAUDE_HOME_DISABLED_MCP_KEY}.
+ * The `projects` key is matched on the RESOLVED path, so an entry under
+ * `/tmp/...` is not read for a cwd the CLI resolves to `/private/tmp/...` —
+ * worth knowing before trusting a re-probe that seems to disagree.
+ *
+ * Keeping the status here is load-bearing rather than tidy: an unrecognised one
+ * degrades to `unknown`, and where the CLI's own config cannot be read the panel
+ * falls back to `status === 'disabled'` to decide whether a row is off. A
+ * `disabled` row arriving as `unknown` therefore renders as ON.
+ *
+ * Anything still unrecognised degrades to `unknown` rather than being dropped —
+ * the server is real either way, and a status this mapper could not read is not
+ * a reason to hide it from the panel.
+ */
+const INIT_STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
+  'connected',
+  'failed',
+  'pending',
+  'disabled',
+]);
+
+/**
+ * The `mcp_servers` rows of a `system/init` line.
+ *
+ * `target`/`transport`/`detail` are null because init genuinely does not carry
+ * them — it reports a name and a state and nothing else (verified live on
+ * 2.1.222). Null is the honest answer here for the same reason it is on the
+ * `mcp list` path: an empty string would assert a command line the CLI never
+ * reported. `AgentMcpService` fills them from a previous listing when it has
+ * one.
+ */
+function readInitMcpServers(root: Record<string, unknown>): AgentMcpServer[] {
+  const servers: AgentMcpServer[] = [];
+  for (const entry of asArray(root.mcp_servers)) {
+    const row = asRecord(entry);
+    const name = row ? asString(row.name) : null;
+    if (!name) {
+      continue;
+    }
+    const status = row ? asString(row.status) : null;
+    servers.push({
+      name,
+      target: null,
+      transport: null,
+      status:
+        status !== null && INIT_STATUSES.has(status)
+          ? (status as AgentMcpServerStatus)
+          : 'unknown',
+      detail: null,
+    });
+  }
+  return servers;
+}
+
+/**
  * Map one parsed line of `claude -p --output-format stream-json` to normalized
  * events. Shapes verified against a live `claude` 2.1.196 capture:
  * - `system/init` carries the `session_id` (→ resume slot).
@@ -91,6 +160,13 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           .filter((entry): entry is string => entry !== null && entry !== '');
         if (commands.length > 0) {
           events.push({ type: 'slash_commands', commands });
+        }
+        // init's `mcp_servers` names every server this session loaded and the
+        // state each was in — harvested so the MCP panel need not re-dial them
+        // from cold to answer. Verified live on 2.1.222.
+        const servers = readInitMcpServers(root);
+        if (servers.length > 0) {
+          events.push({ type: 'mcp_servers', servers });
         }
         // The only line before `result` that names the model. `assistant`
         // lines carry the CANONICAL id (`claude-opus-5`), which is not the key

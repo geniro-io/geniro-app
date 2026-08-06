@@ -1,33 +1,13 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
+import { harvestKey, HarvestStore } from './harvest-store';
 
 /** Defensive bound per key — init reports ~60 entries today. */
 const MAX_HARVESTED = 500;
-
-/** One (agent, cwd) pair's harvested list, as cached on disk. */
-interface HarvestRecord {
-  commands: string[];
-  harvestedAt: number;
-}
-
-/**
- * The cache key: an agent's report says nothing about the other CLI's, so the
- * two are kept apart per folder. NUL-joined because it is the one byte a path
- * cannot contain — the same key shape the renderer's own skills cache uses.
- */
-function keyOf(agent: AgentKind, cwd: string): string {
-  return `${agent}\u0000${cwd}`;
-}
-
-interface SkillHarvestStoreOptions {
-  /** Test seam — the cache file; defaults to `<userData>/claude-skills.json`. */
-  file?: string;
-}
 
 /**
  * The CLI-reported slash-command lists, harvested from the `slash_commands`
@@ -40,19 +20,24 @@ interface SkillHarvestStoreOptions {
  * the adapter's own catalog when composing the composer autocomplete.
  *
  * Cached to `<userData>/claude-skills.json` (cursor-probe.json precedent) so
- * a daemon restart keeps the enriched list; the cache is a non-critical
- * nicety, so disk failures degrade to memory-only with a warning, never an
- * error path.
+ * a daemon restart keeps the enriched list; see {@link HarvestStore} for the
+ * shared cache contract.
  */
 @Injectable()
-export class SkillHarvestStore {
-  private readonly logger = new Logger(SkillHarvestStore.name);
-  private readonly file: string;
-  private records: Map<string, HarvestRecord> | null = null;
+export class SkillHarvestStore extends HarvestStore<string> {
+  constructor(options: { file?: string } = {}) {
+    // No max age, deliberately — unlike the MCP harvest, this one is MERGED
+    // with the other sources rather than consulted instead of them, so it
+    // shadows nothing that would otherwise be re-read. A command the CLI
+    // reported once stays a real command until a later turn says otherwise.
+    super(
+      options.file ?? join(environment.userDataDir, 'claude-skills.json'),
+      MAX_HARVESTED,
+    );
+  }
 
-  constructor(options: SkillHarvestStoreOptions = {}) {
-    this.file =
-      options.file ?? join(environment.userDataDir, 'claude-skills.json');
+  protected isEntry(value: unknown): value is string {
+    return typeof value === 'string';
   }
 
   /**
@@ -70,18 +55,8 @@ export class SkillHarvestStore {
       }
       seen.add(name);
       cleaned.push(name);
-      if (cleaned.length >= MAX_HARVESTED) {
-        break;
-      }
     }
-    if (cleaned.length === 0) {
-      return;
-    }
-    this.load().set(keyOf(agent, cwd), {
-      commands: cleaned,
-      harvestedAt: Date.now(),
-    });
-    this.save();
+    this.recordAt(harvestKey(agent, cwd), cleaned);
   }
 
   /**
@@ -90,50 +65,6 @@ export class SkillHarvestStore {
    * invokable sets have nothing to do with each other.
    */
   get(agent: AgentKind, cwd: string): string[] | null {
-    return this.load().get(keyOf(agent, cwd))?.commands ?? null;
-  }
-
-  private load(): Map<string, HarvestRecord> {
-    if (this.records !== null) {
-      return this.records;
-    }
-    this.records = new Map();
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'));
-      if (typeof parsed === 'object' && parsed !== null) {
-        for (const [cwd, value] of Object.entries(parsed)) {
-          const record = value as Partial<HarvestRecord> | null;
-          if (
-            record &&
-            Array.isArray(record.commands) &&
-            record.commands.every((entry) => typeof entry === 'string') &&
-            typeof record.harvestedAt === 'number'
-          ) {
-            this.records.set(cwd, {
-              commands: record.commands,
-              harvestedAt: record.harvestedAt,
-            });
-          }
-        }
-      }
-    } catch {
-      // Missing or malformed cache — start empty; the next turn re-harvests.
-    }
-    return this.records;
-  }
-
-  private save(): void {
-    try {
-      mkdirSync(dirname(this.file), { recursive: true });
-      writeFileSync(
-        this.file,
-        JSON.stringify(Object.fromEntries(this.load())),
-        'utf8',
-      );
-    } catch (err) {
-      this.logger.warn(
-        `skill-harvest cache write failed (memory-only until next harvest): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    return this.getAt(harvestKey(agent, cwd));
   }
 }

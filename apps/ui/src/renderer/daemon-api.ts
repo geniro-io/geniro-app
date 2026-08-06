@@ -85,6 +85,105 @@ export function daemonErrorStatus(err: unknown): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/**
+ * The daemon's `code` field, read out of the body {@link uniformErrors} appended
+ * after the `(status)` segment.
+ *
+ * Lives here for the same reason {@link daemonErrorStatus} does: this module is
+ * the only writer of that text, so the only parser of it belongs beside the
+ * writer. Callers ask for a NAMED code rather than substring-matching the
+ * message — `String(err).includes('RUN_BUSY')` also matches a run whose id or
+ * cwd happens to contain the word, and says nothing about the status.
+ *
+ * Returns null when the body is absent or is not the daemon's JSON error shape
+ * (a proxy's HTML page, a truncated body), so a caller can never mistake
+ * "we could not tell" for "some other code".
+ */
+export function daemonErrorCode(err: unknown): string | null {
+  return errorEnvelopeField(err, 'code');
+}
+
+/**
+ * The daemon's own SENTENCE for a refusal, or null when it did not write one.
+ *
+ * Sibling of {@link daemonErrorCode} and deliberately shaped like it: the code
+ * is what a caller branches on, this is what it shows a person. The daemon
+ * writes real explanations next to its codes ("this turn is running without a
+ * permission gate, so its approval mode cannot be changed until it settles"),
+ * and a renderer that falls back to `String(err)` throws that away and prints
+ * the whole `daemon PATCH /v1/… failed (409): {"code":…}` envelope instead.
+ *
+ * Null — never a guess — when the body is absent, is not the daemon's JSON
+ * shape, or carries no message, so a caller can tell "nothing to show" from a
+ * refusal that explained itself.
+ */
+export function daemonErrorDetail(err: unknown): string | null {
+  const detail = errorEnvelopeField(err, 'message');
+  // Present but blank is still nothing to show the user.
+  return detail !== null && detail.trim() !== '' ? detail : null;
+}
+
+/**
+ * One string field of the daemon's JSON error envelope, or null.
+ *
+ * The uniform error shape (`daemon <METHOD> <path> failed (<status>): <body>`)
+ * is parsed HERE and nowhere else, so its two readers cannot come to disagree
+ * about it — the format is a contract with `createDaemonApis` below, and it had
+ * already grown a third independent copy of this regex.
+ *
+ * Null — never a guess — when the body is absent or is not that JSON shape (a
+ * proxy's HTML page, a truncated body), so a caller can never mistake "we could
+ * not tell" for a value the daemon sent.
+ */
+function errorEnvelopeField(err: unknown, field: string): string | null {
+  const message = err instanceof Error ? err.message : String(err);
+  const body = /^daemon .*? failed \(\d{3}\): (.*)$/s.exec(message)?.[1];
+  if (body === undefined) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === 'object' && parsed !== null && field in parsed) {
+      const value = (parsed as Record<string, unknown>)[field];
+      return typeof value === 'string' ? value : null;
+    }
+  } catch {
+    // Not JSON — the daemon did not answer, something in front of it did.
+  }
+  return null;
+}
+
+/**
+ * Whether the daemon refused a send because a turn is already in flight.
+ *
+ * The ONE question the follow-up composer asks, named once. It is answered by
+ * the SERVER (409 + `RUN_BUSY`) and never by the renderer's own belief about
+ * whether a turn is running: the two disagree in practice — a run row that has
+ * not loaded yet, or a turn the daemon still holds — and when they did, the
+ * documented queue fallback was skipped and the raw JSON body was rendered as a
+ * red banner instead.
+ */
+export function isRunBusyError(err: unknown): boolean {
+  // The STATUS is the strict half, and it is what makes this safe: 409 is the
+  // daemon's one "a turn is already in flight" answer, so no 404, 500 or
+  // transport failure can be mistaken for a reason to queue.
+  if (daemonErrorStatus(err) !== 409) {
+    return false;
+  }
+  // The BODY is the tolerant half. A parsed `code` is the precise reading, but
+  // a 409 that names RUN_BUSY in any other envelope still means the same thing,
+  // and being brittle here has a bad failure mode in exactly one direction:
+  // an unrecognised body drops the user's message into a red banner instead of
+  // the queue. A 409 carrying some OTHER code is still rejected, because the
+  // parsed reading wins whenever there is one.
+  const code = daemonErrorCode(err);
+  if (code !== null) {
+    return code === 'RUN_BUSY';
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /\bRUN_BUSY\b/.test(message);
+}
+
 /** The generated API clients, all bound to one daemon launch. */
 export interface DaemonApis {
   chats: ChatsApi;

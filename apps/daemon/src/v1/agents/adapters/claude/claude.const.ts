@@ -69,6 +69,50 @@ export const CLAUDE_PERMISSION_PROMPT_TOOL_STDIO = 'stdio';
 /** Bypasses every permission check — and STRIPS the question tool with them. */
 export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 
+/**
+ * The control subtype that re-modes a turn ALREADY RUNNING.
+ *
+ * The one client-INITIATED control request the daemon sends; every other line
+ * on this dialogue answers something the CLI asked first. Probed live on
+ * 2.1.222: written mid-turn it was acknowledged in ~2ms, and the CLI re-emitted
+ * `system/init` with the new `permissionMode` ~350ms later — so the change
+ * lands on the turn in flight rather than on the next one.
+ *
+ *     --> {"type":"control_request","request_id":"…",
+ *          "request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}
+ *     <-- control_response success {"mode":"acceptEdits"}
+ *
+ * Same expiry warning as the block above: an observation, not a contract.
+ */
+export const CLAUDE_SET_PERMISSION_MODE_SUBTYPE = 'set_permission_mode';
+
+/**
+ * The client-initiated control request that stops the turn in flight WITHOUT
+ * stopping the process — the difference a run-scoped session is built on.
+ *
+ * Probed live on 2.1.223: acknowledged in ~2ms, the turn then ended with
+ * `result subtype=error_during_execution`, and the process kept running with
+ * its MCP servers up. Killing the process group instead is what takes those
+ * servers — and a browser one of them owns — down with a turn the user only
+ * meant to stop.
+ *
+ *     --> {"type":"control_request","request_id":"…",
+ *          "request":{"subtype":"interrupt"}}
+ *     <-- control_response success {"still_queued":[]}
+ *
+ * Same expiry warning as the blocks above: an observation, not a contract —
+ * which is why the cancel path keeps a deadline behind it.
+ */
+export const CLAUDE_INTERRUPT_SUBTYPE = 'interrupt';
+
+/**
+ * Prefix for the request ids the DAEMON mints, keeping them out of the id
+ * space the CLI mints for its own `can_use_tool` requests. Both travel the one
+ * dialogue, and a collision would route the CLI's answer to our request into
+ * the approval registry as though a tool had been decided.
+ */
+export const CLAUDE_CONTROL_REQUEST_ID_PREFIX = 'geniro-';
+
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
@@ -83,12 +127,31 @@ export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 export const CLAUDE_PLUGIN_DIR_FLAG = '--plugin-dir';
 
 /**
- * Restricts a turn to `--mcp-config` servers only. geniro does NOT pass it:
- * an agent must see the same MCP servers a fresh session in that folder sees,
- * plus geniro's call surface. Named so the spec pinning its absence and any
- * future reader spell it the same way.
+ * Restricts a turn to `--mcp-config` servers only.
+ *
+ * NEVER passed on a turn of the user's: an agent must see the same MCP servers
+ * a fresh session in that folder sees, plus geniro's call surface. It is passed
+ * on exactly one path — a turn the daemon runs for its own bookkeeping and
+ * cancels before the model runs (`AgentTurnInput.isolateMcpServers`), where
+ * loading the user's servers only to reap them is pure cost.
  */
 export const CLAUDE_STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
+
+/**
+ * The `--mcp-config` value that defines no servers at all.
+ *
+ * Passed WITH {@link CLAUDE_STRICT_MCP_CONFIG_FLAG} rather than relying on the
+ * flag alone, so the restriction has an explicit empty set to restrict to
+ * rather than depending on how the CLI reads a strict flag with no config
+ * beside it. The flag takes inline JSON as readily as a path, so this needs no
+ * temp file to be cleaned up.
+ *
+ * Probe-verified on claude 2.1.223: this argv is accepted, the `init` line
+ * comes back with `mcp_servers: []` — no server of the user's was started —
+ * and it still reports all 59 `slash_commands`, which is the only thing the
+ * probe reading it wants.
+ */
+export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 
 // ── The MCP toggle ────────────────────────────────────────────────────────
 //
@@ -279,6 +342,31 @@ export const CLAUDE_MCP_LIST_TIMEOUT_MS = 45_000;
 export const CLAUDE_MCP_CONNECTED_MARKER = 'Connected';
 export const CLAUDE_MCP_FAILED_MARKER = 'Failed to connect';
 export const CLAUDE_MCP_PENDING_MARKER = 'Pending approval';
+
+/**
+ * An OAuth server the CLI holds no credentials for. Probe-verified on 2.1.223,
+ * driven live against a `mcp add --transport http` server in a throwaway folder:
+ *
+ *     probe-linear: https://mcp.linear.app/mcp (HTTP) - ! Needs authentication
+ *
+ * `claude mcp get` prints the same wording as its `Status:`. The glyph is `!`
+ * and is excluded for the same reason the other three are — see the block above.
+ *
+ * Its absence was a live defect, not a gap: the row parsed, matched no marker,
+ * and came out `status: 'unknown'` with the wording as its detail — which the
+ * panel then did not render at all, since it shows a detail only for `failed`.
+ * A server one command away from working therefore appeared as a row with an
+ * unexplained badge and nothing to do about it.
+ */
+export const CLAUDE_MCP_NEEDS_AUTH_MARKER = 'Needs authentication';
+
+/**
+ * Argv that signs the CLI in to one server, with the server name appended.
+ *
+ * Named rather than written inline because it has the second reader that earns
+ * a name: `getConfig()` spells it, and the adapter's spec asserts on it.
+ */
+export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
 
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */
 export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';

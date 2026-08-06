@@ -27,6 +27,9 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+  // A case that fails part-way through a fake-timer block must not leave the
+  // clock frozen for whatever runs next.
+  vi.useRealTimers();
 });
 
 /** A plugin-less scope, which is what every pre-existing case describes. */
@@ -116,7 +119,123 @@ function apiReturning(
   } as unknown as DaemonApis['agents'];
 }
 
-const listing = { servers: [], unavailableReason: null };
+const listing = { servers: [], unavailableReason: null, pending: false };
+
+describe('useAgentMcp — a read the daemon has not finished', () => {
+  it('asks again until the listing settles, and never calls it empty meanwhile', async () => {
+    // The daemon answers a cold read at once with empty rows and `pending`,
+    // finishing the dial behind it — that dial STARTS the user's own MCP
+    // servers, so it is measured in seconds. Treating the placeholder as an
+    // answer would render "No servers" for a folder that has them.
+    vi.useFakeTimers();
+    const call = vi
+      .fn<(request: McpRequest) => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        servers: [],
+        unavailableReason: null,
+        pending: true,
+      })
+      .mockResolvedValue({
+        servers: [
+          {
+            name: 'sentry',
+            target: 'node x.js',
+            transport: 'stdio',
+            status: 'connected',
+            detail: null,
+            scope: 'project',
+            disabled: false,
+            toggleUnavailableReason: null,
+            signInUnavailableReason: null,
+          },
+        ],
+        unavailableReason: null,
+        pending: false,
+      });
+    const get = mount(apiReturning(call), [claudeScope], '/proj');
+    await settle();
+
+    expect(call).toHaveBeenCalledTimes(1);
+    // Still loading, so the panel keeps its spinner rather than stating a fact
+    // about the user's configuration it has not been told.
+    expect(get().loading).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    await settle();
+
+    expect(call).toHaveBeenCalledTimes(2);
+    // A plain re-read: bypassing the daemon's cache would start a SECOND dial,
+    // launching the user's servers all over again.
+    expect(call.mock.calls[1]?.[0]).toEqual({ agent: 'claude', cwd: '/proj' });
+    expect(get().loading).toBe(false);
+    expect(
+      get()
+        .byScope.get(scopeKey('claude'))
+        ?.servers.map((s) => s.name),
+    ).toEqual(['sentry']);
+
+    // And it stops: a settled listing must not keep re-dialling forever.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(call).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('goes on asking when a second answer is still pending too', async () => {
+    // The daemon's first-paint budget is a fraction of a second while a cold
+    // dial takes several, so TWO consecutive `pending` answers is the ordinary
+    // shape of a folder with real servers — not an exotic one. Asking once and
+    // then stopping leaves the panel spinning on placeholder rows for good: the
+    // dial finishes, the daemon has the answer, and nobody ever collects it.
+    vi.useFakeTimers();
+    const stillReading = {
+      servers: [],
+      unavailableReason: null,
+      pending: true,
+    };
+    const call = vi
+      .fn<(request: McpRequest) => Promise<unknown>>()
+      .mockResolvedValueOnce(stillReading)
+      .mockResolvedValueOnce(stillReading)
+      .mockResolvedValue({
+        servers: [
+          {
+            name: 'sentry',
+            target: 'node x.js',
+            transport: 'stdio',
+            status: 'connected',
+            detail: null,
+            scope: 'project',
+            disabled: false,
+            toggleUnavailableReason: null,
+            signInUnavailableReason: null,
+          },
+        ],
+        unavailableReason: null,
+        pending: false,
+      });
+    const get = mount(apiReturning(call), [claudeScope], '/proj');
+    await settle();
+
+    // Two retry windows — one per outstanding `pending` answer.
+    for (let poll = 0; poll < 2; poll += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await settle();
+    }
+
+    expect(
+      get()
+        .byScope.get(scopeKey('claude'))
+        ?.servers.map((s) => s.name),
+    ).toEqual(['sentry']);
+    expect(get().loading).toBe(false);
+  });
+});
 
 describe('useAgentMcp', () => {
   it('asks each kind once for the run’s folder', async () => {

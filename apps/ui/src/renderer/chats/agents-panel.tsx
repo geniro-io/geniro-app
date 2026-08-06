@@ -57,6 +57,7 @@ function McpDisclosure({
   loading,
   onRefresh,
   onSetEnabled,
+  onSignIn,
 }: {
   /** Names the dialog, so several open one at a time stay tellable apart. */
   agentName: string;
@@ -66,6 +67,7 @@ function McpDisclosure({
   loading: boolean;
   onRefresh?: () => void;
   onSetEnabled?: (server: string, enabled: boolean) => void;
+  onSignIn?: (server: string) => void;
 }): React.JSX.Element {
   const count = listing?.servers?.length ?? 0;
   return (
@@ -97,6 +99,7 @@ function McpDisclosure({
           loading={loading}
           onRefresh={onRefresh}
           onSetEnabled={onSetEnabled}
+          onSignIn={onSignIn}
           // The dialog IS the section's chrome here, so the card-band edges
           // (a top rule, the card's own padding) would draw a stray line
           // across a panel that is already bounded.
@@ -214,6 +217,7 @@ export function AgentsPanel({
   mcpLoading = false,
   onRefreshMcp,
   onSetMcpEnabled,
+  onSignInMcp,
   mcpToggleError = null,
   onDismissMcpToggleError,
   onMcpOpenChange,
@@ -242,6 +246,16 @@ export function AgentsPanel({
    * read-only — the panel never invents a write path it was not given.
    */
   onSetMcpEnabled?: (kind: CliKind, server: string, enabled: boolean) => void;
+  /**
+   * Sign one CLI in to one MCP server. Absent hides the action, on the same
+   * rule as {@link onSetMcpEnabled}.
+   *
+   * It ends in the user's own terminal rather than in the daemon, and that is
+   * forced: `mcp login` refuses a non-TTY stdin outright (probe-verified), so
+   * there is no headless path being passed over. Nothing in this panel knows
+   * that — it hands over a CLI kind and a server name.
+   */
+  onSignInMcp?: (kind: CliKind, server: string) => void;
   /**
    * Why the last toggle did not land. Shown as a strip rather than swallowed:
    * the daemon refuses a toggle it cannot honour, and its sentence explains
@@ -496,6 +510,11 @@ export function AgentsPanel({
                           onSetMcpEnabled
                             ? (server, enabled) =>
                                 onSetMcpEnabled(mcpKind, server, enabled)
+                            : undefined
+                        }
+                        onSignIn={
+                          onSignInMcp
+                            ? (server) => onSignInMcp(mcpKind, server)
                             : undefined
                         }
                       />

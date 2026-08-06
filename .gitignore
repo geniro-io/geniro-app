@@ -62,3 +62,8 @@ Thumbs.db
 !.geniro/workflow/**
 !.geniro/instructions/
 !.geniro/instructions/**
+
+# Playwright-MCP scratch: page snapshots, console logs and screenshots the
+# browser tool writes while driving a page. Local debugging output, never a
+# build input.
+.playwright-mcp/

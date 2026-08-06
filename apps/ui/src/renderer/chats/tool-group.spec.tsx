@@ -83,7 +83,7 @@ describe('ToolGroup', () => {
 
     // The sender frame around the group names the agent — the summary line
     // itself stays name-free.
-    expect(container.textContent).toContain('Used 2 tools · ran 1 command');
+    expect(container.textContent).toContain('Read 1 file · ran 1 command');
     expect(container.textContent).not.toContain('ls -la');
     expect(container.textContent).not.toContain('file-list');
     const header = container.querySelector('button[aria-expanded]');

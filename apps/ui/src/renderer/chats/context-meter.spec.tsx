@@ -172,27 +172,54 @@ describe('ContextMeter', () => {
   });
 });
 
-describe('the header and the panel read the SAME meter', () => {
+describe('where the meter lives', () => {
   const CONTEXT = { contextTokens: 250_000, contextWindowTokens: 1_000_000 };
 
-  it('reports identical numbers in both places', () => {
-    // Structural, not a coincidence to re-assert: both render ContextMeter, so
-    // they cannot drift. The panel used to own the only copy and the header
-    // had no readout at all.
+  it('is NOT in the transcript header any more — it moved beside Send', () => {
+    // The question it answers ("how much room is left") is asked while
+    // composing the next message, not while reading the header, and the eye
+    // leaves that row as soon as the conversation starts. The header no longer
+    // even takes the figures, so this cannot regress by someone passing them.
     render(
       <ChatHeader
         label="My chat"
         isWorkflow={false}
         status="running"
         lastActivityAt={new Date().toISOString()}
-        {...CONTEXT}
         sidePanelOpen={false}
         onToggleSidePanel={vi.fn()}
       />,
     );
-    const headerLabel = meterLabel();
-    expect(headerLabel).toBe('Context 25% full — 250k of 1M');
 
+    expect(meterLabel()).toBeNull();
+  });
+
+  it('opens its readout UPWARD, because the composer row has no room below it', () => {
+    // `Popover` does no collision detection — its placement is two static
+    // ternaries — and this row sits at the bottom of the composer inside the
+    // shell's `overflow-hidden` main, leaving ~20px under a 50-68px panel.
+    // Opening downward clips the panel away, and the ring deliberately shows
+    // no figures, so there is nothing left for a sighted user to read.
+    render(<ContextMeter {...CONTEXT} side="top" />);
+    openMeter();
+
+    const panel = container.querySelector('[role="dialog"]');
+    expect(panel?.className).toContain('bottom-full');
+    expect(panel?.className).not.toContain('top-full');
+  });
+
+  it('still opens downward where there IS room, so the panel call site is untouched', () => {
+    render(<ContextMeter {...CONTEXT} />);
+    openMeter();
+
+    const panel = container.querySelector('[role="dialog"]');
+    expect(panel?.className).toContain('top-full');
+  });
+
+  it('still reads the same figures in the agents panel', () => {
+    // The panel keeps its own copy for a workflow's PER-NODE windows, which
+    // the one composer meter could never show — and it renders the same
+    // component, so the two cannot state a window differently.
     render(
       <AgentsPanel
         agents={[
@@ -220,6 +247,7 @@ describe('the header and the panel read the SAME meter', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(meterLabel()).toBe(headerLabel);
+
+    expect(meterLabel()).toBe('Context 25% full — 250k of 1M');
   });
 });

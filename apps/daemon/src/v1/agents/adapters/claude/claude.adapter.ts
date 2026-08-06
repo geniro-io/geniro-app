@@ -31,9 +31,12 @@ import {
   CLAUDE_BASE_ARGS,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
+  CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
+  CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_HOME_SETTINGS_FILE,
+  CLAUDE_INTERRUPT_SUBTYPE,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_EMPTY_MARKER,
@@ -41,6 +44,7 @@ import {
   CLAUDE_MCP_LIST_FAILED_MESSAGE,
   CLAUDE_MCP_LIST_TIMEOUT_MS,
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
+  CLAUDE_MCP_LOGIN_ARGS,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_CACHE_FILE,
@@ -53,7 +57,9 @@ import {
   CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
+  CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
 import { buildImageBlocks } from './utils/claude-images.utils';
@@ -218,6 +224,9 @@ export class ClaudeAdapter extends AgentAdapter {
         toggleUnavailableReason: null,
         userDisabledReason:
           'switched off in your own claude settings, which geniro cannot re-enable',
+        /** `claude mcp login <name>` — probe-verified on 2.1.223. */
+        loginArgs: CLAUDE_MCP_LOGIN_ARGS,
+        loginUnavailableReason: null,
       },
       plugin: {
         /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */
@@ -561,10 +570,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.
-    const systemPrompt = this.composeSystemPrompt(
-      input,
-      Boolean(input.mcpEndpoint),
-    );
+    // `isolateMcpServers` WITHHOLDS the config below, geniro's own call server
+    // included — so a turn carrying both would be told to route work through
+    // `call_agent` with no such tool registered, which the adapter rules call
+    // out by name as silent by construction. Nothing sets the two together
+    // today; saying so here is what keeps that true if something ever does.
+    const granted = Boolean(input.mcpEndpoint) && !input.isolateMcpServers;
+    const systemPrompt = this.composeSystemPrompt(input, granted);
     if (systemPrompt) {
       args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
     }
@@ -595,6 +607,14 @@ export class ClaudeAdapter extends AgentAdapter {
         CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
         CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
       );
+    }
+    if (input.isolateMcpServers) {
+      // The one path that passes the strict flag. Without it the probe loads
+      // every server the folder defines just to have them reaped a moment
+      // later, and the reap reaches the user's OWN running servers.
+      args.push(CLAUDE_MCP_CONFIG_FLAG, CLAUDE_EMPTY_MCP_CONFIG);
+      args.push(CLAUDE_STRICT_MCP_CONFIG_FLAG);
+      return args;
     }
     const mcpConfigPath = this.mcpConfigPaths.get(input);
     if (mcpConfigPath) {
@@ -653,6 +673,60 @@ export class ClaudeAdapter extends AgentAdapter {
     return this.userMessageLine(message.text, message.images);
   }
 
+  /**
+   * One process can serve a whole run's worth of turns — probe-verified on
+   * 2.1.223: two user messages written to one still-open stdin produced two
+   * `result` lines under ONE `session_id`, and the process exited only when
+   * stdin was closed. `system/init` is re-emitted at the head of each turn, so
+   * the session saver and the MCP harvest keep seeing what they read today.
+   *
+   * The predicate is `keepStdinOpen`'s, deliberately reused rather than
+   * restated, exactly as `buildApprovalModePayload` reuses it: "can this turn
+   * carry a dialogue" and "can this process take another prompt" are the same
+   * question about the same open pipe, and a second copy of the condition is
+   * how the two would come to disagree.
+   */
+  protected override canHostSession(input: AgentTurnInput): boolean {
+    return this.keepStdinOpen(input);
+  }
+
+  /**
+   * The next turn opens with the SAME user line the first one did — a
+   * stream-json stdin is a conversation, so the CLI reads a `{"type":"user"}`
+   * arriving after a `result` as the next prompt rather than as an addition to
+   * the last one. Third caller of the one encoder, so the three cannot drift.
+   */
+  protected override buildNextTurnPayload(message: FollowUpMessage): string {
+    return this.userMessageLine(message.text, message.images);
+  }
+
+  /**
+   * Stop the turn without stopping the process.
+   *
+   * Probe-verified on 2.1.223: `control_request`/`interrupt` was acknowledged
+   * in 2ms and the turn ended with `result subtype=error_during_execution`,
+   * the process still alive. That is what lets Stop leave the run's MCP
+   * servers — and a browser one of them owns — running.
+   *
+   * Gated on the same open-stdin predicate as its neighbours: a turn spawned
+   * under `--dangerously-skip-permissions` has no channel to be told anything.
+   */
+  protected override buildInterruptPayload(
+    input: AgentTurnInput,
+  ): string | undefined {
+    if (!this.keepStdinOpen(input)) {
+      return undefined;
+    }
+    return `${JSON.stringify({
+      type: 'control_request',
+      // Namespaced away from the CLI's own request ids, like the mode change
+      // below: both id spaces share this one dialogue, and nothing here
+      // correlates a reply.
+      request_id: `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}${CLAUDE_INTERRUPT_SUBTYPE}`,
+      request: { subtype: CLAUDE_INTERRUPT_SUBTYPE },
+    })}\n`;
+  }
+
   /** The CLI's stream-json user line — one encoder, so the two cannot drift. */
   private userMessageLine(
     text: string,
@@ -697,6 +771,41 @@ export class ClaudeAdapter extends AgentAdapter {
         response: allow
           ? { behavior: 'allow', updatedInput: updatedInput ?? {} }
           : { behavior: 'deny', message: CLAUDE_DENY_MESSAGE },
+      },
+    })}\n`;
+  }
+
+  protected override buildApprovalModePayload(
+    input: AgentTurnInput,
+    mode: AgentApprovalMode,
+  ): string | undefined {
+    // The predicate is `keepStdinOpen`'s, deliberately reused rather than
+    // restated: "can this turn be re-moded" and "does this turn hold the stdin
+    // dialogue" are the SAME question, and a second copy of the condition is
+    // how the two would come to disagree after a change to buildArgs. A turn
+    // spawned under --dangerously-skip-permissions has no prompt tool, so a
+    // gate cannot be reintroduced into it by any message.
+    if (!this.keepStdinOpen(input)) {
+      return undefined;
+    }
+    return `${JSON.stringify({
+      type: 'control_request',
+      // Namespaced away from the CLI's own request ids — both id spaces share
+      // this one dialogue. Not unique per call by design: the CLI answers with
+      // the id it was given and nothing correlates a reply here, so a counter
+      // would be state on the adapter serving N concurrent turns.
+      request_id: `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}${CLAUDE_SET_PERMISSION_MODE_SUBTYPE}`,
+      request: {
+        subtype: CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
+        // `auto` is not a mode the CLI has. It is the DAEMON auto-approving at
+        // its own seam, so the CLI must keep prompting — which is `default`,
+        // exactly what `buildArgs` spawns an auto question-capable turn with.
+        // Sending `auto` would earn a rejected control request and leave the
+        // turn on whatever mode it had.
+        mode:
+          mode === 'auto' || mode === 'ask'
+            ? CLAUDE_PERMISSION_MODE_DEFAULT
+            : mode,
       },
     })}\n`;
   }

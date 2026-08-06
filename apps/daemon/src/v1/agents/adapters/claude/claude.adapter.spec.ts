@@ -28,6 +28,8 @@ import type {
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
+  CLAUDE_EMPTY_MCP_CONFIG,
+  CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
   CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_RESUME_FLAG,
@@ -1272,6 +1274,29 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     ]);
   });
 
+  it("starts no MCP server of the user's to answer a question about the CLI itself", async () => {
+    // The probe turn is cancelled before the model runs, so a server it
+    // launched could never have contributed to the answer — but launching one
+    // costs a real process, and the cancel then reaps a group holding the
+    // user's OWN running servers. Restricting the turn to an empty config is
+    // what makes there be nothing to kill.
+    const { spawn, child, captured } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear']));
+    await reported;
+
+    const args = captured.args ?? [];
+    expect(args).toContain(CLAUDE_STRICT_MCP_CONFIG_FLAG);
+    // The strict flag needs an explicit empty set to restrict to.
+    expect(args[args.indexOf(CLAUDE_MCP_CONFIG_FLAG) + 1]).toBe(
+      CLAUDE_EMPTY_MCP_CONFIG,
+    );
+  });
+
   it("drops claude's internal `_`-prefixed commands", async () => {
     // `__remote-workflow` is reported but is not something a user invokes —
     // offering it in the autocomplete would be a dead row.
@@ -1345,9 +1370,10 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     expect(readdirSync(probeRootDir)).toEqual([]);
   });
 
-  it('runs the least-privileged turn — no permission bypass, no MCP endpoint', async () => {
+  it("runs the least-privileged turn — no permission bypass, no server of the user's", async () => {
     // The probe never reaches a tool, so it asks for nothing that would let it:
-    // the argv is the plain stream-json head, and the prompt is the config's.
+    // the argv is the plain stream-json head plus the MCP isolation, and the
+    // prompt is the config's.
     const { spawn, child, captured } = probeSpawn();
     const reported = new ClaudeAdapter({
       spawn,
@@ -1357,10 +1383,14 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     child.stdout.emitData(initLine(['clear']));
     await reported;
 
-    expect(captured.args).toEqual([...CLAUDE_BASE_ARGS]);
+    expect(captured.args).toEqual([
+      ...CLAUDE_BASE_ARGS,
+      CLAUDE_MCP_CONFIG_FLAG,
+      CLAUDE_EMPTY_MCP_CONFIG,
+      CLAUDE_STRICT_MCP_CONFIG_FLAG,
+    ]);
     expect(captured.args).not.toContain('--dangerously-skip-permissions');
     expect(captured.args).not.toContain('--permission-mode');
-    expect(captured.args).not.toContain('--mcp-config');
     expect(JSON.parse(child.stdin.written.trim())).toEqual({
       type: 'user',
       message: {
@@ -1756,6 +1786,23 @@ describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
   });
 });
 
+describe('ClaudeAdapter — signing in to an MCP server', () => {
+  it('composes the CLI’s real sign-in argv', () => {
+    // The literal subcommand, from `claude mcp --help` on 2.1.223:
+    //   login [options] <name>  Authenticate with an MCP server
+    // Spelled out here on purpose. The base's shared test derives the argv from
+    // the same config the code reads, so it cannot tell `mcp login` from any
+    // other pair of words; this is the assertion that would fail if the config
+    // drifted off what the binary accepts.
+    expect(new ClaudeAdapter().mcpLoginTarget('probe-linear')).toEqual({
+      ok: true,
+      kind: 'command',
+      command: 'claude',
+      args: ['mcp', 'login', 'probe-linear'],
+    });
+  });
+});
+
 describe('ClaudeAdapter geniro-key collision', () => {
   const ENDPOINT = {
     url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
@@ -1951,8 +1998,18 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     // everything finishes".
     const { spawn, child } = fakeSpawn();
     const handle = new ClaudeAdapter({ spawn }).start(
-      // A chat turn: `allowUserQuestions` is what keeps stdin open.
-      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      // A REAL chat turn. `approvalMode` is not decoration: `keepStdinOpen`
+      // answers false the moment it is undefined, so a fixture without one
+      // spawns with stdin ALREADY ENDED — and this test still passed, because
+      // the writer reported success for a write into a closed pipe. Since
+      // `ChatService.initialApproval` gives every chat run a mode, the mode is
+      // what makes the fixture match production and this assertion a real pin.
+      {
+        prompt: 'first',
+        cwd: '/proj',
+        approvalMode: 'ask',
+        allowUserQuestions: true,
+      },
       () => {},
     );
     const openingBytes = child.stdin.written.length;
@@ -1975,13 +2032,122 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
   it('reports false once the turn has settled, rather than dropping it silently', () => {
     // The caller keeps the message queued on false. A true here would have it
     // discarded while the agent never saw it.
+    //
+    // `approvalMode` for the same reason as the test above: without it stdin is
+    // closed from the start, so this would answer false whether or not the
+    // settle guard existed. With stdin genuinely open, the settle is the ONLY
+    // thing making it false.
     const { spawn, child } = fakeSpawn();
     const handle = new ClaudeAdapter({ spawn }).start(
-      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      {
+        prompt: 'first',
+        cwd: '/proj',
+        approvalMode: 'ask',
+        allowUserQuestions: true,
+      },
       () => {},
     );
     child.emit('close', 0, null);
 
     expect(handle.sendUserMessage({ text: 'too late' })).toBe(false);
+  });
+
+  it('reports false for a turn whose stdin was never kept open', () => {
+    // The turn shape with no permission dialogue: `keepStdinOpen` is false, so
+    // the pipe is ended right after the opening prompt and there is nowhere for
+    // a follow-up to go. Reporting true here — which is what a writer that only
+    // checked the turn's own settle flags did — has the caller drop a message
+    // the agent will never receive.
+    const { spawn } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'first', cwd: '/proj' },
+      () => {},
+    );
+
+    expect(handle.sendUserMessage({ text: 'nowhere to go' })).toBe(false);
+  });
+});
+
+describe('ClaudeAdapter — re-moding a turn already running', () => {
+  /** Everything written to stdin after the opening prompt line. */
+  function afterOpening(
+    input: Parameters<ClaudeAdapter['start']>[0],
+    act: (handle: ReturnType<ClaudeAdapter['start']>) => void,
+  ): string {
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(input, () => {});
+    const openingBytes = child.stdin.written.length;
+    act(handle);
+    return child.stdin.written.slice(openingBytes);
+  }
+
+  it('writes a set_permission_mode control_request on the open dialogue', () => {
+    // Probe-verified on 2.1.222: acknowledged in ~2ms, with the CLI re-emitting
+    // `system/init` under the new mode ~350ms later. This is what makes the
+    // change land on the turn in flight rather than the next one.
+    let delivered = false;
+    const written = afterOpening(
+      { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
+      (handle) => {
+        delivered = handle.setApprovalMode('acceptEdits');
+      },
+    );
+
+    expect(delivered).toBe(true);
+    expect(JSON.parse(written)).toEqual({
+      type: 'control_request',
+      // Namespaced away from the ids the CLI mints for its own can_use_tool
+      // requests — both id spaces share this one dialogue.
+      request_id: expect.stringMatching(/^geniro-/),
+      request: { subtype: 'set_permission_mode', mode: 'acceptEdits' },
+    });
+    expect(written.endsWith('\n')).toBe(true);
+    expect(written.trimEnd().includes('\n')).toBe(false);
+  });
+
+  it('sends `default` for auto, because the CLI has no mode by that name', () => {
+    // `auto` is the DAEMON auto-approving at its own seam, so the CLI must keep
+    // prompting — which is `default`, exactly what buildArgs spawns an auto
+    // question-capable turn with. Sending the literal 'auto' would earn a
+    // rejected control request and silently leave the turn on its old mode.
+    const written = afterOpening(
+      { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
+      (handle) => handle.setApprovalMode('auto'),
+    );
+
+    expect(JSON.parse(written).request.mode).toBe('default');
+  });
+
+  it('REFUSES a turn spawned without a permission gate, writing nothing', () => {
+    // `auto` with no question channel spawns under
+    // `--dangerously-skip-permissions`, which wires no prompt tool at all — so
+    // no message can reintroduce a gate the process was started without, and a
+    // true here would state a safety posture the user does not have.
+    let delivered = true;
+    const written = afterOpening(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        approvalMode: 'auto',
+        allowUserQuestions: false,
+      },
+      (handle) => {
+        delivered = handle.setApprovalMode('ask');
+      },
+    );
+
+    expect(delivered).toBe(false);
+    expect(written).toBe('');
+  });
+
+  it('reports false once the turn has settled', () => {
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
+      () => {},
+    );
+    child.emit('close', 0, null);
+
+    expect(handle.setApprovalMode('plan')).toBe(false);
   });
 });

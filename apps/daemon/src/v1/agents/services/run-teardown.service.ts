@@ -6,6 +6,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -53,6 +54,7 @@ export class RunTeardownService {
     private readonly runDao: RunDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
+    private readonly sessions: AgentSessionRegistry,
     private readonly callTokens: CallTokenRegistry,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
@@ -80,7 +82,14 @@ export class RunTeardownService {
     // opposite of what this method promises.
     await this.awaitSettled(runId, settled);
 
-    // The in-memory planes. Cleared first — pure bookkeeping, and a failure
+    // The run's own CLI process, if it kept one between turns. The cancel
+    // above stops the WORK but deliberately leaves the process running — that
+    // is the whole point of a run-scoped session — so a delete that skipped
+    // this would strand a CLI, and every MCP server it started, belonging to a
+    // run that no longer exists and that nothing can ever reach again.
+    this.sessions.close(runId);
+
+    // The in-memory planes. Cleared next — pure bookkeeping, and a failure
     // here must not leave the durable rows half-deleted.
     this.callTokens.revokeRun(runId);
     this.partials.forgetRun(runId);

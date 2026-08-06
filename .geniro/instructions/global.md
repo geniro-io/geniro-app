@@ -14,15 +14,26 @@ file at the start of each run and at every phase-boundary refresh via
 - Never commit with `--no-verify`.
 - No `any` — use specific types, generics, or `unknown` + type guards. ESLint
   enforces `@typescript-eslint/no-explicit-any: error`.
-- **Always use CodeGraph for code exploration before grep/find/Read.** This repo
-  is codegraph-indexed (`.codegraph/` at the root). Call `codegraph_explore` (MCP
-  `mcp__codegraph__codegraph_explore`, or `codegraph explore "<query>"` in the
-  shell) FIRST — one call returns verbatim line-numbered source plus dependents,
-  replacing a multi-step grep+Read loop; treat returned source as already-Read (do
-  not re-open those files). Grep/find stay correct for exact-literal / non-symbol
-  text (log strings, config values, comments, copy) — codegraph is a CODE index
-  only. The index it reads must be the worktree's own — the per-worktree index
-  bootstrap runs at `## Additional Steps → After worktree-setup`.
+- **Always use CodeGraph for code exploration before grep/find/Read — every code
+  lookup, not just the first.** This repo is codegraph-indexed (`.codegraph/` at
+  the root). Call `codegraph_explore` (MCP `mcp__codegraph__codegraph_explore`, or
+  `codegraph explore "<query>"` in the shell) FIRST — one call returns verbatim
+  line-numbered source plus dependents, replacing a multi-step grep+Read loop;
+  treat returned source as already-Read (do not re-open those files). Falling back
+  to grep after one codegraph call is the failure mode this rule exists to prevent:
+  a good first result is not permission to revert to plain-text search for the rest
+  of the run. Grep/find stay correct for exact-literal / non-symbol text (log
+  strings, config values, comments, copy) — codegraph is a CODE index only. The
+  index it reads must be the worktree's own — the per-worktree index bootstrap runs
+  at `## Additional Steps → After worktree-setup`.
+  - **A deferred MCP tool looks exactly like a missing one.** If
+    `mcp__codegraph__codegraph_explore` is not in your tool surface, load its schema
+    by name before concluding codegraph is unavailable — or use the shell form,
+    which never needs loading.
+  - **Spawning subagents: pass this rule into each spawn prompt next to the task,
+    not as a closing note.** A subagent inherits none of your context and its own
+    workflow defaults to plain-text search, so a policy that arrives as a trailing
+    aside loses to it.
 - Vendored `@packages/{common,http-server,metrics,mikroorm}` track the sibling
   Geniro repo — keep changes minimal and local-first so fixes can flow between
   the two repos.

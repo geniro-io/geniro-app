@@ -83,12 +83,16 @@ describe('SkillHarvestStore', () => {
 
   it('drops malformed records but keeps well-formed ones on load', () => {
     const file = cacheFile();
+    // `entries`, not `commands`: the on-disk field is named by the shared
+    // HarvestStore, which now backs the MCP harvest too. A deliberate break of
+    // the old file — the cache is a nicety that the next turn re-harvests, so
+    // an existing one is simply ignored rather than migrated.
     writeFileSync(
       file,
       JSON.stringify({
-        [cacheKey('/good')]: { commands: ['deploy'], harvestedAt: 1 },
-        [cacheKey('/bad-shape')]: { commands: 'nope', harvestedAt: 1 },
-        [cacheKey('/bad-entries')]: { commands: ['ok', 42], harvestedAt: 1 },
+        [cacheKey('/good')]: { entries: ['deploy'], harvestedAt: 1 },
+        [cacheKey('/bad-shape')]: { entries: 'nope', harvestedAt: 1 },
+        [cacheKey('/bad-entries')]: { entries: ['ok', 42], harvestedAt: 1 },
       }),
       'utf8',
     );

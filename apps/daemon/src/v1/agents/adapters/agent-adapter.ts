@@ -7,8 +7,12 @@ import { join } from 'node:path';
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
 import { trackDetachedChild } from '../utils/child-journal';
-import { killProcessGroup } from '../utils/kill-tree';
-import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
+import { createGroupTerminator } from '../utils/kill-tree';
+import {
+  type CliSession,
+  runCliSession,
+  type SpawnFn,
+} from '../utils/spawn-cli';
 import type {
   AdapterConfig,
   AdapterQuestion,
@@ -20,6 +24,7 @@ import type {
   AgentMcpListingResult,
   AgentMcpServersInput,
   AgentModel,
+  AgentSession,
   AgentSkillEntry,
   AgentSkillsInput,
   AgentTurnHandle,
@@ -273,6 +278,32 @@ export abstract class AgentAdapter {
     };
   }
 
+  /**
+   * How the user signs this CLI in to ONE MCP server, or that it cannot.
+   *
+   * Shaped like {@link handoffTarget} and delivered the same way — resolved
+   * here, run by the user's own terminal — and that is a constraint rather than
+   * a preference: both CLIs' `mcp login` refuse a non-TTY stdin outright (the
+   * probe is recorded on `AdapterConfig.mcp.loginArgs`), so there is no
+   * headless spawn being passed over.
+   *
+   * Only `unsupported` can come back. A server NAME cannot be wrong here the
+   * way a session id can — the caller took it from a listing this same CLI
+   * produced — so there is no `no-session` counterpart to invent.
+   */
+  mcpLoginTarget(server: string): HandoffResult {
+    const { loginArgs } = this.getConfig().mcp;
+    if (loginArgs === null) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    return {
+      ok: true,
+      kind: 'command',
+      command: this.command,
+      args: [...loginArgs, server],
+    };
+  }
+
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
@@ -471,18 +502,27 @@ export abstract class AgentAdapter {
       // No approvalMode: the turn gets the CLI's own defaults and NO
       // permission-bypass flag. It is cancelled before the model runs, so the
       // least-privileged argv is also the sufficient one.
-      const handle = this.start({ prompt: probe.probePrompt, cwd }, (event) => {
-        if (event.type === 'slash_commands' && captured.length === 0) {
-          captured = event.commands
-            .filter(
-              (name) =>
-                probe.internalPrefix === null ||
-                !name.startsWith(probe.internalPrefix),
-            )
-            .slice(0, probe.maxCommands);
-          resolveCaptured();
-        }
-      });
+      //
+      // `isolateMcpServers` for the same reason, one step further: the probe
+      // reads a list the CLI reports about ITSELF, so no MCP server can
+      // contribute to the answer — but without this the CLI still starts every
+      // server the folder defines, and cancelling the probe then reaps a group
+      // holding the user's own. Nothing to launch is nothing to kill.
+      const handle = this.start(
+        { prompt: probe.probePrompt, cwd, isolateMcpServers: true },
+        (event) => {
+          if (event.type === 'slash_commands' && captured.length === 0) {
+            captured = event.commands
+              .filter(
+                (name) =>
+                  probe.internalPrefix === null ||
+                  !name.startsWith(probe.internalPrefix),
+              )
+              .slice(0, probe.maxCommands);
+            resolveCaptured();
+          }
+        },
+      );
       options.onTurn?.(handle);
       const timer = setTimeout(
         () => handle.cancel(),
@@ -640,9 +680,9 @@ export abstract class AgentAdapter {
       let stdout = '';
       const reapGroup = (): void => {
         // Idempotent, and that is the point: `exit`, `close` and the deadline
-        // all reap. Without this the second `process.kill(-pid)` would land
-        // after node has waitpid'd the child, when the pid may already belong
-        // to something else.
+        // all reap. Without this the second signal would land after node has
+        // waitpid'd the child, when the pid may already belong to something
+        // else.
         // `child` is assigned before any caller of this can run: the stream
         // and process listeners are attached after the spawn, and the timer
         // cannot fire synchronously. The guard is the type narrowing.
@@ -650,8 +690,23 @@ export abstract class AgentAdapter {
           return;
         }
         reaped = true;
-        const target = child;
-        killProcessGroup(target.pid, 'SIGKILL', () => target.kill('SIGKILL'));
+        // SIGTERM first, then SIGKILL. This group exists to have launched the
+        // user's OWN MCP servers — that is what a listing command does to
+        // health-check them — and a server holding real state (a browser
+        // session, an open index) needs the chance to shut down.
+        //
+        // The escalation runs even once the CLI's own `exit` has been seen,
+        // because the wedged case this reap exists for HAS an exit: the CLI is
+        // gone while a health-check grandchild still holds the inherited stdout
+        // pipe, so `close` never arrives, and it is the SIGKILL that closes the
+        // pipe and lets an already-read listing be delivered. Withholding it
+        // there trades a working read for the deadline and a null.
+        //
+        // Safe despite the pid-reuse hazard, by POSIX: a process-GROUP id is
+        // not reissued while the group still has members, so `kill(-pgid)`
+        // reaches something only when that something is genuinely this group.
+        // Once the group is empty the signal finds nothing.
+        createGroupTerminator(child).terminate();
       };
       const settle = (value: string | null): void => {
         if (settled) {
@@ -814,6 +869,29 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Encode a mid-turn approval-mode change for a turn THIS adapter spawned,
+   * or undefined when that turn cannot be re-moded.
+   *
+   * Takes the turn's own `input` rather than being a per-CLI constant, because
+   * the answer is per-TURN: claude can be re-moded on the stdio permission
+   * dialogue, but a turn it spawned under `--dangerously-skip-permissions` has
+   * no prompt tool wired, and no message can reintroduce a gate the process
+   * was started without. Stateless by construction — a pure function of
+   * (input, mode) — so it stays on the adapter while genuine protocol state
+   * lives on the per-turn driver.
+   *
+   * The default is the "this CLI cannot be told" answer, which is the honest
+   * one for ACP: `session/set_mode` is a session-level call, not something the
+   * protocol accepts against a prompt already in flight.
+   */
+  protected buildApprovalModePayload(
+    _input: AgentTurnInput,
+    _mode: AgentApprovalMode,
+  ): string | undefined {
+    return undefined;
+  }
+
+  /**
    * Encode a user message sent while the turn is STILL RUNNING, as the stdin
    * line this CLI expects. Default undefined — "this CLI cannot be told
    * anything more once its prompt is in", which makes
@@ -832,6 +910,99 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Whether a process spawned for this turn should be KEPT so the run's next
+   * turn can use it, instead of dying with the turn.
+   *
+   * The spawn-time question, asked once; {@link buildNextTurnPayload} is the
+   * per-turn mechanism that then opens each subsequent turn. Default false —
+   * "this CLI needs a fresh process per turn", which is what every adapter
+   * did before run-scoped sessions and remains correct for any CLI whose
+   * stdin cannot carry a second prompt.
+   *
+   * An adapter answering true MUST also keep stdin open for the whole session
+   * and implement `buildNextTurnPayload`, or the process is kept alive with no
+   * way to ever talk to it again.
+   */
+  protected canHostSession(_input: AgentTurnInput): boolean {
+    return false;
+  }
+
+  /**
+   * Encode the payload that opens ANOTHER turn on a process that has already
+   * finished one. Undefined = there is no such payload and the caller must
+   * spawn afresh.
+   *
+   * Deliberately NOT the same hook as {@link buildFollowUpPayload}, even where
+   * one CLI's bytes happen to be identical: that one adds to a prompt already
+   * in flight, this one starts the next prompt. The two come apart on the very
+   * next transport — ACP HAS a next prompt (`session/prompt` again on the same
+   * session) and has no way at all to add to one already accepted — so
+   * collapsing them would make that adapter unimplementable without an
+   * untangle.
+   */
+  protected buildNextTurnPayload(
+    _message: FollowUpMessage,
+  ): string | undefined {
+    return undefined;
+  }
+
+  /**
+   * Encode an in-protocol "stop the current turn" for this CLI. Undefined =
+   * this CLI has no such message and can only be stopped by killing it.
+   *
+   * Only reached on a run-scoped session, where the difference is the whole
+   * point: killing the group takes the user's MCP servers — and a browser one
+   * of them owns — down with a turn they only meant to stop.
+   */
+  protected buildInterruptPayload(_input: AgentTurnInput): string | undefined {
+    return undefined;
+  }
+
+  /**
+   * The fingerprint of everything this turn baked into the child's argv and
+   * env. Two turns with the same key can share one process; a change means
+   * the running process cannot serve the new turn and must be replaced.
+   *
+   * Concrete on the base rather than per-adapter: it is composed of the INPUT
+   * fields a `buildArgs` can read, not of any one CLI's flags, so an adapter
+   * that starts reading a new field is the only reason to override it.
+   *
+   * Four fields are deliberately absent:
+   *
+   * - `prompt` / `images` — per-turn by definition; they ride stdin, not argv.
+   * - `resumeSessionId` — a continued turn must NOT resume, because the
+   *   process already holds the session. Keying on it would make every second
+   *   turn look like a different process.
+   * - `approvalMode` — a live process is RE-MODED rather than respawned, so a
+   *   change here is delivered on the way into the next turn (see
+   *   `startSession`'s `startTurn`, which is what makes this omission safe);
+   *   the session falls back to a respawn only when the running process
+   *   refuses, which is the honest signal that it was spawned in a shape no
+   *   message can change.
+   */
+  protected sessionKey(input: AgentTurnInput): string {
+    return JSON.stringify([
+      this.getConfig().kind,
+      this.command,
+      input.cwd,
+      input.model ?? null,
+      input.effort ?? null,
+      input.systemPrompt ?? null,
+      input.callSurfacePrompt ?? null,
+      input.pluginDir ?? null,
+      input.streamPartials === true,
+      input.allowUserQuestions === true,
+      input.trustWorkspace === true,
+      // Read by `buildArgs`, so it is argv, so it belongs here — a turn that
+      // isolated its MCP set cannot be served by a process spawned without
+      // that restriction, or the reverse.
+      input.isolateMcpServers === true,
+      input.mcpEndpoint?.url ?? null,
+      input.env ?? null,
+    ]);
+  }
+
+  /**
    * Materialize turn-scoped resources BEFORE the spawn; the returned disposer
    * runs when the turn settles (any path). Default: nothing. The Claude
    * adapter writes its per-turn MCP config file here so `buildArgs` can
@@ -842,78 +1013,225 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * Start a turn. Events are delivered to `onEvent` in stream order. The
-   * returned handle settles via `done` and can `cancel` the turn.
+   * Open a CLI process for this run and return the session that owns it.
+   *
+   * The single spawn path. A CLI that answers false to {@link canHostSession}
+   * yields a session serving exactly one turn — which is what every caller got
+   * before run-scoped sessions existed, reached now through the same code
+   * rather than a branch.
+   *
+   * **The caller owns the process.** Nothing here reaps a run-scoped session;
+   * it lives until someone calls `close()`. That is why `runScoped` is the
+   * CALLER's opt-in and not the adapter's decision alone: `canHostSession`
+   * answers whether this CLI *can* be kept, while only a caller holding a run
+   * to keep it for can answer whether it *should* be — and a caller with
+   * nowhere to store the session would otherwise leak a process per turn.
+   */
+  startSession(
+    input: AgentTurnInput,
+    opts: { runScoped?: boolean } = {},
+  ): AgentSession {
+    const runScoped = opts.runScoped === true && this.canHostSession(input);
+    // Turn-scoped resources become SESSION-scoped once the process outlives
+    // the turn: claude's `--mcp-config` file is named in argv, so it has to
+    // outlive every turn that argv serves. For a one-turn session the two are
+    // the same moment (the process ends with the turn), so this is not a
+    // behaviour change for any existing caller.
+    const dispose = this.prepareTurn(input);
+    const key = this.sessionKey(input);
+    // The mode this process was SPAWNED with, tracked because `sessionKey`
+    // deliberately omits it: the mode is baked into argv, so a later turn
+    // asking for a different one is served by re-moding the live process
+    // rather than replacing it. Without this the key's omission would mean the
+    // new mode is simply never applied — the run row and the chip would both
+    // read a posture the CLI was never told about.
+    let spawnedMode = input.approvalMode;
+    let session: CliSession;
+    let driver: TurnDriver;
+    try {
+      // Resolved once, INSIDE the try: `command` re-reads the binary override
+      // per access, and a `buildArgs` throw must still reach the disposer
+      // below — hoisting either one out would leak the session-scoped resource.
+      const command = this.command;
+      const args = this.buildArgs(input);
+      driver = this.createTurnDriver(input);
+      session = runCliSession({
+        command,
+        args,
+        cwd: input.cwd,
+        env: this.buildEnv(input),
+        stdinLifetime: runScoped
+          ? 'session'
+          : this.keepStdinOpen(input)
+            ? 'turn'
+            : 'payload',
+        mapper: (obj) => driver.onMessage(obj),
+        spawn: this.options.spawn,
+        logger: this.options.logger,
+      });
+    } catch (err) {
+      // A synchronous throw between prepareTurn and a live session (a bad
+      // argv) would otherwise leak the session-scoped resource — the disposer
+      // only rides `closed`, which never arrives here. Its own failure must
+      // not mask the original error.
+      this.runDisposer(dispose);
+      throw err;
+    }
+    if (dispose) {
+      // `closed` never rejects, so one callback covers every exit path. The
+      // disposer itself may throw (an rmSync EACCES) — that's cleanup failure
+      // to log, not an unhandled rejection.
+      void session.closed.then(() => this.runDisposer(dispose));
+    }
+
+    let firstTurnTaken = false;
+    return {
+      startTurn: (turnInput, onEvent) => {
+        // A turn needing different argv cannot run on this process, whatever
+        // its stdin can carry. Checked before anything is written, so the
+        // caller gets the same null it gets for a dead session.
+        if (firstTurnTaken && this.sessionKey(turnInput) !== key) {
+          return null;
+        }
+        // The opening payload differs by position, not by content: the FIRST
+        // turn's rides the spawn (or is written by a driver that opens its own
+        // conversation), while a later one has to say "here is the next
+        // prompt" on a stdin that is already mid-conversation.
+        const stdinPayload = firstTurnTaken
+          ? this.buildNextTurnPayload({
+              text: turnInput.prompt,
+              images: turnInput.images,
+            })
+          : this.buildStdinPayload(turnInput);
+        if (firstTurnTaken && stdinPayload === undefined) {
+          return null;
+        }
+        // The approval mode is argv, and argv belongs to the spawn — so a turn
+        // wanting a different one has to say so before its prompt, or the CLI
+        // runs it under the posture the PREVIOUS turn was started with. That is
+        // a safety property, not a preference: a chat switched from
+        // `acceptEdits` back to `ask` between turns would go on editing files
+        // without raising a single permission request, while both the chip and
+        // the persisted run row read `ask`.
+        //
+        // Returning null when the CLI has no such message is the honest answer
+        // and the one the registry already handles — it closes the session and
+        // respawns, which puts the mode back in argv where it started.
+        let modeLine = '';
+        if (firstTurnTaken && turnInput.approvalMode !== spawnedMode) {
+          if (turnInput.approvalMode === undefined) {
+            // "No mode at all" is the CLI's own default, which no message can
+            // ask a running process to return to.
+            return null;
+          }
+          const line = this.buildApprovalModePayload(
+            turnInput,
+            turnInput.approvalMode,
+          );
+          if (line === undefined) {
+            return null;
+          }
+          modeLine = line;
+        }
+        const handle = session.startTurn({
+          // Both are newline-delimited lines on the one stdin conversation, so
+          // prepending is what puts the mode change strictly ahead of the
+          // prompt it has to govern. `stdinPayload` is always defined where a
+          // mode line exists — a continued turn with none returned null above.
+          stdinPayload: modeLine
+            ? `${modeLine}${stdinPayload ?? ''}`
+            : stdinPayload,
+          buildApprovalResponse: (id, allow, updatedInput) =>
+            driver.buildApprovalResponse?.(id, allow, updatedInput),
+          buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
+          buildApprovalModePayload: (mode) => {
+            const line = this.buildApprovalModePayload(turnInput, mode);
+            if (line !== undefined) {
+              // The MID-TURN re-mode goes through here (`ChatService`'s live
+              // apply), and it changes the same process state the between-turns
+              // delivery above compares against. Without this the process is
+              // left holding `mode` while `spawnedMode` still reads whatever it
+              // was spawned with — so a later turn asking for that older mode
+              // sees "no change" and sends nothing, and the CLI keeps the
+              // mid-turn one. Switching to `acceptEdits` mid-turn and back to
+              // `ask` afterwards would then run the next turn un-gated with
+              // the chip and the run row both reading `ask`.
+              spawnedMode = mode;
+            }
+            return line;
+          },
+          buildInterruptPayload: () => this.buildInterruptPayload(turnInput),
+          // The driver opens the conversation on the FIRST turn only: its
+          // handshake belongs to the process, not to each prompt.
+          onStdinReady: firstTurnTaken
+            ? undefined
+            : (io) => driver.onStdinReady?.(io),
+          // The mappers are pure module-scope functions, so a control message
+          // an adapter does not model comes back as data and is logged HERE —
+          // the one caller of `mapMessage`, rather than once per consumer. It
+          // is diagnostic, so it stops here and never reaches the turn.
+          onEvent: (event) => {
+            if (event.type === 'unhandled_control') {
+              this.options.logger?.warn(
+                `${this.getConfig().kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
+              );
+              return;
+            }
+            onEvent(event);
+          },
+        });
+        if (handle) {
+          firstTurnTaken = true;
+          // Only once the write actually went out: a refused turn leaves the
+          // process on the mode it still has, and recording the new one here
+          // would make the NEXT turn skip a delivery that never happened.
+          spawnedMode = turnInput.approvalMode;
+        }
+        return handle;
+      },
+      get idle() {
+        // A one-turn session is never idle again once its turn has been taken:
+        // the process is alive only until that turn ends, and offering it as
+        // reusable would have the caller wait for a turn it can never open.
+        return session.idle && (runScoped || !firstTurnTaken);
+      },
+      get alive() {
+        return session.alive;
+      },
+      close: () => session.close(),
+      closed: session.closed,
+    };
+  }
+
+  /**
+   * Start a turn on its own process — the one-shot form, for a caller with no
+   * run to keep a session for. Events are delivered to `onEvent` in stream
+   * order; the returned handle settles via `done` and can `cancel` the turn.
    */
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
   ): AgentTurnHandle {
-    const dispose = this.prepareTurn(input);
-    let handle: AgentTurnHandle;
-    try {
-      // Resolved once, INSIDE the try: `command` re-reads the binary override
-      // per access, and a `buildArgs` throw must still reach the disposer
-      // below — hoisting either one out would leak the turn-scoped resource.
-      const command = this.command;
-      const args = this.buildArgs(input);
-      const driver = this.createTurnDriver(input);
-      handle = runHeadlessCli({
-        command,
-        args,
-        cwd: input.cwd,
-        env: this.buildEnv(input),
-        stdinPayload: this.buildStdinPayload(input),
-        keepStdinOpen: this.keepStdinOpen(input),
-        buildApprovalResponse: (id, allow, updatedInput) =>
-          driver.buildApprovalResponse?.(id, allow, updatedInput),
-        buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
-        mapper: (obj) => driver.onMessage(obj),
-        onStdinReady: (io) => driver.onStdinReady?.(io),
-        // The mappers are pure module-scope functions, so a control message
-        // an adapter does not model comes back as data and is logged HERE —
-        // the one caller of `mapMessage`, rather than once per consumer. It
-        // is diagnostic, so it stops here and never reaches the turn.
-        onEvent: (event) => {
-          if (event.type === 'unhandled_control') {
-            this.options.logger?.warn(
-              `${this.getConfig().kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
-            );
-            return;
-          }
-          onEvent(event);
-        },
-        spawn: this.options.spawn,
-        logger: this.options.logger,
-      });
-    } catch (err) {
-      // A synchronous throw between prepareTurn and a settling handle (a spawn
-      // failure, a bad argv) would otherwise leak the turn-scoped resource —
-      // the disposer only rides `handle.done`, which never arrives here. Its
-      // own failure must not mask the original error.
-      try {
-        dispose?.();
-      } catch (disposeErr) {
-        this.options.logger?.warn(
-          `turn resource disposer failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
-        );
-      }
-      throw err;
-    }
-    if (dispose) {
-      // `done` never rejects (handle contract), so one settle callback covers
-      // every exit path. The disposer itself may throw (an rmSync EACCES) —
-      // that's cleanup failure to log, not an unhandled rejection.
-      void handle.done.then(() => {
-        try {
-          dispose();
-        } catch (err) {
-          this.options.logger?.warn(
-            `turn resource disposer failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      });
+    const handle = this.startSession(input).startTurn(input, onEvent);
+    // A fresh session always accepts its first turn; a spawn failure comes
+    // back as a settled handle carrying an `error` event, not as null.
+    if (!handle) {
+      throw new Error(`failed to open a turn on ${this.command}`);
     }
     return handle;
+  }
+
+  /** Run a session's cleanup, logging rather than throwing on its failure. */
+  private runDisposer(dispose: (() => void) | undefined): void {
+    if (!dispose) {
+      return;
+    }
+    try {
+      dispose();
+    } catch (err) {
+      this.options.logger?.warn(
+        `turn resource disposer failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }

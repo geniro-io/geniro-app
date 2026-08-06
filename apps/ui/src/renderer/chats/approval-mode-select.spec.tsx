@@ -158,22 +158,22 @@ describe('ApprovalModeSelect', () => {
     expect(optionValues(el)).toEqual(['ask', 'accept edits', 'auto-approve']);
   });
 
-  it('LOCKS while a turn is running, unlike the model and effort chips', () => {
-    // The odd one out among the composer chips, deliberately: this is the
-    // permission control, so the daemon 409s a mid-turn change rather than ACK
-    // a safety posture the running turn will not honour. A usable chip here
-    // would let the user flip `auto → ask`, see the chip read `ask`, and have
-    // the turn run fully auto-approved anyway.
+  it('stays usable while a turn is running, like every other composer chip', () => {
+    // It used to lock, because the daemon 409'd a mid-turn approval change.
+    // The CLI accepts `set_permission_mode` on a turn already in flight and
+    // re-reads it in milliseconds, so the daemon now hands the change to the
+    // running turn — and a chip disabled in advance would hide a control the
+    // user really has. The one case that still cannot be honoured (a turn
+    // spawned with no permission gate) is refused by the daemon and surfaces
+    // as an error, which is the only place that fact is actually known.
     const el = render(
       <ApprovalModeSelect
         supportedModes={CLAUDE_MODES}
         value="ask"
         planSupported={false}
-        lockedMidTurn
         onChange={() => {}}
       />,
     );
-    expect(trigger(el).disabled).toBe(true);
-    expect(trigger(el).title).toContain('locked while a turn is running');
+    expect(trigger(el).disabled).toBe(false);
   });
 });

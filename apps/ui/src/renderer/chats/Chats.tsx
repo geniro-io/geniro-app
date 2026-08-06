@@ -10,8 +10,6 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -45,7 +43,12 @@ import { Chip } from '../components/ui/chip';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
-import { createDaemonApis, daemonErrorStatus } from '../daemon-api';
+import {
+  createDaemonApis,
+  daemonErrorDetail,
+  daemonErrorStatus,
+  isRunBusyError,
+} from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
 import { useCapabilities } from '../use-capabilities';
 import {
@@ -64,7 +67,9 @@ import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
-import { ComposerChipRow } from './composer-chip-row';
+import { isComposerSendKey } from './composer-keys';
+import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
+import { ContextMeter } from './context-meter';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
 import {
@@ -76,7 +81,7 @@ import {
 import { AttachmentLoaderContext } from './message-attachments';
 import { ModelSelect } from './model-select';
 import { formatClockTime } from './relative-time';
-import { isScrolledToBottom } from './scroll-follow';
+import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
@@ -220,6 +225,16 @@ export function Chats({
   // "not at bottom" and would suppress the scroll — leaving the user at the
   // oldest message of every chat they open.
   const pendingScrollRef = useRef(false);
+  /**
+   * Whether the transcript is currently glued to its tail.
+   *
+   * A ref, not state: it is read inside a `scroll` listener and a
+   * `ResizeObserver` callback, both of which fire far more often than a render
+   * should, and none of its readers need to re-render when it flips.
+   */
+  const followingRef = useRef(true);
+  /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
+  const lastScrollTopRef = useRef(0);
   // Highest seq rendered for the active run — the replay cursor used to fetch
   // only the items missed during a disconnect.
   const lastSeqRef = useRef(-1);
@@ -790,10 +805,11 @@ export function Chats({
         return;
       }
       pendingScrollRef.current = false;
+      followingRef.current = true;
       transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
       return;
     }
-    if (!scroller || !isScrolledToBottom(scroller)) {
+    if (!scroller || !followingRef.current) {
       return;
     }
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -801,6 +817,90 @@ export function Chats({
     // with no new item, and keying on `items` alone let the live text run off
     // the bottom of the viewport mid-turn.
   }, [items, liveText]);
+
+  /**
+   * Keep the tail glued to the bottom when a block grows AFTER it rendered.
+   *
+   * The effect above runs once per React commit, which is too early for the
+   * cases the user actually hit: a thinking block that fills in, a code block
+   * that gets highlighted, an image that finishes loading. All of them change
+   * the transcript's HEIGHT with no new item and no new live text, so the
+   * commit-time scroll lands short and the tail sits just below the fold.
+   *
+   * A `ResizeObserver` is what closes that gap — it fires on the layout change
+   * itself rather than on the render that preceded it. It watches the scroller's
+   * children (the scroller's own box never changes size; only its content does),
+   * and is re-pointed whenever the child list changes.
+   *
+   * The `scroll` listener beside it owns the follow decision, so that a resize
+   * arriving while the user is reading further up never yanks them down; see
+   * `nextFollowState` for why the naive at-bottom read was not enough.
+   */
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (!scroller) {
+      return;
+    }
+    lastScrollTopRef.current = scroller.scrollTop;
+    const onScroll = (): void => {
+      followingRef.current = nextFollowState(
+        followingRef.current,
+        scroller,
+        lastScrollTopRef.current,
+      );
+      lastScrollTopRef.current = scroller.scrollTop;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+    // Its OWN effect, keyed on the run alone. The listener is on the scroller,
+    // which does not change as rows arrive — re-adding it per transcript change
+    // was pure churn, and per streaming TOKEN it was churn at token rate.
+  }, [activeRunId]);
+
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (!scroller) {
+      return;
+    }
+    // jsdom has no ResizeObserver, and neither does an old runtime — the
+    // commit-time effect above is still the baseline behaviour without it.
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => {
+            if (!followingRef.current) {
+              return;
+            }
+            transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
+          });
+    const repoint = (): void => {
+      observer?.disconnect();
+      for (const child of Array.from(scroller.children)) {
+        observer?.observe(child);
+      }
+    };
+    repoint();
+    // The element set is WATCHED rather than guessed at from a dependency list.
+    //
+    // This used to key on `liveText`, which is a fresh Map per streamed token
+    // while the daemon coalesces nothing — so every token cost a `disconnect()`
+    // plus one `observe()` per row in an unvirtualized transcript. But no
+    // dependency list can stand in for the element set either: transcript rows
+    // are derived from durable items, live text AND working agents, and a
+    // single row's top-level block identity flips as it becomes a thinking or
+    // working block. A `childList` observation is exactly the question — "did
+    // the children change" — so it catches all of those and none of the text
+    // deltas, which mutate character data rather than the child list.
+    const children =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(repoint);
+    children?.observe(scroller, { childList: true });
+    return () => {
+      observer?.disconnect();
+      children?.disconnect();
+    };
+  }, [activeRunId]);
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
@@ -891,7 +991,18 @@ export function Chats({
           prev.map((run) => (run.id === updated.id ? updated : run)),
         );
       } catch (err) {
-        setError(String(err));
+        // A RUN_BUSY here is not a fault — it is the daemon saying this turn
+        // was spawned with no permission gate, so its mode cannot be changed
+        // until it settles. It is also not rare: only claude implements
+        // `buildApprovalModePayload`, so EVERY mid-turn approval change on a
+        // cursor chat lands here, and the chip is offered on cursor.
+        //
+        // `String(err)` printed the whole
+        // `daemon PATCH /v1/chats/<id>/settings failed (409): {"code":…}`
+        // envelope. The daemon wrote a real sentence for this; show that.
+        setError(
+          (isRunBusyError(err) ? daemonErrorDetail(err) : null) ?? String(err),
+        );
       }
     },
     [chatApi],
@@ -1182,12 +1293,19 @@ export function Chats({
       // so a retry needs no re-paste, exactly as it keeps the text.
       attachments.clear();
     } catch (err) {
-      if (streaming && queueable && String(err).includes('RUN_BUSY')) {
+      if (queueable && isRunBusyError(err)) {
         // The CLI cannot be told anything mid-turn (or the turn settled as
         // this was in flight). Queue it — the composer shows it pending and
         // the drain sends it the moment the turn ends. Not an error: this is
         // the documented fallback, and a red banner for it would report a
         // failure the user has no action for.
+        //
+        // Deliberately NOT gated on `streaming`. That flag is the renderer's
+        // own belief, and the daemon's RUN_BUSY is the fact — they disagree
+        // whenever the run list has not loaded yet (`refreshRuns` is
+        // fire-and-forget while `activateRun` reads `runsRef.current`), or
+        // when a turn wedged without settling. Every one of those disagreements
+        // used to surface the raw 409 JSON as a red banner.
         enqueueMessage(runId, { text, images });
         attachments.clear();
         return;
@@ -1720,7 +1838,6 @@ export function Chats({
       if (!runId) {
         return;
       }
-      const nodeId = agent.id === CHAT_AGENT_KEY ? undefined : agent.id;
       try {
         setError(null);
         const target = await resolveHandoff(agent, thread);
@@ -1743,6 +1860,69 @@ export function Chats({
       }
     },
     [resolveHandoff],
+  );
+
+  /**
+   * Sign one CLI in to one MCP server, in the user's own terminal.
+   *
+   * The same two steps as {@link openThreadTerminal}, and for a harder reason:
+   * `mcp login` refuses a non-TTY stdin outright — in browser mode and under
+   * `--no-browser` alike — so a terminal is not the nicer option here, it is
+   * the only one. The daemon resolves the invocation and Electron opens it.
+   *
+   * Nothing is re-read afterwards. The sign-in finishes in a window geniro does
+   * not watch, on the user's own schedule, so a refresh fired here would
+   * re-dial every server in the folder before they had reached the consent
+   * page. Reconnect, one control up, is the deliberate way back.
+   */
+  const signInToMcpServer = useCallback(
+    async (kind: CliKind, server: string) => {
+      // The RUN's folder, exactly as the listing beside it was taken in — never
+      // the composer's `folder`, which is where the NEXT chat would start. A
+      // server name resolves against the directory the CLI runs in, so signing
+      // in from the other one authenticates a different server or none.
+      const cwd = activeRun?.cwd ?? null;
+      if (!cwd) {
+        // The route needs a folder and this one has none — a run can carry no
+        // working directory at all. Said rather than swallowed: the button
+        // would otherwise do nothing at all when pressed.
+        //
+        // Not reachable from today's panel, and deliberately kept anyway: the
+        // listing that renders this button is itself gated on the run's folder
+        // (`useAgentMcp`), so a folderless run has no rows to press. What the
+        // spec pins is that absence, not this message — the day a caller
+        // reaches the handler another way, this is the answer it gets.
+        setError(
+          `${server} is configured per folder, and this chat has no folder to sign in from`,
+        );
+        return;
+      }
+      try {
+        setError(null);
+        const target = await handoffApi.resolveMcpLogin({
+          agent: kind,
+          cwd,
+          server,
+        });
+        if (target.kind !== 'command' || !target.command || !target.cwd) {
+          // A refusal is the ANSWER — this CLI has no sign-in command — and the
+          // daemon's own sentence is what the user reads.
+          setError(
+            target.unavailableReason ??
+              `${server} cannot be signed in to from here`,
+          );
+          return;
+        }
+        await window.geniro.openInTerminal({
+          command: target.command,
+          args: target.args,
+          cwd: target.cwd,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [handoffApi, activeRun?.cwd],
   );
 
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
@@ -1876,58 +2056,7 @@ export function Chats({
                     />
                   ) : null}
                   <ComposerCard>
-                    <AttachmentStrip
-                      attachments={attachments.attachments}
-                      onRemove={attachments.remove}
-                    />
-                    <Textarea
-                      value={input}
-                      rows={4}
-                      aria-label="Task for the new run"
-                      className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                      placeholder={
-                        workflowSlug
-                          ? 'Describe the task for the workflow team…'
-                          : 'Message the agent…'
-                      }
-                      onChange={(event) => setInput(event.target.value)}
-                      onPaste={(event) => {
-                        // Only swallow the paste when it actually carried images —
-                        // a normal text paste must keep its default behaviour.
-                        if (attachments.addFromClipboard(event.clipboardData)) {
-                          event.preventDefault();
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (handleSkillMenuKeys(event)) {
-                          return;
-                        }
-                        if (
-                          event.key === 'Enter' &&
-                          (event.metaKey || event.ctrlKey)
-                        ) {
-                          event.preventDefault();
-                          void send();
-                        }
-                      }}
-                    />
-                    <ComposerChipRow
-                      actions={
-                        <Button
-                          type="button"
-                          size="icon"
-                          className="size-8 shrink-0 rounded-full"
-                          disabled={!hasContent || streaming}
-                          aria-label={workflowSlug ? 'Start run' : 'Send'}
-                          title={workflowSlug ? 'Start run' : 'Send'}
-                          onClick={() => void send()}>
-                          {workflowSlug ? (
-                            <Zap className="size-4 shrink-0" />
-                          ) : (
-                            <ArrowUp className="size-4 shrink-0" />
-                          )}
-                        </Button>
-                      }>
+                    <ComposerTopRow>
                       <Select
                         variant="ghost"
                         value={target}
@@ -1975,26 +2104,6 @@ export function Chats({
                         ]}
                         onValueChange={changeTarget}
                       />
-                      {!workflowSlug ? (
-                        // Only a single-agent run picks a model here — a
-                        // workflow's nodes each name their own in its YAML.
-                        <ModelSelect
-                          agentKind={agentKind}
-                          models={agentModels}
-                          value={models[agentKind] ?? null}
-                          onChange={(model) => changeModel(agentKind, model)}
-                        />
-                      ) : null}
-                      {!workflowSlug ? (
-                        // Absent, not disabled, for a CLI with no effort
-                        // control — the component decides that from an empty
-                        // list, so nothing here branches on the agent kind.
-                        <EffortSelect
-                          efforts={agentEfforts}
-                          value={efforts[agentKind] ?? null}
-                          onChange={(effort) => changeEffort(agentKind, effort)}
-                        />
-                      ) : null}
                       <FolderSelect
                         folder={folder}
                         recentFolders={recentFolders}
@@ -2042,7 +2151,77 @@ export function Chats({
                           onChange={changeApprovalMode}
                         />
                       ) : null}
-                    </ComposerChipRow>
+                    </ComposerTopRow>
+                    <AttachmentStrip
+                      attachments={attachments.attachments}
+                      onRemove={attachments.remove}
+                    />
+                    <Textarea
+                      value={input}
+                      rows={4}
+                      aria-label="Task for the new run"
+                      className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                      placeholder={
+                        workflowSlug
+                          ? 'Describe the task for the workflow team…'
+                          : 'Message the agent…'
+                      }
+                      onChange={(event) => setInput(event.target.value)}
+                      onPaste={(event) => {
+                        // Only swallow the paste when it actually carried images —
+                        // a normal text paste must keep its default behaviour.
+                        if (attachments.addFromClipboard(event.clipboardData)) {
+                          event.preventDefault();
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (handleSkillMenuKeys(event)) {
+                          return;
+                        }
+                        if (isComposerSendKey(event)) {
+                          event.preventDefault();
+                          void send();
+                        }
+                      }}
+                    />
+                    <ComposerBottomRow
+                      actions={
+                        <Button
+                          type="button"
+                          size="icon"
+                          className="size-8 shrink-0 rounded-full"
+                          disabled={!hasContent || streaming}
+                          aria-label={workflowSlug ? 'Start run' : 'Send'}
+                          title={workflowSlug ? 'Start run' : 'Send'}
+                          onClick={() => void send()}>
+                          {workflowSlug ? (
+                            <Zap className="size-4 shrink-0" />
+                          ) : (
+                            <ArrowUp className="size-4 shrink-0" />
+                          )}
+                        </Button>
+                      }>
+                      {!workflowSlug ? (
+                        // Only a single-agent run picks a model here — a
+                        // workflow's nodes each name their own in its YAML.
+                        <ModelSelect
+                          agentKind={agentKind}
+                          models={agentModels}
+                          value={models[agentKind] ?? null}
+                          onChange={(model) => changeModel(agentKind, model)}
+                        />
+                      ) : null}
+                      {!workflowSlug ? (
+                        // Absent, not disabled, for a CLI with no effort
+                        // control — the component decides that from an empty
+                        // list, so nothing here branches on the agent kind.
+                        <EffortSelect
+                          efforts={agentEfforts}
+                          value={efforts[agentKind] ?? null}
+                          onChange={(effort) => changeEffort(agentKind, effort)}
+                        />
+                      ) : null}
+                    </ComposerBottomRow>
                   </ComposerCard>
                 </div>
                 {/* The suggestion-chip row that sat here is gone. Both halves of it
@@ -2076,19 +2255,6 @@ export function Chats({
                   status={activeRun.status}
                   lastActivityAt={activeRun.updatedAt}
                   turnStartedAt={turnStartedAt}
-                  // The header shows the FOCUSED agent's context. For a 1:1 chat
-                  // that is the only agent; for a workflow the panel is where
-                  // per-node figures live, so the header stays quiet.
-                  contextTokens={
-                    activeRun.workflowId
-                      ? null
-                      : (agents[0]?.contextTokens ?? null)
-                  }
-                  contextWindowTokens={
-                    activeRun.workflowId
-                      ? null
-                      : (agents[0]?.contextWindowTokens ?? null)
-                  }
                   sidePanelOpen={agentsPanelOpen}
                   onToggleSidePanel={toggleAgentsPanel}
                 />
@@ -2250,90 +2416,7 @@ export function Chats({
                     />
                   ) : null}
                   <ComposerCard>
-                    <AttachmentStrip
-                      attachments={attachments.attachments}
-                      onRemove={attachments.remove}
-                    />
-                    <Textarea
-                      value={input}
-                      rows={2}
-                      aria-label="Message the agent"
-                      disabled={activeRun?.workflowId != null}
-                      className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                      placeholder={
-                        activeRun?.workflowId
-                          ? 'Workflow runs take one task — press + to start another.'
-                          : streaming
-                            ? 'Agent is working — your message will queue…'
-                            : 'Message the agent…'
-                      }
-                      onChange={(event) => setInput(event.target.value)}
-                      onPaste={(event) => {
-                        if (attachments.addFromClipboard(event.clipboardData)) {
-                          event.preventDefault();
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (handleSkillMenuKeys(event)) {
-                          return;
-                        }
-                        if (
-                          event.key === 'Enter' &&
-                          (event.metaKey || event.ctrlKey)
-                        ) {
-                          event.preventDefault();
-                          void sendFollowUp();
-                        }
-                      }}
-                    />
-                    <ComposerChipRow
-                      actions={
-                        streaming ? (
-                          <>
-                            {hasContent && activeRun?.workflowId == null ? (
-                              <Button
-                                type="button"
-                                size="icon"
-                                className="size-8 rounded-full"
-                                // It SENDS. The message goes into the turn
-                                // already running whenever the agent's CLI can
-                                // take one mid-turn, and only falls back to the
-                                // queue when it cannot — so a label promising
-                                // "later" was wrong for the common case, and
-                                // the queue strip above the composer is what
-                                // says when the fallback happened.
-                                aria-label="Send"
-                                title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
-                                onClick={() => void sendFollowUp()}>
-                                <ArrowUp className="size-4 shrink-0" />
-                              </Button>
-                            ) : null}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              className="size-8 rounded-full"
-                              aria-label="Stop"
-                              title="Stop the current turn"
-                              onClick={() => void cancel()}>
-                              <Square className="size-3.5 shrink-0" />
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            type="button"
-                            size="icon"
-                            className="size-8 rounded-full"
-                            aria-label="Send"
-                            title="Send"
-                            disabled={
-                              !hasContent || activeRun?.workflowId != null
-                            }
-                            onClick={() => void sendFollowUp()}>
-                            <ArrowUp className="size-4 shrink-0" />
-                          </Button>
-                        )
-                      }>
+                    <ComposerTopRow>
                       {/* Informational run-identity chips — static Chips carrying
                       no chevron, never disabled Buttons: disabled kills hover
                       (so the cwd title tooltip could never fire) and 50%
@@ -2367,22 +2450,153 @@ export function Chats({
                       {activeRun &&
                       activeRun.workflowId === null &&
                       activeRun.agentKind ? (
-                        /* Editable at ANY time, including mid-turn. Unlike the
-                        agent and folder above, none of these is run identity:
-                        a chat can switch model mid-conversation exactly as the
-                        CLIs themselves allow.
+                        /* The permission posture belongs with what the run
+                        IS, not with how this turn thinks — and it is
+                        editable at any time, mid-turn included: the daemon
+                        hands the change to the turn already running. */
+                        <ApprovalModeSelect
+                          supportedModes={
+                            capabilities
+                              ? (approvalModesByAgent.get(
+                                  activeRun.agentKind,
+                                ) ?? [])
+                              : null
+                          }
+                          value={activeRun.approval}
+                          planSupported={
+                            capabilities?.claudeModes.plan === 'pass'
+                          }
+                          onChange={(approval) =>
+                            void changeRunSettings({ approval })
+                          }
+                        />
+                      ) : null}
+                    </ComposerTopRow>
+                    <AttachmentStrip
+                      attachments={attachments.attachments}
+                      onRemove={attachments.remove}
+                    />
+                    <Textarea
+                      value={input}
+                      rows={2}
+                      aria-label="Message the agent"
+                      disabled={activeRun?.workflowId != null}
+                      className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                      placeholder={
+                        activeRun?.workflowId
+                          ? 'Workflow runs take one task — press + to start another.'
+                          : streaming
+                            ? 'Agent is working — your message will queue…'
+                            : 'Message the agent…'
+                      }
+                      onChange={(event) => setInput(event.target.value)}
+                      onPaste={(event) => {
+                        if (attachments.addFromClipboard(event.clipboardData)) {
+                          event.preventDefault();
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (handleSkillMenuKeys(event)) {
+                          return;
+                        }
+                        if (isComposerSendKey(event)) {
+                          event.preventDefault();
+                          void sendFollowUp();
+                        }
+                      }}
+                    />
+                    <ComposerBottomRow
+                      actions={
+                        <>
+                          {/* The context readout, immediately left of the
+                          actions. It lived in the transcript header — a row
+                          the eye leaves as soon as the conversation starts —
+                          while the question it answers ("how much room is
+                          left") is asked at the moment of composing the next
+                          message, which is here. */}
+                          <ContextMeter
+                            contextTokens={
+                              activeRun?.workflowId
+                                ? null
+                                : (agents[0]?.contextTokens ?? null)
+                            }
+                            contextWindowTokens={
+                              activeRun?.workflowId
+                                ? null
+                                : (agents[0]?.contextWindowTokens ?? null)
+                            }
+                            // Opens UPWARD here, unlike the agents panel. This
+                            // row sits at the bottom of the composer, inside
+                            // the app shell's `overflow-hidden` main — roughly
+                            // 20px below a panel that is 50-68px tall — so a
+                            // downward readout is clipped, and the ring shows
+                            // no figures of its own to fall back on.
+                            side="top"
+                          />
+                          {streaming ? (
+                            <>
+                              {hasContent && activeRun?.workflowId == null ? (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-8 rounded-full"
+                                  // It SENDS. The message goes into the turn
+                                  // already running whenever the agent's CLI can
+                                  // take one mid-turn, and only falls back to the
+                                  // queue when it cannot — so a label promising
+                                  // "later" was wrong for the common case, and
+                                  // the queue strip above the composer is what
+                                  // says when the fallback happened.
+                                  aria-label="Send"
+                                  title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
+                                  onClick={() => void sendFollowUp()}>
+                                  <ArrowUp className="size-4 shrink-0" />
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                // Red, not outline: Stop ABORTS the turn the user
+                                // is watching, and the one control in the composer
+                                // that destroys work should not read the same as
+                                // the pickers beside it.
+                                variant="destructive"
+                                size="icon"
+                                className="size-8 rounded-full"
+                                aria-label="Stop"
+                                title="Stop the current turn"
+                                onClick={() => void cancel()}>
+                                <Square className="size-3.5 shrink-0" />
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="icon"
+                              className="size-8 rounded-full"
+                              aria-label="Send"
+                              title="Send"
+                              disabled={
+                                !hasContent || activeRun?.workflowId != null
+                              }
+                              onClick={() => void sendFollowUp()}>
+                              <ArrowUp className="size-4 shrink-0" />
+                            </Button>
+                          )}
+                        </>
+                      }>
+                      {activeRun &&
+                      activeRun.workflowId === null &&
+                      activeRun.agentKind ? (
+                        /* How THIS turn thinks — the two settings that sit
+                        below the text, beside the actions, rather than above
+                        with the run's identity.
 
                         A running turn's argv is fixed at spawn and no adapter
                         can mutate it in flight, so a change made now takes
-                        effect on the NEXT turn — which model and effort say
-                        while a turn streams, because a control that silently
-                        did nothing for the thing you are watching would be
-                        worse than one that is disabled.
-
-                        Approval is the exception and LOCKS: it is the
-                        permission control, and the daemon 409s a mid-turn
-                        change rather than ACK a safety posture the running
-                        turn will not honour. */
+                        effect on the NEXT turn — which both chips say while a
+                        turn streams, because a control that silently did
+                        nothing for the thing you are watching would be worse
+                        than one that announces the delay. */
                         <>
                           <ModelSelect
                             agentKind={activeRun.agentKind}
@@ -2401,26 +2615,9 @@ export function Chats({
                               void changeRunSettings({ effort })
                             }
                           />
-                          <ApprovalModeSelect
-                            supportedModes={
-                              capabilities
-                                ? (approvalModesByAgent.get(
-                                    activeRun.agentKind,
-                                  ) ?? [])
-                                : null
-                            }
-                            value={activeRun.approval}
-                            planSupported={
-                              capabilities?.claudeModes.plan === 'pass'
-                            }
-                            lockedMidTurn={streaming}
-                            onChange={(approval) =>
-                              void changeRunSettings({ approval })
-                            }
-                          />
                         </>
                       ) : null}
-                    </ComposerChipRow>
+                    </ComposerBottomRow>
                   </ComposerCard>
                 </div>
               </div>
@@ -2442,6 +2639,7 @@ export function Chats({
               mcpLoading={mcp.loading}
               onRefreshMcp={mcp.refresh}
               onSetMcpEnabled={mcp.setEnabled}
+              onSignInMcp={signInToMcpServer}
               mcpToggleError={mcp.toggleError}
               onDismissMcpToggleError={mcp.dismissToggleError}
               onMcpOpenChange={(open) =>

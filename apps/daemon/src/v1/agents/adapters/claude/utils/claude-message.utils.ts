@@ -57,25 +57,22 @@ function describesNoWork(
 /**
  * The statuses claude's `system/init` reports a loaded MCP server in.
  *
- * `disabled` IS one of them. This set used to omit it, on the stated reasoning
- * that a switched-off server is not loaded and so never reaches the report —
- * which is not what the CLI does. PROBE-VERIFIED on 2.1.223, isolated
+ * `disabled` is one of them — a switched-off server IS still reported, it is
+ * simply reported as off. PROBE-VERIFIED on 2.1.223, isolated
  * `CLAUDE_CONFIG_DIR`, one `local`-scope server:
  *
  *   without `disabledMcpServers` → `[{name:'probe-server', status:'failed'}]`
  *   with it                      → `[{name:'probe-server', status:'disabled'}]`
  *
- * (The same result the 2.1.222 probe recorded at
- * {@link CLAUDE_HOME_DISABLED_MCP_KEY}, which this contradicted. Note the key
- * is matched on the RESOLVED path — a `projects` entry under `/tmp/...` is not
- * read for a cwd the CLI resolves to `/private/tmp/...`, which is what made an
- * earlier re-probe appear to disagree.)
+ * matching the 2.1.222 probe recorded at {@link CLAUDE_HOME_DISABLED_MCP_KEY}.
+ * The `projects` key is matched on the RESOLVED path, so an entry under
+ * `/tmp/...` is not read for a cwd the CLI resolves to `/private/tmp/...` —
+ * worth knowing before trusting a re-probe that seems to disagree.
  *
- * Omitting it was not cosmetic: an unrecognised status degrades to `unknown`,
- * so every disabled server a turn reported was harvested as `unknown`. Where
- * the CLI's own config could still be read the overlay corrected it, but where
- * it could not, `disabled: server.status === 'disabled'` then answered false
- * and the panel rendered a switched-off server as on.
+ * Keeping the status here is load-bearing rather than tidy: an unrecognised one
+ * degrades to `unknown`, and where the CLI's own config cannot be read the panel
+ * falls back to `status === 'disabled'` to decide whether a row is off. A
+ * `disabled` row arriving as `unknown` therefore renders as ON.
  *
  * Anything still unrecognised degrades to `unknown` rather than being dropped —
  * the server is real either way, and a status this mapper could not read is not

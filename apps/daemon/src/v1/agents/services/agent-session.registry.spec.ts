@@ -176,6 +176,19 @@ describe('AgentSessionRegistry — reusing a run’s process', () => {
     expect(at(sessions, 0).closes).toBe(1);
     expect(at(sessions, 1).turns).toBe(1);
     expect(registry.liveCount).toBe(1);
+
+    // The REPLACED session's `closed` resolves on a microtask, after its
+    // successor is already in the map — so the close subscription must check
+    // that the entry it is deleting is still its own. Without that guard it
+    // deletes the LIVE successor here, leaving a run holding a process the
+    // registry no longer tracks and `onApplicationShutdown` will never close.
+    // The assertions above all run before the microtask, which is exactly why
+    // deleting the guard used to leave the whole suite green.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.liveCount).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
   });
 
   it('throws rather than registering a session that refuses its FIRST turn', () => {

@@ -4110,6 +4110,45 @@ describe('Chats error strip', () => {
   });
 });
 
+describe('Chats — the composer’s context readout', () => {
+  it('opens UPWARD, because the composer row has no space beneath it', async () => {
+    // Pinned at the CALL SITE, not on the component. `context-meter.spec.tsx`
+    // renders `<ContextMeter side="top">` directly, so it stays green with the
+    // prop deleted from Chats.tsx — while in the real app the readout is
+    // clipped away by the shell's `overflow-hidden` main, and the ring shows no
+    // figures of its own to fall back on.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The meter renders only once a turn has reported a window.
+    await act(async () => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: 'working',
+        thinkingTokens: null,
+        ...LIVE_DELTA_REST,
+        contextTokens: 120_000,
+        contextWindowTokens: 200_000,
+      });
+    });
+
+    const meter = container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Context "]',
+    );
+    expect(meter).not.toBeNull();
+    await act(async () => {
+      meter!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const panel = container.querySelector('[role="dialog"]');
+    expect(panel?.className).toContain('bottom-full');
+    expect(panel?.className).not.toContain('top-full');
+  });
+});
+
 describe('Chats — signing a server in', () => {
   const chatIn = (id: string, title: string, cwd: string): ChatRun => ({
     ...run1,

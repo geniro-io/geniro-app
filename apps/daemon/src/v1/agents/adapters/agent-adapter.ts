@@ -690,26 +690,22 @@ export abstract class AgentAdapter {
           return;
         }
         reaped = true;
-        // SIGTERM first, and only then SIGKILL. This group exists to have
-        // launched the user's OWN MCP servers — that is what a listing command
-        // does to health-check them — so the straight SIGKILL this used to send
-        // gave a server holding real state (a browser session, an open index)
-        // no chance to shut down.
+        // SIGTERM first, then SIGKILL. This group exists to have launched the
+        // user's OWN MCP servers — that is what a listing command does to
+        // health-check them — and a server holding real state (a browser
+        // session, an open index) needs the chance to shut down.
         //
-        // The escalation is NOT withheld once the CLI's own `exit` has been
-        // seen, and that is deliberate: the wedged case this reap exists for
-        // HAS an exit. The CLI is gone while a health-check grandchild still
-        // holds the inherited stdout pipe, so `close` never arrives — and it is
-        // the SIGKILL that closes the pipe and lets the listing we already read
-        // be delivered. Skipping it there trades a working read for the 45s
-        // deadline and a null.
+        // The escalation runs even once the CLI's own `exit` has been seen,
+        // because the wedged case this reap exists for HAS an exit: the CLI is
+        // gone while a health-check grandchild still holds the inherited stdout
+        // pipe, so `close` never arrives, and it is the SIGKILL that closes the
+        // pipe and lets an already-read listing be delivered. Withholding it
+        // there trades a working read for the deadline and a null.
         //
-        // A pid recycled under us is the hazard that argues the other way, and
-        // POSIX answers it: a process-GROUP id is not reissued while the group
-        // still has members, so `kill(-pgid)` is safe in exactly the case where
-        // it has something to reach. Once the group is empty the signal finds
-        // nothing, which is why the pre-SIGTERM behaviour was safe here for the
-        // life of this path.
+        // Safe despite the pid-reuse hazard, by POSIX: a process-GROUP id is
+        // not reissued while the group still has members, so `kill(-pgid)`
+        // reaches something only when that something is genuinely this group.
+        // Once the group is empty the signal finds nothing.
         createGroupTerminator(child).terminate();
       };
       const settle = (value: string | null): void => {

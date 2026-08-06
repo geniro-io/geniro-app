@@ -352,18 +352,35 @@ export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
  */
 // No `.meta({ id })` on this ROOT: it is the response DTO's own schema (see
 // AgentModelWireSchema above for the dangling-$ref an id here would cause).
-export const AgentMcpListingWireSchema = z.object({
-  servers: z.array(AgentMcpServerWireSchema),
-  unavailableReason: z
-    .string()
-    .nullable()
-    .describe('Why this CLI cannot be listed at all; null when it can'),
-  pending: z
-    .boolean()
-    .describe(
-      'A cold read is running; these rows are not the answer yet. Ask again.',
-    ),
-});
+export const AgentMcpListingWireSchema = z
+  .object({
+    servers: z.array(AgentMcpServerWireSchema),
+    unavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why this CLI cannot be listed at all; null when it can'),
+    pending: z
+      .boolean()
+      .describe(
+        'A cold read is running; these rows are not the answer yet. Ask again.',
+      ),
+  })
+  // Three fields, but only three LEGAL states — reading, refused, answered. The
+  // combinations below are representable and mean nothing, and every consumer
+  // was guarding against them by hand (each construction site spells
+  // `pending: false`). One missed guard renders a read-in-progress as "No
+  // servers", a claim about the user's configuration that nobody made.
+  //
+  // Enforced on the RESPONSE, which is where it bites: `@ZodResponse`
+  // serializes through this schema, so a daemon that ever composed an illegal
+  // envelope fails here rather than shipping it to a renderer that has to
+  // re-derive which field wins.
+  .refine(
+    (listing) =>
+      !listing.pending ||
+      (listing.unavailableReason === null && listing.servers.length === 0),
+    'a pending listing carries no rows and no reason — it is the answer not being ready yet',
+  );
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
 
 /**

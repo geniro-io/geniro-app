@@ -375,6 +375,54 @@ describe('cancelling a session turn', () => {
 });
 
 describe('runHeadlessCli keeps the one-turn contract', () => {
+  it('records a clean exit that produced no result as a failure here too', async () => {
+    // `settleFromTermination` is SHARED — this façade serves the `payload` and
+    // `turn` lifetimes, which is every cursor ACP turn, every non-`ask` claude
+    // turn and the probes. The clean-exit branch was pinned only for a
+    // `session` lifetime, so a false alarm on this far busier path would have
+    // shipped unnoticed, as would its removal.
+    const events: AgentEvent[] = [];
+    const { spawn, child } = fakeSpawn();
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper: resultOnDone,
+      onEvent: (event) => events.push(event),
+      spawn,
+    });
+
+    // Exit 0, no signal, and no `result` line ever printed.
+    child.emit('close', 0, null);
+    await handle.done;
+
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('without completing') },
+    ]);
+  });
+
+  it('stays silent when the turn DID complete before the clean exit', async () => {
+    // The other half, and what stops the branch above becoming a false alarm on
+    // the ordinary path: a process that printed its result and then exited 0 has
+    // completed, and must not also report a failure.
+    const events: AgentEvent[] = [];
+    const { spawn, child } = fakeSpawn();
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      mapper: resultOnDone,
+      onEvent: (event) => events.push(event),
+      spawn,
+    });
+
+    child.stdout.emitData(`${JSON.stringify({ done: true })}\n`);
+    child.emit('close', 0, null);
+    await handle.done;
+
+    expect(events).toEqual([COMPLETE]);
+  });
+
   it('closes a kept-open stdin on the terminal event and settles on the process', async () => {
     // The façade every pre-session caller still uses. Two properties it must
     // not lose: stdin is ended when the turn ends (or a stream-json CLI waits

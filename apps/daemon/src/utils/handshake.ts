@@ -65,6 +65,11 @@ export function isValidPort(value: unknown): value is number {
  * pure decimal digits in range — so `'4e4'`, `'0x1234'`, `'80.5'`, `'99999999'`,
  * empty/whitespace all return null (caller falls back to a default). Lenient
  * `Number()` coercion would silently accept those.
+ *
+ * Bypasses `@packages/common`'s `getEnv`, and must: that helper
+ * BOOLEAN-COERCES `'0'`/`'1'`/`'on'`/`'off'`, so a port of `'1'` would arrive
+ * as `true`. Same reason its own `getEnvPositiveInt` reads `process.env`
+ * directly.
  */
 export function parsePort(raw: string | undefined | null): number | null {
   if (raw === undefined || raw === null) {
@@ -76,4 +81,22 @@ export function parsePort(raw: string | undefined | null): number | null {
   }
   const port = Number(trimmed);
   return isValidPort(port) ? port : null;
+}
+
+/**
+ * Strictly parse a positive millisecond duration from an env-style string —
+ * the `GENIRO_IDLE_EXIT_MS` half of the contract, which the UI supervisor sets
+ * and nothing else does.
+ *
+ * Null means "no window", and every malformed value lands there on purpose: a
+ * duration nobody can have meant must switch the feature OFF rather than pick a
+ * number on the user's behalf, because the feature in question terminates the
+ * daemon. Strict for the same reason as {@link parsePort}.
+ */
+export function parseDurationMs(raw: string | undefined | null): number | null {
+  if (raw === undefined || raw === null || !/^\d+$/.test(raw.trim())) {
+    return null;
+  }
+  const ms = Number(raw.trim());
+  return ms > 0 ? ms : null;
 }

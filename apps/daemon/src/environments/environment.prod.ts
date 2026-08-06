@@ -1,113 +1,72 @@
-import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { getEnv, type LogLevel } from '@packages/common';
 
+import { DAEMON_VERSION } from '../utils/daemon-version';
 import {
   DAEMON_HOST,
   DAEMON_PIDFILE_NAME,
   DAEMON_PREFERRED_PORT,
+  parseDurationMs,
   parsePort,
 } from '../utils/handshake';
 
 /**
- * Daemon version — surfaced in `/health`, the pidfile, and the UI status line.
- * Read from the daemon's own package.json rather than a hardcoded literal: it
- * sits one level above `environments/` in every layout (source `apps/daemon`,
- * built `dist`, and the packaged `Resources/daemon`), so the tag that
- * scripts/sync-app-version.mjs stamps into it on release is what actually
- * ships — a hardcoded constant silently kept reporting 0.1.0 on tagged builds.
+ * Base (production) environment, laid out like the sibling api's
+ * (`geniro/apps/api/src/environments`): one object literal per env, prod as the
+ * base, and the SHAPE INFERRED from it — there is no hand-written interface to
+ * keep in step with the object, and a field added below is typed everywhere it
+ * is read without a second edit.
+ *
+ * Three fields deliberately do NOT go through `getEnv`, and each says why at
+ * its own line: that helper boolean-coerces `'0'`/`'1'`/`'on'`/`'off'`, which
+ * is wrong for a path, a port and a duration alike. Their strict parsers live
+ * in `utils/handshake.ts` beside the rest of the UI→daemon contract, so this
+ * file holds environments and nothing else.
  */
-export function readDaemonVersion(
-  pkgPath: string = join(__dirname, '..', '..', 'package.json'),
-): string {
-  try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
-      version?: unknown;
-    };
-    if (typeof pkg.version === 'string' && pkg.version.length > 0) {
-      return pkg.version;
-    }
-  } catch {
-    // Fall through to the safe default (an unreadable package.json shouldn't
-    // crash the daemon; the version is informational).
-  }
-  return '0.0.0';
-}
-
-export const DAEMON_VERSION = readDaemonVersion();
-
-export interface DaemonEnvironment {
-  /** Deployment env name (`production` | `development` | `test`). */
-  env: string;
-  /** App name passed to the bootstrapper/logger. */
-  appName: string;
-  version: string;
-  /** Always loopback — never a routable address. */
-  host: string;
-  /** Port to try first; falls back to a free port if taken. */
-  preferredPort: number;
-  /** Directory holding the DB and pidfile (Electron passes its userData path). */
-  userDataDir: string;
-  /** SQLite database file. */
-  dbPath: string;
-  /** On-disk daemon descriptor (pidfile). */
-  pidfilePath: string;
-  /**
-   * How long the daemon may sit with no connected client and no in-flight turn
-   * before exiting itself, or null to never exit on its own.
-   *
-   * Null is the DEFAULT, and deliberately so: a daemon that exits when unused
-   * is only correct when something is expected to be using it. The Electron
-   * supervisor sets `GENIRO_IDLE_EXIT_MS` because it knows a UI is the only
-   * client and that a UI outliving its daemon is recoverable; `pnpm daemon:dev`
-   * and the throwaway daemon `pnpm generate:api` boots set nothing and must
-   * stay up regardless of who is talking to them.
-   */
-  idleExitMs: number | null;
-  logLevel: LogLevel;
-  prettyLog: boolean;
-}
-
-/**
- * Strictly parse a positive millisecond duration from an env string. Anything
- * that is not pure decimal digits above zero returns null — the caller then
- * treats the feature as switched off, which is the safe reading of a value
- * nobody can have meant.
- */
-export function parseDurationMs(raw: string | undefined | null): number | null {
-  if (raw === undefined || raw === null || !/^\d+$/.test(raw.trim())) {
-    return null;
-  }
-  const ms = Number(raw.trim());
-  return ms > 0 ? ms : null;
-}
-
-/**
- * Base (production) environment. The Electron UI passes `GENIRO_USER_DATA` (its
- * userData path); standalone/dev runs fall back to `~/.geniro`. `GENIRO_PORT`
- * overrides the preferred port; a malformed value falls back to the default
- * rather than binding a surprising port. The userData dir is created in
- * `environments/index.ts` (kept out of this factory so it stays pure).
- */
-export const environment = (): DaemonEnvironment => {
+export const environment = () => {
+  // Read once: three fields below are derived from it.
+  //
+  // NOT `getEnv`: a userData path of "0" or "on" would come back as a boolean.
+  // The Electron UI passes its own userData path; standalone/dev runs fall back
+  // to `~/.geniro`.
   const userDataDir =
     process.env.GENIRO_USER_DATA?.trim() || join(homedir(), '.geniro');
-  const preferredPort =
-    parsePort(process.env.GENIRO_PORT) ?? DAEMON_PREFERRED_PORT;
 
   return {
     env: getEnv('NODE_ENV', 'production'),
     appName: 'geniro-daemon',
     version: DAEMON_VERSION,
+
+    // server
+    //
+    // `host` is a CONSTANT, not an env knob, and that is the one place this
+    // file deliberately parts from the sibling's env-everything shape: "the
+    // daemon binds 127.0.0.1 only, never a routable address" is a hard v1
+    // constraint, and an env var is exactly how it would come to be broken.
     host: DAEMON_HOST,
-    preferredPort,
+    // NOT `getEnv`: a port must be a bindable integer, so `'4e4'`, `'0x1234'`
+    // and `'99999999'` are rejected rather than silently coerced into some
+    // other port. A malformed value falls back to the default.
+    preferredPort: parsePort(process.env.GENIRO_PORT) ?? DAEMON_PREFERRED_PORT,
+
+    // storage (all under the userData dir the UI hands us)
     userDataDir,
     dbPath: join(userDataDir, 'geniro.db'),
     pidfilePath: join(userDataDir, DAEMON_PIDFILE_NAME),
+
+    // lifecycle
+    //
+    // How long the daemon may sit with no connected client and no in-flight
+    // turn before exiting itself; null = never, which is the DEFAULT. Only the
+    // Electron supervisor sets it, because only it can promise a UI is the
+    // sole client — `pnpm daemon:dev` and the throwaway `pnpm generate:api`
+    // daemon have no client by design and must stay up regardless.
     idleExitMs: parseDurationMs(process.env.GENIRO_IDLE_EXIT_MS),
-    logLevel: 'info' as LogLevel,
-    prettyLog: false,
-  };
+
+    // logging
+    logLevel: getEnv('LOG_LEVEL', 'info') as LogLevel,
+    prettyLog: getEnv('PRETTY_LOGS', false),
+  } as const satisfies Record<string, string | number | boolean | null>;
 };

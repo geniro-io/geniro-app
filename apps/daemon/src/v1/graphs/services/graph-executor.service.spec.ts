@@ -39,6 +39,7 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -499,12 +500,16 @@ function setup(
   );
   const deltas: RunDeltaEvent[] = [];
   bus.allDeltas().subscribe((delta) => deltas.push(delta));
+  // Real, like its neighbours: it holds an in-memory map of CLI processes, and
+  // a double would hide whether a delete actually closes the run's own.
+  const sessions = new AgentSessionRegistry();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
     runDao as unknown as RunDao,
     bus,
     registry,
+    sessions,
     callTokens,
     partials,
     attachments,

@@ -33,6 +33,7 @@ import { RunDao } from '../dao/run.dao';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
@@ -211,6 +212,8 @@ function fakeAdapter(kind: AgentKind): {
     sendUserMessage: ReturnType<typeof vi.fn>;
     setApprovalMode: ReturnType<typeof vi.fn>;
   }[];
+  /** Every session the service opened, and whether each was closed. */
+  sessions: { closed: boolean }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
@@ -251,6 +254,40 @@ function fakeAdapter(kind: AgentKind): {
       return handle;
     },
   );
+  // The double fakes the SPAWN, and a session is a spawned PROCESS — so it is
+  // faked here too, at the same seam. Each turn still goes through `start`, so
+  // every assertion counting spawns keeps counting turns; what the session adds
+  // is the lifetime around them, which is the thing a delete has to end.
+  const sessions: { closed: boolean }[] = [];
+  const startSession = vi.fn(() => {
+    const record = { closed: false };
+    sessions.push(record);
+    let inFlight = 0;
+    return {
+      startTurn: (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
+        const handle = start(input, cb);
+        inFlight += 1;
+        void handle.done.then(() => {
+          inFlight -= 1;
+        });
+        return handle;
+      },
+      get idle() {
+        return inFlight === 0;
+      },
+      get alive() {
+        return !record.closed;
+      },
+      close: () => {
+        record.closed = true;
+      },
+      // Never resolves: nothing in the daemon awaits a session's death, and a
+      // promise that resolved on its own would model a process that reaps
+      // itself — which is exactly what a run-scoped one does not do.
+      closed: new Promise<void>(() => {}),
+    };
+  });
+
   // Every CLI-fact declaration comes from the REAL adapter: the double fakes
   // the SPAWN, never the contract, so a policy this service leans on cannot
   // pass here while being absent from the adapter that ships. The whole
@@ -263,6 +300,7 @@ function fakeAdapter(kind: AgentKind): {
     adapter: {
       getConfig: () => real.getConfig(),
       start,
+      startSession,
       resolveApprovalMode: (
         requested: AgentApprovalMode,
         installed: InstalledApprovalSupport,
@@ -297,6 +335,7 @@ function fakeAdapter(kind: AgentKind): {
       return release;
     },
     handles,
+    sessions,
   };
 }
 
@@ -375,12 +414,16 @@ function setup(
   // a mock here would leave every assertion below pinning the mock.
   // A real one: it holds nothing but in-memory buffers, so a double would
   // only hide whether the turn is actually tee'd into it.
+  // Real, like its neighbours: it holds an in-memory map of CLI processes, and
+  // a double would hide whether a delete actually closes the run's own.
+  const sessions = new AgentSessionRegistry();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
     runDao as unknown as RunDao,
     bus,
     registry,
+    sessions,
     callTokens,
     partials,
     attachments,
@@ -392,6 +435,7 @@ function setup(
     nodeDao as unknown as NodeStateDao,
     bus,
     registry,
+    sessions,
     approvals,
     adapters,
     claudeProbe,
@@ -798,6 +842,49 @@ describe('ChatService', () => {
     });
     claude.finish();
     await drain();
+  });
+
+  it('runs a chat’s second message on the process the first one left running', async () => {
+    // The user-visible complaint behind item 11: a CLI boots the user's MCP
+    // servers when it starts, and one of them can own a browser they are
+    // logged into. A process per turn tore that down on every message —
+    // measured at two full boots of all ten servers for two messages, plus
+    // 6.5s of startup before the second turn produced a token.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'first');
+    claude.finish();
+    await drain();
+
+    await service.sendMessage(run.id, 'second');
+    claude.finish();
+    await drain();
+
+    // Two turns…
+    expect(claude.start).toHaveBeenCalledTimes(2);
+    // …on ONE process.
+    expect(claude.sessions).toHaveLength(1);
+    expect(claude.sessions[0]?.closed).toBe(false);
+  });
+
+  it('closes the chat’s CLI process when the chat is deleted', async () => {
+    // Cancelling the turn stops the WORK and deliberately leaves the process
+    // running — that is what a run-scoped session is for. So a delete that did
+    // not close it would strand a CLI, and every MCP server it started, under
+    // a run nothing can ever reach again.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+
+    expect(claude.sessions).toHaveLength(1);
+    expect(claude.sessions[0]?.closed).toBe(false);
+
+    await service.delete(run.id);
+
+    expect(claude.sessions[0]?.closed).toBe(true);
   });
 
   it('maps a turn_cancelled event to cancelled status', async () => {

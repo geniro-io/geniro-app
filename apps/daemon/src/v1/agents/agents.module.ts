@@ -15,6 +15,7 @@ import { RunDao } from './dao/run.dao';
 import { AgentAdapterRegistry } from './services/agent-adapter.registry';
 import { AgentEventBus } from './services/agent-events.bus';
 import { AgentMcpService } from './services/agent-mcp.service';
+import { AgentSessionRegistry } from './services/agent-session.registry';
 import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
@@ -115,6 +116,7 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
     },
     PartialStreamService,
     ProcessRegistry,
+    AgentSessionRegistry,
     {
       // Factory because the trailing options bag is a test seam, not a DI
       // token — and because the journal path is config, not a dependency.
@@ -169,6 +171,10 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
     // live mirror sessions the panel attaches to.
     ClaudeProbeService,
     ProcessRegistry,
+    // Exported so the graph executor's own run delete reaches the same
+    // teardown obligation a chat delete does — a run-scoped CLI process is
+    // reaped by nothing else.
+    AgentSessionRegistry,
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,

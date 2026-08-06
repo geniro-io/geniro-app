@@ -43,6 +43,7 @@ import { createSessionIdSaver } from '../utils/session-saver';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
@@ -123,6 +124,7 @@ export class ChatService {
     private readonly nodeStateDao: NodeStateDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
+    private readonly sessions: AgentSessionRegistry,
     private readonly approvals: ApprovalRegistry,
     private readonly adapters: AgentAdapterRegistry,
     private readonly claudeProbe: ClaudeProbeService,
@@ -708,7 +710,14 @@ export class ChatService {
           'this chat was deleted while the turn was starting',
         );
       }
-      const handle = adapter.start(
+      // Through the session registry, never `adapter.start`: a chat is the one
+      // run kind that sends turn after turn to the same agent in the same
+      // folder, so its CLI process is kept between them. That is what stops
+      // every message re-booting the user's MCP servers — and whatever one of
+      // them owns, up to a browser they are logged into.
+      const handle = this.sessions.startTurn(
+        runId,
+        adapter,
         {
           prompt: text,
           cwd,

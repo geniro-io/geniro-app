@@ -28,6 +28,8 @@ import type {
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
+  CLAUDE_EMPTY_MCP_CONFIG,
+  CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
   CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_RESUME_FLAG,
@@ -1272,6 +1274,29 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     ]);
   });
 
+  it("starts no MCP server of the user's to answer a question about the CLI itself", async () => {
+    // The probe turn is cancelled before the model runs, so a server it
+    // launched could never have contributed to the answer — but launching one
+    // costs a real process, and the cancel then reaps a group holding the
+    // user's OWN running servers. Restricting the turn to an empty config is
+    // what makes there be nothing to kill.
+    const { spawn, child, captured } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear']));
+    await reported;
+
+    const args = captured.args ?? [];
+    expect(args).toContain(CLAUDE_STRICT_MCP_CONFIG_FLAG);
+    // The strict flag needs an explicit empty set to restrict to.
+    expect(args[args.indexOf(CLAUDE_MCP_CONFIG_FLAG) + 1]).toBe(
+      CLAUDE_EMPTY_MCP_CONFIG,
+    );
+  });
+
   it("drops claude's internal `_`-prefixed commands", async () => {
     // `__remote-workflow` is reported but is not something a user invokes —
     // offering it in the autocomplete would be a dead row.
@@ -1345,9 +1370,10 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     expect(readdirSync(probeRootDir)).toEqual([]);
   });
 
-  it('runs the least-privileged turn — no permission bypass, no MCP endpoint', async () => {
+  it("runs the least-privileged turn — no permission bypass, no server of the user's", async () => {
     // The probe never reaches a tool, so it asks for nothing that would let it:
-    // the argv is the plain stream-json head, and the prompt is the config's.
+    // the argv is the plain stream-json head plus the MCP isolation, and the
+    // prompt is the config's.
     const { spawn, child, captured } = probeSpawn();
     const reported = new ClaudeAdapter({
       spawn,
@@ -1357,10 +1383,14 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     child.stdout.emitData(initLine(['clear']));
     await reported;
 
-    expect(captured.args).toEqual([...CLAUDE_BASE_ARGS]);
+    expect(captured.args).toEqual([
+      ...CLAUDE_BASE_ARGS,
+      CLAUDE_MCP_CONFIG_FLAG,
+      CLAUDE_EMPTY_MCP_CONFIG,
+      CLAUDE_STRICT_MCP_CONFIG_FLAG,
+    ]);
     expect(captured.args).not.toContain('--dangerously-skip-permissions');
     expect(captured.args).not.toContain('--permission-mode');
-    expect(captured.args).not.toContain('--mcp-config');
     expect(JSON.parse(child.stdin.written.trim())).toEqual({
       type: 'user',
       message: {

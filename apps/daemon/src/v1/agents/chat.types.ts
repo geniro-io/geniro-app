@@ -340,6 +340,15 @@ export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
  * listing — needs a discriminator added here rather than a match on the prose.
  * Deliberately not added yet: nothing reads it, and inventing the field now
  * would be a wire commitment with no consumer to shape it.
+ *
+ * `pending` is the THIRD shape, and the reason it had to exist: a cold read
+ * dials every server the folder defines, which is measured in seconds and
+ * bounded only by the slowest one. Blocking the response on that made the panel
+ * hold an HTTP request open for up to the CLI's whole listing timeout. So a
+ * cold read now answers immediately with `pending: true` and empty rows, and
+ * the dial continues behind it — meaning `servers: []` asserts "this folder has
+ * none" only when `pending` is false. A consumer that ignores the flag would
+ * read a read-in-progress as an empty folder.
  */
 // No `.meta({ id })` on this ROOT: it is the response DTO's own schema (see
 // AgentModelWireSchema above for the dangling-$ref an id here would cause).
@@ -349,6 +358,11 @@ export const AgentMcpListingWireSchema = z.object({
     .string()
     .nullable()
     .describe('Why this CLI cannot be listed at all; null when it can'),
+  pending: z
+    .boolean()
+    .describe(
+      'A cold read is running; these rows are not the answer yet. Ask again.',
+    ),
 });
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
 

@@ -34,6 +34,7 @@ import {
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
+  CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_HOME_SETTINGS_FILE,
   CLAUDE_INTERRUPT_SUBTYPE,
   CLAUDE_MCP_CONFIG_DIR_NAME,
@@ -58,6 +59,7 @@ import {
   CLAUDE_RESUME_FLAG,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
+  CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
 import { buildImageBlocks } from './utils/claude-images.utils';
@@ -568,10 +570,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.
-    const systemPrompt = this.composeSystemPrompt(
-      input,
-      Boolean(input.mcpEndpoint),
-    );
+    // `isolateMcpServers` WITHHOLDS the config below, geniro's own call server
+    // included — so a turn carrying both would be told to route work through
+    // `call_agent` with no such tool registered, which the adapter rules call
+    // out by name as silent by construction. Nothing sets the two together
+    // today; saying so here is what keeps that true if something ever does.
+    const granted = Boolean(input.mcpEndpoint) && !input.isolateMcpServers;
+    const systemPrompt = this.composeSystemPrompt(input, granted);
     if (systemPrompt) {
       args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
     }
@@ -602,6 +607,14 @@ export class ClaudeAdapter extends AgentAdapter {
         CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
         CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
       );
+    }
+    if (input.isolateMcpServers) {
+      // The one path that passes the strict flag. Without it the probe loads
+      // every server the folder defines just to have them reaped a moment
+      // later, and the reap reaches the user's OWN running servers.
+      args.push(CLAUDE_MCP_CONFIG_FLAG, CLAUDE_EMPTY_MCP_CONFIG);
+      args.push(CLAUDE_STRICT_MCP_CONFIG_FLAG);
+      return args;
     }
     const mcpConfigPath = this.mcpConfigPaths.get(input);
     if (mcpConfigPath) {

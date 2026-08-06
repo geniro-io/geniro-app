@@ -55,6 +55,19 @@ export abstract class HarvestStore<T> {
     private readonly file: string,
     /** Defensive bound per key — a runaway report must not fill the disk. */
     private readonly maxEntries: number,
+    /**
+     * How long a stored report may be SERVED for. `Infinity` — the default —
+     * means a harvest never goes stale on its own, which is right for a subject
+     * whose answer does not change behind the daemon's back.
+     *
+     * A subject that DOES change needs a bound, because a harvest consulted
+     * ahead of a live read shadows it: once any turn has run, the read the
+     * bound exists to eventually reach is never taken again. That is the
+     * difference between a floor and a ceiling.
+     */
+    private readonly maxAgeMs: number = Infinity,
+    /** Clock seam — the harvest ages, so a spec has to be able to move time. */
+    private readonly now: () => number = Date.now,
   ) {}
 
   /**
@@ -80,14 +93,27 @@ export abstract class HarvestStore<T> {
     }
     this.load().set(key, {
       entries: entries.slice(0, this.maxEntries),
-      harvestedAt: Date.now(),
+      harvestedAt: this.now(),
     });
     this.save();
   }
 
-  /** The last report stored under this key, or null when there is none. */
+  /**
+   * The last report stored under this key, or null when there is none — or
+   * when the one there is has aged past {@link maxAgeMs}.
+   *
+   * The record is kept rather than deleted on expiry: it is still the best
+   * guess available if the live read it makes way for fails, and the next
+   * successful harvest overwrites it anyway.
+   */
   protected getAt(key: string): T[] | null {
-    return this.load().get(key)?.entries ?? null;
+    const record = this.load().get(key);
+    if (!record) {
+      return null;
+    }
+    return this.now() - record.harvestedAt < this.maxAgeMs
+      ? record.entries
+      : null;
   }
 
   private load(): Map<string, HarvestRecord<T>> {

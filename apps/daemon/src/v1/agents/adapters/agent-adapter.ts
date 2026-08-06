@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
 import { trackDetachedChild } from '../utils/child-journal';
-import { killProcessGroup } from '../utils/kill-tree';
+import { createGroupTerminator } from '../utils/kill-tree';
 import {
   type CliSession,
   runCliSession,
@@ -502,18 +502,27 @@ export abstract class AgentAdapter {
       // No approvalMode: the turn gets the CLI's own defaults and NO
       // permission-bypass flag. It is cancelled before the model runs, so the
       // least-privileged argv is also the sufficient one.
-      const handle = this.start({ prompt: probe.probePrompt, cwd }, (event) => {
-        if (event.type === 'slash_commands' && captured.length === 0) {
-          captured = event.commands
-            .filter(
-              (name) =>
-                probe.internalPrefix === null ||
-                !name.startsWith(probe.internalPrefix),
-            )
-            .slice(0, probe.maxCommands);
-          resolveCaptured();
-        }
-      });
+      //
+      // `isolateMcpServers` for the same reason, one step further: the probe
+      // reads a list the CLI reports about ITSELF, so no MCP server can
+      // contribute to the answer — but without this the CLI still starts every
+      // server the folder defines, and cancelling the probe then reaps a group
+      // holding the user's own. Nothing to launch is nothing to kill.
+      const handle = this.start(
+        { prompt: probe.probePrompt, cwd, isolateMcpServers: true },
+        (event) => {
+          if (event.type === 'slash_commands' && captured.length === 0) {
+            captured = event.commands
+              .filter(
+                (name) =>
+                  probe.internalPrefix === null ||
+                  !name.startsWith(probe.internalPrefix),
+              )
+              .slice(0, probe.maxCommands);
+            resolveCaptured();
+          }
+        },
+      );
       options.onTurn?.(handle);
       const timer = setTimeout(
         () => handle.cancel(),
@@ -671,9 +680,9 @@ export abstract class AgentAdapter {
       let stdout = '';
       const reapGroup = (): void => {
         // Idempotent, and that is the point: `exit`, `close` and the deadline
-        // all reap. Without this the second `process.kill(-pid)` would land
-        // after node has waitpid'd the child, when the pid may already belong
-        // to something else.
+        // all reap. Without this the second signal would land after node has
+        // waitpid'd the child, when the pid may already belong to something
+        // else.
         // `child` is assigned before any caller of this can run: the stream
         // and process listeners are attached after the spawn, and the timer
         // cannot fire synchronously. The guard is the type narrowing.
@@ -681,8 +690,27 @@ export abstract class AgentAdapter {
           return;
         }
         reaped = true;
-        const target = child;
-        killProcessGroup(target.pid, 'SIGKILL', () => target.kill('SIGKILL'));
+        // SIGTERM first, and only then SIGKILL. This group exists to have
+        // launched the user's OWN MCP servers — that is what a listing command
+        // does to health-check them — so the straight SIGKILL this used to send
+        // gave a server holding real state (a browser session, an open index)
+        // no chance to shut down.
+        //
+        // The escalation is NOT withheld once the CLI's own `exit` has been
+        // seen, and that is deliberate: the wedged case this reap exists for
+        // HAS an exit. The CLI is gone while a health-check grandchild still
+        // holds the inherited stdout pipe, so `close` never arrives — and it is
+        // the SIGKILL that closes the pipe and lets the listing we already read
+        // be delivered. Skipping it there trades a working read for the 45s
+        // deadline and a null.
+        //
+        // A pid recycled under us is the hazard that argues the other way, and
+        // POSIX answers it: a process-GROUP id is not reissued while the group
+        // still has members, so `kill(-pgid)` is safe in exactly the case where
+        // it has something to reach. Once the group is empty the signal finds
+        // nothing, which is why the pre-SIGTERM behaviour was safe here for the
+        // life of this path.
+        createGroupTerminator(child).terminate();
       };
       const settle = (value: string | null): void => {
         if (settled) {
@@ -949,10 +977,12 @@ export abstract class AgentAdapter {
    * - `resumeSessionId` — a continued turn must NOT resume, because the
    *   process already holds the session. Keying on it would make every second
    *   turn look like a different process.
-   * - `approvalMode` — a live process can be re-moded (`setApprovalMode`), so
-   *   a change here is applied rather than respawned; the session falls back
-   *   to a respawn only when the running process refuses, which is the honest
-   *   signal that it was spawned in a shape no message can change.
+   * - `approvalMode` — a live process is RE-MODED rather than respawned, so a
+   *   change here is delivered on the way into the next turn (see
+   *   `startSession`'s `startTurn`, which is what makes this omission safe);
+   *   the session falls back to a respawn only when the running process
+   *   refuses, which is the honest signal that it was spawned in a shape no
+   *   message can change.
    */
   protected sessionKey(input: AgentTurnInput): string {
     return JSON.stringify([
@@ -967,6 +997,10 @@ export abstract class AgentAdapter {
       input.streamPartials === true,
       input.allowUserQuestions === true,
       input.trustWorkspace === true,
+      // Read by `buildArgs`, so it is argv, so it belongs here — a turn that
+      // isolated its MCP set cannot be served by a process spawned without
+      // that restriction, or the reverse.
+      input.isolateMcpServers === true,
       input.mcpEndpoint?.url ?? null,
       input.env ?? null,
     ]);
@@ -1009,6 +1043,13 @@ export abstract class AgentAdapter {
     // behaviour change for any existing caller.
     const dispose = this.prepareTurn(input);
     const key = this.sessionKey(input);
+    // The mode this process was SPAWNED with, tracked because `sessionKey`
+    // deliberately omits it: the mode is baked into argv, so a later turn
+    // asking for a different one is served by re-moding the live process
+    // rather than replacing it. Without this the key's omission would mean the
+    // new mode is simply never applied — the run row and the chip would both
+    // read a posture the CLI was never told about.
+    let spawnedMode = input.approvalMode;
     let session: CliSession;
     let driver: TurnDriver;
     try {
@@ -1069,13 +1110,60 @@ export abstract class AgentAdapter {
         if (firstTurnTaken && stdinPayload === undefined) {
           return null;
         }
+        // The approval mode is argv, and argv belongs to the spawn — so a turn
+        // wanting a different one has to say so before its prompt, or the CLI
+        // runs it under the posture the PREVIOUS turn was started with. That is
+        // a safety property, not a preference: a chat switched from
+        // `acceptEdits` back to `ask` between turns would go on editing files
+        // without raising a single permission request, while both the chip and
+        // the persisted run row read `ask`.
+        //
+        // Returning null when the CLI has no such message is the honest answer
+        // and the one the registry already handles — it closes the session and
+        // respawns, which puts the mode back in argv where it started.
+        let modeLine = '';
+        if (firstTurnTaken && turnInput.approvalMode !== spawnedMode) {
+          if (turnInput.approvalMode === undefined) {
+            // "No mode at all" is the CLI's own default, which no message can
+            // ask a running process to return to.
+            return null;
+          }
+          const line = this.buildApprovalModePayload(
+            turnInput,
+            turnInput.approvalMode,
+          );
+          if (line === undefined) {
+            return null;
+          }
+          modeLine = line;
+        }
         const handle = session.startTurn({
-          stdinPayload,
+          // Both are newline-delimited lines on the one stdin conversation, so
+          // prepending is what puts the mode change strictly ahead of the
+          // prompt it has to govern. `stdinPayload` is always defined where a
+          // mode line exists — a continued turn with none returned null above.
+          stdinPayload: modeLine
+            ? `${modeLine}${stdinPayload ?? ''}`
+            : stdinPayload,
           buildApprovalResponse: (id, allow, updatedInput) =>
             driver.buildApprovalResponse?.(id, allow, updatedInput),
           buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
-          buildApprovalModePayload: (mode) =>
-            this.buildApprovalModePayload(turnInput, mode),
+          buildApprovalModePayload: (mode) => {
+            const line = this.buildApprovalModePayload(turnInput, mode);
+            if (line !== undefined) {
+              // The MID-TURN re-mode goes through here (`ChatService`'s live
+              // apply), and it changes the same process state the between-turns
+              // delivery above compares against. Without this the process is
+              // left holding `mode` while `spawnedMode` still reads whatever it
+              // was spawned with — so a later turn asking for that older mode
+              // sees "no change" and sends nothing, and the CLI keeps the
+              // mid-turn one. Switching to `acceptEdits` mid-turn and back to
+              // `ask` afterwards would then run the next turn un-gated with
+              // the chip and the run row both reading `ask`.
+              spawnedMode = mode;
+            }
+            return line;
+          },
           buildInterruptPayload: () => this.buildInterruptPayload(turnInput),
           // The driver opens the conversation on the FIRST turn only: its
           // handshake belongs to the process, not to each prompt.
@@ -1098,6 +1186,10 @@ export abstract class AgentAdapter {
         });
         if (handle) {
           firstTurnTaken = true;
+          // Only once the write actually went out: a refused turn leaves the
+          // process on the mode it still has, and recording the new one here
+          // would make the NEXT turn skip a delivery that never happened.
+          spawnedMode = turnInput.approvalMode;
         }
         return handle;
       },

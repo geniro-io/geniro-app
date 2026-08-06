@@ -95,6 +95,31 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('carries a switched-off server through as disabled, not as unknown', () => {
+    // PROBE-VERIFIED on 2.1.223, isolated CLAUDE_CONFIG_DIR, one local-scope
+    // server: without `disabledMcpServers` init says `failed`, with it init
+    // says `disabled`. The mapper used to omit that status from its allow-list
+    // — on the stated reasoning that a switched-off server is never loaded and
+    // so never reported, which is not what the CLI does — and every such row
+    // was harvested as `unknown` instead.
+    //
+    // Where the CLI's own config could still be read the overlay put it right,
+    // which is what kept this invisible. Where it could not, the panel fell
+    // back to `status === 'disabled'` and rendered a switched-off server as on.
+    const [event] = mapClaudeMessage({
+      type: 'system',
+      subtype: 'init',
+      mcp_servers: [{ name: 'probe-server', status: 'disabled' }],
+    });
+
+    expect(event).toEqual({
+      type: 'mcp_servers',
+      servers: [
+        expect.objectContaining({ name: 'probe-server', status: 'disabled' }),
+      ],
+    });
+  });
+
   it('keeps a server whose status it cannot read, calling it unknown', () => {
     // The server is real either way. Dropping it would shrink the listing on a
     // CLI wording change; calling it `failed` would invent a problem. A row

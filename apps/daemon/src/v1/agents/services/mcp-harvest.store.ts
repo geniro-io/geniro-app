@@ -16,6 +16,24 @@ import { harvestKey, HarvestStore } from './harvest-store';
  */
 const MAX_HARVESTED = 200;
 
+/**
+ * How long a harvested reading may be served before the panel goes back to the
+ * CLI.
+ *
+ * Unbounded, this store does not merely cache — it SHADOWS. The harvest is
+ * consulted ahead of the live listing, so once any turn has run in a folder,
+ * the lapsed-TTL re-dial below it is never reached again for as long as the
+ * harvest lives. A server the user adds to `.mcp.json` would then never appear
+ * until they ran another turn or pressed Reconnect, and the disk file makes
+ * that survive restarts.
+ *
+ * Ten minutes: comfortably longer than the listing's own TTL, so the harvest
+ * still absorbs the burst of panel opens that follows a turn — which is the
+ * whole point of having one — while a folder nobody has run in for a while
+ * settles back to being read from the CLI.
+ */
+const HARVEST_MAX_AGE_MS = 10 * 60 * 1000;
+
 const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
   'connected',
   'failed',
@@ -57,10 +75,12 @@ const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
  */
 @Injectable()
 export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
-  constructor(options: { file?: string } = {}) {
+  constructor(options: { file?: string; now?: () => number } = {}) {
     super(
       options.file ?? join(environment.userDataDir, 'mcp-harvest.json'),
       MAX_HARVESTED,
+      HARVEST_MAX_AGE_MS,
+      options.now,
     );
   }
 

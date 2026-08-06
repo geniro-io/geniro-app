@@ -26,6 +26,10 @@ const MAX_HARVESTED = 500;
 @Injectable()
 export class SkillHarvestStore extends HarvestStore<string> {
   constructor(options: { file?: string } = {}) {
+    // No max age, deliberately — unlike the MCP harvest, this one is MERGED
+    // with the other sources rather than consulted instead of them, so it
+    // shadows nothing that would otherwise be re-read. A command the CLI
+    // reported once stays a real command until a later turn says otherwise.
     super(
       options.file ?? join(environment.userDataDir, 'claude-skills.json'),
       MAX_HARVESTED,

@@ -300,13 +300,18 @@ describe('McpSection', () => {
     // cursor's `mcp disable` state. It is a stated choice rather than a
     // failure, so it must not wear the destructive tone — and the row still
     // has to be visible: before this status existed the row vanished entirely.
+    // The fixture is named `srv-x`, NOT `off-srv`: with that name
+    // `toContain('off')` was satisfied by the server's own name, so the badge
+    // assertion passed with the badge deleted. (The pre-diff version asserted
+    // `toContain('disabled')`, which discriminated; the label rename to `off`
+    // is what made it tautological.)
     const el = render({
-      listing: listing({ name: 'off-srv', status: 'disabled', disabled: true }),
+      listing: listing({ name: 'srv-x', status: 'disabled', disabled: true }),
       loading: false,
     });
 
     const row = el.querySelector('li');
-    expect(row?.textContent).toContain('off-srv');
+    expect(row?.textContent).toContain('srv-x');
     expect(row?.textContent).toContain('off');
     expect(row?.querySelector('.line-through')).not.toBeNull();
     expect(row?.querySelector('.bg-destructive')).toBeNull();

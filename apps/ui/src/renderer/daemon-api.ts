@@ -100,6 +100,42 @@ export function daemonErrorStatus(err: unknown): number | null {
  * "we could not tell" for "some other code".
  */
 export function daemonErrorCode(err: unknown): string | null {
+  return errorEnvelopeField(err, 'code');
+}
+
+/**
+ * The daemon's own SENTENCE for a refusal, or null when it did not write one.
+ *
+ * Sibling of {@link daemonErrorCode} and deliberately shaped like it: the code
+ * is what a caller branches on, this is what it shows a person. The daemon
+ * writes real explanations next to its codes ("this turn is running without a
+ * permission gate, so its approval mode cannot be changed until it settles"),
+ * and a renderer that falls back to `String(err)` throws that away and prints
+ * the whole `daemon PATCH /v1/… failed (409): {"code":…}` envelope instead.
+ *
+ * Null — never a guess — when the body is absent, is not the daemon's JSON
+ * shape, or carries no message, so a caller can tell "nothing to show" from a
+ * refusal that explained itself.
+ */
+export function daemonErrorDetail(err: unknown): string | null {
+  const detail = errorEnvelopeField(err, 'message');
+  // Present but blank is still nothing to show the user.
+  return detail !== null && detail.trim() !== '' ? detail : null;
+}
+
+/**
+ * One string field of the daemon's JSON error envelope, or null.
+ *
+ * The uniform error shape (`daemon <METHOD> <path> failed (<status>): <body>`)
+ * is parsed HERE and nowhere else, so its two readers cannot come to disagree
+ * about it — the format is a contract with `createDaemonApis` below, and it had
+ * already grown a third independent copy of this regex.
+ *
+ * Null — never a guess — when the body is absent or is not that JSON shape (a
+ * proxy's HTML page, a truncated body), so a caller can never mistake "we could
+ * not tell" for a value the daemon sent.
+ */
+function errorEnvelopeField(err: unknown, field: string): string | null {
   const message = err instanceof Error ? err.message : String(err);
   const body = /^daemon .*? failed \(\d{3}\): (.*)$/s.exec(message)?.[1];
   if (body === undefined) {
@@ -107,13 +143,9 @@ export function daemonErrorCode(err: unknown): string | null {
   }
   try {
     const parsed: unknown = JSON.parse(body);
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'code' in parsed &&
-      typeof (parsed as { code: unknown }).code === 'string'
-    ) {
-      return (parsed as { code: string }).code;
+    if (typeof parsed === 'object' && parsed !== null && field in parsed) {
+      const value = (parsed as Record<string, unknown>)[field];
+      return typeof value === 'string' ? value : null;
     }
   } catch {
     // Not JSON — the daemon did not answer, something in front of it did.

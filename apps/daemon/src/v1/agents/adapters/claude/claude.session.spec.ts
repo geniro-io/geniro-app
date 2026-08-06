@@ -77,6 +77,30 @@ describe('a run-scoped claude session', () => {
     expect(session.startTurn(CHAT, () => {})).not.toBeNull();
   });
 
+  it('refuses a turn that must load no MCP servers on a process that loaded them', async () => {
+    // `isolateMcpServers` is argv — `--mcp-config {} --strict-mcp-config`, and
+    // `buildArgs` returns early on it. Serving such a turn on a process spawned
+    // without those flags runs it against every server the folder defines,
+    // which is the whole cost the field exists to avoid; the reverse is worse
+    // still, an ordinary turn silently running with NO MCP servers while the
+    // panel lists them. Either way the process cannot serve both.
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(CHAT, () => {});
+    endTurn(child);
+    await first?.done;
+
+    expect(
+      session.startTurn({ ...CHAT, isolateMcpServers: true }, () => {}),
+    ).toBeNull();
+    // …while the argv it WAS spawned with is still served, so the refusal is
+    // about the flag and not about the session being spent.
+    expect(session.startTurn(CHAT, () => {})).not.toBeNull();
+  });
+
   it('does not resume mid-session, since the process already holds the session', async () => {
     // `resumeSessionId` is deliberately outside the session key: a continued
     // turn must not re-resume, and keying on it would make every second turn
@@ -95,11 +119,78 @@ describe('a run-scoped claude session', () => {
     ).not.toBeNull();
   });
 
-  it('serves an approval-mode change on the running process rather than respawning', async () => {
+  it('DELIVERS an approval-mode change to the running process, ahead of the prompt', async () => {
     // `approvalMode` is outside the key too, but for a different reason than
     // resume: a live claude CAN be re-moded (`set_permission_mode`), so a
     // change is applied to the process instead of costing a fresh boot of
     // every MCP server.
+    //
+    // Accepting the turn is NOT the claim — the mode is baked into argv at
+    // spawn, so a turn that is merely accepted runs under the PREVIOUS mode.
+    // The bytes are the claim: without them a chat switched back to `ask`
+    // between turns goes on editing files with no permission request, while
+    // the chip and the persisted run row both read `ask`.
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(CHAT, () => {});
+    endTurn(child);
+    await first?.done;
+    const openingBytes = child.stdin.written.length;
+
+    expect(
+      session.startTurn({ ...CHAT, approvalMode: 'plan' }, () => {}),
+    ).not.toBeNull();
+
+    const [modeLine, promptLine] = after(child, openingBytes)
+      .trim()
+      .split('\n');
+    expect(JSON.parse(modeLine!)).toEqual({
+      type: 'control_request',
+      request_id: 'geniro-set_permission_mode',
+      request: { subtype: 'set_permission_mode', mode: 'plan' },
+    });
+    // Strictly BEFORE the prompt it has to govern — a mode arriving after the
+    // user line would leave that turn running under the old posture.
+    expect(JSON.parse(promptLine!).type).toBe('user');
+  });
+
+  it('re-sends a mode only when it actually changed', async () => {
+    // The delivered mode becomes the new baseline. Without that, every later
+    // turn would re-send a `set_permission_mode` the process is already in.
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(CHAT, () => {});
+    endTurn(child);
+    await first?.done;
+
+    const second = session.startTurn(
+      { ...CHAT, approvalMode: 'plan' },
+      () => {},
+    );
+    endTurn(child);
+    await second?.done;
+    const afterSecond = child.stdin.written.length;
+
+    session.startTurn(
+      { ...CHAT, approvalMode: 'plan', prompt: 'third' },
+      () => {},
+    );
+
+    expect(after(child, afterSecond)).not.toContain('set_permission_mode');
+  });
+
+  it('refuses a turn that drops the mode entirely, rather than keeping the old one', async () => {
+    // "No mode at all" is the CLI's own default, and no message asks a running
+    // process to go back to it. Replacing the refusal with an empty mode line
+    // compiles and keeps the rest of the suite green — while silently running
+    // the turn under the PREVIOUS posture, which is the whole failure this
+    // machinery exists to prevent.
     const { spawn, child } = fakeSpawn();
     const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
       runScoped: true,
@@ -110,8 +201,35 @@ describe('a run-scoped claude session', () => {
     await first?.done;
 
     expect(
-      session.startTurn({ ...CHAT, approvalMode: 'plan' }, () => {}),
-    ).not.toBeNull();
+      session.startTurn({ ...CHAT, approvalMode: undefined }, () => {}),
+    ).toBeNull();
+  });
+
+  it('never hosts a session it could not re-mode, so the refusal cannot arise here', () => {
+    // Both answers come from `keepStdinOpen`, deliberately: an `auto` turn
+    // spawns under --dangerously-skip-permissions with no prompt tool, and it
+    // is the same missing dialogue that makes the process unable to take a
+    // second prompt at all. So claude never reaches the base's
+    // cannot-be-re-moded refusal — that branch is pinned at the base instead
+    // (`agent-adapter.spec.ts`), on an adapter that CAN host a session and has
+    // no mode message.
+    const AUTO: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'auto',
+    };
+    const { spawn, child } = fakeSpawn();
+    const session = new ClaudeAdapter({ spawn }).startSession(AUTO, {
+      runScoped: true,
+    });
+
+    session.startTurn(AUTO, () => {});
+
+    // stdin closed with the payload — a one-turn process, not a session.
+    expect(child.stdin.ended).toBe(true);
+    expect(
+      session.startTurn({ ...AUTO, prompt: 'second' }, () => {}),
+    ).toBeNull();
   });
 
   it('stops a turn in protocol, leaving the process and its MCP servers alive', async () => {

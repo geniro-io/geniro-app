@@ -51,21 +51,47 @@ class FakeSession implements AgentSession {
   }
 
   get idle(): boolean {
-    return this.closes === 0 && this.settle === null;
+    // A dead process is not "alive with no turn in flight". This is the shape
+    // the real session has, and the reason the registry cannot use `idle` to
+    // tell a busy session from a dead one.
+    return this.alive && this.settle === null;
   }
 
   get alive(): boolean {
-    return this.closes === 0;
+    return this.closes === 0 && !this.processGone;
   }
 
   close(): void {
     this.closes += 1;
+    this.resolveClosed();
     if (this.closeThrows) {
       throw new Error('close boom');
     }
   }
 
-  closed = new Promise<void>(() => {});
+  /**
+   * The process died with nobody asking it to — the cancel fallback's group
+   * kill, or a crash. `closed` resolves, as the real session's does.
+   */
+  die(): void {
+    this.processGone = true;
+    this.resolveClosed();
+  }
+
+  /**
+   * Dead, but the settle has not landed yet — the window in which the registry
+   * still holds the entry and `closed` has not fired. This is what
+   * `evictIfFull` has to cope with on its own.
+   */
+  dieWithoutSettling(): void {
+    this.processGone = true;
+  }
+
+  private processGone = false;
+  private resolveClosed!: () => void;
+  closed = new Promise<void>((resolve) => {
+    this.resolveClosed = resolve;
+  });
 }
 
 /** An adapter double whose only job is to hand out sessions, one per spawn. */
@@ -281,6 +307,53 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(at(sessions, 0).closes).toBe(1);
     expect(at(sessions, 1).closes).toBe(0);
     expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+  });
+
+  it('drops a dead session rather than evicting a live one to make room for it', async () => {
+    // The inverted consequence this fixes. A dead session reports `idle` false
+    // — it is not "alive with no turn in flight" — so the eviction scan used to
+    // skip it as though it were BUSY while still counting it against the
+    // ceiling. The slot it occupied forever was paid for by a genuinely live
+    // idle session being closed instead, respawning that run's CLI and
+    // re-booting the user's MCP servers.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    // The NEWEST session dies behind the registry's back, with its settle not
+    // yet landed — so `closed` has not fired and only the eviction scan can
+    // notice. It is also the least attractive eviction candidate by age, which
+    // is what makes this discriminating.
+    at(sessions, MAX_LIVE_SESSIONS - 1).dieWithoutSettling();
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, MAX_LIVE_SESSIONS - 1).closes).toBe(1);
+    // The oldest LIVE session survived — under the old scan it was the one
+    // that went.
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+  });
+
+  it('forgets a session the moment its process dies, without waiting to be asked', async () => {
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    expect(registry.liveCount).toBe(1);
+
+    at(sessions, 0).die();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Gone from the map, so it occupies no slot and no later turn is handed it.
+    expect(registry.liveCount).toBe(0);
   });
 
   it('goes over the ceiling rather than killing a running turn', () => {

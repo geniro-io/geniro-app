@@ -304,6 +304,33 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * One process per turn, stated rather than inherited.
+   *
+   * The base already answers false, so this override changes no behaviour —
+   * it exists because "this CLI cannot keep its process between turns" and
+   * "nobody has got round to it" are the same silence otherwise, and only one
+   * of them is a fact a reader can act on. Same standard as `loginArgs` above,
+   * which is declared with its reason even though no row can use it yet.
+   *
+   * ACP has the shape for it: `session/prompt` can be sent again on a session
+   * that is already loaded, so the protocol does not forbid a kept process.
+   * What is missing is EVIDENCE. cursor-agent is not signed in on the machine
+   * this was built on, so no multi-turn ACP session has ever been observed
+   * here — and the cost of guessing is not a failed turn but a wrong one: a
+   * second prompt on a session the agent considers finished is answered with
+   * the previous turn's context, which reads as an agent ignoring what it was
+   * just asked. Keeping a process is an optimization; keeping a WRONG one is a
+   * correctness bug.
+   *
+   * Flip this to `keepStdinOpen`'s answer once a signed-in cursor-agent has
+   * been observed serving two `session/prompt` calls on one process, and the
+   * turn driver has been checked for state that assumes it dies with its turn.
+   */
+  protected override canHostSession(_input: AgentTurnInput): boolean {
+    return false;
+  }
+
+  /**
    * No one-shot payload — the driver writes the opening `initialize` frame
    * from `onStdinReady`, and everything after it is a reply to the agent.
    */

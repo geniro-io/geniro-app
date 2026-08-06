@@ -381,6 +381,7 @@ function cardFor(el: HTMLDivElement, name: string): Element {
 describe('AgentsPanel — MCP servers', () => {
   const claudeListing: AgentMcpListing = {
     unavailableReason: null,
+    pending: false,
     servers: [
       {
         name: 'sentry',
@@ -660,6 +661,7 @@ describe('AgentsPanel — MCP servers', () => {
                 servers: [],
                 unavailableReason:
                   'could not read MCP servers — cursor-agent did not answer',
+                pending: false,
               },
             ],
           ])
@@ -689,7 +691,10 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={
           new Map<string, AgentMcpListing>([
-            [scope('claude'), { servers: [], unavailableReason: null }],
+            [
+              scope('claude'),
+              { servers: [], unavailableReason: null, pending: false },
+            ],
           ])
         }
         onOpenThread={vi.fn()}
@@ -802,6 +807,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
   function oneServer(name: string): AgentMcpListing {
     return {
       unavailableReason: null,
+      pending: false,
       servers: [
         {
           name,
@@ -885,6 +891,7 @@ describe('AgentsPanel — MCP toggle', () => {
   ): AgentMcpListing {
     return {
       unavailableReason: null,
+      pending: false,
       servers: [
         {
           target: 'node x.js',

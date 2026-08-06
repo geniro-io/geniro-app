@@ -49,6 +49,9 @@ function emptyHarvest(): McpHarvestStore {
 }
 
 afterEach(() => {
+  // Before the dir sweep: a spec that took fake timers must not leave them for
+  // the next one, which would then hang on the first-paint budget.
+  vi.useRealTimers();
   while (dirs.length > 0) {
     rmSync(dirs.pop() as string, { recursive: true, force: true });
   }
@@ -456,6 +459,89 @@ describe('AgentMcpService.list', () => {
     expect(await first).toEqual(await second);
   });
 
+  it('answers a slow cold dial with `pending` instead of holding the request open', async () => {
+    // The cold read STARTS the user's own MCP servers to health-check them —
+    // 6.7s here against nine, bounded only by the slowest, up to the CLI's
+    // whole 45s listing timeout. Awaiting that gave the panel a spinner and
+    // nothing else, and gave it to a cursor scope EVERY time: the `mcp_servers`
+    // event has one producer (claude's `system/init`), so no cursor folder ever
+    // has a harvest to answer from.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    let release!: (servers: AgentMcpServer[]) => void;
+    const { service } = harness(
+      () =>
+        new Promise<AgentMcpServer[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const asked = service.list(AgentKind.Claude, cwd);
+    await vi.advanceTimersByTimeAsync(400);
+    const first = await asked;
+
+    expect(first.pending).toBe(true);
+    expect(first.servers).toEqual([]);
+    // Empty rows here are NOT "this folder has no servers" — `pending` is what
+    // keeps those two apart on the wire.
+    expect(first.unavailableReason).toBeNull();
+
+    // The dial kept going behind the answer; the next ask collects it.
+    release([server('sentry')]);
+    await vi.advanceTimersByTimeAsync(0);
+    const second = await service.list(AgentKind.Claude, cwd);
+
+    expect(second.pending).toBe(false);
+    expect(second.servers.map((s) => s.name)).toEqual(['sentry']);
+  });
+
+  it('hands the next ask the failure the deferred dial produced', async () => {
+    // A dial that misses the budget finishes with nobody awaiting it, and a
+    // FAILED one is deliberately never cached — so its verdict has to survive
+    // to the ask that comes back for it, or it is lost outright. Lost, the
+    // caller is told `pending` again, is never told what went wrong, and its
+    // retry starts yet another cold dial of the user's own MCP servers.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    let fail!: (err: Error) => void;
+    const { service } = harness(
+      () =>
+        new Promise<AgentMcpServer[]>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+
+    const asked = service.list(AgentKind.Claude, cwd);
+    await vi.advanceTimersByTimeAsync(400);
+    expect((await asked).pending).toBe(true);
+
+    // The dial ends badly, well after the request that started it was answered.
+    fail(new Error('mcp list timed out'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const collected = service.list(AgentKind.Claude, cwd);
+    await vi.advanceTimersByTimeAsync(400);
+    const listing = await collected;
+
+    expect(listing.pending).toBe(false);
+    expect(listing.unavailableReason).toBe(
+      'could not read MCP servers — mcp list timed out',
+    );
+  });
+
+  it('serves a dial that beats the budget in one round trip', async () => {
+    // The reason this is a budget and not an immediate `pending`: most folders
+    // are not slow, and answering "ask again" to a read that had already
+    // finished would cost a second round trip for nothing.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('quick')]));
+
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listing.pending).toBe(false);
+    expect(listing.servers.map((s) => s.name)).toEqual(['quick']);
+  });
+
   it('a concurrent refresh joins the read already running', async () => {
     // A double-clicked Refresh must not spawn a second health check.
     const cwd = realDir();
@@ -578,6 +664,9 @@ describe('AgentMcpService.list', () => {
     await expect(service.list(AgentKind.CursorAgent, cwd)).resolves.toEqual({
       servers: [],
       unavailableReason: 'no listing on this CLI yet',
+      // A settled refusal, not a read in progress — there is nothing to wait
+      // for, so telling the caller to ask again would loop it forever.
+      pending: false,
     });
     expect(listMcpServers).not.toHaveBeenCalled();
   });
@@ -841,6 +930,34 @@ describe('AgentMcpService.setEnabled', () => {
     );
 
     expect(listing.servers[0]?.disabled).toBe(true);
+  });
+
+  it('reports the switch that landed even when the rows come from a harvest', async () => {
+    // Every other case here runs on an EMPTY harvest, so they all take the
+    // ask-the-adapter path. With one present the short-circuit sits above that
+    // ask, and the rows it returns were captured BEFORE the write — a turn
+    // reported the server `connected`, and nothing re-dials it here. What
+    // corrects them is the folder-facts overlay, which is read fresh on every
+    // exit path; without that, a toggle would answer with its own stale
+    // "connected, enabled" row and the switch would snap back.
+    const cwd = realDir();
+    const harvest = emptyHarvest();
+    harvest.record('claude', cwd, null, [server('proj')]);
+    const { service, listMcpServers } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: nothingOff, harvest },
+    );
+
+    const listing = await service.setEnabled(
+      AgentKind.Claude,
+      cwd,
+      'proj',
+      false,
+    );
+
+    expect(listMcpServers).not.toHaveBeenCalled();
+    expect(listing.servers[0]?.disabled).toBe(true);
+    expect(listing.pending).toBe(false);
   });
 
   it('re-reads the folder AFTER the write, so the row is the state that landed', async () => {

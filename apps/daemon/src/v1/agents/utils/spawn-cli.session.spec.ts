@@ -132,6 +132,40 @@ describe('a run-scoped session outlives its turns', () => {
     expect(session.startTurn({ onEvent: () => {} })).toBeNull();
   });
 
+  it('refuses a turn as soon as the process exits, without waiting out the settle grace', () => {
+    // `close` is what settles, and on a run-scoped session it can lag `exit` by
+    // the full grace window — MCP grandchildren hold the inherited stdio open.
+    // For those two seconds nothing else has changed: `processGone` is false
+    // and stdin was never ended, so the session used to report itself idle and
+    // alive and hand the registry a handle on a process that had already gone.
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+
+    child.emit('exit', 0, null);
+
+    expect(session.alive).toBe(false);
+    expect(session.idle).toBe(false);
+    expect(session.startTurn({ onEvent: () => {} })).toBeNull();
+  });
+
+  it('records a clean exit that produced no result as a failure, not a success', async () => {
+    // The silence is the bug: with no terminal event, `ChatService` writes a
+    // synthetic `turn_complete` and the transcript shows an answered turn that
+    // has no answer in it.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    child.emit('exit', 0, null);
+    await vi.advanceTimersByTimeAsync(2000);
+    await handle?.done;
+
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('without completing') },
+    ]);
+  });
+
   it('drops a stray event arriving between turns instead of giving it to the next one', async () => {
     // Trailing stdout after a turn's `result` belongs to the turn that ended.
     // Holding it for the next turn would file one turn's output under another;
@@ -162,6 +196,57 @@ describe('a run-scoped session outlives its turns', () => {
 
     expect(events).toEqual([{ type: 'turn_cancelled' }]);
     expect(session.alive).toBe(false);
+  });
+});
+
+describe('a session turn that goes silent', () => {
+  it('gives up on the turn, and leaves the process alive to serve the next one', async () => {
+    // The gap this closes: a `session` turn ends on its terminal EVENT, so a
+    // process that stays alive and never emits one leaves the turn open with
+    // nothing to bound it — both other backstops hang off `handle.done`, which
+    // is precisely what never resolves here.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await handle?.done;
+
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('giving up') },
+    ]);
+    // The process holds this run's MCP servers up. Only the turn was given up
+    // on, so the next one still reuses it.
+    expect(session.alive).toBe(true);
+    expect(session.startTurn({ onEvent: () => {} })).not.toBeNull();
+  });
+
+  it('does not give up on a turn that is merely long', async () => {
+    // Measured against SILENCE, not against the turn's length: an agent
+    // legitimately works for hours, and a wall-clock cap would abandon real
+    // work while the CLI was still reporting progress.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(25 * 60 * 1000);
+      // Deliberately a line this mapper makes NO event of: unrecognised
+      // stdout is still the process talking, and settling over one would
+      // present a vocabulary gap to the user as a hang.
+      line(child, { note: i });
+    }
+    await vi.advanceTimersByTimeAsync(25 * 60 * 1000);
+
+    // Two and a half hours in, still running.
+    expect(events).toEqual([]);
+    expect(handle).not.toBeNull();
+
+    line(child, { done: true });
+    await handle?.done;
+    expect(events).toEqual([COMPLETE]);
   });
 });
 

@@ -194,6 +194,28 @@ describe('where the meter lives', () => {
     expect(meterLabel()).toBeNull();
   });
 
+  it('opens its readout UPWARD, because the composer row has no room below it', () => {
+    // `Popover` does no collision detection — its placement is two static
+    // ternaries — and this row sits at the bottom of the composer inside the
+    // shell's `overflow-hidden` main, leaving ~20px under a 50-68px panel.
+    // Opening downward clips the panel away, and the ring deliberately shows
+    // no figures, so there is nothing left for a sighted user to read.
+    render(<ContextMeter {...CONTEXT} side="top" />);
+    openMeter();
+
+    const panel = container.querySelector('[role="dialog"]');
+    expect(panel?.className).toContain('bottom-full');
+    expect(panel?.className).not.toContain('top-full');
+  });
+
+  it('still opens downward where there IS room, so the panel call site is untouched', () => {
+    render(<ContextMeter {...CONTEXT} />);
+    openMeter();
+
+    const panel = container.querySelector('[role="dialog"]');
+    expect(panel?.className).toContain('top-full');
+  });
+
   it('still reads the same figures in the agents panel', () => {
     // The panel keeps its own copy for a workflow's PER-NODE windows, which
     // the one composer meter could never show — and it renders the same

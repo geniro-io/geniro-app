@@ -231,6 +231,28 @@ describe('CursorAcpAdapter spawn', () => {
   });
 });
 
+describe('CursorAcpAdapter serves one turn per process', () => {
+  it('refuses a second turn even when the caller asks for a run-scoped session', () => {
+    // The observable is that the caller's `runScoped` opt-in does not make the
+    // session reusable — so the registry respawns, as it does today, instead of
+    // holding a process that would answer the next prompt with the previous
+    // turn's context.
+    //
+    // This is forward regression coverage, not a pin on the `canHostSession`
+    // override: the base already answers false, so the override is a
+    // readability choice (declaring the fact where a reader of this adapter
+    // will look for it) and deleting it changes nothing observable here.
+    const { spawn } = fakeSpawn();
+    const session = new CursorAcpAdapter({ spawn }).startSession(BASE, {
+      runScoped: true,
+    });
+
+    expect(session.startTurn(BASE, () => {})).not.toBeNull();
+    expect(session.idle).toBe(false);
+    expect(session.startTurn(BASE, () => {})).toBeNull();
+  });
+});
+
 describe('CursorAcpAdapter turn shaping', () => {
   it('inlines a graph node role into the prompt, as the legacy adapter does', () => {
     const { spawn, child } = fakeSpawn();
@@ -653,7 +675,7 @@ describe('CursorAcpAdapter misuse', () => {
           cwd: '/proj',
         });
 
-        expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+        expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
       } finally {
         killSpy.mockRestore();
       }

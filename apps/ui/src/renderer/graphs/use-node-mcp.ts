@@ -17,6 +17,13 @@ const LISTING_DEBOUNCE_MS = 500;
 const LOAD_FAILURE = 'could not load MCP servers';
 
 /**
+ * How long to wait before asking again for a listing the daemon reported as
+ * still being read. Same cadence the chat panel's hook uses — the wait is the
+ * daemon's cold dial, which is the same dial for both.
+ */
+const PENDING_RETRY_MS = 1000;
+
+/**
  * Whether a daemon error says "the input you gave me is wrong" rather than
  * "something here is broken".
  *
@@ -94,18 +101,33 @@ export function useNodeMcp(
   const [pending, setPending] = useState(false);
   // Bumped by refresh; the effect keys on it, so a bump re-runs the read.
   const [reloadToken, setReloadToken] = useState(0);
+  /**
+   * Bumped while a read the daemon reported as still running is being waited
+   * on. Separate from {@link reloadToken} because that one means "the user
+   * pressed Refresh" — re-using it would turn every poll into a cache bypass.
+   */
+  const [rereadToken, setRereadToken] = useState(0);
   // The token the last read already spent. Refresh is a ONE-SHOT intent about
   // the node on screen, so it must be consumed rather than latched: the effect
   // also re-runs when the selection or the plugin path changes, and a
   // monotonic `reloadToken > 0` would make every later click re-dial the
   // user's own MCP servers for the rest of the session.
   const consumedToken = useRef(0);
+  /** The poll token the last read already served, so a poll is recognised once. */
+  const consumedReread = useRef(0);
   // NUL-joined, the one byte neither an agent kind nor a path can contain —
   // the same key shape the daemon's own caches use.
   const scope = `${agent ?? ''}\u0000${pluginDir ?? ''}`;
 
   useEffect(() => {
     const bypassCache = reloadToken > consumedToken.current;
+    // A POLL of a read the daemon said was still running. Like a refresh it is
+    // not a keystroke, so it skips the debounce below — that delay exists only
+    // to collapse typing in the plugin-path field, and charging it to every
+    // poll would add half a second to each cycle of a wait that is already
+    // seconds long.
+    const isPoll = rereadToken > consumedReread.current;
+    consumedReread.current = rereadToken;
     // Spent even when there is nothing to ask, so a refresh raised with no
     // node selected is not banked and then applied to whichever node the user
     // clicks next — re-dialling a read nobody asked to refresh.
@@ -162,7 +184,13 @@ export function useNodeMcp(
                   : LOAD_FAILURE;
               setAnswered({
                 scope,
-                listing: { servers: [], unavailableReason: message },
+                listing: {
+                  servers: [],
+                  unavailableReason: message,
+                  // Settled: the request failed rather than being deferred, so
+                  // there is no running read to come back for.
+                  pending: false,
+                },
                 invalidPluginDir:
                   pluginDir && isInputRefusal(message) ? message : null,
               });
@@ -174,23 +202,49 @@ export function useNodeMcp(
             }
           });
       },
-      bypassCache ? 0 : LISTING_DEBOUNCE_MS,
+      bypassCache || isPoll ? 0 : LISTING_DEBOUNCE_MS,
     );
     return () => {
       stale = true;
       clearTimeout(timer);
     };
-  }, [agentsApi, agent, pluginDir, scope, reloadToken]);
+  }, [agentsApi, agent, pluginDir, scope, reloadToken, rereadToken]);
 
   const refresh = useCallback(() => {
     setReloadToken((token) => token + 1);
   }, []);
 
   const current = answered.scope === scope;
+  const listing = current ? answered.listing : undefined;
+  // The daemon answers a cold read at once with empty rows under this flag and
+  // finishes the dial behind it. Without asking again the inspector would keep
+  // that placeholder forever and render it as "no servers".
+  const stillReading = listing?.pending === true;
+
+  useEffect(() => {
+    if (!stillReading) {
+      return;
+    }
+    // Its OWN token, not `reloadToken`: that one carries the user's REFRESH
+    // intent, and bumping it here would make the re-read bypass the daemon's
+    // cache and start a second dial — launching the user's servers again. (It
+    // also keeps the ref-consuming out of a state updater, which React may run
+    // twice.)
+    const timer = setTimeout(
+      () => setRereadToken((token) => token + 1),
+      PENDING_RETRY_MS,
+    );
+    return () => clearTimeout(timer);
+    // Keyed on the ANSWER, not on the boolean: `stillReading` is true after the
+    // first pending answer and still true after the second, so React would skip
+    // the effect and arm no further timer. With a 6.7s cold dial against a
+    // 400ms budget, pending-then-pending is the ordinary case.
+  }, [answered, stillReading]);
+
   return {
-    listing: current ? answered.listing : undefined,
+    listing,
     invalidPluginDir: current ? answered.invalidPluginDir : null,
-    loading: pending,
+    loading: pending || stillReading,
     refresh,
   };
 }

@@ -56,7 +56,10 @@ const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
 // invocation and the Electron main process opens it, so the only seams are
 // this client call and window.geniro.openInTerminal.
-const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
+const handoffApi = vi.hoisted(() => ({
+  resolveHandoff: vi.fn(),
+  resolveMcpLogin: vi.fn(),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -377,9 +380,11 @@ beforeEach(() => {
   api.deleteChat.mockReset();
   api.updateChatSettings.mockReset();
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
-  agentsApi.listAgentMcpServers
-    .mockReset()
-    .mockResolvedValue({ servers: [], unavailableReason: null });
+  agentsApi.listAgentMcpServers.mockReset().mockResolvedValue({
+    servers: [],
+    unavailableReason: null,
+    pending: false,
+  });
   // The composer's model rows come from the daemon, which asks the CLI.
   agentsApi.listAgentModels.mockReset().mockResolvedValue([
     { id: 'opus', label: 'opus', source: 'builtin' },
@@ -442,6 +447,7 @@ beforeEach(() => {
     ],
   });
   handoffApi.resolveHandoff.mockReset();
+  handoffApi.resolveMcpLogin.mockReset();
 });
 
 afterEach(async () => {
@@ -707,6 +713,68 @@ describe('Chats reconnect seam', () => {
       await joined;
     });
     expect(api.listRunItems).toHaveBeenCalledWith({ runId: 'r1' });
+  });
+
+  it('does not rebuild the autoscroll observer on every streamed token', async () => {
+    // `liveText` is a fresh Map per delta and the daemon coalesces nothing, so
+    // keying the observer on it cost a `disconnect()` plus one `observe()` per
+    // transcript row FOR EVERY TOKEN — on a list that is not virtualized. It
+    // was redundant too: a delta grows a row that already exists, and watching
+    // that row is exactly what the observer is for.
+    //
+    // jsdom has no ResizeObserver, so the production code takes its null branch
+    // without one — this stub is what makes the behaviour observable at all.
+    let disconnects = 0;
+    let observes = 0;
+    class CountingResizeObserver {
+      observe(): void {
+        observes += 1;
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        disconnects += 1;
+      }
+    }
+    const globals = globalThis as { ResizeObserver?: unknown };
+    const previous = globals.ResizeObserver;
+    globals.ResizeObserver = CountingResizeObserver;
+    try {
+      api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+      const { client, emitLiveText } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      // First delta: the bubble is a NEW element, so a re-point here is right.
+      await act(async () => {
+        emitLiveText({
+          runId: 'r1',
+          nodeId: null,
+          text: 'a',
+          thinkingTokens: null,
+          ...LIVE_DELTA_REST,
+        });
+      });
+      const afterFirst = { disconnects, observes };
+
+      // Twenty more tokens into the SAME bubble. No element appears, so
+      // nothing needs re-pointing.
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => {
+          emitLiveText({
+            runId: 'r1',
+            nodeId: null,
+            text: `a${'b'.repeat(i + 1)}`,
+            thinkingTokens: null,
+            ...LIVE_DELTA_REST,
+          });
+        });
+      }
+
+      expect(disconnects).toBe(afterFirst.disconnects);
+      expect(observes).toBe(afterFirst.observes);
+    } finally {
+      globals.ResizeObserver = previous;
+    }
   });
 
   it('shows the agent’s words as they are written, before any item exists', async () => {
@@ -4039,6 +4107,172 @@ describe('Chats error strip', () => {
     expect(deleteRunButton(container)).toBeNull();
     // Still closeable — every failure is.
     expect(dismissButton(container)).not.toBeNull();
+  });
+});
+
+describe('Chats — signing a server in', () => {
+  const chatIn = (id: string, title: string, cwd: string): ChatRun => ({
+    ...run1,
+    id,
+    title,
+    cwd,
+    status: 'completed',
+  });
+
+  /** One server the CLI says needs authenticating, and can be. */
+  const needsAuth = {
+    servers: [
+      {
+        name: 'linear',
+        target: null,
+        transport: null,
+        status: 'needs_auth' as const,
+        detail: null,
+        scope: 'project' as const,
+        disabled: false,
+        toggleUnavailableReason: null,
+        signInUnavailableReason: null,
+      },
+    ],
+    unavailableReason: null,
+    pending: false,
+  };
+
+  /** Open the panel, open the MCP list, and unfold the signed-out group. */
+  async function reachSignIn(
+    container: HTMLElement,
+  ): Promise<HTMLButtonElement> {
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'aside[aria-label="Run agents"] button[aria-label="MCP servers"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // The signed-out rows are folded under their own disclosure.
+    const group = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.includes('Needs sign-in'));
+    await act(async () => {
+      group!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    return [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Sign in',
+    )!;
+  }
+
+  it('signs in against the RUN’s folder, not the composer’s', async () => {
+    // The load-bearing rule, and the one nothing pinned. A server name resolves
+    // against the directory the CLI runs in, so signing in from the composer's
+    // folder — where the NEXT chat would start — authenticates a different
+    // server or none at all. This test fails if the handler is switched to it.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    handoffApi.resolveMcpLogin.mockResolvedValue({
+      kind: 'command',
+      command: 'claude',
+      args: ['mcp', 'login', 'linear'],
+      cwd: '/proj-a',
+      unavailableReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(handoffApi.resolveMcpLogin).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/proj-a',
+      server: 'linear',
+    });
+    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
+      command: 'claude',
+      args: ['mcp', 'login', 'linear'],
+      cwd: '/proj-a',
+    });
+  });
+
+  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
+    // A refusal is the ANSWER, not a failure — this CLI has no sign-in command
+    // — so the user reads the daemon's own sentence and no window opens.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    handoffApi.resolveMcpLogin.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      unavailableReason: 'cursor-agent cannot sign in to an MCP server',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'cursor-agent cannot sign in to an MCP server',
+    );
+  });
+
+  it('surfaces a failed resolve rather than pressing on', async () => {
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    handoffApi.resolveMcpLogin.mockRejectedValue(
+      new Error('daemon GET /v1/handoff/mcp-login failed (500): boom'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('boom');
+  });
+
+  it('never offers sign-in at all on a chat with no folder', async () => {
+    // The handler's no-cwd guard cannot be reached from here, and this is why:
+    // `useAgentMcp` is gated on the folder, so a run without one has no rows,
+    // no signed-out group, and no button to press. Asserting THAT is honest;
+    // asserting the guard's message would mean driving the handler directly
+    // past the UI that makes it unreachable.
+    api.listChats.mockResolvedValue([
+      { ...chatIn('r1', 'First chat', '/proj-a'), cwd: null },
+    ]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Sign in',
+      ),
+    ).toBe(false);
+    expect(agentsApi.listAgentMcpServers).not.toHaveBeenCalled();
   });
 });
 

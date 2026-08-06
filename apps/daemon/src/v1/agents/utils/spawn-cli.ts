@@ -9,7 +9,7 @@ import type {
 } from '../adapters/adapter.types';
 import { buildChildEnv } from './child-env';
 import { trackDetachedChild } from './child-journal';
-import { killProcessGroup } from './kill-tree';
+import { createGroupTerminator } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 
 /**
@@ -175,9 +175,6 @@ function toUtf8(chunk: string | Buffer): string {
 /** Bytes of a child's stderr retained for the failure message on a non-zero exit. */
 const STDERR_TAIL_BYTES = 2000;
 
-/** Grace after a SIGTERM cancel before the process group is force-killed (SIGKILL). */
-const SIGKILL_GRACE_MS = 2000;
-
 /**
  * How long an in-protocol interrupt is given to end the turn before the cancel
  * falls back to killing the process group.
@@ -203,15 +200,29 @@ const INTERRUPT_SETTLE_GRACE_MS = 5000;
 const EXIT_SETTLE_GRACE_MS = 2000;
 
 /**
- * Signal the child's entire process group so the tool/MCP grandchildren a coding
- * agent forks die with it. The child is spawned `detached` (a group leader), so
- * its PID doubles as the group id and `process.kill(-pid, …)` reaches every
- * descendant. Falls back to a direct `child.kill` when the PID is unavailable
- * (e.g. a test fake) or the group is already gone — never throws.
+ * How long a run-scoped turn may go completely SILENT before the turn is
+ * settled as failed and the user gets their composer back.
+ *
+ * The gap this closes: on a `session` lifetime a turn ends on its terminal
+ * EVENT, so a process that stays alive and simply never emits one leaves the
+ * turn open forever. Both other backstops hang off `handle.done`, which is
+ * exactly what never resolves in that state — so nothing bounds it.
+ *
+ * Measured against SILENCE rather than against the turn's total length, and
+ * that distinction is the whole design. A wall-clock cap cleared only by the
+ * terminal event would settle a turn that is working perfectly well — an agent
+ * legitimately runs for hours — and the user would watch real work be
+ * abandoned. Any event at all rearms this, so it fires only when the CLI has
+ * genuinely stopped talking.
+ *
+ * Generous for the same reason: a single tool call (a full test suite, a long
+ * build) can be silent for many minutes, and settling one of those early costs
+ * the user their turn. Half an hour of nothing is not a slow turn.
+ *
+ * The process is deliberately LEFT ALIVE on expiry — it holds the run's MCP
+ * servers, and the next turn reuses it. Only the turn is given up on.
  */
-function killProcessTree(child: SpawnedProcess, signal: NodeJS.Signals): void {
-  killProcessGroup(child.pid, signal, () => child.kill(signal));
-}
+const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
 
 /** The mutable state of the one turn currently in flight. */
 interface TurnState {
@@ -237,6 +248,12 @@ interface TurnState {
   options: CliTurnOptions;
   /** Fallback deadline armed when an in-protocol interrupt was delivered. */
   interruptTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Rearmed by every event this turn produces; fires only after
+   * {@link TURN_SILENCE_DEADLINE_MS} of nothing. Null for a lifetime whose
+   * turn already ends with its process.
+   */
+  silenceTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -265,8 +282,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
 
   let current: TurnState | null = null;
   let processGone = false;
+  /**
+   * The child's `exit` has fired — set SYNCHRONOUSLY, ahead of the settle.
+   *
+   * `processGone` cannot answer "can this process still take a turn": it stays
+   * false for the whole {@link EXIT_SETTLE_GRACE_MS} window while `close` is
+   * awaited, and on a `session` lifetime `stdinEnded` stays false too. For
+   * those two seconds the session reported itself idle AND alive, so the
+   * registry would hand a caller a handle on a process that had already
+   * ended. `processGone` still owns the settle/flush semantics; this owns the
+   * question of whether the process is there.
+   */
+  let processExited = false;
   let stdinEnded = false;
-  let killTimer: ReturnType<typeof setTimeout> | null = null;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -282,6 +310,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       clearTimeout(turn.interruptTimer);
       turn.interruptTimer = null;
     }
+    if (turn.silenceTimer) {
+      clearTimeout(turn.silenceTimer);
+      turn.silenceTimer = null;
+    }
     if (current === turn) {
       current = null;
     }
@@ -291,6 +323,35 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // escalate if the group ignores it. Only the process actually ending
     // disarms it — see `endProcess`.
     turn.resolveDone();
+  };
+
+  /**
+   * Arm (or rearm) the silence deadline for a turn that ends on an event.
+   * A no-op for the other lifetimes, whose turn ends with its process and is
+   * already bounded by `close`/`exit`.
+   */
+  const armSilenceDeadline = (turn: TurnState): void => {
+    if (!settlesOnTerminalEvent || turn.settled) {
+      return;
+    }
+    if (turn.silenceTimer) {
+      clearTimeout(turn.silenceTimer);
+    }
+    turn.silenceTimer = setTimeout(() => {
+      turn.silenceTimer = null;
+      if (turn.settled || turn.terminalEmitted) {
+        return;
+      }
+      // Through `emit`, so this takes the one-terminal gate with every other
+      // outcome and cannot contradict a `result` line that arrives beside it.
+      emit({
+        type: 'error',
+        message: `${opts.command} produced nothing for ${Math.round(
+          TURN_SILENCE_DEADLINE_MS / 60_000,
+        )} minutes — giving up on the turn`,
+      });
+    }, TURN_SILENCE_DEADLINE_MS);
+    turn.silenceTimer.unref?.();
   };
 
   /**
@@ -328,6 +389,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       return;
     }
+    // The CLI is still talking, so it has not wedged — push the deadline out.
+    armSilenceDeadline(turn);
     turn.options.onEvent(normalized);
   };
 
@@ -345,6 +408,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     return deadSession(`failed to spawn ${opts.command}: ${errorMessage(err)}`);
   }
 
+  // The whole group, not the direct child: a single-PID SIGTERM would orphan
+  // the tool/MCP grandchildren the agent forked.
+  //
+  // `processGone` — not `processExited` — is the right predicate, and the
+  // difference matters. `processExited` means the CLI itself is gone; the
+  // GROUP may still be full of grandchildren holding the inherited stdio open,
+  // and those are exactly what the escalation is for. `processGone` means the
+  // session has been accounted for (`close`, or the exit backstop), by which
+  // point there is nothing left to escalate against.
+  const terminator = createGroupTerminator(child, {
+    isGone: () => processGone,
+  });
+
   const buffer = new NdjsonBuffer({
     onObject: (obj) => {
       for (const event of opts.mapper(obj)) {
@@ -359,6 +435,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
 
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (chunk: string | Buffer) => {
+    // Any stdout at all proves the CLI has not wedged, whether or not the
+    // mapper makes an event of it — a line this daemon does not recognise is
+    // still the process talking, and settling a turn over one would be a
+    // vocabulary gap presented to the user as a hang.
+    if (current) {
+      armSilenceDeadline(current);
+    }
     buffer.push(toUtf8(chunk));
   });
 
@@ -377,10 +460,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         clearTimeout(exitTimer);
         exitTimer = null;
       }
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
+      terminator.disarm();
       resolveClosed();
     }
     if (current) {
@@ -421,6 +501,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           type: 'error',
           message: `${opts.command} exited with code ${code}${detail ? `: ${detail}` : ''}`,
         });
+      } else {
+        // A CLEAN exit with no terminal event: the process ended without ever
+        // printing the result line the mapper turns into `turn_complete`.
+        // Saying nothing here is not neutral — `ChatService` fills the silence
+        // with a synthetic `turn_complete` and records a success the agent
+        // never produced, which reads to the user as an answered turn with no
+        // answer in it.
+        const detail = stderrTail.trim();
+        emit({
+          type: 'error',
+          message: `${opts.command} exited without completing the turn${detail ? `: ${detail}` : ''}`,
+        });
       }
     }
     endProcess();
@@ -455,6 +547,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   // through them a browser session they are driving. A stray grandchild costs
   // memory; the child journal and its next-boot reaper already own that.
   child.on('exit', (code, signal) => {
+    // Before the early return, and before the timer: the process is gone as of
+    // now whatever the settle does about it, and every reader below asks this
+    // rather than waiting out the grace window.
+    processExited = true;
     if (processGone || exitTimer) {
       return;
     }
@@ -480,7 +576,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * turn-scoped writers below add their own guard on top.
    */
   const sessionWrite = (payload: string): boolean => {
-    if (processGone || stdinEnded) {
+    if (processGone || processExited || stdinEnded) {
       return false;
     }
     const stream = child.stdin;
@@ -531,24 +627,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     });
   }
 
-  const killGroup = (): void => {
-    // Kill the whole process group — the CLI plus any tool/MCP grandchildren —
-    // not just the direct child a single-PID SIGTERM would reach. Escalate to
-    // SIGKILL if the group is still alive after the grace window.
-    killProcessTree(child, 'SIGTERM');
-    if (!killTimer) {
-      killTimer = setTimeout(() => {
-        killTimer = null;
-        if (!processGone) {
-          killProcessTree(child, 'SIGKILL');
-        }
-      }, SIGKILL_GRACE_MS);
-      killTimer.unref?.();
-    }
-  };
+  const killGroup = (): void => terminator.terminate();
 
   const startTurn = (turnOptions: CliTurnOptions): AgentTurnHandle | null => {
-    if (processGone || stdinEnded || current !== null) {
+    if (processGone || processExited || stdinEnded || current !== null) {
       return null;
     }
     let resolveDone!: () => void;
@@ -562,8 +644,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       resolveDone: () => resolveDone(),
       options: turnOptions,
       interruptTimer: null,
+      silenceTimer: null,
     };
     current = turn;
+    // Armed from the start, not from the first event: a turn whose CLI never
+    // answers at all is exactly the case with nothing to rearm it.
+    armSilenceDeadline(turn);
 
     // The write/end can also throw synchronously (stdin already destroyed).
     // Keep it inside the settle contract: surface an error event and end the
@@ -658,10 +744,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   return {
     startTurn,
     get idle() {
-      return !processGone && !stdinEnded && current === null;
+      return !processGone && !processExited && !stdinEnded && current === null;
     },
     get alive() {
-      return !processGone;
+      return !processGone && !processExited;
     },
     close: () => {
       if (processGone) {

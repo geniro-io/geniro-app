@@ -32,6 +32,17 @@ import { ProcessRegistry } from './process-registry';
 const DEFAULT_MCP_TTL_MS = 5 * 60_000;
 
 /**
+ * How long a listing request will wait for a cold dial before answering
+ * `pending` and letting it finish in the background.
+ *
+ * Short enough that the panel always paints promptly, long enough that a folder
+ * whose servers answer quickly is served in ONE round trip rather than two.
+ * A dial that misses it is not merely slow — it is starting the user's own MCP
+ * servers, which is seconds of work no request should be held open across.
+ */
+const FIRST_PAINT_BUDGET_MS = 400;
+
+/**
  * Shown when the adapter itself misbehaved rather than the CLI refusing.
  *
  * The thrown error's own message is appended by {@link listingFailure}: this
@@ -182,6 +193,21 @@ export class AgentMcpService {
   private readonly folderlessDirPath: string;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<AgentMcpListingResult>>();
+  /**
+   * The verdict of a dial that finished after its caller had already been
+   * answered `pending`, held until someone asks again.
+   *
+   * Only FAILURES land here — a success is remembered by {@link cache} like any
+   * other. Without it a refusal reached nobody at all: the caller had gone, the
+   * cache deliberately does not keep failures, and `inFlight` was cleared — so
+   * the next ask started a whole fresh dial, LAUNCHING the user's MCP servers
+   * again, and answered `pending` again. A polling panel never converged.
+   *
+   * Consumed exactly once, and below the cache, so it can neither shadow a
+   * later good reading nor become the five-minute false claim the no-caching
+   * rule exists to prevent.
+   */
+  private readonly deferredFailure = new Map<string, AgentMcpListingResult>();
 
   constructor(
     private readonly adapters: AgentAdapterRegistry,
@@ -220,12 +246,18 @@ export class AgentMcpService {
     cwd: string | null,
     options: { pluginDir?: string | null; refresh?: boolean } = {},
   ): Promise<AgentMcpListingWire> {
-    const { projectDir, adapter, result } = await this.readServers(
+    const { projectDir, adapter, result, pending } = await this.readServers(
       agent,
       cwd,
       options,
     );
-    return this.composeListing(adapter, agent, projectDir, result);
+    const listing = await this.composeListing(
+      adapter,
+      agent,
+      projectDir,
+      result,
+    );
+    return { ...listing, pending };
   }
 
   /**
@@ -235,17 +267,28 @@ export class AgentMcpService {
    * Split out so {@link setEnabled} can compose ONCE with folder facts it has
    * already read, rather than going through {@link list} and paying for a
    * second read of the same files on every toggle.
+   *
+   * `blocking` decides what a COLD read does. A panel gets `false` and is
+   * answered at once with `pending: true` while the dial runs behind it; a
+   * toggle gets `true`, because its whole answer is the listing that results
+   * and there is nothing useful to hand back before it exists.
    */
   private async readServers(
     agent: AgentKind,
     cwd: string | null,
-    options: { pluginDir?: string | null; refresh?: boolean } = {},
+    options: {
+      pluginDir?: string | null;
+      refresh?: boolean;
+      blocking?: boolean;
+    } = {},
   ): Promise<{
     projectDir: string;
     adapter: AgentAdapter;
     result: AgentMcpListingResult;
+    /** A dial is running; `result` is not the answer yet. */
+    pending: boolean;
   }> {
-    const { pluginDir = null, refresh = false } = options;
+    const { pluginDir = null, refresh = false, blocking = false } = options;
     // Validated FIRST, so a bad path is a bad request whichever adapter
     // answers — never a 400 for one CLI and a 200 for another. Ordering, not
     // just validation: placed BELOW an adapter's refusal, a folder's validity
@@ -268,6 +311,7 @@ export class AgentMcpService {
         projectDir,
         adapter,
         result: { ok: false, reason: unavailableReason },
+        pending: false,
       };
     }
     const version = await this.resolveVersionFn(agent, {
@@ -288,9 +332,11 @@ export class AgentMcpService {
     // Single-flight is checked AFTER the refresh eviction on purpose: a
     // double-clicked Refresh should join the re-read already running, not
     // start a second one. Evicting the cache is idempotent; spawning is not.
-    const pending = this.inFlight.get(key);
-    if (pending) {
-      return { projectDir, adapter, result: await pending };
+    const running = this.inFlight.get(key);
+    if (running) {
+      return blocking
+        ? { projectDir, adapter, result: await running, pending: false }
+        : { projectDir, adapter, ...(await this.firstPaint(key, running)) };
     }
     const cached = this.cache.get(key);
     if (cached && this.now() - cached.fetchedAt < this.ttlMs) {
@@ -298,8 +344,19 @@ export class AgentMcpService {
         projectDir,
         adapter,
         result: { ok: true, servers: cached.servers },
+        pending: false,
       };
     }
+    // Below the cache, above the dial: the verdict of a dial whose caller had
+    // already been answered `pending`. Delivering it here is what lets a
+    // polling panel learn the read FAILED, instead of starting the whole cold
+    // dial over and being told `pending` again.
+    const deferred = this.deferredFailure.get(key);
+    if (deferred && !refresh) {
+      this.deferredFailure.delete(key);
+      return { projectDir, adapter, result: deferred, pending: false };
+    }
+    this.deferredFailure.delete(key);
     // Nothing fresh to serve, and asking the CLI means a COLD DIAL of every
     // server. Before paying for that, take the answer a turn already gave us
     // for this exact (agent, folder, plugin dir) — `system/init` names the
@@ -326,6 +383,7 @@ export class AgentMcpService {
         // the fresher status, the old listing has the `target`/`transport`
         // init never reports. Taking the union loses neither.
         result: { ok: true, servers: enrich(harvested, cached?.servers) },
+        pending: false,
       };
     }
     // `Promise.resolve().then(…)` rather than a bare call: an adapter that
@@ -371,7 +429,62 @@ export class AgentMcpService {
       })
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, ask);
-    return { projectDir, adapter, result: await ask };
+    if (!blocking) {
+      return { projectDir, adapter, ...(await this.firstPaint(key, ask)) };
+    }
+    return { projectDir, adapter, result: await ask, pending: false };
+  }
+
+  /**
+   * Give a running dial a short moment to finish, then answer without it.
+   *
+   * The cold read dials every server the folder defines — measured at 6.7s here
+   * against nine, and bounded only by the slowest one, up to the CLI's whole
+   * listing timeout. Awaiting that held the panel's HTTP request open for the
+   * duration, so the user got a spinner and nothing else, and a cursor scope
+   * got it EVERY time: the `mcp_servers` event has one producer (claude's
+   * `system/init`), so no cursor folder ever has a harvest to answer from.
+   *
+   * A budget rather than an immediate `pending`, because most reads are not
+   * actually slow — a folder with two quick stdio servers settles well inside
+   * it, and answering `pending` there would cost the caller a second round trip
+   * to learn what was already known. Past the budget the dial continues in
+   * `inFlight` and the next ask collects it.
+   *
+   * The rejection is handled INSIDE `ask` (it resolves to a stated refusal
+   * rather than throwing), so the un-awaited branch leaves nothing unobserved.
+   */
+  private async firstPaint(
+    key: string,
+    ask: Promise<AgentMcpListingResult>,
+  ): Promise<{
+    result: AgentMcpListingResult;
+    pending: boolean;
+  }> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), FIRST_PAINT_BUDGET_MS);
+      timer.unref?.();
+    });
+    const settled = await Promise.race([
+      ask.then((result) => ({ result })),
+      budget,
+    ]);
+    clearTimeout(timer);
+    if (settled !== null) {
+      return { result: settled.result, pending: false };
+    }
+    // Nobody is waiting on this dial any more, so its verdict would otherwise
+    // reach no one — a success is kept by the cache, but a REFUSAL is
+    // deliberately not cached, and the caller has gone. Held for the next ask
+    // (see {@link deferredFailure}); without it the poll re-dials from cold,
+    // launching the user's MCP servers again, and never converges.
+    void ask.then((result) => {
+      if (!result.ok) {
+        this.deferredFailure.set(key, result);
+      }
+    });
+    return { result: { ok: true, servers: [] }, pending: true };
   }
 
   /**
@@ -442,16 +555,20 @@ export class AgentMcpService {
         `could not switch ${server} for ${agent}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const read = await this.readServers(agent, projectDir);
+    // BLOCKING, unlike the panel's read: this route's entire answer is the
+    // listing that resulted from the write, so handing back empty rows with
+    // `pending` would leave the caller nothing to render the toggle against.
+    const read = await this.readServers(agent, projectDir, { blocking: true });
     // Re-read rather than reusing `facts`: the write above changed exactly the
     // half `facts` reports, so the pre-write copy would render the state the
     // user just left.
-    return this.composeListing(
+    const listing = await this.composeListing(
       read.adapter,
       agent,
       read.projectDir,
       read.result,
     );
+    return { ...listing, pending: false };
   }
 
   /**
@@ -473,7 +590,9 @@ export class AgentMcpService {
     agent: AgentKind,
     cwd: string,
     result: AgentMcpListingResult,
-  ): Promise<AgentMcpListingWire> {
+    // `pending` is the CALLER's fact — whether a dial is still running — not
+    // anything this overlay can see, so each caller adds it.
+  ): Promise<Omit<AgentMcpListingWire, 'pending'>> {
     if (!result.ok) {
       return { servers: [], unavailableReason: result.reason };
     }

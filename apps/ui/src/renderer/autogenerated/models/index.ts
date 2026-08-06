@@ -90,6 +90,12 @@ export interface AgentMcpListingDto {
      * @memberof AgentMcpListingDto
      */
     unavailableReason: string | null;
+    /**
+     * A cold read is running; these rows are not the answer yet. Ask again.
+     * @type {boolean}
+     * @memberof AgentMcpListingDto
+     */
+    pending: boolean;
 }
 /**
  * 

@@ -4,6 +4,7 @@ import type { DaemonHandle } from '../shared/contracts';
 import {
   createDaemonApis,
   daemonErrorCode,
+  daemonErrorDetail,
   daemonErrorStatus,
   isRunBusyError,
   MCP_ROUTE_TIMEOUT_MS,
@@ -249,5 +250,66 @@ describe('isRunBusyError', () => {
         ),
       ),
     ).toBe(false);
+  });
+
+  // The three cases above all carry a PARSEABLE `code`, so each returns at the
+  // structured branch or the status check — replacing the regex fallback with
+  // `return false` left every one of them green. The tolerant half was the
+  // whole reason the doc block singles it out: an unrecognised body drops the
+  // user's message into a red banner instead of the queue.
+  it('still queues on a 409 whose body is not the daemon’s JSON envelope', () => {
+    expect(
+      isRunBusyError(
+        new Error(
+          'daemon POST /v1/chats/x/messages failed (409): RUN_BUSY — a turn is already in progress',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('holds the word boundary, so a longer code is not read as RUN_BUSY', () => {
+    // Pins the `\b` rather than a bare `includes`: a future `RUN_BUSYX` would
+    // otherwise be silently queued as though it were this one.
+    expect(
+      isRunBusyError(
+        new Error('daemon POST /v1/chats/x/messages failed (409): RUN_BUSYX'),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('daemonErrorDetail', () => {
+  it('reads the sentence the daemon wrote beside its code', () => {
+    // What the approval chip shows when a turn cannot be re-moded. Without it
+    // the user got the whole `daemon PATCH … failed (409): {"code":…}`
+    // envelope in a red strip — raw JSON as an error message, which is the
+    // defect the queue fix removed from `send()` and left here.
+    expect(
+      daemonErrorDetail(
+        new Error(
+          'daemon PATCH /v1/chats/x/settings failed (409): ' +
+            '{"statusCode":409,"code":"RUN_BUSY","message":"this turn is running without a permission gate, so its approval mode cannot be changed until it settles"}',
+        ),
+      ),
+    ).toBe(
+      'this turn is running without a permission gate, so its approval mode cannot be changed until it settles',
+    );
+  });
+
+  it('says nothing rather than guessing when the body is not the daemon’s', () => {
+    expect(
+      daemonErrorDetail(
+        new Error(
+          'daemon GET /v1/chats failed (502): <html>bad gateway</html>',
+        ),
+      ),
+    ).toBeNull();
+    expect(daemonErrorDetail(new Error('socket hang up'))).toBeNull();
+    // Present but empty is still nothing to show.
+    expect(
+      daemonErrorDetail(
+        new Error('daemon GET /v1/chats failed (409): {"message":"   "}'),
+      ),
+    ).toBeNull();
   });
 });

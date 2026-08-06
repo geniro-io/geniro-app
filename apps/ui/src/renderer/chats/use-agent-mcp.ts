@@ -41,6 +41,17 @@ const TOGGLE_FAILURE = 'could not change that server';
 const EMPTY_LISTINGS: ReadonlyMap<string, AgentMcpListing> = new Map();
 
 /**
+ * How long to wait before asking again for a listing the daemon reported as
+ * still being read.
+ *
+ * The daemon answers a cold read immediately with `pending` and finishes the
+ * dial behind it — that dial STARTS the user's own MCP servers, so it is
+ * measured in seconds. Asking again on a short cadence is what turns that into
+ * rows appearing rather than a spinner that ends in an empty panel.
+ */
+const PENDING_RETRY_MS = 1000;
+
+/**
  * What a listing is ABOUT: a CLI, plus the plugin directory the node running
  * it names — a plugin can ship its own MCP servers, so two nodes on the same
  * CLI pointed at different directories genuinely load different sets.
@@ -238,7 +249,13 @@ export function useAgentMcp(
           // from a folder the CLI refused to read.
           return [
             mcpScopeKey(scope),
-            { servers: [], unavailableReason: transportReason(err) },
+            {
+              servers: [],
+              unavailableReason: transportReason(err),
+              // Settled, not still being read: the request never reached an
+              // answer, so asking again on a timer would retry forever.
+              pending: false,
+            },
           ];
         }
       }),
@@ -263,6 +280,39 @@ export function useAgentMcp(
     rereadToken,
     enabled,
   ]);
+
+  // Answers for a different folder are not this folder's answers.
+  const byScope =
+    answered.scope === readScope ? answered.byScope : EMPTY_LISTINGS;
+
+  /**
+   * A scope the daemon is still reading. Empty rows under this flag are NOT a
+   * claim that the folder has no servers — the daemon says so explicitly so the
+   * two cannot be confused, and the panel must not settle on the empty one.
+   */
+  const stillReading = [...byScope.values()].some((listing) => listing.pending);
+
+  useEffect(() => {
+    if (!stillReading || !enabled) {
+      return;
+    }
+    // A plain re-read, never `refresh`: the dial the daemon already has running
+    // is the one we are waiting for, and bypassing its cache would start a
+    // SECOND one — launching the user's MCP servers all over again.
+    const timer = setTimeout(
+      () => setRereadToken((token) => token + 1),
+      PENDING_RETRY_MS,
+    );
+    return () => clearTimeout(timer);
+    // Keyed on `answered` — the ANSWER's identity — and not on `stillReading`
+    // alone. That is the whole correctness of the loop: a boolean that is true
+    // after the first pending answer is still true after the second, so React
+    // would skip the effect and no further timer would ever be armed. With a
+    // 6.7s cold dial against the daemon's 400ms budget, pending-then-pending is
+    // the ORDINARY case, and the panel would spin forever one ask short.
+    // `setAnswered` stores a fresh object per read, so this changes exactly
+    // once per answer.
+  }, [answered, stillReading, enabled]);
 
   const refresh = useCallback(() => {
     setReloadToken((token) => token + 1);
@@ -335,10 +385,6 @@ export function useAgentMcp(
     [agentsApi, cwd, readScope, scopes],
   );
 
-  // Answers for a different folder are not this folder's answers.
-  const byScope =
-    answered.scope === readScope ? answered.byScope : EMPTY_LISTINGS;
-
   // "Asked for, not answered yet" counts as loading. The effect runs after
   // paint, so without this the panel renders one frame of "No servers" — a
   // claim about the user's configuration — before it has asked anything.
@@ -352,7 +398,10 @@ export function useAgentMcp(
 
   return {
     byScope,
-    loading: pending || writing > 0 || awaitingFirstAnswer,
+    // `stillReading` included, or the panel would drop its spinner and render
+    // the daemon's placeholder empty rows as "No servers" — the exact claim
+    // the `pending` flag exists to withhold.
+    loading: pending || writing > 0 || awaitingFirstAnswer || stillReading,
     refresh,
     setEnabled,
     toggleError,

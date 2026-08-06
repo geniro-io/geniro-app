@@ -127,12 +127,31 @@ export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 export const CLAUDE_PLUGIN_DIR_FLAG = '--plugin-dir';
 
 /**
- * Restricts a turn to `--mcp-config` servers only. geniro does NOT pass it:
- * an agent must see the same MCP servers a fresh session in that folder sees,
- * plus geniro's call surface. Named so the spec pinning its absence and any
- * future reader spell it the same way.
+ * Restricts a turn to `--mcp-config` servers only.
+ *
+ * NEVER passed on a turn of the user's: an agent must see the same MCP servers
+ * a fresh session in that folder sees, plus geniro's call surface. It is passed
+ * on exactly one path — a turn the daemon runs for its own bookkeeping and
+ * cancels before the model runs (`AgentTurnInput.isolateMcpServers`), where
+ * loading the user's servers only to reap them is pure cost.
  */
 export const CLAUDE_STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
+
+/**
+ * The `--mcp-config` value that defines no servers at all.
+ *
+ * Passed WITH {@link CLAUDE_STRICT_MCP_CONFIG_FLAG} rather than relying on the
+ * flag alone, so the restriction has an explicit empty set to restrict to
+ * rather than depending on how the CLI reads a strict flag with no config
+ * beside it. The flag takes inline JSON as readily as a path, so this needs no
+ * temp file to be cleaned up.
+ *
+ * Probe-verified on claude 2.1.223: this argv is accepted, the `init` line
+ * comes back with `mcp_servers: []` — no server of the user's was started —
+ * and it still reports all 59 `slash_commands`, which is the only thing the
+ * probe reading it wants.
+ */
+export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 
 // ── The MCP toggle ────────────────────────────────────────────────────────
 //

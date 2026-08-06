@@ -45,6 +45,44 @@ describe('McpHarvestStore', () => {
     expect(store.get('cursor-agent', '/proj', null)).toBeNull();
   });
 
+  it('stops serving a harvest once it has aged out, so the CLI is reached again', () => {
+    // Unbounded, this store does not cache — it SHADOWS. It is consulted ahead
+    // of the live listing, so once any turn has run in a folder the re-dial
+    // below it is never reached again, and a server the user adds to
+    // `.mcp.json` never appears until they run another turn or press
+    // Reconnect. The disk file makes that outlive restarts.
+    let clock = 1_000_000;
+    const store = new McpHarvestStore({
+      file: cacheFile(),
+      now: () => clock,
+    });
+    store.record('claude', '/proj', null, [server('codegraph')]);
+
+    clock += 10 * 60 * 1000 - 1;
+    expect(store.get('claude', '/proj', null)).toEqual([server('codegraph')]);
+
+    clock += 1;
+    expect(store.get('claude', '/proj', null)).toBeNull();
+  });
+
+  it('re-arms the window when a later turn harvests the folder again', () => {
+    // The age is of the READING, not of the key: a folder in active use keeps
+    // answering instantly, which is the whole reason to have a harvest.
+    let clock = 1_000_000;
+    const store = new McpHarvestStore({
+      file: cacheFile(),
+      now: () => clock,
+    });
+    store.record('claude', '/proj', null, [server('codegraph')]);
+
+    clock += 9 * 60 * 1000;
+    store.record('claude', '/proj', null, [server('linear')]);
+    clock += 9 * 60 * 1000;
+
+    // 18 minutes after the first harvest, and still served.
+    expect(store.get('claude', '/proj', null)).toEqual([server('linear')]);
+  });
+
   it('keys by plugin directory, because a plugin ships its own servers', () => {
     // The failure this prevents: two agent nodes on one CLI in one folder,
     // pointed at different plugin directories, genuinely load different sets.
@@ -116,7 +154,9 @@ describe('McpHarvestStore', () => {
       }),
       'utf8',
     );
-    const store = new McpHarvestStore({ file });
+    // A clock that makes the fixture's `harvestedAt: 1` freshly harvested, so
+    // this stays a test about load VALIDATION rather than about the age bound.
+    const store = new McpHarvestStore({ file, now: () => 1 });
 
     expect(store.get('claude', '/good', null)).toEqual([server('ok')]);
     expect(store.get('claude', '/bad-status', null)).toBeNull();

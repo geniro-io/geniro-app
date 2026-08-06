@@ -35,6 +35,7 @@ export function ContextMeter({
   contextTokens,
   contextWindowTokens,
   spentUsd = null,
+  side = 'bottom',
   className,
 }: {
   /** Prompt-side tokens of the latest request, or null when unknown. */
@@ -43,6 +44,19 @@ export function ContextMeter({
   contextWindowTokens: number | null;
   /** Total spend across the run's turns, or null to omit. */
   spentUsd?: number | null;
+  /**
+   * Which way the readout opens. `Popover` does no collision detection — its
+   * placement is two static ternaries — so a caller near an edge has to say.
+   *
+   * The ring shows no figures by design, which makes this panel the only
+   * readout a sighted pointer or keyboard user gets: clipped, there is nothing
+   * left to read. (Screen-reader users are unaffected — the trigger carries the
+   * whole reading in its `aria-label`.)
+   *
+   * Defaults to `bottom` so the agents-panel call site, which has room below,
+   * is unchanged.
+   */
+  side?: 'top' | 'bottom';
   className?: string;
 }): React.JSX.Element | null {
   const [pinned, setPinned] = useState(false);
@@ -161,7 +175,7 @@ export function ContextMeter({
         open={pinned || hovered}
         onClose={close}
         triggerRef={triggerRef}
-        side="bottom"
+        side={side}
         align="end"
         label="Context usage"
         className="w-max px-2.5 py-2">

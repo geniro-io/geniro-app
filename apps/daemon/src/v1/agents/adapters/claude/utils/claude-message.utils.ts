@@ -57,16 +57,35 @@ function describesNoWork(
 /**
  * The statuses claude's `system/init` reports a loaded MCP server in.
  *
- * Narrower than {@link AgentMcpServerStatus} on purpose: `disabled` never
- * appears here, because a server the user switched off is not loaded and so is
- * absent from the report entirely. Anything unrecognised degrades to `unknown`
- * rather than being dropped — the server is real either way, and a status this
- * mapper could not read is not a reason to hide it from the panel.
+ * `disabled` IS one of them. This set used to omit it, on the stated reasoning
+ * that a switched-off server is not loaded and so never reaches the report —
+ * which is not what the CLI does. PROBE-VERIFIED on 2.1.223, isolated
+ * `CLAUDE_CONFIG_DIR`, one `local`-scope server:
+ *
+ *   without `disabledMcpServers` → `[{name:'probe-server', status:'failed'}]`
+ *   with it                      → `[{name:'probe-server', status:'disabled'}]`
+ *
+ * (The same result the 2.1.222 probe recorded at
+ * {@link CLAUDE_HOME_DISABLED_MCP_KEY}, which this contradicted. Note the key
+ * is matched on the RESOLVED path — a `projects` entry under `/tmp/...` is not
+ * read for a cwd the CLI resolves to `/private/tmp/...`, which is what made an
+ * earlier re-probe appear to disagree.)
+ *
+ * Omitting it was not cosmetic: an unrecognised status degrades to `unknown`,
+ * so every disabled server a turn reported was harvested as `unknown`. Where
+ * the CLI's own config could still be read the overlay corrected it, but where
+ * it could not, `disabled: server.status === 'disabled'` then answered false
+ * and the panel rendered a switched-off server as on.
+ *
+ * Anything still unrecognised degrades to `unknown` rather than being dropped —
+ * the server is real either way, and a status this mapper could not read is not
+ * a reason to hide it from the panel.
  */
 const INIT_STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
   'connected',
   'failed',
   'pending',
+  'disabled',
 ]);
 
 /**

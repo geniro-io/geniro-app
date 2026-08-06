@@ -656,6 +656,22 @@ export interface AgentTurnInput {
    */
   trustWorkspace?: boolean;
   /**
+   * This turn must load NO MCP servers of the user's.
+   *
+   * Adapter-agnostic intent, like {@link trustWorkspace}: the caller states
+   * that nothing about this turn depends on the user's servers, and each CLI
+   * decides how to arrange that. Set only by probes the daemon runs for its
+   * own bookkeeping — the reported-commands probe is cancelled before the
+   * model runs, so a server it launched could never have been used, yet
+   * launching one costs a real process and reaping it costs the user's own
+   * server on that folder.
+   *
+   * A user-project turn NEVER sets it: an agent must see the same MCP servers
+   * a fresh session in that folder sees. A CLI with no way to restrict the set
+   * ignores the field.
+   */
+  isolateMcpServers?: boolean;
+  /**
    * A plugin directory this turn loads, and no other turn's.
    *
    * Already validated and canonicalized by the caller — an adapter puts it

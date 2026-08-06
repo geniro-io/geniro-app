@@ -45,6 +45,7 @@ import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import {
   createDaemonApis,
+  daemonErrorDetail,
   daemonErrorStatus,
   isRunBusyError,
 } from '../daemon-api';
@@ -850,7 +851,17 @@ export function Chats({
       lastScrollTopRef.current = scroller.scrollTop;
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+    // Its OWN effect, keyed on the run alone. The listener is on the scroller,
+    // which does not change as rows arrive — re-adding it per transcript change
+    // was pure churn, and per streaming TOKEN it was churn at token rate.
+  }, [activeRunId]);
 
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (!scroller) {
+      return;
+    }
     // jsdom has no ResizeObserver, and neither does an old runtime — the
     // commit-time effect above is still the baseline behaviour without it.
     const observer =
@@ -862,19 +873,34 @@ export function Chats({
             }
             transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
           });
-    const observed = Array.from(scroller.children);
-    for (const child of observed) {
-      observer?.observe(child);
-    }
-    return () => {
-      scroller.removeEventListener('scroll', onScroll);
+    const repoint = (): void => {
       observer?.disconnect();
+      for (const child of Array.from(scroller.children)) {
+        observer?.observe(child);
+      }
     };
-    // Re-pointed on every transcript change: the observer holds the CHILDREN,
-    // and a new row is a new element it has never seen. Keyed on the inputs
-    // `transcriptEntries` is derived from rather than on the memo itself, which
-    // is declared further down this component.
-  }, [activeRunId, items, liveText]);
+    repoint();
+    // The element set is WATCHED rather than guessed at from a dependency list.
+    //
+    // This used to key on `liveText`, which is a fresh Map per streamed token
+    // while the daemon coalesces nothing — so every token cost a `disconnect()`
+    // plus one `observe()` per row in an unvirtualized transcript. But no
+    // dependency list can stand in for the element set either: transcript rows
+    // are derived from durable items, live text AND working agents, and a
+    // single row's top-level block identity flips as it becomes a thinking or
+    // working block. A `childList` observation is exactly the question — "did
+    // the children change" — so it catches all of those and none of the text
+    // deltas, which mutate character data rather than the child list.
+    const children =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(repoint);
+    children?.observe(scroller, { childList: true });
+    return () => {
+      observer?.disconnect();
+      children?.disconnect();
+    };
+  }, [activeRunId]);
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
@@ -965,7 +991,18 @@ export function Chats({
           prev.map((run) => (run.id === updated.id ? updated : run)),
         );
       } catch (err) {
-        setError(String(err));
+        // A RUN_BUSY here is not a fault — it is the daemon saying this turn
+        // was spawned with no permission gate, so its mode cannot be changed
+        // until it settles. It is also not rare: only claude implements
+        // `buildApprovalModePayload`, so EVERY mid-turn approval change on a
+        // cursor chat lands here, and the chip is offered on cursor.
+        //
+        // `String(err)` printed the whole
+        // `daemon PATCH /v1/chats/<id>/settings failed (409): {"code":…}`
+        // envelope. The daemon wrote a real sentence for this; show that.
+        setError(
+          (isRunBusyError(err) ? daemonErrorDetail(err) : null) ?? String(err),
+        );
       }
     },
     [chatApi],
@@ -1849,6 +1886,12 @@ export function Chats({
         // The route needs a folder and this one has none — a run can carry no
         // working directory at all. Said rather than swallowed: the button
         // would otherwise do nothing at all when pressed.
+        //
+        // Not reachable from today's panel, and deliberately kept anyway: the
+        // listing that renders this button is itself gated on the run's folder
+        // (`useAgentMcp`), so a folderless run has no rows to press. What the
+        // spec pins is that absence, not this message — the day a caller
+        // reaches the handler another way, this is the answer it gets.
         setError(
           `${server} is configured per folder, and this chat has no folder to sign in from`,
         );
@@ -2482,6 +2525,13 @@ export function Chats({
                                 ? null
                                 : (agents[0]?.contextWindowTokens ?? null)
                             }
+                            // Opens UPWARD here, unlike the agents panel. This
+                            // row sits at the bottom of the composer, inside
+                            // the app shell's `overflow-hidden` main — roughly
+                            // 20px below a panel that is 50-68px tall — so a
+                            // downward readout is clipped, and the ring shows
+                            // no figures of its own to fall back on.
+                            side="top"
                           />
                           {streaming ? (
                             <>

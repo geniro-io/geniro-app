@@ -7,7 +7,9 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { fakeSpawn } from '../__tests__/fake-child';
 import type { ClaudeModesCapability } from '../chat.types';
+import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import { fakeGroupChild, spawnAnswering } from './__tests__/fake-group-child';
 import type {
@@ -16,6 +18,7 @@ import type {
   AgentCommandOptions,
   AgentEvent,
   AgentModel,
+  AgentTurnInput,
 } from './adapter.types';
 import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
@@ -396,6 +399,90 @@ class BareAdapter extends AgentAdapter {
   }
 }
 
+/**
+ * A CLI that CAN keep a process between turns but has no message for changing
+ * its approval mode — the combination claude cannot produce (both of its
+ * answers come from `keepStdinOpen`) and the one the base's re-mode refusal
+ * exists for.
+ */
+class SessionWithoutModeChangeAdapter extends AgentAdapter {
+  constructor(spawn: SpawnFn) {
+    super({ spawn });
+  }
+
+  protected get command(): string {
+    return 'sessionful-cli';
+  }
+
+  getConfig(): AdapterConfig {
+    return new CursorAcpAdapter().getConfig();
+  }
+
+  protected buildArgs(): string[] {
+    return [];
+  }
+
+  /** `{"done":true}` is this fake CLI's whole result-line vocabulary. */
+  protected mapMessage(obj: unknown): AgentEvent[] {
+    return (obj as { done?: boolean }).done === true
+      ? [
+          {
+            type: 'turn_complete',
+            usage: null,
+            stopReason: null,
+            finalText: null,
+          },
+        ]
+      : [];
+  }
+
+  override listModels(): Promise<AgentModel[]> {
+    return Promise.resolve([]);
+  }
+
+  protected override canHostSession(): boolean {
+    return true;
+  }
+
+  protected override buildNextTurnPayload(): string {
+    return 'next\n';
+  }
+
+  // Left at the base default (undefined) on purpose: this CLI has no such
+  // message, which is exactly what the refusal below is about.
+}
+
+describe('AgentAdapter re-modes a session it can, and refuses one it cannot', () => {
+  it('refuses a turn whose mode the running process cannot be told about', async () => {
+    // Silently accepting would run the turn under the mode the PREVIOUS one
+    // was spawned with, while the chip and the persisted run row read the new
+    // one. Null is what the registry already handles: it closes the session
+    // and respawns, putting the mode back in argv where it started.
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      approvalMode: 'acceptEdits',
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+
+    const first = session.startTurn(input, () => {});
+    expect(first).not.toBeNull();
+    child.stdout.emitData('{"done":true}\n');
+    await first?.done;
+
+    expect(
+      session.startTurn({ ...input, approvalMode: 'ask' }, () => {}),
+    ).toBeNull();
+    // …while the SAME mode is still served on that process, so the refusal is
+    // about the mode change and not about the session being spent.
+    expect(session.startTurn(input, () => {})).not.toBeNull();
+  });
+});
+
 describe('AgentAdapter.listMcpServers', () => {
   it('refuses rather than claiming an empty folder when an adapter forgot to override', async () => {
     // The safety net: answering `{ ok: true, servers: [] }` here would let the
@@ -712,11 +799,66 @@ describe('AgentAdapter.runCommand spawn options', () => {
       );
       await vi.advanceTimersByTimeAsync(50);
 
+      // The group is ASKED to stop first — it may hold the user's own MCP
+      // servers, which a straight SIGKILL would give no chance to shut down.
+      expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+      expect(killSpy).not.toHaveBeenCalledWith(-4242, 'SIGKILL');
+
+      // And this is the case the force-kill is FOR: no `exit` ever arrived, so
+      // a grandchild is still holding the inherited stdout pipe open. Nothing
+      // has waitpid'd the leader, so its pid cannot have been reissued.
+      await vi.advanceTimersByTimeAsync(GROUP_KILL_GRACE_MS);
       expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+
       await expect(pending).resolves.toEqual({
         ok: false,
         reason: expect.stringContaining('could not read'),
       });
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('still frees a grandchild that ignores SIGTERM, so a completed read is not thrown away', async () => {
+    // The case reaping-at-`exit` exists for, spelled out at that listener: the
+    // CLI is gone and has printed its whole answer, but a health-check
+    // grandchild it forked still holds the inherited stdout pipe, so `close`
+    // does not arrive. A grandchild that ignores SIGTERM — a browser server
+    // mid-shutdown, an indexer — then keeps holding it, and with no escalation
+    // the read sits until the 45s deadline and is discarded, reporting a
+    // failure for a folder whose servers were read successfully.
+    vi.useFakeTimers();
+    const fake = fakeGroupChild(4260);
+    const killSpy = vi
+      .spyOn(process, 'kill')
+      .mockImplementation((pid: number, signal?: string | number): true => {
+        // Only a force-kill takes this grandchild down; the SIGTERM is ignored.
+        if (pid === -4260 && signal === 'SIGKILL') {
+          fake.child.emit('close', 0, null);
+        }
+        return true;
+      });
+    try {
+      const groupSpawnFn = ((): unknown => {
+        queueMicrotask(() => {
+          fake.writeStdout('the whole listing\n');
+          // `exit` alone: the leader is gone, the pipe is not.
+          fake.child.emit('exit', 0, null);
+        });
+        return fake.child;
+      }) as unknown as typeof spawn;
+
+      const pending = new RawCommandAdapter({ groupSpawnFn }).run(
+        ['mcp', 'list'],
+        { processGroup: true, timeoutMs: 45_000 },
+      );
+      // Past the grace the escalation should have landed on, and on past the
+      // whole deadline so the read settles either way rather than hanging.
+      await vi.advanceTimersByTimeAsync(GROUP_KILL_GRACE_MS + 1);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      await expect(pending).resolves.toBe('the whole listing\n');
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();
@@ -736,7 +878,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
     // And it must happen exactly ONCE. `exit`, `close` and the deadline all
     // reap, and the timer is armed BEFORE the spawn (an injected spawn that
     // emits synchronously would otherwise leave one nothing can clear), so
-    // settle has to clear it — else it fires later and SIGKILLs whatever
+    // settle has to clear it — else it fires later and signals whatever
     // process group owns that pid by then.
     vi.useFakeTimers();
     const killSpy = vi
@@ -747,13 +889,18 @@ describe('AgentAdapter.runCommand spawn options', () => {
 
       await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
+      // ONE reap, which is ONE escalation: SIGTERM now…
       expect(killSpy).toHaveBeenCalledTimes(1);
-      expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGKILL');
+      expect(killSpy).toHaveBeenCalledWith(-4243, 'SIGTERM');
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      // Still one: the deadline was cleared, not merely outrun.
-      expect(killSpy).toHaveBeenCalledTimes(1);
+      // …and its single SIGKILL after the grace, and nothing further. Two
+      // signals from one reap, not two reaps: the deadline was cleared rather
+      // than merely outrun, and `exit`/`close` did not each arm their own
+      // escalation.
+      expect(killSpy).toHaveBeenCalledTimes(2);
+      expect(killSpy).toHaveBeenNthCalledWith(2, -4243, 'SIGKILL');
     } finally {
       killSpy.mockRestore();
       vi.useRealTimers();
@@ -778,8 +925,8 @@ describe('AgentAdapter.runCommand spawn options', () => {
 
       await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
-      expect(killSpy).toHaveBeenCalledWith(-4249, 'SIGKILL');
-      expect(fake.directKills).toEqual(['SIGKILL']);
+      expect(killSpy).toHaveBeenCalledWith(-4249, 'SIGTERM');
+      expect(fake.directKills).toEqual(['SIGTERM']);
     } finally {
       killSpy.mockRestore();
     }
@@ -801,7 +948,7 @@ describe('AgentAdapter.runCommand spawn options', () => {
 
       await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/tmp' });
 
-      expect(killSpy).toHaveBeenCalledWith(-4244, 'SIGKILL');
+      expect(killSpy).toHaveBeenCalledWith(-4244, 'SIGTERM');
     } finally {
       killSpy.mockRestore();
     }

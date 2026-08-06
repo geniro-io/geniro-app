@@ -121,6 +121,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       timer: null,
     };
     this.entries.set(runId, entry);
+    this.forgetWhenClosed(runId, entry);
     return this.track(runId, entry, handle);
   }
 
@@ -153,6 +154,35 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     for (const [runId, entry] of [...this.entries]) {
       this.closeEntry(runId, entry, 'the daemon is shutting down');
     }
+  }
+
+  /**
+   * Drop an entry the moment its process dies, rather than waiting for someone
+   * to try to use it.
+   *
+   * A dead session reports `idle === false` — it is not "alive with no turn in
+   * flight" — and every reader here treats a non-idle entry as BUSY. So the
+   * idle timer returns without closing it, and `evictIfFull` skips it while
+   * still counting it against the ceiling. The consequence is inverted: a
+   * genuinely live idle session gets chosen as `oldest` and closed instead,
+   * respawning that run's CLI and re-booting the user's MCP servers — the exact
+   * cost this whole feature exists to avoid.
+   *
+   * `closed` is the channel the session already exposes for this
+   * (`CliSession.closed`), so nothing new had to be plumbed; it simply had no
+   * subscriber on this side.
+   */
+  private forgetWhenClosed(runId: string, entry: SessionEntry): void {
+    void entry.session.closed.then(() => {
+      // Only if it is still the registered one: a replaced entry's `closed`
+      // arrives after its successor is in the map, and deleting then would
+      // drop a live session.
+      if (this.entries.get(runId) !== entry) {
+        return;
+      }
+      this.disarm(entry);
+      this.entries.delete(runId);
+    });
   }
 
   /** Re-arm the idle window once this turn settles. */
@@ -199,6 +229,16 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * kill work the user is watching to make room for work they just asked for.
    */
   private evictIfFull(): void {
+    // A dead session is not busy, whatever `idle` says about it. Dropping these
+    // first is what stops one from occupying a slot forever and getting a LIVE
+    // session evicted in its place — `closed` normally removes them, but a
+    // process killed behind the registry's back (the cancel fallback's group
+    // kill) may not have settled yet when the next turn arrives.
+    for (const [runId, entry] of [...this.entries]) {
+      if (!entry.session.alive) {
+        this.closeEntry(runId, entry, 'its process was already gone');
+      }
+    }
     while (this.entries.size >= MAX_LIVE_SESSIONS) {
       let oldest: [string, SessionEntry] | null = null;
       for (const candidate of this.entries) {

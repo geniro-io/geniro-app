@@ -392,4 +392,44 @@ describe('useNodeMcp', () => {
     expect(listAgentMcpServers).toHaveBeenCalledTimes(1);
     expect(seen[0]).not.toHaveProperty('refresh');
   });
+
+  it('keeps asking while the daemon says the read is still running', async () => {
+    // The daemon answers a cold read at once with empty rows under `pending`
+    // and finishes the dial behind it. That dial STARTS the user's own MCP
+    // servers, so it routinely outlasts several of these windows — the
+    // inspector has to keep asking until the listing settles, or it renders the
+    // daemon's placeholder as "no servers" for a node that has them.
+    const stillReading = {
+      servers: [],
+      unavailableReason: null,
+      pending: true,
+    } as unknown as AgentMcpListing;
+    const settled = { ...listing('memory'), pending: false };
+    const listAgentMcpServers = vi
+      .fn<() => Promise<AgentMcpListing>>()
+      .mockResolvedValueOnce(stillReading)
+      .mockResolvedValueOnce(stillReading)
+      .mockResolvedValue(settled);
+    const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
+
+    vi.useFakeTimers();
+    const { latest } = mount(api, 'claude', null);
+    // The first read clears its 500ms debounce; each later one costs a 1000ms
+    // retry window plus that same debounce.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    // One advance per poll CYCLE, and there are three answers to collect.
+    // React flushes the retry effect after `advanceTimersByTimeAsync` returns,
+    // so the timer it arms and the read that timer triggers land in the next
+    // advance — two iterations would stop one answer short of the settled one.
+    for (let poll = 0; poll < 4; poll += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1600);
+      });
+    }
+
+    expect(latest().listing?.servers.map((s) => s.name)).toEqual(['memory']);
+    expect(latest().loading).toBe(false);
+  });
 });

@@ -31,6 +31,7 @@ import {
   CLAUDE_BASE_ARGS,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
+  CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
   CLAUDE_HOME_SETTINGS_FILE,
@@ -53,6 +54,7 @@ import {
   CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
@@ -697,6 +699,41 @@ export class ClaudeAdapter extends AgentAdapter {
         response: allow
           ? { behavior: 'allow', updatedInput: updatedInput ?? {} }
           : { behavior: 'deny', message: CLAUDE_DENY_MESSAGE },
+      },
+    })}\n`;
+  }
+
+  protected override buildApprovalModePayload(
+    input: AgentTurnInput,
+    mode: AgentApprovalMode,
+  ): string | undefined {
+    // The predicate is `keepStdinOpen`'s, deliberately reused rather than
+    // restated: "can this turn be re-moded" and "does this turn hold the stdin
+    // dialogue" are the SAME question, and a second copy of the condition is
+    // how the two would come to disagree after a change to buildArgs. A turn
+    // spawned under --dangerously-skip-permissions has no prompt tool, so a
+    // gate cannot be reintroduced into it by any message.
+    if (!this.keepStdinOpen(input)) {
+      return undefined;
+    }
+    return `${JSON.stringify({
+      type: 'control_request',
+      // Namespaced away from the CLI's own request ids — both id spaces share
+      // this one dialogue. Not unique per call by design: the CLI answers with
+      // the id it was given and nothing correlates a reply here, so a counter
+      // would be state on the adapter serving N concurrent turns.
+      request_id: `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}${CLAUDE_SET_PERMISSION_MODE_SUBTYPE}`,
+      request: {
+        subtype: CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
+        // `auto` is not a mode the CLI has. It is the DAEMON auto-approving at
+        // its own seam, so the CLI must keep prompting — which is `default`,
+        // exactly what `buildArgs` spawns an auto question-capable turn with.
+        // Sending `auto` would earn a rejected control request and leave the
+        // turn on whatever mode it had.
+        mode:
+          mode === 'auto' || mode === 'ask'
+            ? CLAUDE_PERMISSION_MODE_DEFAULT
+            : mode,
       },
     })}\n`;
   }

@@ -1985,3 +1985,87 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     expect(handle.sendUserMessage({ text: 'too late' })).toBe(false);
   });
 });
+
+describe('ClaudeAdapter — re-moding a turn already running', () => {
+  /** Everything written to stdin after the opening prompt line. */
+  function afterOpening(
+    input: Parameters<ClaudeAdapter['start']>[0],
+    act: (handle: ReturnType<ClaudeAdapter['start']>) => void,
+  ): string {
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(input, () => {});
+    const openingBytes = child.stdin.written.length;
+    act(handle);
+    return child.stdin.written.slice(openingBytes);
+  }
+
+  it('writes a set_permission_mode control_request on the open dialogue', () => {
+    // Probe-verified on 2.1.222: acknowledged in ~2ms, with the CLI re-emitting
+    // `system/init` under the new mode ~350ms later. This is what makes the
+    // change land on the turn in flight rather than the next one.
+    let delivered = false;
+    const written = afterOpening(
+      { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
+      (handle) => {
+        delivered = handle.setApprovalMode('acceptEdits');
+      },
+    );
+
+    expect(delivered).toBe(true);
+    expect(JSON.parse(written)).toEqual({
+      type: 'control_request',
+      // Namespaced away from the ids the CLI mints for its own can_use_tool
+      // requests — both id spaces share this one dialogue.
+      request_id: expect.stringMatching(/^geniro-/),
+      request: { subtype: 'set_permission_mode', mode: 'acceptEdits' },
+    });
+    expect(written.endsWith('\n')).toBe(true);
+    expect(written.trimEnd().includes('\n')).toBe(false);
+  });
+
+  it('sends `default` for auto, because the CLI has no mode by that name', () => {
+    // `auto` is the DAEMON auto-approving at its own seam, so the CLI must keep
+    // prompting — which is `default`, exactly what buildArgs spawns an auto
+    // question-capable turn with. Sending the literal 'auto' would earn a
+    // rejected control request and silently leave the turn on its old mode.
+    const written = afterOpening(
+      { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
+      (handle) => handle.setApprovalMode('auto'),
+    );
+
+    expect(JSON.parse(written).request.mode).toBe('default');
+  });
+
+  it('REFUSES a turn spawned without a permission gate, writing nothing', () => {
+    // `auto` with no question channel spawns under
+    // `--dangerously-skip-permissions`, which wires no prompt tool at all — so
+    // no message can reintroduce a gate the process was started without, and a
+    // true here would state a safety posture the user does not have.
+    let delivered = true;
+    const written = afterOpening(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        approvalMode: 'auto',
+        allowUserQuestions: false,
+      },
+      (handle) => {
+        delivered = handle.setApprovalMode('ask');
+      },
+    );
+
+    expect(delivered).toBe(false);
+    expect(written).toBe('');
+  });
+
+  it('reports false once the turn has settled', () => {
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
+      () => {},
+    );
+    child.emit('close', 0, null);
+
+    expect(handle.setApprovalMode('plan')).toBe(false);
+  });
+});

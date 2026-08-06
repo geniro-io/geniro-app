@@ -1257,6 +1257,7 @@ describe('GraphExecutorService', () => {
       cancel: cancelled,
       respondApproval: () => false,
       sendUserMessage: () => false,
+      setApprovalMode: () => false,
     });
 
     await expect(service.cancel(chat.id)).rejects.toThrow(

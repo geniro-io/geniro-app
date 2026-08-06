@@ -69,6 +69,31 @@ export const CLAUDE_PERMISSION_PROMPT_TOOL_STDIO = 'stdio';
 /** Bypasses every permission check — and STRIPS the question tool with them. */
 export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 
+/**
+ * The control subtype that re-modes a turn ALREADY RUNNING.
+ *
+ * The one client-INITIATED control request the daemon sends; every other line
+ * on this dialogue answers something the CLI asked first. Probed live on
+ * 2.1.222: written mid-turn it was acknowledged in ~2ms, and the CLI re-emitted
+ * `system/init` with the new `permissionMode` ~350ms later — so the change
+ * lands on the turn in flight rather than on the next one.
+ *
+ *     --> {"type":"control_request","request_id":"…",
+ *          "request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}
+ *     <-- control_response success {"mode":"acceptEdits"}
+ *
+ * Same expiry warning as the block above: an observation, not a contract.
+ */
+export const CLAUDE_SET_PERMISSION_MODE_SUBTYPE = 'set_permission_mode';
+
+/**
+ * Prefix for the request ids the DAEMON mints, keeping them out of the id
+ * space the CLI mints for its own `can_use_tool` requests. Both travel the one
+ * dialogue, and a collision would route the CLI's answer to our request into
+ * the approval registry as though a tool had been decided.
+ */
+export const CLAUDE_CONTROL_REQUEST_ID_PREFIX = 'geniro-';
+
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**

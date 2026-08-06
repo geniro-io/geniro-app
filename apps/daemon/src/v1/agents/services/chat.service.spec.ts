@@ -209,6 +209,7 @@ function fakeAdapter(kind: AgentKind): {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    setApprovalMode: ReturnType<typeof vi.fn>;
   }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
@@ -219,6 +220,7 @@ function fakeAdapter(kind: AgentKind): {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    setApprovalMode: ReturnType<typeof vi.fn>;
   }[] = [];
   const start = vi.fn(
     (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
@@ -240,6 +242,10 @@ function fakeAdapter(kind: AgentKind): {
         // stream-json stdin (probe-verified). A spec about the CLI that cannot
         // overrides it to false.
         sendUserMessage: vi.fn(() => true),
+        // A chat turn always spawns question-capable, so it always holds the
+        // permission dialogue and can always be re-moded — true is the
+        // realistic default. A spec about a turn that CANNOT overrides it.
+        setApprovalMode: vi.fn(() => true),
       };
       handles.push(handle);
       return handle;
@@ -834,6 +840,7 @@ describe('ChatService', () => {
       cancel: cancelled,
       respondApproval: () => false,
       sendUserMessage: () => false,
+      setApprovalMode: () => false,
     });
 
     await expect(service.cancel(run.id)).rejects.toThrow(
@@ -1056,7 +1063,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
   });
 
-  it('updateSettings flips the mode between turns, LOCKS it mid-turn, and 400s a cursor plan mode', async () => {
+  it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     const updated = await service.updateSettings(run.id, {
@@ -1064,13 +1071,14 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     expect(updated.approval).toBe('acceptEdits');
 
-    // A claimed run is a turn in flight. Approval is the ONE field that still
-    // refuses: it is the permission control, so ACKing a mode the running turn
-    // cannot honour would state a safety posture the user does not have.
+    // CLAIMED but not yet spawned: there is no process to be told, and the turn
+    // about to start has not read its settings row yet. Refused rather than
+    // ACKed — a change that reaches neither the CLI nor the snapshot the turn
+    // is about to take is a change that did not happen.
     expect(registry.tryClaim(run.id)).toBe(true);
     await expect(
       service.updateSettings(run.id, { approval: 'auto' }),
-    ).rejects.toThrow('a turn is in flight');
+    ).rejects.toThrow('cannot be changed until it settles');
     // ...while the cosmetic fields go through on the same claimed run.
     const midTurn = await service.updateSettings(run.id, { model: 'opus' });
     expect(midTurn.model).toBe('opus');
@@ -1088,6 +1096,79 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'acceptEdits',
     });
     expect(flipped.approval).toBe('acceptEdits');
+  });
+
+  it('hands an approval change to the turn ALREADY RUNNING, not to the next one', async () => {
+    // The behaviour the user asked for, in the CLI's own words: a mode switch
+    // applies as soon as possible. The CLI accepts `set_permission_mode` on a
+    // turn in flight and re-reads it in milliseconds (probe-verified on
+    // 2.1.222), so refusing here was this service's limitation, not the
+    // agent's.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.updateSettings(run.id, { approval: 'ask' });
+    await service.sendMessage(run.id, 'go');
+
+    const updated = await service.updateSettings(run.id, {
+      approval: 'acceptEdits',
+    });
+
+    expect(claude.handles[0]!.setApprovalMode).toHaveBeenCalledWith(
+      'acceptEdits',
+    );
+    expect(updated.approval).toBe('acceptEdits');
+    claude.finish();
+    await drain();
+  });
+
+  it('moves the DAEMON’s own auto-approve seam with it, not just the CLI', async () => {
+    // Two halves have to move together. The CLI decides which tools it even
+    // asks about; the daemon decides what to do with the ones it is asked. An
+    // `auto` turn switched to `ask` that only told the CLI would keep
+    // auto-approving every request the CLI still sent — the user would see the
+    // chip read `ask` while the turn approved everything for them.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.updateSettings(run.id, { approval: 'auto' });
+    await service.sendMessage(run.id, 'go');
+
+    await service.updateSettings(run.id, { approval: 'ask' });
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-1',
+      toolName: 'Bash',
+      input: {},
+    });
+    await drain();
+
+    // Parked for a human instead of auto-approved.
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    claude.finish();
+    await drain();
+  });
+
+  it('REFUSES when the running turn has no permission gate to be told through', async () => {
+    // The one case that is still genuinely unhonourable: a turn spawned under
+    // `--dangerously-skip-permissions` has no prompt tool wired, so no message
+    // can reintroduce a gate the process was started without. The handle says
+    // so, and the refusal must leave the stored mode untouched — ACKing would
+    // state a safety posture the user does not have.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.updateSettings(run.id, { approval: 'auto' });
+    await service.sendMessage(run.id, 'go');
+    claude.handles[0]!.setApprovalMode.mockReturnValue(false);
+
+    await expect(
+      service.updateSettings(run.id, { approval: 'ask' }),
+    ).rejects.toThrow('cannot be changed until it settles');
+
+    claude.finish();
+    await drain();
+    const [after] = await service.listChats();
+    expect(after?.approval).toBe('auto');
   });
 
   it('updateSettings changes the model mid-chat — the NEXT turn spawns with it', async () => {

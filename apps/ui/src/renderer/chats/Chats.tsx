@@ -2493,7 +2493,6 @@ export function Chats({
                             planSupported={
                               capabilities?.claudeModes.plan === 'pass'
                             }
-                            lockedMidTurn={streaming}
                             onChange={(approval) =>
                               void changeRunSettings({ approval })
                             }

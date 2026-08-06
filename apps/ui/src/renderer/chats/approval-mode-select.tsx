@@ -30,12 +30,20 @@ const MODE_LABELS: readonly { value: ChatApprovalMode; label: string }[] = [
  * `plan` carries one extra narrowing on top: it is hidden unless the installed
  * claude probed pass (no dead UI), while a run already stored on `plan` keeps
  * the option visible so the select never lies.
+ *
+ * Editable MID-TURN, like every other composer chip. It used to lock, on the
+ * once-true grounds that the daemon 409'd an approval change while a turn ran —
+ * but the CLI accepts a `set_permission_mode` on a turn already in flight and
+ * re-reads it in milliseconds, so that refusal was a limitation of the daemon
+ * rather than of the agent. The daemon now hands the change to the running turn
+ * and still refuses the one case it genuinely cannot honour (a turn spawned
+ * with no permission gate at all), which surfaces as an ordinary error rather
+ * than as a control greyed out in advance.
  */
 export function ApprovalModeSelect({
   supportedModes,
   value,
   planSupported,
-  lockedMidTurn = false,
   onChange,
   className,
 }: {
@@ -48,16 +56,6 @@ export function ApprovalModeSelect({
   /** Current mode; null = legacy run created before the selector existed. */
   value: ChatApprovalMode | null;
   planSupported: boolean;
-  /**
-   * A turn is running, so this chip is LOCKED.
-   *
-   * The odd one out among the composer chips, and deliberately: the daemon
-   * 409s an approval change mid-turn because this is the permission control,
-   * and an ACK that the running turn will not honour would state a safety
-   * posture the user does not have. Model and effort carry no such risk and
-   * stay editable, applying to the next turn.
-   */
-  lockedMidTurn?: boolean;
   onChange: (mode: ChatApprovalMode) => void;
   className?: string;
 }): React.JSX.Element | null {
@@ -75,12 +73,7 @@ export function ApprovalModeSelect({
       value={value}
       placeholder="cli default"
       aria-label="Tool-approval mode"
-      disabled={lockedMidTurn}
-      title={
-        lockedMidTurn
-          ? 'The approval mode is locked while a turn is running'
-          : 'Tool-approval mode'
-      }
+      title="Tool-approval mode"
       className={className}
       groups={[{ items: [...options] }]}
       onValueChange={(mode) => onChange(mode as ChatApprovalMode)}

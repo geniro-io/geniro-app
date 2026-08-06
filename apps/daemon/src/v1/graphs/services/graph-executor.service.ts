@@ -683,6 +683,7 @@ export class GraphExecutorService {
       // fanning out over N nodes has no ONE conversation a follow-up belongs
       // to, and picking a node for it would be an invention.
       sendUserMessage: () => false,
+      setApprovalMode: () => false,
     };
     this.registry.register(runId, aggregateHandle);
 

@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 
 import type {
+  AgentApprovalMode,
   AgentEvent,
   AgentTurnHandle,
   FollowUpMessage,
@@ -92,6 +93,14 @@ export interface RunCliOptions {
    * once its prompt is in, and `sendUserMessage` is a no-op.
    */
   buildFollowUpPayload?: (message: FollowUpMessage) => string | undefined;
+  /**
+   * Encode a mid-turn approval-mode change as the stdin line the CLI expects.
+   * Undefined = THIS turn cannot be re-moded, and `setApprovalMode` is a no-op
+   * — which is a per-TURN fact, not a per-CLI one: the same adapter answers
+   * differently for a turn it spawned with a permission dialogue and one it
+   * spawned without.
+   */
+  buildApprovalModePayload?: (mode: AgentApprovalMode) => string | undefined;
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
   /**
@@ -230,6 +239,7 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       cancel: () => {},
       respondApproval: () => false,
       sendUserMessage: () => false,
+      setApprovalMode: () => false,
     };
   }
 
@@ -432,6 +442,19 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         return false;
       }
       const line = opts.buildFollowUpPayload?.(message);
+      if (line === undefined) {
+        return false;
+      }
+      return writeStdin(line);
+    },
+    setApprovalMode: (mode) => {
+      // Same settle guard as the two writers above. It matters more here: a
+      // true reported for a write the turn never read would tell the user
+      // their permission posture changed when it did not.
+      if (settled || terminalEmitted) {
+        return false;
+      }
+      const line = opts.buildApprovalModePayload?.(mode);
       if (line === undefined) {
         return false;
       }

@@ -814,6 +814,29 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Encode a mid-turn approval-mode change for a turn THIS adapter spawned,
+   * or undefined when that turn cannot be re-moded.
+   *
+   * Takes the turn's own `input` rather than being a per-CLI constant, because
+   * the answer is per-TURN: claude can be re-moded on the stdio permission
+   * dialogue, but a turn it spawned under `--dangerously-skip-permissions` has
+   * no prompt tool wired, and no message can reintroduce a gate the process
+   * was started without. Stateless by construction — a pure function of
+   * (input, mode) — so it stays on the adapter while genuine protocol state
+   * lives on the per-turn driver.
+   *
+   * The default is the "this CLI cannot be told" answer, which is the honest
+   * one for ACP: `session/set_mode` is a session-level call, not something the
+   * protocol accepts against a prompt already in flight.
+   */
+  protected buildApprovalModePayload(
+    _input: AgentTurnInput,
+    _mode: AgentApprovalMode,
+  ): string | undefined {
+    return undefined;
+  }
+
+  /**
    * Encode a user message sent while the turn is STILL RUNNING, as the stdin
    * line this CLI expects. Default undefined — "this CLI cannot be told
    * anything more once its prompt is in", which makes
@@ -868,6 +891,8 @@ export abstract class AgentAdapter {
         buildApprovalResponse: (id, allow, updatedInput) =>
           driver.buildApprovalResponse?.(id, allow, updatedInput),
         buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
+        buildApprovalModePayload: (mode) =>
+          this.buildApprovalModePayload(input, mode),
         mapper: (obj) => driver.onMessage(obj),
         onStdinReady: (io) => driver.onStdinReady?.(io),
         // The mappers are pure module-scope functions, so a control message

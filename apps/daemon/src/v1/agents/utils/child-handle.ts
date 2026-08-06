@@ -36,5 +36,6 @@ export function childProcessHandle(
     // A utility child (a `--version` probe, an `mcp list`) is not a
     // conversation — there is no turn for a user message to join.
     sendUserMessage: () => false,
+    setApprovalMode: () => false,
   };
 }

@@ -762,6 +762,22 @@ export interface AgentTurnHandle {
    * adapter therefore answers false and the caller keeps the message queued.
    */
   sendUserMessage(message: FollowUpMessage): boolean;
+  /**
+   * Re-mode the tool-approval posture of the turn ALREADY RUNNING, returning
+   * whether the CLI was actually told.
+   *
+   * Honest in both directions, like {@link AgentTurnHandle.sendUserMessage} —
+   * and here the cost of a dishonest true is higher than a dropped message.
+   * This is the permission surface: ACKing a change the running turn will not
+   * honour tells the user a safety posture they do not have, which is exactly
+   * what the caller's refusal exists to prevent.
+   *
+   * False is the honest answer for a turn with no way to be told, and that is
+   * not hypothetical: a claude turn spawned under
+   * `--dangerously-skip-permissions` has no permission prompt tool wired at
+   * all, so no message could reintroduce a gate it was started without.
+   */
+  setApprovalMode(mode: AgentApprovalMode): boolean;
 }
 
 /** One question a CLI asked the user, projected out of its own tool payload. */

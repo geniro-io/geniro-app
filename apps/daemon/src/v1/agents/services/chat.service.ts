@@ -97,6 +97,25 @@ export class ChatService {
    */
   private readonly deleting = new Set<string>();
 
+  /**
+   * How a mid-turn approval change reaches the turn in flight, keyed by run.
+   *
+   * Set when a turn registers, dropped when it settles. Returns whether the
+   * change was DELIVERED — an entry existing only means a turn is running, not
+   * that it can be re-moded (a claude turn spawned under
+   * `--dangerously-skip-permissions` has no permission dialogue to be told
+   * through, and answers false).
+   *
+   * A function rather than the handle itself because two things must move
+   * together: the CLI's own mode, and the `approvalMode` the turn's closure
+   * reads at its auto-approve seam. Handing callers the handle would let them
+   * move one without the other.
+   */
+  private readonly liveApproval = new Map<
+    string,
+    (mode: ChatApprovalMode) => boolean
+  >();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -298,21 +317,47 @@ export class ChatService {
     // identity-mapped entity, so `run.approval` is already the NEW value by the
     // time it returns — the revert below needs the old one.
     const previousApproval = run.approval;
+    // A turn in flight no longer refuses the change — it is HANDED it. The CLI
+    // accepts a `set_permission_mode` on a turn already running and re-reads it
+    // within milliseconds (probe-verified on claude 2.1.222), which is what the
+    // CLI itself does when the user switches mode mid-turn, so refusing here
+    // was a limitation of this service rather than of the agent.
+    //
+    // Only the case that is still genuinely unhonourable refuses: a turn with
+    // no permission dialogue to be told through. `applyLive` reports that as
+    // false, and it is a fact about how the turn SPAWNED — under
+    // `--dangerously-skip-permissions` there is no prompt tool, so no message
+    // can reintroduce a gate the process was started without, and ACKing one
+    // would state a safety posture the user does not have.
+    let deliveredLive = false;
     if (patch.approval !== undefined && this.registry.has(runId)) {
-      throw new ConflictException(
-        'RUN_BUSY',
-        'a turn is in flight — the approval mode is locked until it settles',
-      );
+      const applyLive = this.liveApproval.get(runId);
+      deliveredLive = applyLive?.(patch.approval) === true;
+      if (!deliveredLive) {
+        throw new ConflictException(
+          'RUN_BUSY',
+          'this turn is running without a permission gate, so its approval mode cannot be changed until it settles',
+        );
+      }
     }
     await this.runDao.updateById(runId, changes, em);
-    // A turn may have claimed the run DURING the write — after the pre-check
+    // A turn may have claimed the run DURING the write — after the check above
     // but before the flush — and `sendMessage` snapshots the row in its own
     // fork, so that turn may already be spawning under the OLD mode. ACKing
     // here would tell the user a permission mode the in-flight turn will not
     // honour, so the approval half is reverted and refused. The model/effort
     // half of the same PATCH is left applied: it only ever described the next
     // turn, so nothing about it is untrue.
-    if (patch.approval !== undefined && this.registry.has(runId)) {
+    //
+    // Skipped once the change was delivered LIVE: the turn that made
+    // `registry.has` true is the very one that just took the new mode, so
+    // reverting here would undo a change already in effect and refuse a
+    // request that succeeded.
+    if (
+      patch.approval !== undefined &&
+      !deliveredLive &&
+      this.registry.has(runId)
+    ) {
       await this.runDao.updateById(runId, { approval: previousApproval }, em);
       throw new ConflictException(
         'RUN_BUSY',
@@ -926,6 +971,22 @@ export class ChatService {
         },
       );
       this.registry.register(runId, handle);
+      // How a mid-turn approval change reaches THIS turn's own seam. The
+      // closure variable above is what the auto-approve branch reads on every
+      // `approval_request`, so telling the CLI alone would leave the daemon
+      // half of the posture on the mode the turn started with — an `auto`
+      // turn switched to `ask` would keep auto-approving even though the CLI
+      // had begun asking.
+      this.liveApproval.set(runId, (mode) => {
+        // The CLI FIRST, and only adopt the mode it accepted. The reverse
+        // order would move the daemon's own gate for a change the running
+        // turn never received.
+        if (!handle.setApprovalMode(mode)) {
+          return false;
+        }
+        approvalMode = mode;
+        return true;
+      });
 
       const finalized = handle.done
         .then(async () => {
@@ -1018,6 +1079,10 @@ export class ChatService {
           this.finalizing.delete(runId);
         }
       });
+      // Dropped on the same settle, so a PATCH arriving after the turn ends
+      // takes the plain persist-only path instead of writing into a dead
+      // closure and reporting the change as live.
+      void handle.done.finally(() => this.liveApproval.delete(runId));
 
       return userWire;
     } catch (err) {

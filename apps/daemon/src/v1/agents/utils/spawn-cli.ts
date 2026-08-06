@@ -23,7 +23,7 @@ export interface SpawnedProcess {
   readonly stderr: NodeJS.ReadableStream | null;
   readonly stdin: NodeJS.WritableStream | null;
   on(
-    event: 'close',
+    event: 'close' | 'exit',
     listener: (code: number | null, signal: NodeJS.Signals | null) => void,
   ): this;
   on(event: 'error', listener: (err: Error) => void): this;
@@ -122,6 +122,19 @@ const STDERR_TAIL_BYTES = 2000;
 const SIGKILL_GRACE_MS = 2000;
 
 /**
+ * How long `exit` waits for `close` before settling the turn itself.
+ *
+ * `close` is the preferred settle point because it guarantees stdout has fully
+ * drained; `exit` only says the CLI is gone. The window exists so the ordinary
+ * case still settles on `close` with everything parsed — it is a BACKSTOP for
+ * the case where `close` is never coming at all, not a race against it.
+ *
+ * Generous on purpose: settling early would cut off trailing stdout, and the
+ * cost of waiting is a spinner that stops two seconds later rather than never.
+ */
+const EXIT_SETTLE_GRACE_MS = 2000;
+
+/**
  * Signal the child's entire process group so the tool/MCP grandchildren a coding
  * agent forks die with it. The child is spawned `detached` (a group leader), so
  * its PID doubles as the group id and `process.kill(-pid, …)` reaches every
@@ -146,6 +159,7 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   let settled = false;
   let resolveDone!: () => void;
   let killTimer: ReturnType<typeof setTimeout> | null = null;
+  let exitTimer: ReturnType<typeof setTimeout> | null = null;
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
@@ -155,6 +169,10 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       if (killTimer) {
         clearTimeout(killTimer);
         killTimer = null;
+      }
+      if (exitTimer) {
+        clearTimeout(exitTimer);
+        exitTimer = null;
       }
       resolveDone();
     }
@@ -256,10 +274,10 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   // last chunk. Guard on `settled`: a child can surface a process-level `error`
   // and THEN fire `close` with a non-zero code; without this guard both handlers
   // emit a terminal event and the transcript records two contradictory ones.
-  child.on('close', (code, signal) => {
-    if (settled) {
-      return;
-    }
+  const settleFromTermination = (
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void => {
     buffer.flush();
     if (signal) {
       emit({ type: 'turn_cancelled' });
@@ -271,6 +289,48 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       });
     }
     settle();
+  };
+
+  child.on('close', (code, signal) => {
+    if (settled) {
+      return;
+    }
+    settleFromTermination(code, signal);
+  });
+
+  // The BACKSTOP for a `close` that never arrives.
+  //
+  // `close` fires only once the process has exited AND every piped stdio fd has
+  // lost its last writer. A coding agent forks tool/MCP grandchildren that
+  // inherit those fds, and any one of them outliving the CLI holds `close` open
+  // indefinitely — the process is gone, its turn is over, and nothing says so.
+  // Everything hangs off this one settle: the run row stays `running`, the
+  // transcript never gets a terminal item, the registry slot is never released
+  // (so every later send answers RUN_BUSY), and the composer spins forever.
+  //
+  // The codebase already learned this on the utility path and did not carry it
+  // here — see `agent-adapter.ts`'s `child.on('exit', () => reapGroup())` and
+  // its note that `close` "waits for the stdio pipes, which a lingering
+  // health-check grandchild holds open".
+  //
+  // `close` stays the PREFERRED path: this only arms a timer, so the ordinary
+  // turn still settles on `close` with stdout fully drained, and the timer is
+  // cleared by `settle()`. Deliberately signals NOTHING — reaping the group
+  // here would SIGKILL the user's own MCP servers, and through them a browser
+  // session they are driving. A stray grandchild costs memory; the child
+  // journal and its next-boot reaper already own that problem.
+  child.on('exit', (code, signal) => {
+    if (settled || exitTimer) {
+      return;
+    }
+    exitTimer = setTimeout(() => {
+      exitTimer = null;
+      if (settled) {
+        return;
+      }
+      settleFromTermination(code, signal);
+    }, EXIT_SETTLE_GRACE_MS);
+    exitTimer.unref?.();
   });
 
   // The one write path to the child's stdin, shared by the approval verdict

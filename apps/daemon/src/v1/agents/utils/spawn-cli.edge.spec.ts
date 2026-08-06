@@ -525,3 +525,147 @@ describe('runHeadlessCli onStdinReady', () => {
     expect(child.stdin.written).toBe(before);
   });
 });
+
+describe('runHeadlessCli exit backstop', () => {
+  // The reported defect: a finished turn that spins forever. `close` waits for
+  // every piped stdio fd to lose its last writer, and an MCP grandchild that
+  // outlives the CLI holds them open — so the process is gone, the turn is
+  // over, and `done` never resolves. With it, the run row stays `running`, the
+  // registry slot is never released (every later send answers RUN_BUSY) and the
+  // composer's spinner runs on.
+  it('settles a turn whose `close` never arrives because a grandchild holds the pipes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const handle = runHeadlessCli({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        mapper: noopMapper,
+        onEvent: (e) => events.push(e),
+        spawn,
+      });
+
+      let settled = false;
+      void handle.done.then(() => {
+        settled = true;
+      });
+
+      // The CLI is gone. `close` is deliberately never emitted.
+      child.emit('exit', 1, null);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(settled).toBe(true);
+      expect(events).toEqual([
+        { type: 'error', message: 'claude exited with code 1' },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes buffered stdout before settling from the exit backstop', async () => {
+    // Settling without the flush would drop whatever the CLI printed on its way
+    // out — the very lines that say what the turn did.
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const handle = runHeadlessCli({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        mapper: (obj) =>
+          (obj as { type?: string }).type === 'result'
+            ? [
+                {
+                  type: 'turn_complete',
+                  usage: null,
+                  stopReason: 'end_turn',
+                  finalText: null,
+                  sessionId: null,
+                },
+              ]
+            : [],
+        onEvent: (e) => events.push(e),
+        spawn,
+      });
+
+      // No trailing newline: the line sits in the NdjsonBuffer until a flush.
+      child.stdout.emitData('{"type":"result"}');
+      child.emit('exit', 0, null);
+      await vi.advanceTimersByTimeAsync(5000);
+      await handle.done;
+
+      expect(events).toEqual([
+        {
+          type: 'turn_complete',
+          usage: null,
+          stopReason: 'end_turn',
+          finalText: null,
+          sessionId: null,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets `close` win when it does arrive — the backstop never doubles a terminal event', async () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const handle = runHeadlessCli({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        mapper: noopMapper,
+        onEvent: (e) => events.push(e),
+        spawn,
+      });
+
+      // The ordinary ordering: exit, then close a moment later.
+      child.emit('exit', 1, null);
+      child.emit('close', 1, null);
+      await handle.done;
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(events).toEqual([
+        { type: 'error', message: 'claude exited with code 1' },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT signal the process group on exit — the user’s MCP servers and their browser outlive the turn', async () => {
+    // Reaping here would SIGKILL the group the CLI led, which holds the user's
+    // own MCP servers; a browser one of them drives dies with the CDP pipe.
+    // A stray grandchild costs memory, and the child journal's next-boot reaper
+    // already owns that.
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const handle = runHeadlessCli({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        mapper: noopMapper,
+        onEvent: () => {},
+        spawn,
+      });
+
+      child.emit('exit', 0, null);
+      await vi.advanceTimersByTimeAsync(5000);
+      await handle.done;
+
+      expect(child.kills).toBe(0);
+      expect(child.killSignal).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

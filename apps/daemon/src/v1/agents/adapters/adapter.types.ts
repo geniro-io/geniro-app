@@ -684,6 +684,47 @@ export interface AgentTurnInput {
   } | null;
 }
 
+/**
+ * One CLI process, and the turns an adapter runs on it.
+ *
+ * Every turn goes through a session — including the ordinary one-turn kind, so
+ * there is a single code path rather than a branch on which CLI is being
+ * talked to. A CLI that cannot host more than one turn per process simply
+ * yields a session whose SECOND {@link AgentSession.startTurn} answers null,
+ * which is the same answer a caller gets for a session that has died or whose
+ * argv no longer fits — and it means exactly one thing everywhere: spawn a
+ * fresh one.
+ *
+ * Why a session exists at all: a CLI boots the user's MCP servers when it
+ * starts, and an MCP server can own something expensive — a browser the user
+ * is logged into. A process per turn tears that down on every message.
+ */
+export interface AgentSession {
+  /**
+   * Open a turn on this process. Null when this session cannot serve it: the
+   * process is gone, a turn is already in flight, this CLI hosts one turn per
+   * process, or the input would need different argv than the process was
+   * spawned with (a changed model, folder or plugin directory).
+   */
+  startTurn(
+    input: AgentTurnInput,
+    onEvent: (event: AgentEvent) => void,
+  ): AgentTurnHandle | null;
+  /** Alive, with no turn in flight — ready to take another one. */
+  readonly idle: boolean;
+  /** The process has not been observed to end. */
+  readonly alive: boolean;
+  /**
+   * Terminate the process group — the CLI plus every tool/MCP grandchild.
+   *
+   * This is the ONLY thing that stops a run-scoped process, so whoever holds
+   * the session owns that obligation: nothing else will reap it.
+   */
+  close(): void;
+  /** Resolves once the process is gone. Never rejects. */
+  readonly closed: Promise<void>;
+}
+
 export type TurnStdin = (payload: string) => boolean;
 
 /** The two channels a {@link TurnDriver} owns for the turn it is driving. */

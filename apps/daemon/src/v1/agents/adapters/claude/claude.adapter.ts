@@ -35,6 +35,7 @@ import {
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
   CLAUDE_HOME_SETTINGS_FILE,
+  CLAUDE_INTERRUPT_SUBTYPE,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_EMPTY_MARKER,
@@ -653,6 +654,60 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   protected override buildFollowUpPayload(message: FollowUpMessage): string {
     return this.userMessageLine(message.text, message.images);
+  }
+
+  /**
+   * One process can serve a whole run's worth of turns — probe-verified on
+   * 2.1.223: two user messages written to one still-open stdin produced two
+   * `result` lines under ONE `session_id`, and the process exited only when
+   * stdin was closed. `system/init` is re-emitted at the head of each turn, so
+   * the session saver and the MCP harvest keep seeing what they read today.
+   *
+   * The predicate is `keepStdinOpen`'s, deliberately reused rather than
+   * restated, exactly as `buildApprovalModePayload` reuses it: "can this turn
+   * carry a dialogue" and "can this process take another prompt" are the same
+   * question about the same open pipe, and a second copy of the condition is
+   * how the two would come to disagree.
+   */
+  protected override canHostSession(input: AgentTurnInput): boolean {
+    return this.keepStdinOpen(input);
+  }
+
+  /**
+   * The next turn opens with the SAME user line the first one did — a
+   * stream-json stdin is a conversation, so the CLI reads a `{"type":"user"}`
+   * arriving after a `result` as the next prompt rather than as an addition to
+   * the last one. Third caller of the one encoder, so the three cannot drift.
+   */
+  protected override buildNextTurnPayload(message: FollowUpMessage): string {
+    return this.userMessageLine(message.text, message.images);
+  }
+
+  /**
+   * Stop the turn without stopping the process.
+   *
+   * Probe-verified on 2.1.223: `control_request`/`interrupt` was acknowledged
+   * in 2ms and the turn ended with `result subtype=error_during_execution`,
+   * the process still alive. That is what lets Stop leave the run's MCP
+   * servers — and a browser one of them owns — running.
+   *
+   * Gated on the same open-stdin predicate as its neighbours: a turn spawned
+   * under `--dangerously-skip-permissions` has no channel to be told anything.
+   */
+  protected override buildInterruptPayload(
+    input: AgentTurnInput,
+  ): string | undefined {
+    if (!this.keepStdinOpen(input)) {
+      return undefined;
+    }
+    return `${JSON.stringify({
+      type: 'control_request',
+      // Namespaced away from the CLI's own request ids, like the mode change
+      // below: both id spaces share this one dialogue, and nothing here
+      // correlates a reply.
+      request_id: `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}${CLAUDE_INTERRUPT_SUBTYPE}`,
+      request: { subtype: CLAUDE_INTERRUPT_SUBTYPE },
+    })}\n`;
   }
 
   /** The CLI's stream-json user line — one encoder, so the two cannot drift. */

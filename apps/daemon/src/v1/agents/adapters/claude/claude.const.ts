@@ -87,6 +87,25 @@ export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 export const CLAUDE_SET_PERMISSION_MODE_SUBTYPE = 'set_permission_mode';
 
 /**
+ * The client-initiated control request that stops the turn in flight WITHOUT
+ * stopping the process — the difference a run-scoped session is built on.
+ *
+ * Probed live on 2.1.223: acknowledged in ~2ms, the turn then ended with
+ * `result subtype=error_during_execution`, and the process kept running with
+ * its MCP servers up. Killing the process group instead is what takes those
+ * servers — and a browser one of them owns — down with a turn the user only
+ * meant to stop.
+ *
+ *     --> {"type":"control_request","request_id":"…",
+ *          "request":{"subtype":"interrupt"}}
+ *     <-- control_response success {"still_queued":[]}
+ *
+ * Same expiry warning as the blocks above: an observation, not a contract —
+ * which is why the cancel path keeps a deadline behind it.
+ */
+export const CLAUDE_INTERRUPT_SUBTYPE = 'interrupt';
+
+/**
  * Prefix for the request ids the DAEMON mints, keeping them out of the id
  * space the CLI mints for its own `can_use_tool` requests. Both travel the one
  * dialogue, and a collision would route the CLI's answer to our request into

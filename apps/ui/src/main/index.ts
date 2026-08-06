@@ -113,6 +113,23 @@ function createWindow(): void {
   }
 }
 
+/**
+ * Bring the daemon up and hand the renderer its address.
+ *
+ * The one entry point for both the launch and a later re-ensure, so the window
+ * always learns about a daemon the same way: a failure is surfaced but never
+ * fatal — the renderer shows a disconnected state rather than the app failing
+ * to open.
+ */
+function ensureDaemon(): void {
+  void supervisor
+    .start()
+    .then((handle) => notifyDaemonReady(mainWindow, handle))
+    .catch((err: unknown) => {
+      console.error('[ui] daemon failed to start:', err);
+    });
+}
+
 function focusMainWindow(): void {
   if (!mainWindow) {
     return;
@@ -153,18 +170,20 @@ function main(): void {
     // both ready-vs-mount orderings deliver the handle).
     createWindow();
 
-    void supervisor
-      .start()
-      .then((handle) => notifyDaemonReady(mainWindow, handle))
-      .catch((err: unknown) => {
-        // Surface the failure but keep the window — the renderer renders a
-        // disconnected state rather than the app failing to launch.
-        console.error('[ui] daemon failed to start:', err);
-      });
+    ensureDaemon();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();
+      }
+      // The daemon may be gone even though the app is not: on macOS, closing
+      // the window leaves the app in the Dock with no client attached, and the
+      // daemon exits itself once its idle window passes. Coming back through
+      // the Dock has to bring it back, or the reopened window would talk to a
+      // handle that no longer answers. `start()` de-dupes concurrent calls and
+      // adopts a healthy daemon, so an unnecessary call here costs nothing.
+      if (!supervisor.isConnected()) {
+        ensureDaemon();
       }
     });
   });

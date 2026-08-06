@@ -28,6 +28,8 @@ import { ProcessRegistry } from './services/process-registry';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
+import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 
 /**
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
@@ -105,6 +107,15 @@ import { SkillsService } from './services/skills.service';
     },
     PartialStreamService,
     ProcessRegistry,
+    {
+      // Factory because the trailing options bag is a test seam, not a DI
+      // token — and because the journal path is config, not a dependency.
+      provide: StrandedChildReaper,
+      useFactory: () =>
+        new StrandedChildReaper(
+          join(environment.userDataDir, CHILD_JOURNAL_FILE_NAME),
+        ),
+    },
     RunTeardownService,
     ItemDao,
     NodeStateDao,
@@ -150,6 +161,9 @@ import { SkillsService } from './services/skills.service';
     // live mirror sessions the panel attaches to.
     ClaudeProbeService,
     ProcessRegistry,
+    // Exported for main.ts's boot sweep — it runs before the server listens,
+    // beside the other reconciles a crashed launch leaves behind.
+    StrandedChildReaper,
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,

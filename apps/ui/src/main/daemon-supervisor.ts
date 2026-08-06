@@ -29,6 +29,23 @@ const KILL_CONFIRM_MS = 1_000;
  * cleanup and orphaning SIGHUP-ignoring PTY groups.
  */
 const SHUTDOWN_GRACE_MS = 7_000;
+/**
+ * How long a daemon WE spawned may sit with no client and no in-flight turn
+ * before exiting itself (`GENIRO_IDLE_EXIT_MS`).
+ *
+ * It exists for the launches this supervisor can never clean up after: a
+ * force-quit or a crash of the shell leaves the daemon running, `stop()` only
+ * terminates the child it still owns, and a later launch adopts it rather than
+ * replacing it. Ten minutes is chosen against BOTH failure modes — long enough
+ * that quitting and reopening still adopts a warm daemon (and that a macOS
+ * window closed with the app left in the Dock does not lose its backend under
+ * the user), short enough that an abandoned one is measured in minutes rather
+ * than the days that were actually observed.
+ *
+ * Only ever passed to a daemon we spawn: `pnpm daemon:dev` and the throwaway
+ * daemon `pnpm generate:api` boots have no client by design.
+ */
+const DAEMON_IDLE_EXIT_MS = 600_000;
 
 function pidfilePath(): string {
   return join(app.getPath('userData'), PIDFILE_NAME);
@@ -399,6 +416,10 @@ export class DaemonSupervisor {
         // Run the daemon under Electron's bundled Node — no external runtime.
         ELECTRON_RUN_AS_NODE: '1',
         GENIRO_USER_DATA: app.getPath('userData'),
+        // Self-shutdown window. Set HERE and nowhere else: it is the promise
+        // that a UI is the only client, which is true exactly of the daemons
+        // this supervisor spawns.
+        GENIRO_IDLE_EXIT_MS: String(DAEMON_IDLE_EXIT_MS),
         ...(cursorApiKey ? { GENIRO_CURSOR_API_KEY: cursorApiKey } : {}),
         ...(claudeBin ? { GENIRO_CLAUDE_BIN: claudeBin } : {}),
         ...(cursorBin ? { GENIRO_CURSOR_BIN: cursorBin } : {}),

@@ -5,6 +5,7 @@ import type { RuntimeInfo } from '../../../auth/runtime';
 import type { ItemWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { WsPresenceService } from '../services/ws-presence.service';
 import { NotificationsGateway } from './notifications.gateway';
 
 const runtime: RuntimeInfo = {
@@ -49,6 +50,7 @@ describe('NotificationsGateway', () => {
       runtime,
       new AgentEventBus(),
       new ApprovalRegistry(),
+      new WsPresenceService(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -63,6 +65,7 @@ describe('NotificationsGateway', () => {
       runtime,
       new AgentEventBus(),
       new ApprovalRegistry(),
+      new WsPresenceService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -79,6 +82,7 @@ describe('NotificationsGateway', () => {
       runtime,
       new AgentEventBus(),
       new ApprovalRegistry(),
+      new WsPresenceService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -111,6 +115,7 @@ describe('NotificationsGateway', () => {
       runtime,
       new AgentEventBus(),
       new ApprovalRegistry(),
+      new WsPresenceService(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -140,6 +145,7 @@ describe('NotificationsGateway', () => {
       runtime,
       new AgentEventBus(),
       new ApprovalRegistry(),
+      new WsPresenceService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -152,7 +158,12 @@ describe('NotificationsGateway', () => {
 
   it('isolates a per-emit failure so the bus subscription survives', () => {
     const bus = new AgentEventBus();
-    const gw = new NotificationsGateway(runtime, bus, new ApprovalRegistry());
+    const gw = new NotificationsGateway(
+      runtime,
+      bus,
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+    );
     let calls = 0;
     const emit = vi.fn(() => {
       calls += 1;
@@ -199,6 +210,7 @@ describe('verdict round-trip', () => {
       runtime,
       new AgentEventBus(),
       approvals,
+      new WsPresenceService(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -214,6 +226,7 @@ describe('verdict round-trip', () => {
       runtime,
       new AgentEventBus(),
       new ApprovalRegistry(),
+      new WsPresenceService(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -241,6 +254,7 @@ describe('verdict round-trip', () => {
       runtime,
       new AgentEventBus(),
       approvals,
+      new WsPresenceService(),
     );
 
     track('req-a');

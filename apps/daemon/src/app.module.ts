@@ -4,11 +4,16 @@ import { APP_GUARD } from '@nestjs/core';
 import { type RuntimeInfo } from './auth/runtime';
 import { RuntimeModule } from './auth/runtime.module';
 import { LoopbackTokenGuard } from './auth/token.guard';
+import { environment } from './environments';
+import { IdleShutdownLifecycle } from './utils/idle-shutdown.lifecycle';
+import { InstanceLockLifecycle } from './utils/instance-lock.lifecycle';
 import { PidfileLifecycle } from './utils/pidfile.lifecycle';
 import { AgentsModule } from './v1/agents/agents.module';
+import { ProcessRegistry } from './v1/agents/services/process-registry';
 import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
+import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
 import { RunsModule } from './v1/runs/runs.module';
 
 export interface AppModuleOptions {
@@ -42,6 +47,24 @@ export class AppModule {
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },
         PidfileLifecycle,
+        InstanceLockLifecycle,
+        {
+          // Factory because the window is config and the trailing options bag
+          // is a test seam. Lives here rather than in either module it reads:
+          // "is anyone connected" belongs to notifications and "is anything
+          // running" to agents, and the decision to exit belongs to neither.
+          provide: IdleShutdownLifecycle,
+          useFactory: (
+            presence: WsPresenceService,
+            processes: ProcessRegistry,
+          ) =>
+            new IdleShutdownLifecycle(
+              environment.idleExitMs,
+              presence,
+              processes,
+            ),
+          inject: [WsPresenceService, ProcessRegistry],
+        },
       ],
     };
   }

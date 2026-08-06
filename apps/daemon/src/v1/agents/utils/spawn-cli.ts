@@ -7,6 +7,7 @@ import type {
   TurnIo,
 } from '../adapters/adapter.types';
 import { buildChildEnv } from './child-env';
+import { trackDetachedChild } from './child-journal';
 import { killProcessGroup } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 
@@ -40,13 +41,21 @@ export type SpawnFn = (
  * the child becomes its own process-group leader. That lets {@link runHeadlessCli}
  * signal the WHOLE group on cancel/shutdown (`process.kill(-pid, …)`) and reap the
  * tool/MCP grandchildren a coding agent forks — a single-PID kill would orphan them.
+ *
+ * `detached` is also what makes the group survive the daemon's own death, so the
+ * spawn is journaled here — in the same expression that creates it, before any
+ * caller can see the child. The next boot reaps whatever the journal still
+ * holds; see `child-journal.ts`.
  */
-export const defaultSpawn: SpawnFn = (command, args, options) =>
-  nodeSpawn(command, args, {
+export const defaultSpawn: SpawnFn = (command, args, options) => {
+  const child = nodeSpawn(command, args, {
     ...options,
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
+  trackDetachedChild(child, command);
+  return child;
+};
 
 export interface RunCliOptions {
   command: string;

@@ -54,8 +54,34 @@ export interface DaemonEnvironment {
   dbPath: string;
   /** On-disk daemon descriptor (pidfile). */
   pidfilePath: string;
+  /**
+   * How long the daemon may sit with no connected client and no in-flight turn
+   * before exiting itself, or null to never exit on its own.
+   *
+   * Null is the DEFAULT, and deliberately so: a daemon that exits when unused
+   * is only correct when something is expected to be using it. The Electron
+   * supervisor sets `GENIRO_IDLE_EXIT_MS` because it knows a UI is the only
+   * client and that a UI outliving its daemon is recoverable; `pnpm daemon:dev`
+   * and the throwaway daemon `pnpm generate:api` boots set nothing and must
+   * stay up regardless of who is talking to them.
+   */
+  idleExitMs: number | null;
   logLevel: LogLevel;
   prettyLog: boolean;
+}
+
+/**
+ * Strictly parse a positive millisecond duration from an env string. Anything
+ * that is not pure decimal digits above zero returns null — the caller then
+ * treats the feature as switched off, which is the safe reading of a value
+ * nobody can have meant.
+ */
+export function parseDurationMs(raw: string | undefined | null): number | null {
+  if (raw === undefined || raw === null || !/^\d+$/.test(raw.trim())) {
+    return null;
+  }
+  const ms = Number(raw.trim());
+  return ms > 0 ? ms : null;
 }
 
 /**
@@ -80,6 +106,7 @@ export const environment = (): DaemonEnvironment => {
     userDataDir,
     dbPath: join(userDataDir, 'geniro.db'),
     pidfilePath: join(userDataDir, DAEMON_PIDFILE_NAME),
+    idleExitMs: parseDurationMs(process.env.GENIRO_IDLE_EXIT_MS),
     logLevel: 'info' as LogLevel,
     prettyLog: false,
   };

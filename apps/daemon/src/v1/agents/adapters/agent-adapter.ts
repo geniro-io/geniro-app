@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
+import { trackDetachedChild } from '../utils/child-journal';
 import { killProcessGroup } from '../utils/kill-tree';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
@@ -680,6 +681,11 @@ export abstract class AgentAdapter {
         settle(null);
         return;
       }
+      // Journaled like a turn spawn, and for a sharper reason: this path is
+      // taken by `mcp list`, which HEALTH-CHECKS by launching the user's own
+      // MCP servers (see the doc block above). A SIGKILL between the spawn and
+      // the reap strands that whole group with nothing left to name it.
+      trackDetachedChild(child, this.command);
       // Decoded as a STREAM: node's StringDecoder holds a partial multi-byte
       // sequence across reads, so a character split at a 64KB boundary is not
       // turned into two replacement characters.

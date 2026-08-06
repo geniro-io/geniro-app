@@ -93,6 +93,17 @@ export class ProcessRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * Runs with a turn claimed or in flight, across every run kind.
+   *
+   * The idle shutdown reads it, and CLAIMED-but-not-yet-spawned deliberately
+   * counts: a turn crossing that window is work in progress, and exiting on it
+   * would kill a CLI a millisecond after spawning it.
+   */
+  get activeCount(): number {
+    return this.active.size;
+  }
+
+  /**
    * The run's in-flight turn handle, or null.
    *
    * Null covers two states that callers must NOT tell apart by asking twice:

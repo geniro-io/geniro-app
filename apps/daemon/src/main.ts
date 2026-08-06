@@ -1,8 +1,10 @@
 import 'reflect-metadata';
 
+import { join } from 'node:path';
+
 import { MikroORM } from '@mikro-orm/core';
 import type { MikroORM as SqliteMikroOrm } from '@mikro-orm/sqlite';
-import type { INestApplication } from '@nestjs/common';
+import { type INestApplication, Logger } from '@nestjs/common';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { buildBootstrapper } from '@packages/common';
 import { buildHttpServerExtension } from '@packages/http-server';
@@ -16,10 +18,20 @@ import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
 import { installCrashGuards } from './utils/crash-guards';
 import type { DaemonInfo } from './utils/handshake';
+import {
+  acquireInstanceLock,
+  DAEMON_LOCK_FILE_NAME,
+  DaemonAlreadyRunningError,
+} from './utils/instance-lock';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { ChatService } from './v1/agents/services/chat.service';
 import { CursorMcpCleanupService } from './v1/agents/services/cursor-mcp-cleanup.service';
+import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
+import {
+  CHILD_JOURNAL_FILE_NAME,
+  configureChildJournal,
+} from './v1/agents/utils/child-journal';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
 installCrashGuards();
@@ -85,6 +97,13 @@ bootstrapper.addExtension(
       // before the server accepts traffic. `safe: true` never emits destructive
       // DDL — a removed/renamed column won't drop user data; the full versioned
       // Migrator workflow lands in M2.
+      // FIRST, ahead of every other reconcile: a previous launch's SIGKILL
+      // leaves detached agent groups reparented to launchd, still holding the
+      // session files the reconciles below are about to reason over. Kill them
+      // before this launch can resume any of those sessions — and before the
+      // server listens, so no new turn can race the sweep.
+      app.get(StrandedChildReaper).reap();
+
       const orm = app.get(MikroORM) as unknown as SqliteMikroOrm;
       await orm.schema.update({ safe: true });
 
@@ -124,7 +143,42 @@ bootstrapper.setupLogger({
 });
 bootstrapper.addModules([AppModule.forRoot({ runtime })]);
 
-bootstrapper.init().catch((err: unknown) => {
-  console.error('daemon failed to start', { err: String(err) });
-  process.exit(1);
-});
+/**
+ * Boot: claim the userData dir, start recording spawned child groups, then hand
+ * over to the bootstrapper.
+ *
+ * The lock comes FIRST, ahead of the journal and of Nest. Everything below it
+ * assumes a single writer — the SQLite file, the pidfile, the child journal —
+ * so a second daemon must be turned away before it can touch any of them, not
+ * after. It is also why the journal is configured here rather than at module
+ * scope: a launch that stands down must not have written anything.
+ */
+acquireInstanceLock(join(environment.userDataDir, DAEMON_LOCK_FILE_NAME))
+  .then(async (releaseLock) => {
+    // Backstop only, for the failures BELOW that exit before Nest exists. The
+    // clean-shutdown release is `InstanceLockLifecycle`: Nest re-raises the
+    // signal after its hooks, and default signal termination never runs `exit`
+    // listeners, so this one does not fire on a normal stop.
+    process.on('exit', releaseLock);
+
+    // Every detached child group is written here the moment it exists, so a
+    // SIGKILL that skips Nest's shutdown hooks still leaves a record for the
+    // next launch to reap. Unconfigured, `trackDetachedChild` is a no-op.
+    configureChildJournal(
+      join(environment.userDataDir, CHILD_JOURNAL_FILE_NAME),
+      new Logger('ChildJournal'),
+    );
+
+    await bootstrapper.init();
+  })
+  .catch((err: unknown) => {
+    if (err instanceof DaemonAlreadyRunningError) {
+      // Not a crash: the app already has a daemon. Say so plainly rather than
+      // burying it in a stack trace — this is the message a developer sees
+      // when `pnpm daemon:dev` meets a running app.
+      console.error(err.message);
+      process.exit(1);
+    }
+    console.error('daemon failed to start', { err: String(err) });
+    process.exit(1);
+  });

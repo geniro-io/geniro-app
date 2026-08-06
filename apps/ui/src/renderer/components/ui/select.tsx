@@ -109,7 +109,11 @@ export function Select({
         className={cn(
           ghost
             ? cn(
-                chipVariants({ interactive: true }),
+                // Always `active`: a picker chip exists BECAUSE the value is
+                // the user's to change, so there is no such thing as a muted
+                // one. A momentarily disabled picker keeps the tone and says so
+                // through `disabled:opacity-50` instead — see `chip.tsx`.
+                chipVariants({ interactive: true, tone: 'active' }),
                 'focus-visible:ring-[3px] focus-visible:ring-ring/50',
               )
             : triggerVariants({ variant }),

@@ -475,6 +475,13 @@ describe('Chats transcript auto-scroll', () => {
     })) {
       Object.defineProperty(scroller, key, { value, configurable: true });
     }
+    // A browser fires `scroll` on every position change, and the transcript
+    // decides whether to keep following the tail FROM that event. A fake that
+    // moved the viewport silently was testing a signal the component is never
+    // given — and could only ever pin a position-based reading, which is the
+    // one that broke: content growing pushes the bottom away without the user
+    // moving at all.
+    scroller.dispatchEvent(new Event('scroll'));
   }
 
   it('does NOT move a viewport the user scrolled up when a new item arrives', async () => {
@@ -483,6 +490,14 @@ describe('Chats transcript auto-scroll', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
+    // The user was at the tail and then scrolled UP to read history. The
+    // movement is what stops the follow — not the resting position — so the
+    // fake has to make the movement, in two steps like the real one.
+    setScrollPosition(container, {
+      scrollTop: 3600,
+      scrollHeight: 4000,
+      clientHeight: 400,
+    });
     setScrollPosition(container, {
       scrollTop: 0,
       scrollHeight: 4000,
@@ -537,6 +552,39 @@ describe('Chats transcript auto-scroll', () => {
       scrollTop: 3600,
       scrollHeight: 4000,
       clientHeight: 400,
+    });
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a long reply'));
+    });
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('keeps following after a block GROWS below the fold — the thinking-block defect', async () => {
+    // The reported bug. A thinking block fills in after its row rendered, which
+    // moves the bottom away without the user touching the scroller. Reading the
+    // position at commit time then said "not at the bottom" and gave up, so the
+    // tail stuck just above the block for the rest of the turn.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    setScrollPosition(container, {
+      scrollTop: 3600,
+      scrollHeight: 4000,
+      clientHeight: 400,
+    });
+
+    // Content growth, NOT a user scroll: a browser fires no `scroll` for this,
+    // which is exactly why the follow decision cannot be read off the position.
+    const scroller = [...container.querySelectorAll('div')].find((el) =>
+      el.className.includes('overflow-y-auto'),
+    )!;
+    Object.defineProperty(scroller, 'scrollHeight', {
+      value: 9000,
+      configurable: true,
     });
     (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
 
@@ -2463,7 +2511,17 @@ describe('Chats queued messages', () => {
    * all.
    */
   const busy = (): Error =>
-    new Error('daemon POST /v1/chats/r1/messages failed (409): RUN_BUSY');
+    // The daemon's ACTUAL body, not a shorthand: a Fastify JSON error envelope.
+    // The renderer decides to queue by reading the 409 and the `code` out of
+    // this, so a fixture that only spelled the word tested a parse the daemon
+    // never asks for.
+    new Error(
+      'daemon POST /v1/chats/r1/messages failed (409): ' +
+        '{"statusCode":409,"code":"RUN_BUSY",' +
+        '"message":"a turn is already in progress for this run",' +
+        '"fullMessage":"[RUN_BUSY] a turn is already in progress for this run",' +
+        '"fields":[]}',
+    );
 
   const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
   const PNG_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
@@ -2885,7 +2943,10 @@ describe('Chats queued messages', () => {
     // message the UI had said was cancelled.
     vi.useFakeTimers();
     try {
-      api.sendChatMessage.mockRejectedValue(new Error('RUN_BUSY'));
+      // The shared fixture, not a bare Error: the queue is entered by reading
+      // the daemon's 409, so a message that merely says RUN_BUSY is not what
+      // this path reacts to.
+      api.sendChatMessage.mockRejectedValue(busy());
       const { client, emitItem } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');

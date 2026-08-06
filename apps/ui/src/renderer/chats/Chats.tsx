@@ -45,7 +45,11 @@ import { Chip } from '../components/ui/chip';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
-import { createDaemonApis, daemonErrorStatus } from '../daemon-api';
+import {
+  createDaemonApis,
+  daemonErrorStatus,
+  isRunBusyError,
+} from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
 import { useCapabilities } from '../use-capabilities';
 import {
@@ -65,6 +69,7 @@ import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ComposerCard } from './composer-card';
 import { ComposerChipRow } from './composer-chip-row';
+import { isComposerSendKey } from './composer-keys';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
 import {
@@ -76,7 +81,7 @@ import {
 import { AttachmentLoaderContext } from './message-attachments';
 import { ModelSelect } from './model-select';
 import { formatClockTime } from './relative-time';
-import { isScrolledToBottom } from './scroll-follow';
+import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
@@ -220,6 +225,16 @@ export function Chats({
   // "not at bottom" and would suppress the scroll — leaving the user at the
   // oldest message of every chat they open.
   const pendingScrollRef = useRef(false);
+  /**
+   * Whether the transcript is currently glued to its tail.
+   *
+   * A ref, not state: it is read inside a `scroll` listener and a
+   * `ResizeObserver` callback, both of which fire far more often than a render
+   * should, and none of its readers need to re-render when it flips.
+   */
+  const followingRef = useRef(true);
+  /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
+  const lastScrollTopRef = useRef(0);
   // Highest seq rendered for the active run — the replay cursor used to fetch
   // only the items missed during a disconnect.
   const lastSeqRef = useRef(-1);
@@ -790,10 +805,11 @@ export function Chats({
         return;
       }
       pendingScrollRef.current = false;
+      followingRef.current = true;
       transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
       return;
     }
-    if (!scroller || !isScrolledToBottom(scroller)) {
+    if (!scroller || !followingRef.current) {
       return;
     }
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -801,6 +817,65 @@ export function Chats({
     // with no new item, and keying on `items` alone let the live text run off
     // the bottom of the viewport mid-turn.
   }, [items, liveText]);
+
+  /**
+   * Keep the tail glued to the bottom when a block grows AFTER it rendered.
+   *
+   * The effect above runs once per React commit, which is too early for the
+   * cases the user actually hit: a thinking block that fills in, a code block
+   * that gets highlighted, an image that finishes loading. All of them change
+   * the transcript's HEIGHT with no new item and no new live text, so the
+   * commit-time scroll lands short and the tail sits just below the fold.
+   *
+   * A `ResizeObserver` is what closes that gap — it fires on the layout change
+   * itself rather than on the render that preceded it. It watches the scroller's
+   * children (the scroller's own box never changes size; only its content does),
+   * and is re-pointed whenever the child list changes.
+   *
+   * The `scroll` listener beside it owns the follow decision, so that a resize
+   * arriving while the user is reading further up never yanks them down; see
+   * `nextFollowState` for why the naive at-bottom read was not enough.
+   */
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (!scroller) {
+      return;
+    }
+    lastScrollTopRef.current = scroller.scrollTop;
+    const onScroll = (): void => {
+      followingRef.current = nextFollowState(
+        followingRef.current,
+        scroller,
+        lastScrollTopRef.current,
+      );
+      lastScrollTopRef.current = scroller.scrollTop;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+
+    // jsdom has no ResizeObserver, and neither does an old runtime — the
+    // commit-time effect above is still the baseline behaviour without it.
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => {
+            if (!followingRef.current) {
+              return;
+            }
+            transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
+          });
+    const observed = Array.from(scroller.children);
+    for (const child of observed) {
+      observer?.observe(child);
+    }
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      observer?.disconnect();
+    };
+    // Re-pointed on every transcript change: the observer holds the CHILDREN,
+    // and a new row is a new element it has never seen. Keyed on the inputs
+    // `transcriptEntries` is derived from rather than on the memo itself, which
+    // is declared further down this component.
+  }, [activeRunId, items, liveText]);
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
@@ -1182,12 +1257,19 @@ export function Chats({
       // so a retry needs no re-paste, exactly as it keeps the text.
       attachments.clear();
     } catch (err) {
-      if (streaming && queueable && String(err).includes('RUN_BUSY')) {
+      if (queueable && isRunBusyError(err)) {
         // The CLI cannot be told anything mid-turn (or the turn settled as
         // this was in flight). Queue it — the composer shows it pending and
         // the drain sends it the moment the turn ends. Not an error: this is
         // the documented fallback, and a red banner for it would report a
         // failure the user has no action for.
+        //
+        // Deliberately NOT gated on `streaming`. That flag is the renderer's
+        // own belief, and the daemon's RUN_BUSY is the fact — they disagree
+        // whenever the run list has not loaded yet (`refreshRuns` is
+        // fire-and-forget while `activateRun` reads `runsRef.current`), or
+        // when a turn wedged without settling. Every one of those disagreements
+        // used to surface the raw 409 JSON as a red banner.
         enqueueMessage(runId, { text, images });
         attachments.clear();
         return;
@@ -1902,10 +1984,7 @@ export function Chats({
                         if (handleSkillMenuKeys(event)) {
                           return;
                         }
-                        if (
-                          event.key === 'Enter' &&
-                          (event.metaKey || event.ctrlKey)
-                        ) {
+                        if (isComposerSendKey(event)) {
                           event.preventDefault();
                           void send();
                         }
@@ -2277,10 +2356,7 @@ export function Chats({
                         if (handleSkillMenuKeys(event)) {
                           return;
                         }
-                        if (
-                          event.key === 'Enter' &&
-                          (event.metaKey || event.ctrlKey)
-                        ) {
+                        if (isComposerSendKey(event)) {
                           event.preventDefault();
                           void sendFollowUp();
                         }
@@ -2310,7 +2386,11 @@ export function Chats({
                             ) : null}
                             <Button
                               type="button"
-                              variant="outline"
+                              // Red, not outline: Stop ABORTS the turn the user
+                              // is watching, and the one control in the composer
+                              // that destroys work should not read the same as
+                              // the pickers beside it.
+                              variant="destructive"
                               size="icon"
                               className="size-8 rounded-full"
                               aria-label="Stop"

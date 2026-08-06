@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonHandle } from '../shared/contracts';
 import {
   createDaemonApis,
+  daemonErrorCode,
   daemonErrorStatus,
+  isRunBusyError,
   MCP_ROUTE_TIMEOUT_MS,
   REQUEST_TIMEOUT_MS,
 } from './daemon-api';
@@ -177,5 +179,75 @@ describe('the MCP route budget', () => {
     // ...and it is genuinely an override, not the shared ceiling under a new
     // name — the shared one is what it exists to escape.
     expect(MCP_ROUTE_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe('daemonErrorCode', () => {
+  // The exact banner the user photographed — the real observable, not a string
+  // this spec invented. If the parse regresses, the composer stops queueing and
+  // renders this JSON at the user again.
+  const runBusy = new Error(
+    'daemon POST /v1/chats/737f7131-5feb-4878-a873-0eb94be951be/messages failed (409): ' +
+      '{"statusCode":409,"code":"RUN_BUSY","message":"a turn is already in progress for this run",' +
+      '"fullMessage":"[RUN_BUSY] a turn is already in progress for this run","fields":[]}',
+  );
+
+  it('reads the code out of the daemon’s JSON body', () => {
+    expect(daemonErrorCode(runBusy)).toBe('RUN_BUSY');
+  });
+
+  it('is null when the body is not the daemon’s JSON shape', () => {
+    expect(
+      daemonErrorCode(
+        new Error(
+          'daemon GET /v1/chats failed (502): <html>bad gateway</html>',
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  it('is null when there is no body at all', () => {
+    expect(
+      daemonErrorCode(new Error('daemon GET /v1/chats failed (500)')),
+    ).toBeNull();
+  });
+
+  it('is null for anything that is not a daemon error', () => {
+    expect(daemonErrorCode(new Error('TimeoutError'))).toBeNull();
+    expect(daemonErrorCode('RUN_BUSY')).toBeNull();
+  });
+});
+
+describe('isRunBusyError', () => {
+  const runBusy = new Error(
+    'daemon POST /v1/chats/737f7131-5feb-4878-a873-0eb94be951be/messages failed (409): ' +
+      '{"statusCode":409,"code":"RUN_BUSY","message":"a turn is already in progress for this run"}',
+  );
+
+  it('recognises the daemon’s busy answer', () => {
+    expect(isRunBusyError(runBusy)).toBe(true);
+  });
+
+  // The reason this is a named predicate and not `includes('RUN_BUSY')`: a run
+  // id, a cwd or a prompt echoed into some other error can carry the word, and
+  // queueing on that would silently swallow a real failure.
+  it('does not fire on an unrelated error that merely says RUN_BUSY', () => {
+    expect(
+      isRunBusyError(
+        new Error(
+          'daemon GET /v1/chats/RUN_BUSY-branch/items failed (404): {}',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not fire on a 409 carrying some other code', () => {
+    expect(
+      isRunBusyError(
+        new Error(
+          'daemon POST /v1/chats/x/messages failed (409): {"code":"RUN_DELETED"}',
+        ),
+      ),
+    ).toBe(false);
   });
 });

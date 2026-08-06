@@ -324,7 +324,7 @@ describe('groupTranscript — call blocks', () => {
 });
 
 describe('toolGroupSummary', () => {
-  it('counts tools, commands, edited and created files', () => {
+  it('counts reads, commands, edited and created files', () => {
     const pairs = groupTranscript([
       call('Bash', 't1', { command: 'ls' }),
       call('Bash', 't2', { command: 'pwd' }),
@@ -337,17 +337,51 @@ describe('toolGroupSummary', () => {
       call('Read', 't5', { file_path: '/c.ts' }),
     ])[0] as ToolGroupEntry;
 
+    // Every call now has a named bucket, so the bare total goes away entirely —
+    // which is the point: "Used 5 tools" said nothing about what the five were.
     expect(toolGroupSummary(pairs.pairs)).toBe(
-      'Used 5 tools · ran 2 commands · edited 1 file · created 1 file',
+      'Read 1 file · ran 2 commands · edited 1 file · created 1 file',
     );
   });
 
-  it('a single plain tool reads "Used 1 tool"', () => {
-    // Nothing else describes a Read, so the total is the only report there is.
+  it('reports a group of file reads as reads, not as a bare tool count', () => {
+    // The line the user photographed read "Used 7 tools · ran 3 commands" for
+    // four Reads and three Bashes — the reads were invisible.
     const group = groupTranscript([
       call('Read', 't1', { file_path: '/a.ts' }),
+      call('Read', 't2', { file_path: '/b.ts' }),
+      call('Read', 't3', { file_path: '/c.ts' }),
+      call('Read', 't4', { file_path: '/d.ts' }),
+      call('Bash', 't5', { command: 'ls' }),
+      call('Bash', 't6', { command: 'pwd' }),
+      call('Bash', 't7', { command: 'rg x' }),
     ])[0] as ToolGroupEntry;
-    expect(toolGroupSummary(group.pairs)).toBe('Used 1 tool');
+
+    expect(toolGroupSummary(group.pairs)).toBe('Read 4 files · ran 3 commands');
+  });
+
+  it('counts reads by DISTINCT path, like the edits', () => {
+    const group = groupTranscript([
+      call('Read', 't1', { file_path: '/a.ts' }),
+      call('Read', 't2', { file_path: '/a.ts' }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Read 1 file');
+  });
+
+  it('names searches, web fetches, subagents and MCP calls', () => {
+    const group = groupTranscript([
+      call('Grep', 't1', { pattern: 'x' }),
+      call('Glob', 't2', { pattern: '*.ts' }),
+      call('WebFetch', 't3', { url: 'https://example.com' }),
+      call('Task', 't4', { prompt: 'go' }),
+      call('mcp__codegraph__codegraph_explore', 't5', { query: 'x' }),
+      call('mcp__telegram__send_message', 't6', { text: 'hi' }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe(
+      'Searched 2 times · fetched 1 page · delegated to 1 subagent · called 2 MCP tools',
+    );
   });
 
   it('does not count the same action twice when the breakdown covers it all', () => {
@@ -361,13 +395,23 @@ describe('toolGroupSummary', () => {
   });
 
   it('keeps the total as soon as one call falls outside the breakdown', () => {
-    // A Read is reported by nothing else, so dropping the total would hide it.
+    // TodoWrite is in no bucket, so dropping the total would hide it entirely.
     const group = groupTranscript([
       call('Bash', 't1', { command: 'ls' }),
-      call('Read', 't2', { file_path: '/a.ts' }),
+      call('TodoWrite', 't2', { todos: [] }),
     ])[0] as ToolGroupEntry;
 
     expect(toolGroupSummary(group.pairs)).toBe('Used 2 tools · ran 1 command');
+  });
+
+  it('leaves a file-shaped call with no path unaccounted rather than miscounting it', () => {
+    // Reporting it as "read 0 files" would be a figure for something that never
+    // happened; the total is the honest answer for a call we cannot describe.
+    const group = groupTranscript([
+      call('Read', 't1', { notAPath: true }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Used 1 tool');
   });
 
   it('counts CALLS, not distinct files, when deciding the total is redundant', () => {

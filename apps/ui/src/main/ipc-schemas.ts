@@ -88,3 +88,15 @@ export const onboardingInputSchema = z.strictObject({
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
   cursorApiKey: z.string().min(1).optional(),
 });
+
+/**
+ * The handoff invocation, as DATA — a command, its arguments and a folder,
+ * never a shell string. The main process writes them into a script it quotes
+ * itself, so a renderer that has been tampered with cannot append a second
+ * command to a line.
+ */
+export const openTerminalSchema = z.strictObject({
+  command: z.string().min(1),
+  args: z.array(z.string()),
+  cwd: absolutePath,
+});

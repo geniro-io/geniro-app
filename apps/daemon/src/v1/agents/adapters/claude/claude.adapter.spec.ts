@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
+import { tempDir } from '../../__tests__/temp-dir';
 import type { ClaudeModesCapability } from '../../chat.types';
 import type { SpawnFn } from '../../utils/spawn-cli';
 import { spawnAnswering } from '../__tests__/fake-group-child';
@@ -1443,35 +1444,37 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
   });
 });
 
-describe('ClaudeAdapter — the interactive terminal mirror', () => {
+describe('ClaudeAdapter — handing the conversation to the user', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
   it('resumes the stored claude session', () => {
     expect(
-      new ClaudeAdapter().terminalCommand({
+      new ClaudeAdapter().handoffTarget({
         sessionId: 'sess-42',
         model: null,
       }),
     ).toEqual({
       ok: true,
+      kind: 'command',
       command: 'claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
     });
   });
 
-  it('opens the mirror on the run’s OWN model, not the CLI default', () => {
+  it('opens on the run’s OWN model, not the CLI default', () => {
     // A mirror that resumed under claude's default was a different model with
     // a different window sitting beside the chat it mirrors — which is what
     // put a 200k context readout next to a 1M-window conversation.
     expect(
-      new ClaudeAdapter().terminalCommand({
+      new ClaudeAdapter().handoffTarget({
         sessionId: 'sess-42',
         model: 'claude-opus-5[1m]',
       }),
     ).toEqual({
       ok: true,
+      kind: 'command',
       command: 'claude',
       args: [
         CLAUDE_MODEL_FLAG,
@@ -1485,16 +1488,17 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
   it('omits the model flag for a run on the CLI’s default', () => {
     // `--model ''` is not the same request as no flag at all.
     expect(
-      new ClaudeAdapter().terminalCommand({ sessionId: 'sess-42', model: '  ' })
+      new ClaudeAdapter().handoffTarget({ sessionId: 'sess-42', model: '  ' })
         .ok,
     ).toBe(true);
     expect(
-      new ClaudeAdapter().terminalCommand({
+      new ClaudeAdapter().handoffTarget({
         sessionId: 'sess-42',
         model: '  ',
       }),
     ).toEqual({
       ok: true,
+      kind: 'command',
       command: 'claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
     });
@@ -1504,7 +1508,7 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
     // Not a mirror target: launching the TUI without a resume id would open an
     // unrelated fresh conversation while claiming to show the run's own.
     expect(
-      new ClaudeAdapter().terminalCommand({ sessionId: null, model: null }),
+      new ClaudeAdapter().handoffTarget({ sessionId: null, model: null }),
     ).toEqual({
       ok: false,
       reason: 'no-session',
@@ -1513,7 +1517,7 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
 
   it('refuses a whitespace-only session id instead of building a broken resume argv', () => {
     expect(
-      new ClaudeAdapter().terminalCommand({ sessionId: ' \t\n ', model: null }),
+      new ClaudeAdapter().handoffTarget({ sessionId: ' \t\n ', model: null }),
     ).toEqual({
       ok: false,
       reason: 'no-session',
@@ -1523,24 +1527,25 @@ describe('ClaudeAdapter — the interactive terminal mirror', () => {
   it('refuses a zero-width-only session id instead of an invisible resume target', () => {
     // U+200B is not trimmed as whitespace, so only the id PATTERN rejects it.
     expect(
-      new ClaudeAdapter().terminalCommand({ sessionId: '\u200b', model: null }),
+      new ClaudeAdapter().handoffTarget({ sessionId: '\u200b', model: null }),
     ).toEqual({
       ok: false,
       reason: 'no-session',
     });
   });
 
-  it('mirrors through the GENIRO_CLAUDE_BIN override path', () => {
+  it('opens through the GENIRO_CLAUDE_BIN override path', () => {
     // The mirror spawns the same binary a turn would — resolved per access, so
     // a Settings cliPaths override reaches the TUI too.
     vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
     expect(
-      new ClaudeAdapter().terminalCommand({
+      new ClaudeAdapter().handoffTarget({
         sessionId: 'sess-42',
         model: null,
       }),
     ).toEqual({
       ok: true,
+      kind: 'command',
       command: '/opt/tools/claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
     });
@@ -1608,98 +1613,146 @@ describe('ClaudeAdapter — models', () => {
   });
 });
 
-describe('ClaudeAdapter MCP toggle (--settings)', () => {
-  const dirs: string[] = [];
-
-  afterEach(() => {
-    while (dirs.length > 0) {
-      rmSync(dirs.pop() as string, { recursive: true, force: true });
-    }
-  });
-
-  const settingsDir = (): string => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-settings-'));
-    dirs.push(dir);
+describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
+  /** A home dir holding a `.claude.json` with the given contents. */
+  function home(config: unknown): string {
+    const dir = tempDir('claude-toggle-');
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify(config), 'utf8');
     return dir;
-  };
-
-  /** The `--settings` path in a captured argv, or null when the flag is absent. */
-  function settingsPathIn(args: string[] | undefined): string | null {
-    const idx = args?.indexOf('--settings') ?? -1;
-    return idx > -1 ? (args![idx + 1] ?? null) : null;
   }
 
-  it('passes a settings file carrying the disabled servers', async () => {
-    const { spawn, child, captured } = fakeSpawn();
-    const dir = settingsDir();
-    const handle = new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
-      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry', 'docs'] },
-      () => {},
+  const read = (dir: string): Record<string, never> =>
+    JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8')) as Record<
+      string,
+      never
+    >;
+
+  it('writes the folder’s disabled list in the CLI’s own config', async () => {
+    // `projects[<cwd>].disabledMcpServers` — probe-verified on 2.1.222 as the
+    // one list that takes a server of ANY scope out of a turn. Writing the
+    // CLI's list rather than a private one is also why the switch shows up in
+    // the user's own `/mcp` panel.
+    const dir = home({ projects: { '/proj': { allowedTools: ['Bash'] } } });
+
+    await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+      '/proj',
+      'sentry',
+      false,
     );
 
-    const path = settingsPathIn(captured.args);
-    expect(path).not.toBeNull();
-    expect(JSON.parse(readFileSync(path!, 'utf8'))).toEqual({
-      disabledMcpjsonServers: ['sentry', 'docs'],
+    expect(read(dir)).toEqual({
+      projects: {
+        '/proj': { allowedTools: ['Bash'], disabledMcpServers: ['sentry'] },
+      },
+    });
+  });
+
+  it('preserves every other key of the config and of the project entry', async () => {
+    // This file holds the user's whole CLI state. A rewrite that dropped a key
+    // would be silent data loss in a file they never asked us to touch.
+    const dir = home({
+      firstStartTime: '2026-01-01',
+      projects: {
+        '/proj': { history: ['a'], mcpServers: { sentry: { type: 'stdio' } } },
+        '/other': { history: ['b'] },
+      },
     });
 
-    child.emit('close', 0);
-    await handle.done;
-  });
-
-  it('passes NO settings flag when nothing is switched off', async () => {
-    // An empty settings file is one more thing that can be malformed for no
-    // gain, and a turn with no overrides should spawn exactly as it did before
-    // this feature existed.
-    const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn, mcpConfigDir: settingsDir() }).start(
-      { prompt: 'p', cwd: '/proj', disabledMcpServers: [] },
-      () => {},
+    await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+      '/proj',
+      'sentry',
+      false,
     );
 
-    expect(captured.args).not.toContain('--settings');
+    const after = read(dir) as unknown as {
+      firstStartTime: string;
+      projects: Record<string, Record<string, unknown>>;
+    };
+    expect(after.firstStartTime).toBe('2026-01-01');
+    expect(after.projects['/other']).toEqual({ history: ['b'] });
+    expect(after.projects['/proj']?.history).toEqual(['a']);
+    expect(after.projects['/proj']?.mcpServers).toEqual({
+      sentry: { type: 'stdio' },
+    });
   });
 
-  it('passes the settings flag on a PLAIN chat turn, not only a caller node', async () => {
-    // The toggle is a chat-panel control first. Pushing `--settings` inside the
-    // caller-node branch would leave every chat turn ignoring the switch while
-    // the panel showed it as off.
-    const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn, mcpConfigDir: settingsDir() }).start(
-      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry'] },
-      () => {},
+  it('re-enabling removes the name rather than emptying the list', async () => {
+    const dir = home({
+      projects: { '/proj': { disabledMcpServers: ['sentry', 'docs'] } },
+    });
+
+    await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+      '/proj',
+      'sentry',
+      true,
     );
 
-    expect(captured.args).not.toContain('--mcp-config');
-    expect(settingsPathIn(captured.args)).not.toBeNull();
+    expect(read(dir)).toEqual({
+      projects: { '/proj': { disabledMcpServers: ['docs'] } },
+    });
   });
 
-  it('deletes the settings file when the turn settles', async () => {
-    const { spawn, child, captured } = fakeSpawn();
-    const handle = new ClaudeAdapter({
-      spawn,
-      mcpConfigDir: settingsDir(),
-    }).start(
-      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry'] },
-      () => {},
+  it('creates the project entry for a folder the CLI has never opened', async () => {
+    // Otherwise a server could only be switched off in folders the user had
+    // already used interactively — which is not where a fresh chat starts.
+    const dir = home({ projects: {} });
+
+    await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+      '/fresh',
+      'sentry',
+      false,
     );
-    const path = settingsPathIn(captured.args)!;
-    expect(existsSync(path)).toBe(true);
 
-    child.emit('close', 0);
-    await handle.done;
-
-    expect(existsSync(path)).toBe(false);
+    expect(read(dir)).toEqual({
+      projects: { '/fresh': { disabledMcpServers: ['sentry'] } },
+    });
   });
 
-  it('writes the settings file 0600', async () => {
-    const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn, mcpConfigDir: settingsDir() }).start(
-      { prompt: 'p', cwd: '/proj', disabledMcpServers: ['sentry'] },
-      () => {},
+  it('does not rewrite the file when the server is already in that state', async () => {
+    const dir = home({
+      projects: { '/proj': { disabledMcpServers: ['sentry'] } },
+    });
+    const before = statSync(join(dir, '.claude.json')).mtimeMs;
+
+    await new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+      '/proj',
+      'sentry',
+      false,
     );
 
-    expect(statSync(settingsPathIn(captured.args)!).mode & 0o777).toBe(0o600);
+    expect(statSync(join(dir, '.claude.json')).mtimeMs).toBe(before);
+  });
+
+  it('REFUSES on an unparseable config instead of replacing it', async () => {
+    // Treating a corrupt config as empty would rewrite it as `{projects:{…}}`
+    // and take the user's history, account record and every project's settings
+    // with it. Losing a toggle is recoverable; that is not.
+    const dir = tempDir('claude-toggle-');
+    writeFileSync(join(dir, '.claude.json'), '{ this is not json', 'utf8');
+
+    await expect(
+      new ClaudeAdapter({ homeDir: dir }).setMcpServerEnabled(
+        '/proj',
+        'sentry',
+        false,
+      ),
+    ).rejects.toThrow();
+    expect(readFileSync(join(dir, '.claude.json'), 'utf8')).toBe(
+      '{ this is not json',
+    );
+  });
+
+  it('reads back what it wrote, as the folder’s disabled set', async () => {
+    // The read and the write are two halves of one mechanism; a spec that only
+    // pinned the write would let the panel keep listing a stale state.
+    const dir = home({ projects: {} });
+    const adapter = new ClaudeAdapter({ homeDir: dir });
+
+    await adapter.setMcpServerEnabled('/proj', 'sentry', false);
+
+    expect((await adapter.readMcpFolderFacts('/proj')).disabled).toEqual([
+      'sentry',
+    ]);
   });
 });
 
@@ -1886,5 +1939,49 @@ describe('ClaudeAdapter geniro-key collision', () => {
     );
 
     expect(captured.args).toContain('--mcp-config');
+  });
+});
+
+describe('ClaudeAdapter — a message sent into a turn already running', () => {
+  it('writes the same user line the turn opened with, onto the open stdin', () => {
+    // Probe-verified on 2.1.222: a second `{"type":"user"}` on a still-open
+    // stream-json stdin is acted on at the next tool boundary of the turn in
+    // flight. Holding it until the process exits — which is what a queue
+    // draining on settle does — turns "as soon as possible" into "after
+    // everything finishes".
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      // A chat turn: `allowUserQuestions` is what keeps stdin open.
+      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      () => {},
+    );
+    const openingBytes = child.stdin.written.length;
+
+    expect(handle.sendUserMessage({ text: 'actually, do this' })).toBe(true);
+
+    const follow = child.stdin.written.slice(openingBytes);
+    expect(JSON.parse(follow)).toEqual({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'actually, do this' }],
+      },
+    });
+    // One JSON line, newline-terminated — the CLI reads NDJSON.
+    expect(follow.endsWith('\n')).toBe(true);
+    expect(follow.trimEnd().includes('\n')).toBe(false);
+  });
+
+  it('reports false once the turn has settled, rather than dropping it silently', () => {
+    // The caller keeps the message queued on false. A true here would have it
+    // discarded while the agent never saw it.
+    const { spawn, child } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      () => {},
+    );
+    child.emit('close', 0, null);
+
+    expect(handle.sendUserMessage({ text: 'too late' })).toBe(false);
   });
 });

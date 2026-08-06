@@ -93,6 +93,35 @@ export class ProcessRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * Runs with a turn claimed or in flight, across every run kind.
+   *
+   * The idle shutdown reads it, and CLAIMED-but-not-yet-spawned deliberately
+   * counts: a turn crossing that window is work in progress, and exiting on it
+   * would kill a CLI a millisecond after spawning it.
+   */
+  get activeCount(): number {
+    return this.active.size;
+  }
+
+  /**
+   * The run's in-flight turn handle, or null.
+   *
+   * Null covers two states that callers must NOT tell apart by asking twice:
+   * no turn at all, and a turn that is only CLAIMED — reserved by
+   * {@link tryClaim} but not yet spawned, so it has no stdin to write to. Both
+   * mean "there is nothing running you can talk to right now".
+   *
+   * Deliberately narrow. This is not a general accessor for the process table:
+   * it exists so a follow-up message can reach the turn it is meant for, and
+   * the handle's own guards decide whether the write lands (a turn that
+   * settled between this read and the write reports false rather than
+   * accepting it). Cancel and shutdown keep going through this class.
+   */
+  runningHandle(runId: string): AgentTurnHandle | null {
+    return this.active.get(runId) ?? null;
+  }
+
+  /**
    * Resolves once the run's registered handle has settled — the wait a delete
    * needs when finalization rides the handle itself (the graph executor's
    * aggregate handle resolves only after the run's LAST write; a chat turn's

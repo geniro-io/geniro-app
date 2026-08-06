@@ -209,6 +209,16 @@ export interface GeniroApi {
   checkForUpdates(): Promise<UpdateCheckResult>;
   /** Read a folder's git state (repo? branch? branches? dirty?). */
   getGitInfo(dir: string): Promise<GitInfo>;
+  /**
+   * Open the user's own terminal on a command — the handoff out of geniro.
+   * Takes the command as DATA (never a shell string) so nothing here has to
+   * quote it, and so the renderer cannot smuggle a second command in.
+   */
+  openInTerminal(input: {
+    command: string;
+    args: string[];
+    cwd: string;
+  }): Promise<void>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
 }
@@ -231,5 +241,6 @@ export const IPC = {
   pickWorkflowExport: 'geniro:pickWorkflowExport',
   checkForUpdates: 'geniro:checkForUpdates',
   getGitInfo: 'geniro:getGitInfo',
+  openInTerminal: 'geniro:openInTerminal',
   switchBranch: 'geniro:switchBranch',
 } as const satisfies Record<keyof GeniroApi, string>;

@@ -8,11 +8,13 @@ import {
   branchNameSchema,
   gitDirSchema,
   onboardingInputSchema,
+  openTerminalSchema,
   secretNameSchema,
   secretValueSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
 import { deleteSecret, hasSecret, saveSecret } from './keychain';
+import { openInTerminal } from './open-terminal';
 import { readSettings, updateSettings } from './settings';
 import { checkForUpdates } from './updater';
 
@@ -110,6 +112,12 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
 
   ipcMain.handle(IPC.getGitInfo, (_event, dir: unknown) =>
     readGitInfo(gitDirSchema.parse(dir)),
+  );
+
+  // Shape-validated here rather than trusted: this ends in an executable
+  // script the main process writes and hands to LaunchServices.
+  ipcMain.handle(IPC.openInTerminal, (_event, input: unknown) =>
+    openInTerminal(openTerminalSchema.parse(input)),
   );
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>

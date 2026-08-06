@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -27,7 +27,6 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
-import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -38,12 +37,10 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
-import { McpSettingsStore } from './mcp-settings.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
-import { TurnMirrorService } from './turn-mirror.service';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -210,6 +207,7 @@ function fakeAdapter(kind: AgentKind): {
   handles: {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
+    sendUserMessage: ReturnType<typeof vi.fn>;
   }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
@@ -219,6 +217,7 @@ function fakeAdapter(kind: AgentKind): {
   const handles: {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
+    sendUserMessage: ReturnType<typeof vi.fn>;
   }[] = [];
   const start = vi.fn(
     (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
@@ -236,6 +235,10 @@ function fakeAdapter(kind: AgentKind): {
         cancel: vi.fn(() => resolveDone?.()),
         // A live turn delivers verdicts — true is the realistic default.
         respondApproval: vi.fn(() => true),
+        // Same for a follow-up: a running claude turn takes one on its still-open
+        // stream-json stdin (probe-verified). A spec about the CLI that cannot
+        // overrides it to false.
+        sendUserMessage: vi.fn(() => true),
       };
       handles.push(handle);
       return handle;
@@ -361,7 +364,6 @@ function setup(
   // a mock here would leave every assertion below pinning the mock.
   // A real one: it holds nothing but in-memory buffers, so a double would
   // only hide whether the turn is actually tee'd into it.
-  const mirrors = new TurnMirrorService();
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -371,7 +373,6 @@ function setup(
     callTokens,
     partials,
     attachments,
-    mirrors,
   );
   const service = new ChatService(
     em,
@@ -391,15 +392,8 @@ function setup(
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
-    new McpSettingsStore({
-      file:
-        opts.mcpSettingsFile ??
-        join(tmpdir(), 'geniro-chat-spec-never-written.json'),
-    }),
-    mirrors,
   );
   return {
-    mirrors,
     service,
     deltas,
     partials,
@@ -469,25 +463,6 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.status).toBe('completed');
   });
 
-  it('tees the turn into the live mirror, under the single-agent node key', async () => {
-    // The wiring the whole live terminal rests on. Nothing else in the suite
-    // fails if `mirror:` is dropped from the turn input — the chat keeps
-    // working perfectly and the panel goes permanently blank, which is the
-    // silent failure this pins.
-    const { service, claude, mirrors } = setup();
-    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-
-    await service.sendMessage(run.id, 'hello');
-    const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
-    startArg.mirror?.data('stdout', 'raw child output');
-
-    // Keyed by the SINGLE-AGENT node, the same constant the rest of a chat's
-    // per-node state uses — the terminals service reads it back by that key.
-    expect(mirrors.snapshot(run.id, SINGLE_AGENT_NODE)).toContain(
-      'raw child output',
-    );
-  });
-
   it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {
     // A typical turn is a tool-using turn: the persisted kind/role/payload for
     // these rows is what history replay renders, so the exact shape is pinned
@@ -544,12 +519,67 @@ describe('ChatService', () => {
     });
   });
 
-  it('rejects a concurrent turn on the same run with RUN_BUSY', async () => {
+  it('hands a mid-turn message to the running turn instead of refusing it', async () => {
+    // Probe-verified on claude 2.1.222: a second user line on a still-open
+    // stream-json stdin is picked up at the next tool boundary of the turn
+    // already in flight. Refusing (as this used to) meant the message waited
+    // for the CLI PROCESS to exit — minutes on a long turn, for a request the
+    // user had already replaced.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first'); // turn in flight, not finished
+
+    const item = await service.sendMessage(run.id, 'actually, do this instead');
+
+    expect(claude.handles[0]!.sendUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'actually, do this instead' }),
+    );
+    // A SECOND CLI must not have been spawned — it joined the running turn.
+    expect(claude.start).toHaveBeenCalledTimes(1);
+    // And it is in the transcript, after everything the turn has written.
+    expect(item.kind).toBe('message');
+    expect(item.role).toBe('user');
+    const rows = itemDao.items.filter((row) => row.runId === run.id);
+    expect(item.seq).toBe(Math.max(...rows.map((row) => row.seq)));
+
+    claude.finish();
+    await drain();
+  });
+
+  it('refuses with RUN_BUSY when the running turn cannot take one', async () => {
+    // ACP's `session/prompt` is one request per turn, so its adapter reports
+    // false — and the refusal has to be the SAME RUN_BUSY the caller already
+    // queues on, or a CLI without the channel needs special handling upstream.
     const { service, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+    claude.handles[0]!.sendUserMessage.mockReturnValue(false);
 
-    await service.sendMessage(run.id, 'first'); // turn in flight, not finished
-    await expect(service.sendMessage(run.id, 'second')).rejects.toThrow();
+    await expect(service.sendMessage(run.id, 'second')).rejects.toMatchObject({
+      errorCode: 'RUN_BUSY',
+    });
+
+    claude.finish();
+    await drain();
+  });
+
+  it('writes nothing to the transcript when the delivery is refused', async () => {
+    // Order matters: the CLI gets it first, and only a delivery it CONFIRMED
+    // is recorded. The reverse leaves a user message on screen that no agent
+    // ever received — the silent failure this path exists to replace.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+    claude.handles[0]!.sendUserMessage.mockReturnValue(false);
+    const before = itemDao.items.filter((row) => row.runId === run.id).length;
+
+    await expect(service.sendMessage(run.id, 'lost?')).rejects.toMatchObject({
+      errorCode: 'RUN_BUSY',
+    });
+
+    expect(itemDao.items.filter((row) => row.runId === run.id)).toHaveLength(
+      before,
+    );
 
     claude.finish();
     await drain();
@@ -757,6 +787,7 @@ describe('ChatService', () => {
       done: Promise.resolve(),
       cancel: cancelled,
       respondApproval: () => false,
+      sendUserMessage: () => false,
     });
 
     await expect(service.cancel(run.id)).rejects.toThrow(
@@ -1118,6 +1149,34 @@ describe('ChatService — approval modes (parity M1)', () => {
       effort: 'ultracode',
     });
     expect(updated.effort).toBe('ultracode');
+  });
+
+  it('stops claiming the agent is thinking the moment a tool call lands', async () => {
+    // The full path for the reported "Thinking… stays up between tool calls".
+    // A model that thinks and then calls a tool with nothing to say first emits
+    // no text delta, so `append` never fired and the stretch stayed open for
+    // the whole command — measured at 3.5s on one turn, unbounded in general.
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+
+    claude.emit({ type: 'thinking_progress', tokens: 74 });
+    await drain();
+    expect(deltas.at(-1)?.thinkingStretch).toBe(1);
+
+    claude.emit({
+      type: 'tool_call',
+      id: 't1',
+      name: 'Bash',
+      input: { command: 'sleep 40' },
+    });
+    await drain();
+
+    expect(deltas.at(-1)?.thinkingStretch).toBeNull();
+    expect(deltas.at(-1)?.thinkingTokens).toBeNull();
+
+    claude.finish();
+    await drain();
   });
 
   it('scales the live meter from the FIRST request once a model’s window is known', async () => {
@@ -2155,84 +2214,5 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     claude.finish();
     await drain();
-  });
-});
-
-describe('ChatService — the MCP switch reaches the turn', () => {
-  /** A real store file for this test only. */
-  function settingsFile(): string {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-seam-')));
-    return join(dir, 'mcp-settings.json');
-  }
-
-  it('hands the turn the servers the user switched off in that folder', async () => {
-    // THE seam this whole feature rests on. Delete the store read in
-    // ChatService and every switch in the panel becomes a control that moves
-    // and changes nothing — with no other test objecting.
-    const file = settingsFile();
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-cwd-')));
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, cwd, 'sentry', true);
-
-    const ctx = setup({ mcpSettingsFile: file });
-    const run = await ctx.service.createChat({
-      agentKind: AgentKind.Claude,
-      cwd,
-    });
-    await ctx.service.sendMessage(run.id, 'hi');
-
-    const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
-    expect(startArg.disabledMcpServers).toEqual(['sentry']);
-
-    rmSync(dirname(file), { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
-  });
-
-  it('hands the turn nothing when that folder has no switches', async () => {
-    // Pins the KEY, not just the read: a store keyed loosely (or read with the
-    // wrong cwd) would leak another folder's switches into this turn.
-    const file = settingsFile();
-    const disabledCwd = realpathSync(
-      mkdtempSync(join(tmpdir(), 'chat-mcp-a-')),
-    );
-    const otherCwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-b-')));
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, disabledCwd, 'sentry', true);
-
-    const ctx = setup({ mcpSettingsFile: file });
-    const run = await ctx.service.createChat({
-      agentKind: AgentKind.Claude,
-      cwd: otherCwd,
-    });
-    await ctx.service.sendMessage(run.id, 'hi');
-
-    const startArg = ctx.claude.start.mock.calls[0]?.[0] as AgentTurnInput;
-    expect(startArg.disabledMcpServers).toEqual([]);
-
-    rmSync(dirname(file), { recursive: true, force: true });
-    rmSync(disabledCwd, { recursive: true, force: true });
-    rmSync(otherCwd, { recursive: true, force: true });
-  });
-
-  it('does not hand a cursor turn claude’s switches', async () => {
-    // One folder is routinely used by both CLIs; keying loosely would switch
-    // off a server for an agent the user never touched.
-    const file = settingsFile();
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'chat-mcp-both-')));
-    const store = new McpSettingsStore({ file });
-    await store.setDisabled(AgentKind.Claude, cwd, 'sentry', true);
-
-    const ctx = setup({ mcpSettingsFile: file });
-    const run = await ctx.service.createChat({
-      agentKind: AgentKind.CursorAgent,
-      cwd,
-    });
-    await ctx.service.sendMessage(run.id, 'hi');
-
-    const startArg = ctx.cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
-    expect(startArg.disabledMcpServers).toEqual([]);
-
-    rmSync(dirname(file), { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
   });
 });

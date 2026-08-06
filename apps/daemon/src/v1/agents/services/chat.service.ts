@@ -46,12 +46,10 @@ import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
-import { McpSettingsStore } from './mcp-settings.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
-import { TurnMirrorService } from './turn-mirror.service';
 
 function parsePayload(raw: string): unknown {
   try {
@@ -113,8 +111,6 @@ export class ChatService {
     private readonly partials: PartialStreamService,
     private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
-    private readonly mcpSettings: McpSettingsStore,
-    private readonly mirrors: TurnMirrorService,
   ) {}
 
   /**
@@ -533,10 +529,15 @@ export class ChatService {
     // busy check, share one `maxSeq` base, allocate colliding seq values (the
     // renderer then de-dupes by seq and silently drops one), and spawn two CLIs.
     if (!this.registry.tryClaim(runId)) {
-      throw new ConflictException(
-        'RUN_BUSY',
-        'a turn is already in progress for this run',
-      );
+      // A turn holds the run. That used to be the end of it — the message went
+      // back as RUN_BUSY and sat in the renderer's queue until the CLI process
+      // exited, so "send this next" meant "after everything currently running
+      // finishes", which can be minutes. The CLI itself does not work that way:
+      // its stream-json stdin is a conversation, and a follow-up written into a
+      // running turn is picked up at the next tool boundary. So try that first,
+      // and fall back to the queue only when this CLI has no such channel (ACP)
+      // or the turn is already on its way out.
+      return await this.deliverIntoRunningTurn(runId, text, images);
     }
     try {
       const cwd = resolveValidCwd(run.cwd);
@@ -660,10 +661,6 @@ export class ChatService {
           'this chat was deleted while the turn was starting',
         );
       }
-      // Read at turn-build time, not at spawn: the adapter materializes it
-      // into whatever its own CLI reads, and a toggle made after this point
-      // belongs to the NEXT turn rather than silently changing this one.
-      const disabledMcpServers = this.mcpSettings.disabled(agentKind, cwd);
       const handle = adapter.start(
         {
           prompt: text,
@@ -677,14 +674,12 @@ export class ChatService {
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
           streamPartials,
-          disabledMcpServers,
           images: attachments.map((attachment) => ({
             path: this.attachments.pathOf(runId, attachment.id),
             mediaType: attachment.mediaType,
           })),
           // Tee this turn's raw stdio for the live terminal mirror. Keyed by
           // the same single-agent node the rest of a chat's per-node state is.
-          mirror: this.mirrors.sink(runId, SINGLE_AGENT_NODE),
         },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even
@@ -729,6 +724,7 @@ export class ChatService {
               // has finished at least once this session.
               this.partials.useModel(
                 runId,
+                SINGLE_AGENT_NODE,
                 adapter.getConfig().kind,
                 event.model,
               );
@@ -742,6 +738,7 @@ export class ChatService {
               // cannot file that model's window under the requested one.
               this.partials.rememberWindow(
                 runId,
+                SINGLE_AGENT_NODE,
                 event.usage?.contextWindowTokens ?? null,
                 event.usage?.contextModel ?? null,
               );
@@ -756,6 +753,12 @@ export class ChatService {
               );
               return;
             }
+            // Anything durable ends a silent reasoning stretch — the tool call
+            // the model went quiet to prepare is the commonest one, and it
+            // carries no text delta to close it (see `endThinking`). Before the
+            // persist, so the row stops saying "Thinking…" as the tool row
+            // lands rather than a write later.
+            this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
             const mapped = mapEventToItem(event);
             if (!mapped) {
               return;
@@ -1015,6 +1018,65 @@ export class ChatService {
       this.registry.release(runId);
       throw err;
     }
+  }
+
+  /**
+   * Hand a message to the turn that is ALREADY running, or refuse so the
+   * caller can queue it.
+   *
+   * The order is deliberate and is the whole safety of this path: the CLI gets
+   * the message FIRST, and only a delivery it confirmed is written to the
+   * transcript. Persisting first and then failing to deliver would leave a user
+   * message on screen that no agent ever received — the silent failure this is
+   * meant to replace — while the reverse loses at worst a transcript row for a
+   * message the agent is demonstrably answering.
+   *
+   * A refusal is a plain RUN_BUSY, identical to the one the claim used to
+   * throw, so a CLI with no mid-turn channel needs no special handling
+   * anywhere above: the renderer queues it and drains on settle exactly as
+   * before.
+   */
+  private async deliverIntoRunningTurn(
+    runId: string,
+    text: string,
+    images: SendMessageImage[],
+  ): Promise<ItemWire> {
+    const busy = new ConflictException(
+      'RUN_BUSY',
+      'a turn is already in progress for this run',
+    );
+    // Null for a run that is only CLAIMED — reserved microseconds ago by a
+    // concurrent send, with no process to write to yet.
+    const handle = this.registry.runningHandle(runId);
+    if (!handle) {
+      throw busy;
+    }
+    // Written before the send because the payload the adapter builds reads
+    // these files. A delivery that then fails leaves them unreferenced under
+    // the run's own attachments directory, which its teardown removes wholesale
+    // — the same place a failed first-turn send already leaves them.
+    const attachments = images.map((image) =>
+      this.attachments.save(runId, image.mediaType, image.data),
+    );
+    const delivered = handle.sendUserMessage({
+      text,
+      images: attachments.map((attachment) => ({
+        path: this.attachments.pathOf(runId, attachment.id),
+        mediaType: attachment.mediaType,
+      })),
+    });
+    if (!delivered) {
+      throw busy;
+    }
+    const em = this.em.fork();
+    // Its OWN seq, allocated now: the follow-up belongs after everything the
+    // turn has already written, not at the position it would have had when the
+    // user pressed send.
+    const seq = (await this.itemDao.maxSeq(runId, em)) + 1;
+    return this.persist(em, runId, seq, 'message', 'user', {
+      text,
+      ...(attachments.length > 0 ? { images: attachments } : {}),
+    });
   }
 
   private async persist(

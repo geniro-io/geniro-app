@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../utils/agent-binary';
 import { buildChildEnv } from '../utils/child-env';
+import { trackDetachedChild } from '../utils/child-journal';
 import { killProcessGroup } from '../utils/kill-tree';
 import { runHeadlessCli, type SpawnFn } from '../utils/spawn-cli';
 import type {
@@ -24,10 +25,11 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  FollowUpMessage,
+  HandoffInput,
+  HandoffResult,
   InstalledApprovalSupport,
   InstalledCapabilities,
-  TerminalCommandInput,
-  TerminalCommandResult,
   TurnDriver,
 } from './adapter.types';
 import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
@@ -246,13 +248,13 @@ export abstract class AgentAdapter {
    * launch: opening the CLI without a resume target would show an unrelated
    * fresh conversation while claiming to mirror the run.
    */
-  terminalCommand(input: TerminalCommandInput): TerminalCommandResult {
-    const terminal = this.getConfig().terminal;
-    if (!terminal) {
+  handoffTarget(input: HandoffInput): HandoffResult {
+    const handoff = this.getConfig().handoff;
+    if (handoff.kind === 'unavailable') {
       return { ok: false, reason: 'unsupported' };
     }
     const trimmed = input.sessionId?.trim();
-    if (!trimmed || !terminal.sessionIdPattern.test(trimmed)) {
+    if (!trimmed || !handoff.sessionIdPattern.test(trimmed)) {
       return { ok: false, reason: 'no-session' };
     }
     // The run's OWN model, when the CLI can be told. A mirror that opened on
@@ -261,10 +263,11 @@ export abstract class AgentAdapter {
     const model = input.model?.trim();
     return {
       ok: true,
+      kind: 'command',
       command: this.command,
       args: [
-        ...(model ? [terminal.modelFlag, model] : []),
-        terminal.resumeFlag,
+        ...(model ? [handoff.modelFlag, model] : []),
+        handoff.resumeFlag,
         trimmed,
       ],
     };
@@ -336,7 +339,39 @@ export abstract class AgentAdapter {
    * feature ever writes them.
    */
   readMcpFolderFacts(_cwd: string): Promise<AgentMcpFolderFacts> {
-    return Promise.resolve({ projectServers: [], userDisabled: [] });
+    return Promise.resolve({ disabled: [], lockedOff: [] });
+  }
+
+  /**
+   * Switch one MCP server on or off for one folder — the WRITE half of
+   * {@link readMcpFolderFacts}, and the same kind of thing: a mechanism only
+   * that CLI knows, so an adapter that has one overrides this.
+   *
+   * The default REFUSES, with the config's own sentence saying why. Refusing
+   * is the honest answer for a CLI whose disable mechanism is unverified: a
+   * switch that moves and changes nothing is the exact failure this feature is
+   * written to avoid, and the caller turns the refusal into an HTTP error the
+   * panel can show.
+   *
+   * An adapter that implements it writes the CLI's OWN state, not a private
+   * one — claude edits `projects[<cwd>].disabledMcpServers` in `~/.claude.json`
+   * under the same `proper-lockfile` lock the CLI itself takes. That is a
+   * deliberate exception to "geniro writes only its own files": it is the only
+   * mechanism that reaches servers of every scope, and sharing the CLI's list
+   * means a switch flipped here is the same switch the user sees in their own
+   * terminal.
+   */
+  setMcpServerEnabled(
+    _cwd: string,
+    _server: string,
+    _enabled: boolean,
+  ): Promise<void> {
+    return Promise.reject(
+      new Error(
+        this.getConfig().mcp.toggleUnavailableReason ??
+          `${this.getConfig().kind} cannot be told which MCP servers to load`,
+      ),
+    );
   }
 
   /**
@@ -646,6 +681,11 @@ export abstract class AgentAdapter {
         settle(null);
         return;
       }
+      // Journaled like a turn spawn, and for a sharper reason: this path is
+      // taken by `mcp list`, which HEALTH-CHECKS by launching the user's own
+      // MCP servers (see the doc block above). A SIGKILL between the spawn and
+      // the reap strands that whole group with nothing left to name it.
+      trackDetachedChild(child, this.command);
       // Decoded as a STREAM: node's StringDecoder holds a partial multi-byte
       // sequence across reads, so a character split at a 64KB boundary is not
       // turned into two replacement characters.
@@ -774,6 +814,24 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Encode a user message sent while the turn is STILL RUNNING, as the stdin
+   * line this CLI expects. Default undefined — "this CLI cannot be told
+   * anything more once its prompt is in", which makes
+   * `AgentTurnHandle.sendUserMessage` return false and leaves the caller to
+   * queue the message for the next turn.
+   *
+   * It is a MECHANISM rather than a config value: the payload is this CLI's
+   * own wire shape, the same reason `buildApprovalResponse` is a method. An
+   * adapter that overrides it must also keep stdin open for the turn
+   * (`keepStdinOpen`), or the line has nowhere to go.
+   */
+  protected buildFollowUpPayload(
+    _message: FollowUpMessage,
+  ): string | undefined {
+    return undefined;
+  }
+
+  /**
    * Materialize turn-scoped resources BEFORE the spawn; the returned disposer
    * runs when the turn settles (any path). Default: nothing. The Claude
    * adapter writes its per-turn MCP config file here so `buildArgs` can
@@ -809,6 +867,7 @@ export abstract class AgentAdapter {
         keepStdinOpen: this.keepStdinOpen(input),
         buildApprovalResponse: (id, allow, updatedInput) =>
           driver.buildApprovalResponse?.(id, allow, updatedInput),
+        buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
         mapper: (obj) => driver.onMessage(obj),
         onStdinReady: (io) => driver.onStdinReady?.(io),
         // The mappers are pure module-scope functions, so a control message
@@ -824,10 +883,6 @@ export abstract class AgentAdapter {
           }
           onEvent(event);
         },
-        // Handed over whole: `runHeadlessCli` owns the argv, the raw bytes and
-        // the single settle point, which is all three moments the sink
-        // describes. Nothing about the mirror is this class's business.
-        mirror: input.mirror,
         spawn: this.options.spawn,
         logger: this.options.logger,
       });
@@ -843,9 +898,6 @@ export abstract class AgentAdapter {
           `turn resource disposer failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`,
         );
       }
-      // The mirror needs nothing here: a throw on this path means
-      // `runHeadlessCli` was never reached, so it announced no turn and has
-      // none to close out.
       throw err;
     }
     if (dispose) {

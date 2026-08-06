@@ -506,51 +506,6 @@ export interface CreateChatDto {
 /**
  * 
  * @export
- * @interface CreateTerminalDto
- */
-export interface CreateTerminalDto {
-    /**
-     * 
-     * @type {string}
-     * @memberof CreateTerminalDto
-     */
-    runId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof CreateTerminalDto
-     */
-    nodeId?: string;
-    /**
-     * 
-     * @type {TerminalKind}
-     * @memberof CreateTerminalDto
-     */
-    kind?: TerminalKind;
-    /**
-     * 
-     * @type {string}
-     * @memberof CreateTerminalDto
-     */
-    sessionId?: string;
-    /**
-     * 
-     * @type {number}
-     * @memberof CreateTerminalDto
-     */
-    cols?: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof CreateTerminalDto
-     */
-    rows?: number;
-}
-
-
-/**
- * 
- * @export
  * @interface CreateWorkflowDto
  */
 export interface CreateWorkflowDto {
@@ -579,19 +534,6 @@ export interface DeletedDto {
      * @memberof DeletedDto
      */
     deleted: boolean;
-}
-/**
- * 
- * @export
- * @interface DisposedDto
- */
-export interface DisposedDto {
-    /**
-     * 
-     * @type {boolean}
-     * @memberof DisposedDto
-     */
-    disposed: boolean;
 }
 
 /**
@@ -630,6 +572,60 @@ export interface ExportedDto {
      */
     exported: boolean;
 }
+/**
+ * 
+ * @export
+ * @interface HandoffTargetDto
+ */
+export interface HandoffTargetDto {
+    /**
+     * Which delivery applies; anything else is unavailable
+     * @type {string}
+     * @memberof HandoffTargetDto
+     */
+    kind: HandoffTargetDtoKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof HandoffTargetDto
+     */
+    command: string | null;
+    /**
+     * Arguments; empty unless kind=command
+     * @type {Array<string>}
+     * @memberof HandoffTargetDto
+     */
+    args: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof HandoffTargetDto
+     */
+    cwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof HandoffTargetDto
+     */
+    display: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof HandoffTargetDto
+     */
+    unavailableReason: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const HandoffTargetDtoKindEnum = {
+    Command: 'command',
+    Unavailable: 'unavailable'
+} as const;
+export type HandoffTargetDtoKindEnum = typeof HandoffTargetDtoKindEnum[keyof typeof HandoffTargetDtoKindEnum];
+
 /**
  * 
  * @export
@@ -1031,92 +1027,6 @@ export interface SetMcpServerEnabledDto {
     enabled: boolean;
 }
 
-
-
-/**
- * 
- * @export
- */
-export const TerminalKind = {
-    Live: 'live',
-    Interactive: 'interactive'
-} as const;
-export type TerminalKind = typeof TerminalKind[keyof typeof TerminalKind];
-
-/**
- * 
- * @export
- * @interface TerminalSessionDto
- */
-export interface TerminalSessionDto {
-    /**
-     * 
-     * @type {string}
-     * @memberof TerminalSessionDto
-     */
-    id: string;
-    /**
-     * 
-     * @type {TerminalKind}
-     * @memberof TerminalSessionDto
-     */
-    kind: TerminalKind;
-    /**
-     * The chat/workflow run this terminal mirrors
-     * @type {string}
-     * @memberof TerminalSessionDto
-     */
-    runId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof TerminalSessionDto
-     */
-    nodeId: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof TerminalSessionDto
-     */
-    resumeSessionId: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof TerminalSessionDto
-     */
-    cwd: string;
-    /**
-     * 
-     * @type {TerminalStatus}
-     * @memberof TerminalSessionDto
-     */
-    status: TerminalStatus;
-    /**
-     * 
-     * @type {number}
-     * @memberof TerminalSessionDto
-     */
-    exitCode: number | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof TerminalSessionDto
-     */
-    createdAt: number;
-}
-
-
-
-/**
- * 
- * @export
- */
-export const TerminalStatus = {
-    Running: 'running',
-    Closing: 'closing',
-    Exited: 'exited'
-} as const;
-export type TerminalStatus = typeof TerminalStatus[keyof typeof TerminalStatus];
 
 
 /**

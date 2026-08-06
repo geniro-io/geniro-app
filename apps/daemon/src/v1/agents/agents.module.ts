@@ -22,14 +22,14 @@ import { ChatService } from './services/chat.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
-import { McpSettingsStore } from './services/mcp-settings.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
-import { TurnMirrorService } from './services/turn-mirror.service';
+import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 
 /**
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
@@ -78,24 +78,13 @@ import { TurnMirrorService } from './services/turn-mirror.service';
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
-      provide: McpSettingsStore,
-      useFactory: () => new McpSettingsStore(),
-    },
-    {
-      // Factory because the trailing options bag is a test seam, not a DI token.
       provide: AgentMcpService,
       useFactory: (
         adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
-        settings: McpSettingsStore,
         versions: AgentVersionService,
-      ) => new AgentMcpService(adapters, processes, settings, versions),
-      inject: [
-        AgentAdapterRegistry,
-        ProcessRegistry,
-        McpSettingsStore,
-        AgentVersionService,
-      ],
+      ) => new AgentMcpService(adapters, processes, versions),
+      inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -118,8 +107,16 @@ import { TurnMirrorService } from './services/turn-mirror.service';
     },
     PartialStreamService,
     ProcessRegistry,
+    {
+      // Factory because the trailing options bag is a test seam, not a DI
+      // token — and because the journal path is config, not a dependency.
+      provide: StrandedChildReaper,
+      useFactory: () =>
+        new StrandedChildReaper(
+          join(environment.userDataDir, CHILD_JOURNAL_FILE_NAME),
+        ),
+    },
     RunTeardownService,
-    TurnMirrorService,
     ItemDao,
     NodeStateDao,
     RunDao,
@@ -162,16 +159,17 @@ import { TurnMirrorService } from './services/turn-mirror.service';
     PartialStreamService,
     // Exported for the terminals module: it turns these buffers into the
     // live mirror sessions the panel attaches to.
-    TurnMirrorService,
     ClaudeProbeService,
     ProcessRegistry,
+    // Exported for main.ts's boot sweep — it runs before the server listens,
+    // beside the other reconciles a crashed launch leaves behind.
+    StrandedChildReaper,
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,
     SkillHarvestStore,
     // Exported so a turn can be built with the servers the user switched off:
     // the store holds geniro's neutral set and each adapter translates it.
-    McpSettingsStore,
     CursorMcpCleanupService,
     ItemDao,
     NodeStateDao,

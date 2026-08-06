@@ -79,7 +79,6 @@ export function ThinkingRow({
   useSecondsTick();
   return (
     <LiveRow
-      role="thinking"
       label={`Thinking… ${formatTokens(tokens)} tokens · ${formatElapsed(Date.now() - since)}`}
     />
   );
@@ -99,26 +98,24 @@ export function WorkingRow(): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   useSecondsTick();
   return (
-    <LiveRow
-      role="working"
-      label={`Working… ${formatElapsed(Date.now() - mountedAt)}`}
-    />
+    <LiveRow label={`Working… ${formatElapsed(Date.now() - mountedAt)}`} />
   );
 }
 
 /**
  * The shell both rows share — bubble, spinner, label. Split out so a change to
  * the chrome cannot land on one live row and not the other.
+ *
+ * Deliberately WITHOUT `MessageBubble`'s `role` caption. These two rows are the
+ * only ones whose body already names the state they are in, so the caption
+ * printed the word a second time — a row reading "THINKING" over
+ * "Thinking… 250 tokens · 12s". Every other bubble needs the caption because
+ * its body is the agent's own words and says nothing about what kind of row it
+ * is.
  */
-function LiveRow({
-  role,
-  label,
-}: {
-  role: string;
-  label: string;
-}): React.JSX.Element {
+function LiveRow({ label }: { label: string }): React.JSX.Element {
   return (
-    <MessageBubble variant="reasoning" role={role}>
+    <MessageBubble variant="reasoning">
       <div className="flex items-center gap-1.5 italic">
         <Spinner />
         <span>{label}</span>

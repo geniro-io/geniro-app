@@ -128,3 +128,21 @@ describe('WorkingRow', () => {
     expect(container.textContent).toContain('7s');
   });
 });
+
+describe('the live rows say their state exactly once', () => {
+  it.each([
+    ['thinking', <ThinkingRow key="t" since={Date.now()} tokens={250} />],
+    ['working', <WorkingRow key="w" />],
+  ])('%s', (word, node) => {
+    // Both rows rode MessageBubble's `role` caption, which prints its value in
+    // uppercase above the body — so a row read "THINKING" over "Thinking… 250
+    // tokens · 12s". Every other bubble needs that caption because its body is
+    // the agent's own words; these two already name their state.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(node);
+
+    const occurrences =
+      (container.textContent ?? '').toLowerCase().split(word).length - 1;
+    expect(occurrences).toBe(1);
+  });
+});

@@ -1,3 +1,4 @@
+import { renameSync, rmSync, writeFileSync } from 'node:fs';
 import { link, rename, unlink, writeFile } from 'node:fs/promises';
 
 /**
@@ -35,6 +36,26 @@ export async function atomicWrite(
     await rename(tmp, path);
   } finally {
     await unlink(tmp).catch(() => {});
+  }
+}
+
+/**
+ * Synchronous {@link atomicWrite}, for a caller that cannot yield before the
+ * bytes are durable.
+ *
+ * The child journal is the reason it exists: it records a process group from
+ * inside the spawn call itself, and the whole point of the record is to
+ * survive a SIGKILL that could land on the very next tick. An awaited write
+ * would leave a window in which a group is running and unrecorded — small, but
+ * exactly the window the journal is meant to close.
+ */
+export function atomicWriteSync(path: string, content: string): void {
+  const tmp = stagingPath(path);
+  try {
+    writeFileSync(tmp, content, 'utf8');
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
   }
 }
 

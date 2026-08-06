@@ -3,10 +3,11 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import type {
   AgentEvent,
   AgentTurnHandle,
+  FollowUpMessage,
   TurnIo,
-  TurnStdioSink,
 } from '../adapters/adapter.types';
 import { buildChildEnv } from './child-env';
+import { trackDetachedChild } from './child-journal';
 import { killProcessGroup } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
 
@@ -40,13 +41,21 @@ export type SpawnFn = (
  * the child becomes its own process-group leader. That lets {@link runHeadlessCli}
  * signal the WHOLE group on cancel/shutdown (`process.kill(-pid, …)`) and reap the
  * tool/MCP grandchildren a coding agent forks — a single-PID kill would orphan them.
+ *
+ * `detached` is also what makes the group survive the daemon's own death, so the
+ * spawn is journaled here — in the same expression that creates it, before any
+ * caller can see the child. The next boot reaps whatever the journal still
+ * holds; see `child-journal.ts`.
  */
-export const defaultSpawn: SpawnFn = (command, args, options) =>
-  nodeSpawn(command, args, {
+export const defaultSpawn: SpawnFn = (command, args, options) => {
+  const child = nodeSpawn(command, args, {
     ...options,
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
+  trackDetachedChild(child, command);
+  return child;
+};
 
 export interface RunCliOptions {
   command: string;
@@ -77,6 +86,12 @@ export interface RunCliOptions {
     allow: boolean,
     updatedInput?: unknown,
   ) => string | undefined;
+  /**
+   * Encode a user message sent while THIS turn is still running, as the stdin
+   * line the CLI expects. Undefined = this CLI cannot be told anything more
+   * once its prompt is in, and `sendUserMessage` is a no-op.
+   */
+  buildFollowUpPayload?: (message: FollowUpMessage) => string | undefined;
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
   /**
@@ -88,17 +103,6 @@ export interface RunCliOptions {
    */
   onStdinReady?: (io: TurnIo) => void;
   onEvent: (event: AgentEvent) => void;
-  /**
-   * The live terminal mirror for this turn, or absent when nothing is watching.
-   *
-   * The WHOLE lifecycle lives here rather than at the caller, because this
-   * function already owns all three moments the sink describes: it holds the
-   * argv, it is the only place the unparsed bytes exist, and it owns the single
-   * settle point. Driving it from the adapter instead meant four touchpoints
-   * and an asymmetry — a turn that threw before the spawn announced a settle
-   * for a turn it had never announced starting.
-   */
-  mirror?: TurnStdioSink;
   spawn?: SpawnFn;
   logger?: { warn(message: string): void };
 }
@@ -139,28 +143,6 @@ function killProcessTree(child: SpawnedProcess, signal: NodeJS.Signals): void {
 export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   const spawnFn = opts.spawn ?? defaultSpawn;
 
-  // The mirror is a BYSTANDER on every path it sits on — including the stdout
-  // data handler, which owns the turn's entire output. A throwing sink must not
-  // take that down and strand the turn with no events and no terminal item.
-  // Isolated here rather than trusted to behave, because "never throws" is not
-  // enforceable across a boundary.
-  const tellMirror = (tell: () => void): void => {
-    if (!opts.mirror) {
-      return;
-    }
-    try {
-      tell();
-    } catch (err) {
-      opts.logger?.warn(
-        `${opts.command}: terminal mirror sink threw: ${errorMessage(err)}`,
-      );
-    }
-  };
-
-  // Before the spawn, so a spawn that FAILS still leaves the user looking at the
-  // command line that failed.
-  tellMirror(() => opts.mirror?.spawned(opts.command, opts.args));
-
   let settled = false;
   let resolveDone!: () => void;
   let killTimer: ReturnType<typeof setTimeout> | null = null;
@@ -174,10 +156,6 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         clearTimeout(killTimer);
         killTimer = null;
       }
-      // Every terminal path funnels through here — a clean close, a signal, a
-      // process error, a failed spawn — so the mirror is told exactly once and
-      // cannot be left showing a turn that never ends.
-      tellMirror(() => opts.mirror?.settled());
       resolveDone();
     }
   };
@@ -229,7 +207,12 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       message: `failed to spawn ${opts.command}: ${errorMessage(err)}`,
     });
     settle();
-    return { done, cancel: () => {}, respondApproval: () => false };
+    return {
+      done,
+      cancel: () => {},
+      respondApproval: () => false,
+      sendUserMessage: () => false,
+    };
   }
 
   const buffer = new NdjsonBuffer({
@@ -247,7 +230,6 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (chunk: string | Buffer) => {
     const text = toUtf8(chunk);
-    tellMirror(() => opts.mirror?.data('stdout', text));
     buffer.push(text);
   });
 
@@ -255,7 +237,6 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string | Buffer) => {
     const text = toUtf8(chunk);
-    tellMirror(() => opts.mirror?.data('stderr', text));
     stderrTail = (stderrTail + text).slice(-STDERR_TAIL_BYTES);
   });
 
@@ -378,6 +359,19 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
         return false;
       }
       const line = opts.buildApprovalResponse?.(id, allow, updatedInput);
+      if (line === undefined) {
+        return false;
+      }
+      return writeStdin(line);
+    },
+    sendUserMessage: (message) => {
+      // Guarded like the verdict above, and for the same reason: a write that
+      // lands after the turn settled would be reported as delivered while the
+      // agent never sees it, and the caller would drop it from its queue.
+      if (settled || terminalEmitted) {
+        return false;
+      }
+      const line = opts.buildFollowUpPayload?.(message);
       if (line === undefined) {
         return false;
       }

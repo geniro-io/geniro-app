@@ -24,11 +24,10 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
-import { McpSettingsStore } from '../../agents/services/mcp-settings.store';
+import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
-import { TurnMirrorService } from '../../agents/services/turn-mirror.service';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
@@ -227,8 +226,7 @@ export class GraphExecutorService {
     private readonly store: WorkflowStoreService,
     private readonly teardown: RunTeardownService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
-    private readonly mcpSettings: McpSettingsStore,
-    private readonly mirrors: TurnMirrorService,
+    private readonly partials: PartialStreamService,
   ) {}
 
   /**
@@ -679,6 +677,10 @@ export class GraphExecutorService {
       // Approvals route through the ApprovalRegistry per request, not the
       // aggregate — a run-level respond has no single target turn.
       respondApproval: () => false,
+      // Same reason, and it is why a workflow composer is disabled: a run
+      // fanning out over N nodes has no ONE conversation a follow-up belongs
+      // to, and picking a node for it would be an invention.
+      sendUserMessage: () => false,
     };
     this.registry.register(runId, aggregateHandle);
 
@@ -759,6 +761,11 @@ export class GraphExecutorService {
         // reopen its MCP endpoint.
         this.callBroker.unregisterRun(runId);
         this.callTokens.revokeRun(runId);
+        // The live plane's per-node state ends with the run, exactly as a
+        // chat's ends with its turn. The remembered window survives (it
+        // describes the model), so a re-run of the same graph is scaled from
+        // its first request.
+        this.partials.clearRun(runId);
         resolveAllDone();
       }
     };
@@ -965,10 +972,6 @@ export class GraphExecutorService {
         adapter.getConfig().questionToolName !== null &&
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
-      // The same switch the chat panel writes: a graph node runs in a folder
-      // too, and a server the user turned off there stays off for every agent
-      // that runs in it.
-      const disabledMcpServers = this.mcpSettings.disabled(node.agent, cwd);
       const input: AgentTurnInput = {
         prompt,
         cwd,
@@ -982,15 +985,10 @@ export class GraphExecutorService {
         // dialogue, so they spawn as themselves.
         approvalMode: questionCapable && approval === 'auto' ? 'ask' : approval,
         mcpEndpoint: mcpEndpointFor(node),
-        disabledMcpServers,
         // Per NODE, not per run: two nodes pointed at different plugin
         // directories are meant to run with different tools. Already refused
         // at startRun if unusable.
         pluginDir: node.pluginDir ?? null,
-        // Tee this node's raw stdio for the live terminal mirror. Keyed by the
-        // NODE, so a fan-out's parallel agents each mirror themselves rather
-        // than interleaving into one unreadable stream.
-        mirror: this.mirrors.sink(runId, node.id),
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {
@@ -1005,11 +1003,40 @@ export class GraphExecutorService {
             this.skillHarvest.record(node.agent, cwd, event.commands);
             return;
           }
+          if (event.type === 'context_progress') {
+            // EPHEMERAL, like a text delta: the durable copy is the
+            // turn_complete usage. This is what lets a NODE's meter move while
+            // its turn runs — the owner key is the node, so a fan-out's agents
+            // each report their own conversation rather than one shared figure.
+            this.partials.context(runId, node.id, node.id, event.contextTokens);
+            return;
+          }
+          if (event.type === 'turn_model') {
+            // Named at session start, before any usage exists — this is what
+            // lets a node's FIRST request be scaled against the real window,
+            // and what teaches the cross-run cache a model it has never seen.
+            this.partials.useModel(
+              runId,
+              node.id,
+              adapter.getConfig().kind,
+              event.model,
+            );
+            return;
+          }
           if (event.type === 'text') {
             textChunks.push(event.text);
           }
           if (event.type === 'turn_complete') {
             finalText = event.finalText ?? textChunks.join('');
+            // The ONLY line carrying the model's window — under the model that
+            // REPORTED it, so a node that fell back to a second model cannot
+            // file that model's window under the requested one.
+            this.partials.rememberWindow(
+              runId,
+              node.id,
+              event.usage?.contextWindowTokens ?? null,
+              event.usage?.contextModel ?? null,
+            );
           }
           const terminal = terminalStatus(event);
           if (
@@ -1079,6 +1106,11 @@ export class GraphExecutorService {
               return;
             }
           }
+          // Anything durable ends a silent reasoning stretch — the tool call
+          // the model went quiet to prepare carries no text delta to close it
+          // (see `PartialStreamService.endThinking`). Kept in step with the
+          // chat path, which does the same at its own persist seam.
+          this.partials.endThinking(runId, node.id, node.id);
           const mapped = mapEventToItem(event);
           if (mapped) {
             // A callee sub-turn tags every streamed item with its callId so

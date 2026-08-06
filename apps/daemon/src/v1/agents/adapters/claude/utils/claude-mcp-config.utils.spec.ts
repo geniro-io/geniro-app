@@ -14,9 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   sweepStaleTurnMcpConfigs,
-  sweepStaleTurnSettings,
   writeTurnMcpConfig,
-  writeTurnSettings,
 } from './claude-mcp-config.utils';
 
 const dirs: string[] = [];
@@ -123,37 +121,6 @@ describe('sweepStaleTurnMcpConfigs', () => {
     // the whole daemon launch over hygiene.
     expect(() =>
       sweepStaleTurnMcpConfigs(join(tempDir(), 'never', 'created')),
-    ).not.toThrow();
-  });
-});
-
-describe('sweepStaleTurnSettings', () => {
-  it('removes a settings file a crashed launch left behind', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sweep-settings-'));
-    const stale = writeTurnSettings(dir, ['sentry'])!;
-
-    sweepStaleTurnSettings(dir);
-
-    expect(existsSync(stale)).toBe(false);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('leaves a file it did not write', () => {
-    // The sweep runs at boot over a shared dir; deleting by directory rather
-    // than by name prefix would take the user's files with it.
-    const dir = mkdtempSync(join(tmpdir(), 'sweep-settings-'));
-    const foreign = join(dir, 'not-ours.json');
-    writeFileSync(foreign, '{}', 'utf8');
-
-    sweepStaleTurnSettings(dir);
-
-    expect(existsSync(foreign)).toBe(true);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('tolerates a directory that does not exist', () => {
-    expect(() =>
-      sweepStaleTurnSettings(join(tmpdir(), 'sweep-settings-absent-xyz')),
     ).not.toThrow();
   });
 });

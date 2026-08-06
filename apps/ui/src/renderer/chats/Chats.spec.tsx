@@ -53,13 +53,10 @@ const workflowApi = vi.hoisted(() => ({
   deleteWorkflowRun: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
-// TerminalPanel is stubbed too, so opening a terminal never touches xterm or a
-// real socket; the panel stub renders its title for assertions.
-const terminalApi = vi.hoisted(() => ({
-  createTerminal: vi.fn(),
-  listTerminals: vi.fn(),
-  disposeTerminal: vi.fn(),
-}));
+// There is no terminal panel to stub any more: the daemon resolves an
+// invocation and the Electron main process opens it, so the only seams are
+// this client call and window.geniro.openInTerminal.
+const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -71,7 +68,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     agents: agentsApi,
     workflows: workflowApi,
     capabilities: capabilitiesApi,
-    terminals: terminalApi,
+    handoff: handoffApi,
   })),
 }));
 // Counts how many times each turn block actually re-rendered, so a test can
@@ -95,25 +92,6 @@ vi.mock('./turn-block', async (importOriginal) => {
     }),
   };
 });
-vi.mock('../terminals/terminal-panel', () => ({
-  TerminalPanel: (props: {
-    title: string;
-    onClose: () => void;
-    onSwitchKind?: (kind: string) => void;
-  }) => (
-    <div data-testid="terminal-panel">
-      {props.title}
-      <button onClick={props.onClose}>stub-close</button>
-      {/* Rendered only when the owner supplied a switcher, so a test can tell
-          "no picker offered" from "picker offered but unused". */}
-      {props.onSwitchKind ? (
-        <button onClick={() => props.onSwitchKind?.('interactive')}>
-          stub-switch
-        </button>
-      ) : null}
-    </div>
-  ),
-}));
 
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
 
@@ -285,7 +263,7 @@ function classesOf(el: Element): string[] {
 
 function composerButton(
   container: HTMLElement,
-  label: 'Send' | 'Stop' | 'Queue',
+  label: 'Send' | 'Stop',
 ): HTMLButtonElement | null {
   return container.querySelector<HTMLButtonElement>(
     `button[aria-label="${label}"]`,
@@ -366,6 +344,7 @@ beforeEach(() => {
       checkForUpdates: true,
     }),
     updateSettings: vi.fn().mockResolvedValue({}),
+    openInTerminal: vi.fn().mockResolvedValue(undefined),
     // Default to a plain (non-git) folder so the branch chip stays absent
     // unless a test opts into a repo.
     getGitInfo: vi.fn().mockResolvedValue({
@@ -462,9 +441,7 @@ beforeEach(() => {
       { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
     ],
   });
-  terminalApi.createTerminal.mockReset();
-  terminalApi.listTerminals.mockReset().mockResolvedValue([]);
-  terminalApi.disposeTerminal.mockReset().mockResolvedValue({ disposed: true });
+  handoffApi.resolveHandoff.mockReset();
 });
 
 afterEach(async () => {
@@ -1280,6 +1257,51 @@ describe('Chats — the daemon closes a dead approval card', () => {
   });
 });
 
+describe('Chats — what the transcript says the agent is doing', () => {
+  it('draws no "Working…" row under a question waiting for an answer', async () => {
+    // A parked question leaves the run running, so every signal said the agent
+    // was working and the fallback drew a spinning "Working…" directly under
+    // the card it was waiting on. Nothing moves until it is answered, and the
+    // card should be the only thing on screen saying so.
+    api.listRunItems.mockResolvedValue([approval('r1', 0, 'req-open')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The card IS on screen — so this is not passing by rendering nothing.
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (b) => b.textContent === 'Approve',
+      ),
+    ).toBe(true);
+    expect(container.textContent).not.toContain('Working…');
+  });
+
+  it('resumes the working row once the question is answered', async () => {
+    // The suppression is scoped to an UNANSWERED card. The run is still
+    // running afterwards, and going silent then would be the very defect this
+    // row was added to fix.
+    api.listRunItems.mockResolvedValue([
+      approval('r1', 0, 'req-open'),
+      {
+        id: 'r1-verdict-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'approval_verdict' as const,
+        role: null,
+        payload: { id: 'req-open', allow: true },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('Working…');
+  });
+});
+
 describe('Chats verdict acknowledgments', () => {
   it('keeps a second run actionable when a late expired ack reuses its request id', async () => {
     const run2: ChatRun = {
@@ -1483,7 +1505,11 @@ describe('Chats workflow runs', () => {
       });
     });
 
-    expect(container.textContent).toContain('Used 1 tool');
+    // One Bash call reads as ONE figure. "Used 1 tool · ran 1 command" counted
+    // the same action twice in one line, which is what the header now avoids
+    // whenever the breakdown already accounts for every call in the group.
+    expect(container.textContent).toContain('Ran 1 command');
+    expect(container.textContent).not.toContain('Used 1 tool');
     // Collapsed by default: neither the input nor the result payload shows.
     expect(container.textContent).not.toContain('ls -la');
     expect(container.textContent).not.toContain('file-list');
@@ -1773,22 +1799,9 @@ describe('Chats workflow runs', () => {
   });
 });
 
-describe('Chats terminal mirror', () => {
-  const session = {
-    id: 't-1',
-    kind: 'live',
-    runId: 'r1',
-    nodeId: null,
-    resumeSessionId: null,
-    cwd: '/proj',
-    status: 'running',
-    exitCode: null,
-    createdAt: 0,
-  };
-
-  /** Terminals live in the agents side panel: open it, expand the agent,
-   *  click the thread's terminal action. */
-  async function openThreadTerminal(
+describe('Chats — handing a conversation to the user', () => {
+  /** The panel's action: open the side panel, expand the agent, press it. */
+  async function pressOpenInCli(
     container: HTMLElement,
     agentLabel: string,
     threadId = 'main',
@@ -1801,8 +1814,8 @@ describe('Chats terminal mirror', () => {
         toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       });
     }
-    // An agent with a SOLE main thread shows its terminal on the card; one
-    // with several threads still has to be expanded first.
+    // An agent with a SOLE main thread shows its button on the card; one with
+    // several threads still has to be expanded first.
     await act(async () => {
       container
         .querySelector(`button[aria-label="${agentLabel} threads"]`)
@@ -1820,25 +1833,35 @@ describe('Chats terminal mirror', () => {
     });
   }
 
-  it('opens a terminal panel for a claude chat run', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
+  const command = {
+    kind: 'command' as const,
+    command: 'claude',
+    args: ['--resume', 'sess-1'],
+    cwd: '/proj',
+    display: 'claude --resume sess-1',
+    unavailableReason: null,
+  };
+
+  it('opens the agent’s own CLI in the user’s terminal', async () => {
+    // The mirror is gone. What the user asked for was never "watch a second
+    // copy" — it was "let me carry this on myself", and that needs no syncing
+    // because the CLI starts when the button is pressed.
+    handoffApi.resolveHandoff.mockResolvedValue(command);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await openThreadTerminal(container, 'claude');
+    await pressOpenInCli(container, 'claude');
 
-    // `live` by default: the panel exists to show what the agent is doing,
-    // and only the live mirror follows a turn the chat is running right now.
-    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'r1', kind: 'live' },
+    expect(handoffApi.resolveHandoff).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
+      command: 'claude',
+      args: ['--resume', 'sess-1'],
+      cwd: '/proj',
     });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
-    ).toContain('My chat — terminal');
   });
 
-  it('offers a per-node terminal on a workflow run and passes the nodeId', async () => {
+  it('names the node when the run is a workflow', async () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
@@ -1882,342 +1905,55 @@ describe('Chats terminal mirror', () => {
         payload: { nodeId: 'agent-1', status: 'running' },
         createdAt: 'now',
       },
-      {
-        id: 'w-i1',
-        runId: 'w1',
-        nodeId: 'agent-1',
-        seq: 1,
-        kind: 'message',
-        role: 'assistant',
-        payload: { text: 'planning' },
-        createdAt: 'now',
-      },
     ]);
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
-      runId: 'w1',
-      nodeId: 'agent-1',
-    });
+    handoffApi.resolveHandoff.mockResolvedValue(command);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    await openThreadTerminal(container, 'agent-1');
+    await pressOpenInCli(container, 'agent-1');
 
-    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'w1', kind: 'live', nodeId: 'agent-1' },
-    });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]')?.textContent,
-    ).toContain('agent-1 — terminal');
-  });
-
-  it('offers a terminal on every agent node — but never on a trigger', async () => {
-    const wfRun: ChatRun = {
-      id: 'w1',
-      status: 'running',
-      title: 'Mixed team',
-      agentKind: null,
-      workflowId: 'mixed-team',
-      cwd: '/proj',
-      model: null,
-      approval: null,
-      effort: null,
-      createdAt: 'later',
-      updatedAt: 'later',
-      lastMessage: null,
-    };
-    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
-    workflowApi.getWorkflow.mockResolvedValue({
-      slug: 'mixed-team',
-      workflow: {
-        name: 'Mixed team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
-          {
-            id: 'cursor',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
-          {
-            id: 'claude',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-          },
-        ],
-        edges: [],
-      },
-    });
-    api.listRunItems.mockResolvedValue(
-      ['start', 'cursor', 'claude'].map((nodeId, index) => ({
-        id: `w-i${index}`,
-        runId: 'w1',
-        nodeId,
-        seq: index,
-        kind: 'status',
-        role: null,
-        payload: { nodeId, status: 'running' },
-        createdAt: 'now',
-      })),
-    );
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'Mixed team');
-
-    // Both agents get a terminal: the live mirror is the raw output of
-    // whatever CLI ran the turn, so it needs neither a resumable CLI session
-    // nor claude specifically. A trigger runs no agent at all and gets none.
-    await act(async () => {
-      container
-        .querySelector('button[aria-label="Open side panel"]')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
-    expect(panel.textContent).not.toContain('start');
-    for (const agentLabel of ['cursor', 'claude']) {
-      await act(async () => {
-        panel
-          .querySelector(`button[aria-label="${agentLabel} threads"]`)
-          ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      });
-    }
-    // Each node here has one main thread, so the terminal sits on the card.
-    expect(
-      panel.querySelector('button[aria-label="Open terminal for claude"]'),
-    ).not.toBeNull();
-    // Was claude-only while the ONLY mirror was a `claude --resume` spawn.
-    expect(
-      panel.querySelector('button[aria-label="Open terminal for cursor"]'),
-    ).not.toBeNull();
-  });
-
-  it('does not re-attach an INTERACTIVE session to a live open', async () => {
-    // The re-attach match must include the kind. Without it, asking for a live
-    // mirror hands back the `--resume` PTY that happens to be open on the same
-    // node — a read-only view of a different process.
-    terminalApi.listTerminals.mockResolvedValue([
-      { ...session, id: 'other-kind', kind: 'interactive' },
-    ]);
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-
-    await openThreadTerminal(container, 'claude');
-
-    expect(terminalApi.createTerminal).toHaveBeenCalledWith({
-      createTerminalDto: { runId: 'r1', kind: 'live' },
-    });
-  });
-
-  it('offers the kind picker on a claude main thread', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
-    const switcher = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'stub-switch',
-    );
-    expect(switcher).toBeTruthy();
-
-    // Switching re-opens the SAME target as the other kind, and releases the
-    // outgoing live session rather than leaving it absorbing bytes.
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
-      id: 't-2',
-      kind: 'interactive',
-    });
-    await act(async () => {
-      switcher?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(terminalApi.createTerminal).toHaveBeenLastCalledWith({
-      createTerminalDto: { runId: 'r1', kind: 'interactive' },
-    });
-    expect(terminalApi.disposeTerminal).toHaveBeenCalledWith({ id: 't-1' });
-  });
-
-  it('offers NO kind picker for a cursor-agent node — it has no interactive mirror', async () => {
-    // The picker must not list a choice that answers TERMINAL_UNSUPPORTED.
-    const wfRun: ChatRun = {
-      id: 'w1',
-      status: 'running',
-      title: 'Cursor team',
-      agentKind: null,
-      workflowId: 'cursor-team',
-      cwd: '/proj',
-      model: null,
-      approval: null,
-      effort: null,
-      createdAt: 'later',
-      updatedAt: 'later',
-      lastMessage: null,
-    };
-    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
-    workflowApi.getWorkflow.mockResolvedValue({
-      slug: 'cursor-team',
-      workflow: {
-        name: 'Cursor team',
-        nodes: [
-          {
-            id: 'cursor',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
-        ],
-        edges: [],
-      },
-    });
-    api.listRunItems.mockResolvedValue([
-      {
-        id: 'w-s1',
-        runId: 'w1',
-        nodeId: 'cursor',
-        seq: 0,
-        kind: 'status',
-        role: null,
-        payload: { nodeId: 'cursor', status: 'running' },
-        createdAt: 'now',
-      },
-    ]);
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
+    expect(handoffApi.resolveHandoff).toHaveBeenCalledWith({
       runId: 'w1',
-      nodeId: 'cursor',
+      nodeId: 'agent-1',
     });
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'Cursor team');
-
-    await openThreadTerminal(container, 'cursor');
-
-    // It still gets a LIVE mirror — that is the gain — just no picker.
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-    expect(
-      [...container.querySelectorAll('button')].find(
-        (b) => b.textContent === 'stub-switch',
-      ),
-    ).toBeUndefined();
   });
 
-  it('unmounts the fixed panel while the tab is hidden and restores it on return', async () => {
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const root = createRoot(container);
-    roots.push(root);
-    await act(async () => {
-      root.render(<Chats client={client} handle={handle} active />);
+  it('surfaces the CLI’s own reason and opens nothing when it cannot', async () => {
+    // Probe-verified for cursor: `--resume` with an ACP session id silently
+    // opens an EMPTY chat. Opening anyway would look like it worked.
+    handoffApi.resolveHandoff.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      display: null,
+      unavailableReason: 'cursor-agent would open an empty chat',
     });
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-
-    // Hidden tab: the fixed-position drawer must NOT overlay Graphs/Settings —
-    // and hiding is a detach, never an End session.
-    await act(async () => {
-      root.render(<Chats client={client} handle={handle} active={false} />);
-    });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
-    expect(terminalApi.disposeTerminal).not.toHaveBeenCalled();
-
-    // Back to the tab: the kept session state re-mounts the panel.
-    await act(async () => {
-      root.render(<Chats client={client} handle={handle} active />);
-    });
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-  });
-
-  it('re-attaches to a running session instead of creating a second one', async () => {
-    // The daemon keeps a detached session alive for exactly this re-open; a
-    // blind create() would leak one live claude REPL per open→close→open.
-    terminalApi.listTerminals.mockResolvedValue([session]);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await openThreadTerminal(container, 'claude');
+    await pressOpenInCli(container, 'claude');
 
-    expect(terminalApi.createTerminal).not.toHaveBeenCalled();
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeTruthy();
-  });
-
-  /** Close the open terminal panel via its stub close button. */
-  async function closePanel(container: HTMLElement): Promise<void> {
-    const close = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'stub-close',
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'cursor-agent would open an empty chat',
     );
-    await act(async () => {
-      close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  }
-
-  it('Close only DETACHES an INTERACTIVE session — its child keeps running', async () => {
-    // Its whole value is the running `--resume` child; disposing on close would
-    // kill a REPL the user may be mid-conversation with, and re-opening would
-    // pay a fresh CLI startup.
-    terminalApi.createTerminal.mockResolvedValue({
-      ...session,
-      kind: 'interactive',
-    });
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
-    await closePanel(container);
-
-    expect(terminalApi.disposeTerminal).not.toHaveBeenCalled();
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
   });
 
-  it('Close RELEASES a live session — the daemon keeps the buffer either way', async () => {
-    // A live session holds only a copy of a buffer the daemon keeps anyway, so
-    // leaving it open pins that copy and keeps it absorbing every chunk into a
-    // room nobody is in. Re-opening replays from the daemon's own buffer.
-    terminalApi.createTerminal.mockResolvedValue(session);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    await openThreadTerminal(container, 'claude');
-
-    await closePanel(container);
-
-    expect(terminalApi.disposeTerminal).toHaveBeenCalledWith({ id: 't-1' });
-  });
-
-  it('surfaces a daemon rejection (unsupported agent) in the error line', async () => {
-    terminalApi.createTerminal.mockRejectedValue(
-      new Error('daemon POST /v1/terminals failed (400): TERMINAL_UNSUPPORTED'),
-    );
+  it('reports a failure to open rather than swallowing it', async () => {
+    handoffApi.resolveHandoff.mockResolvedValue(command);
+    (
+      window.geniro.openInTerminal as unknown as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(new Error('no terminal app'));
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await openThreadTerminal(container, 'claude');
+    await pressOpenInCli(container, 'claude');
 
-    expect(container.textContent).toContain('TERMINAL_UNSUPPORTED');
-    expect(
-      container.querySelector('[data-testid="terminal-panel"]'),
-    ).toBeNull();
+    expect(container.textContent).toContain('no terminal app');
   });
 });
 
@@ -2716,6 +2452,19 @@ describe('Chats queued messages', () => {
     });
   }
 
+  /**
+   * The daemon's refusal to take a message into a turn that is already
+   * running — a CLI with no mid-turn channel, or a turn already settling.
+   *
+   * Every spec below arms one, because that refusal is what PARKS a message
+   * now: the composer always offers a mid-turn message to the running turn
+   * first, and only a RUN_BUSY sends it to the queue. A spec that armed
+   * nothing would exercise the delivery path and never reach the queue at
+   * all.
+   */
+  const busy = (): Error =>
+    new Error('daemon POST /v1/chats/r1/messages failed (409): RUN_BUSY');
+
   const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
   const PNG_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
 
@@ -2760,6 +2509,7 @@ describe('Chats queued messages', () => {
     // answer about a screenshot it never received), and reaches the daemon as
     // base64 on the send body.
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'look at this'));
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -2769,7 +2519,7 @@ describe('Chats queued messages', () => {
     expect(staged(container)).toHaveLength(1);
 
     await type(container, 'look at this');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
 
     // Staged images clear with the text once queued.
     expect(staged(container)).toHaveLength(0);
@@ -2876,18 +2626,64 @@ describe('Chats queued messages', () => {
 
   // run1 is 'running' with an empty history → the open transcript arms the
   // working state (Stop) straight from activation.
+  it('SENDS a mid-turn message rather than parking it, when the daemon takes it', async () => {
+    // The composer used to park every mid-turn message unconditionally, which
+    // turned "send this next" into "send this after everything finishes" —
+    // minutes on a long turn, for a request that had already replaced the one
+    // the agent was working on. It now offers it to the running turn first;
+    // the daemon writes it into the CLI's still-open stdin and answers with
+    // the persisted item.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'actually, do this'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // The turn is in flight: the composer is in its working state.
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+
+    await type(container, 'actually, do this');
+    await clickButton(container, 'Send');
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'actually, do this' },
+    });
+    // Nothing waiting: it went straight into the turn.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+
+  it('does not surface the daemon’s RUN_BUSY as an error — that is the queue', async () => {
+    // The fallback is documented behaviour, not a failure, and a red banner
+    // for it would report something the user has no action for.
+    api.sendChatMessage.mockRejectedValueOnce(busy());
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'later then');
+    await clickButton(container, 'Send');
+
+    expect(container.textContent).not.toContain('RUN_BUSY');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('later then');
+  });
+
   it('queues a message written mid-turn and auto-sends it when the turn ends', async () => {
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'queued question'));
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     expect(composerButton(container, 'Stop')).not.toBeNull();
 
     await type(container, 'queued question');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
 
-    // Nothing sent yet — the message waits, visibly, above the composer.
-    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    // Offered to the running turn and REFUSED, so it waits — visibly, above
+    // the composer — instead of being lost.
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     const queueRegion = container.querySelector(
       '[aria-label="Queued messages"]',
     )!;
@@ -2909,6 +2705,7 @@ describe('Chats queued messages', () => {
   });
 
   it('Cmd+Enter also queues while the agent is working', async () => {
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -2924,7 +2721,7 @@ describe('Chats queued messages', () => {
       );
     });
 
-    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('via keyboard');
@@ -2932,6 +2729,10 @@ describe('Chats queued messages', () => {
 
   it('drains ONE queued message per settled turn, in order', async () => {
     api.sendChatMessage
+      // Both are offered to the running turn and refused, which is what puts
+      // them in the queue; the drain then delivers them one per settled turn.
+      .mockRejectedValueOnce(busy())
+      .mockRejectedValueOnce(busy())
       .mockResolvedValueOnce(msg(10, 'user', 'first'))
       .mockResolvedValueOnce(msg(12, 'user', 'second'));
     const { client, emitItem } = makeClient();
@@ -2939,14 +2740,14 @@ describe('Chats queued messages', () => {
     await clickRun(container, 'My chat');
 
     await type(container, 'first');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await type(container, 'second');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
 
     await act(async () => {
       emitItem(terminal(5));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
       sendMessageDto: { text: 'first' },
@@ -2959,7 +2760,7 @@ describe('Chats queued messages', () => {
     await act(async () => {
       emitItem(terminal(11));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(4);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
       sendMessageDto: { text: 'second' },
@@ -2971,6 +2772,7 @@ describe('Chats queued messages', () => {
     // in-flight window it disappeared from the pending list — visibly gone,
     // and impossible to remove — then reappeared if the send failed.
     let settleSend!: (item: ChatItem) => void;
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     api.sendChatMessage.mockImplementationOnce(
       () =>
         new Promise<ChatItem>((resolve) => {
@@ -2982,7 +2784,7 @@ describe('Chats queued messages', () => {
     await clickRun(container, 'My chat');
 
     await type(container, 'in flight');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await act(async () => {
       emitItem(terminal(5));
     });
@@ -3009,12 +2811,15 @@ describe('Chats queued messages', () => {
     // in its RUN_BUSY backoff early-returned every other run's drain.
     let settleFirst!: (item: ChatItem) => void;
     api.sendChatMessage
+      // Each run's mid-turn offer is refused, which is what queues it.
+      .mockRejectedValueOnce(busy())
       .mockImplementationOnce(
         () =>
           new Promise<ChatItem>((resolve) => {
             settleFirst = resolve;
           }),
       )
+      .mockRejectedValueOnce(busy())
       .mockResolvedValueOnce(msg(20, 'user', 'second run'));
     api.listChats.mockResolvedValue([
       run1,
@@ -3025,21 +2830,21 @@ describe('Chats queued messages', () => {
 
     await clickRun(container, 'My chat');
     await type(container, 'first run');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await act(async () => {
       emitItem(terminal(5));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
 
     // Second chat, while the first send is still hanging.
     await clickRun(container, 'Second chat');
     await type(container, 'second run');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await act(async () => {
       emitItem({ ...terminal(5), runId: 'r2' });
     });
 
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(4);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r2',
       sendMessageDto: { text: 'second run' },
@@ -3050,12 +2855,13 @@ describe('Chats queued messages', () => {
   });
 
   it('a removed queued message never sends', async () => {
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'changed my mind');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await act(async () => {
       container
         .querySelector('button[aria-label="Remove queued message 1"]')!
@@ -3068,7 +2874,8 @@ describe('Chats queued messages', () => {
     await act(async () => {
       emitItem(terminal(5));
     });
-    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    // Only the refused mid-turn offer — the drain sent nothing.
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it('a queued message removed DURING the busy backoff is not delivered anyway', async () => {
@@ -3084,12 +2891,13 @@ describe('Chats queued messages', () => {
       await clickRun(container, 'My chat');
 
       await type(container, 'changed my mind');
-      await clickButton(container, 'Queue');
+      await clickButton(container, 'Send');
       await act(async () => {
         emitItem(terminal(5));
       });
-      // First attempt fired and was refused; the head is now in the backoff.
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      // The mid-turn offer was refused (which queued it) and the drain's
+      // first attempt was refused too; the head is now in the backoff.
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
 
       await act(async () => {
         container
@@ -3102,7 +2910,7 @@ describe('Chats queued messages', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -3112,17 +2920,20 @@ describe('Chats queued messages', () => {
     api.sendChatMessage.mockRejectedValue(
       new Error('daemon POST failed (400)'),
     );
+    // The mid-turn offer is refused as BUSY (that is what queues it); the
+    // drain's own attempt then hits the 400 this spec is about.
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'unlucky');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await act(async () => {
       emitItem(terminal(5));
     });
 
-    expect(api.sendChatMessage).toHaveBeenCalledOnce();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain('daemon POST failed (400)');
     // The message survives, editable/removable — and does NOT auto-retry
     // (no turn started, so no terminal item will fire the drain).
@@ -3137,6 +2948,8 @@ describe('Chats queued messages', () => {
       // The terminal item races the daemon's claim release: first two sends
       // hit RUN_BUSY, the third lands.
       api.sendChatMessage
+        // The mid-turn offer, refused — that is what queues it.
+        .mockRejectedValueOnce(busy())
         .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
         .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
         .mockResolvedValueOnce(msg(10, 'user', 'delayed'));
@@ -3145,20 +2958,20 @@ describe('Chats queued messages', () => {
       await clickRun(container, 'My chat');
 
       await type(container, 'delayed');
-      await clickButton(container, 'Queue');
+      await clickButton(container, 'Send');
       await act(async () => {
         emitItem(terminal(5));
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(300);
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(600);
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(4);
 
       // Third attempt succeeded: no error line, nothing left queued.
       expect(container.textContent).not.toContain('RUN_BUSY');
@@ -3171,12 +2984,13 @@ describe('Chats queued messages', () => {
   });
 
   it('the queue SURVIVES leaving the transcript and shows again on return', async () => {
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'kept safe');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     // Leave for the new-run composer — the queue is hidden there, not lost.
     await act(async () => {
       container
@@ -3193,23 +3007,25 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('kept safe');
-    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    // Only the refused mid-turn offer: nothing was delivered.
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it('reopening a run that SETTLED while away drains its queue automatically', async () => {
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'later message'));
+    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'later message');
-    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send');
     await act(async () => {
       container
         .querySelector('[aria-label="New chat"]')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
     // While away the turn finished — the reopened transcript replays a
     // history that ends on a terminal item, which fires the drain.
@@ -3655,7 +3471,7 @@ describe('Chats sidebar list', () => {
         edges: [],
       },
     });
-    const { client, emitItem } = makeClient();
+    const { client, emitItem, emitLiveText } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'Big team');
 
@@ -3744,6 +3560,36 @@ describe('Chats sidebar list', () => {
       ),
     ).not.toBeNull();
     expect(rows.some((text) => text?.includes('start'))).toBe(false);
+
+    // A LIVE delta for one node moves that node's meter mid-turn, and only
+    // that node's. The panel read the durable half alone, so a workflow
+    // agent's meter could not move until its turn COMPLETED — and on its first
+    // turn there was no figure at all, which is the bare-number report.
+    await act(async () => {
+      emitLiveText({
+        runId: 'w1',
+        nodeId: 'w-b',
+        text: '',
+        thinkingTokens: null,
+        thinkingSince: null,
+        thinkingStretch: null,
+        contextTokens: 120_000,
+        contextWindowTokens: 200_000,
+      });
+    });
+    expect(
+      panel.querySelector(
+        'button[aria-label="Context 60% full — 120k of 200k"]',
+      ),
+    ).not.toBeNull();
+    // Worker A keeps the window ITS OWN turn reported — 1M, not Worker B's
+    // 200k. A run-scoped window would have redrawn both against whichever
+    // node reported last.
+    expect(
+      panel.querySelector(
+        'button[aria-label="Context 5% full — 45.2k of 1M, $0.23 spent"]',
+      ),
+    ).not.toBeNull();
 
     // ✕ closes the panel.
     await act(async () => {

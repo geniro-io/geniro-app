@@ -19,7 +19,6 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService } from './agent-mcp.service';
 import { AgentVersionService } from './agent-version.service';
-import { McpSettingsStore } from './mcp-settings.store';
 import { ProcessRegistry } from './process-registry';
 
 const dirs: string[] = [];
@@ -75,7 +74,7 @@ interface Harness {
   listMcpServers: ReturnType<typeof vi.fn>;
   readMcpFolderFacts: ReturnType<typeof vi.fn>;
   setNow: (ms: number) => void;
-  settings: McpSettingsStore;
+  setMcpServerEnabled: ReturnType<typeof vi.fn>;
 }
 
 interface HarnessOptions {
@@ -107,8 +106,25 @@ function harness(
     (input: { cwd: string; pluginDir?: string | null }) =>
       impl(input).then((servers) => ({ ok: true as const, servers })),
   );
+  // The adapter's OWN state, mutated by `setMcpServerEnabled` — the same
+  // relationship the real one has with the CLI's config file, so a toggle the
+  // service refuses cannot silently look like it landed.
+  const off = new Set(facts?.disabled ?? []);
   const readMcpFolderFacts = vi.fn(() =>
-    Promise.resolve(facts ?? { projectServers: [], userDisabled: [] }),
+    Promise.resolve({
+      disabled: [...off],
+      lockedOff: facts?.lockedOff ?? [],
+    }),
+  );
+  const setMcpServerEnabled = vi.fn(
+    (_cwd: string, server: string, enabled: boolean) => {
+      if (enabled) {
+        off.delete(server);
+      } else {
+        off.add(server);
+      }
+      return Promise.resolve();
+    },
   );
   const adapter = {
     listMcpServers,
@@ -116,22 +132,19 @@ function harness(
       mcp: {
         listingUnavailableReason: null,
         toggleUnavailableReason,
-        notInToggleableScopeReason: 'not a project server',
         userDisabledReason: 'you switched it off yourself',
       },
     }),
     readMcpFolderFacts,
+    setMcpServerEnabled,
   } as unknown as AgentAdapter;
   const registry = {
     for: () => adapter,
   } as unknown as AgentAdapterRegistry;
   let now = 1_000;
-  const settingsFile = join(realDir(), 'mcp-settings.json');
-  const settings = new McpSettingsStore({ file: settingsFile });
   const service = new AgentMcpService(
     registry,
     new ProcessRegistry(),
-    settings,
     new AgentVersionService(),
     {
       now: () => now,
@@ -146,7 +159,7 @@ function harness(
     service,
     listMcpServers,
     readMcpFolderFacts,
-    settings,
+    setMcpServerEnabled,
     setNow: (ms) => {
       now = ms;
     },
@@ -307,14 +320,13 @@ describe('AgentMcpService.list', () => {
             },
           }),
           readMcpFolderFacts: () =>
-            Promise.resolve({ projectServers: [], userDisabled: [] }),
+            Promise.resolve({ disabled: [], lockedOff: [] }),
         } as unknown as AgentAdapter;
       },
     } as unknown as AgentAdapterRegistry;
     const service = new AgentMcpService(
       registry,
       new ProcessRegistry(),
-      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       new AgentVersionService(),
       {
         resolveVersionFn: () => Promise.resolve('1'),
@@ -348,14 +360,13 @@ describe('AgentMcpService.list', () => {
             },
           }),
           readMcpFolderFacts: () =>
-            Promise.resolve({ projectServers: [], userDisabled: [] }),
+            Promise.resolve({ disabled: [], lockedOff: [] }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
     let version = '2.1.220';
     const service = new AgentMcpService(
       registry,
       new ProcessRegistry(),
-      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       new AgentVersionService(),
       {
         resolveVersionFn: () => Promise.resolve(version),
@@ -534,7 +545,6 @@ describe('AgentMcpService.list', () => {
     const service = new AgentMcpService(
       registry,
       new ProcessRegistry(),
-      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
@@ -628,7 +638,6 @@ describe('AgentMcpService.list', () => {
     const service = new AgentMcpService(
       registry,
       new ProcessRegistry(),
-      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
@@ -674,7 +683,6 @@ describe('AgentMcpService.list', () => {
     const service = new AgentMcpService(
       { for: () => adapter } as unknown as AgentAdapterRegistry,
       processes,
-      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
@@ -702,66 +710,48 @@ describe('AgentMcpService.list', () => {
 });
 
 describe('AgentMcpService scope + disabled overlay', () => {
-  const projectFacts: AgentMcpFolderFacts = {
-    projectServers: ['proj'],
-    userDisabled: [],
-  };
+  const nothingOff: AgentMcpFolderFacts = { disabled: [], lockedOff: [] };
 
-  it('marks a .mcp.json server as project scope and lets it be switched', async () => {
+  it('lets a server be switched, whatever scope defined it', async () => {
     const cwd = realDir();
-    const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: projectFacts,
+    const { service } = harness(() => Promise.resolve([server('global')]), {
+      facts: nothingOff,
     });
 
     const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
 
-    expect(row?.scope).toBe('project');
     expect(row?.toggleUnavailableReason).toBeNull();
     expect(row?.disabled).toBe(false);
   });
 
-  it('gives a non-project server no switch, with the reason on the row', async () => {
-    // Probe-verified: no settings key disables a user- or local-scope server,
-    // so a switch there would move and change nothing.
-    const cwd = realDir();
-    const { service } = harness(() => Promise.resolve([server('global')]), {
-      facts: projectFacts,
-    });
-
-    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
-
-    expect(row?.scope).toBe('other');
-    expect(row?.toggleUnavailableReason).not.toBeNull();
-  });
-
-  it('gives no switch to a server the user disabled in their own settings', async () => {
-    // The CLI UNIONs the disabled lists, so geniro can never pull a name back
+  it('gives no switch to a server the user turned down themselves', async () => {
+    // The CLI UNIONs the rejection lists, so geniro can never pull a name back
     // out of the user's own. Offering the switch would be a control that
     // silently does nothing in the one direction the user would try.
     const cwd = realDir();
     const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: { projectServers: ['proj'], userDisabled: ['proj'] },
+      facts: { disabled: [], lockedOff: ['proj'] },
     });
 
     const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
 
-    expect(row?.scope).toBe('project');
     expect(row?.disabled).toBe(true);
     expect(row?.toggleUnavailableReason).not.toBeNull();
   });
 
-  it('reports a server geniro switched off as disabled', async () => {
+  it('reports a server the config has switched off as disabled', async () => {
+    // The LISTING cannot see it — `claude mcp list` reports a disabled server
+    // as though it were live (probe-verified) — so the row's state comes from
+    // the config's own list, not from the health reading.
     const cwd = realDir();
-    const { service, settings } = harness(
-      () => Promise.resolve([server('proj')]),
-      { facts: projectFacts },
-    );
-    await settings.setDisabled(AgentKind.Claude, cwd, 'proj', true);
+    const { service } = harness(() => Promise.resolve([server('proj')]), {
+      facts: { disabled: ['proj'], lockedOff: [] },
+    });
 
     const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
 
     expect(row?.disabled).toBe(true);
-    // Still switchable — geniro put it there, so geniro can take it back out.
+    // Still switchable — it was switched off through this same list.
     expect(row?.toggleUnavailableReason).toBeNull();
   });
 
@@ -771,12 +761,12 @@ describe('AgentMcpService scope + disabled overlay', () => {
     // the rest of the listing's five-minute TTL — the switch would appear to
     // snap back.
     const cwd = realDir();
-    const { service, settings, listMcpServers } = harness(
+    const { service, listMcpServers } = harness(
       () => Promise.resolve([server('proj')]),
-      { facts: projectFacts },
+      { facts: nothingOff },
     );
     await service.list(AgentKind.Claude, cwd);
-    await settings.setDisabled(AgentKind.Claude, cwd, 'proj', true);
+    await service.setEnabled(AgentKind.Claude, cwd, 'proj', false);
 
     const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
 
@@ -788,9 +778,9 @@ describe('AgentMcpService scope + disabled overlay', () => {
     // Knowing nothing must not be rendered as "everything is toggleable".
     const cwd = realDir();
     // Facts that WOULD make the row toggleable, so the assertions below hold
-    // only if the catch's empty-facts fallback is what produced them.
+    // only if the catch is what produced them.
     const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: projectFacts,
+      facts: nothingOff,
     });
     const adapter = (
       service as unknown as {
@@ -801,21 +791,18 @@ describe('AgentMcpService scope + disabled overlay', () => {
 
     const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
 
-    expect(row?.scope).toBe('other');
+    expect(row?.scope).toBe('unknown');
     expect(row?.toggleUnavailableReason).not.toBeNull();
   });
 });
 
 describe('AgentMcpService.setEnabled', () => {
-  const projectFacts: AgentMcpFolderFacts = {
-    projectServers: ['proj'],
-    userDisabled: [],
-  };
+  const nothingOff: AgentMcpFolderFacts = { disabled: [], lockedOff: [] };
 
-  it('switches a project server off and reports it back as disabled', async () => {
+  it('switches a server off and reports it back as disabled', async () => {
     const cwd = realDir();
     const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: projectFacts,
+      facts: nothingOff,
     });
 
     const listing = await service.setEnabled(
@@ -828,16 +815,14 @@ describe('AgentMcpService.setEnabled', () => {
     expect(listing.servers[0]?.disabled).toBe(true);
   });
 
-  it('reads the folder facts ONCE per toggle', async () => {
-    // `setEnabled` must read them to validate the request, and the listing it
-    // answers with needs the same facts to compose its rows. Going back
-    // through `list()` re-read the user's `.mcp.json` and CLI settings a
-    // second time per click, for an answer that cannot have changed: the
-    // write lands in geniro's OWN settings file, which those reads never see.
+  it('re-reads the folder AFTER the write, so the row is the state that landed', async () => {
+    // The write changes exactly the half the facts report, so answering from
+    // the pre-write copy would render the state the user just left — a switch
+    // that visibly snaps back.
     const cwd = realDir();
     const { service, readMcpFolderFacts } = harness(
       () => Promise.resolve([server('proj')]),
-      { facts: projectFacts },
+      { facts: nothingOff },
     );
 
     const listing = await service.setEnabled(
@@ -847,12 +832,9 @@ describe('AgentMcpService.setEnabled', () => {
       false,
     );
 
-    expect(readMcpFolderFacts).toHaveBeenCalledTimes(1);
-    // And the reused facts still produce a correctly composed row — the whole
-    // point is that the second read was redundant, not that it was skipped.
+    expect(readMcpFolderFacts.mock.calls.length).toBeGreaterThan(1);
     expect(listing.servers[0]).toMatchObject({
       name: 'proj',
-      scope: 'project',
       disabled: true,
       toggleUnavailableReason: null,
     });
@@ -861,7 +843,7 @@ describe('AgentMcpService.setEnabled', () => {
   it('switches it back on', async () => {
     const cwd = realDir();
     const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: projectFacts,
+      facts: nothingOff,
     });
     await service.setEnabled(AgentKind.Claude, cwd, 'proj', false);
 
@@ -875,24 +857,25 @@ describe('AgentMcpService.setEnabled', () => {
     expect(listing.servers[0]?.disabled).toBe(false);
   });
 
-  it('refuses a server that is not project scope', async () => {
-    // Writing the setting anyway would persist a toggle the CLI ignores: the
-    // user would see the switch move and the next turn would load the server
-    // regardless.
+  it('reports a failed write as a refusal instead of a silent success', async () => {
+    // The adapter reaches the user's own config and a real lock. A write that
+    // could not be taken must not come back as a listing claiming it landed.
     const cwd = realDir();
-    const { service } = harness(() => Promise.resolve([server('global')]), {
-      facts: projectFacts,
-    });
+    const { service, setMcpServerEnabled } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: nothingOff },
+    );
+    setMcpServerEnabled.mockRejectedValueOnce(new Error('ELOCKED'));
 
     await expect(
-      service.setEnabled(AgentKind.Claude, cwd, 'global', false),
-    ).rejects.toThrow();
+      service.setEnabled(AgentKind.Claude, cwd, 'proj', false),
+    ).rejects.toThrow(/ELOCKED/);
   });
 
-  it('refuses to re-enable one the user disabled themselves', async () => {
+  it('refuses to re-enable one the user turned down themselves', async () => {
     const cwd = realDir();
     const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: { projectServers: ['proj'], userDisabled: ['proj'] },
+      facts: { disabled: [], lockedOff: ['proj'] },
     });
 
     await expect(
@@ -909,13 +892,12 @@ describe('AgentMcpService.setEnabled', () => {
             mcp: { listingUnavailableReason: 'no listing on this CLI yet' },
           }),
           readMcpFolderFacts: () =>
-            Promise.resolve({ projectServers: [], userDisabled: [] }),
+            Promise.resolve({ disabled: [], lockedOff: [] }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
     const service = new AgentMcpService(
       registry,
       new ProcessRegistry(),
-      new McpSettingsStore({ file: join(realDir(), 'mcp-settings.json') }),
       new AgentVersionService(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
@@ -925,30 +907,29 @@ describe('AgentMcpService.setEnabled', () => {
     ).rejects.toThrow();
   });
 
-  it('does not write the setting when it refuses', async () => {
+  it('does not reach the adapter when it refuses', async () => {
     const cwd = realDir();
-    const { service, settings } = harness(
-      () => Promise.resolve([server('global')]),
-      { facts: projectFacts },
+    const { service, setMcpServerEnabled } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: { disabled: [], lockedOff: ['proj'] } },
     );
 
     await service
-      .setEnabled(AgentKind.Claude, cwd, 'global', false)
+      .setEnabled(AgentKind.Claude, cwd, 'proj', true)
       .catch(() => undefined);
 
-    expect(await settings.disabled(AgentKind.Claude, cwd)).toEqual([]);
+    expect(setMcpServerEnabled).not.toHaveBeenCalled();
   });
 
-  it('keeps one folder’s switch out of another folder’s listing', async () => {
+  it('hands the adapter the folder, so one folder’s switch is only its own', async () => {
     const dirA = realDir();
-    const dirB = realDir();
-    const { service } = harness(() => Promise.resolve([server('proj')]), {
-      facts: projectFacts,
-    });
+    const { service, setMcpServerEnabled } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: nothingOff },
+    );
+
     await service.setEnabled(AgentKind.Claude, dirA, 'proj', false);
 
-    const inB = await service.list(AgentKind.Claude, dirB);
-
-    expect(inB.servers[0]?.disabled).toBe(false);
+    expect(setMcpServerEnabled).toHaveBeenCalledWith(dirA, 'proj', false);
   });
 });

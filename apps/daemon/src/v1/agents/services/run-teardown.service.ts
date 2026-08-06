@@ -9,7 +9,6 @@ import { AgentEventBus } from './agent-events.bus';
 import { AttachmentStoreService } from './attachment-store.service';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
-import { TurnMirrorService } from './turn-mirror.service';
 
 /**
  * How long a purge waits for a cancelled turn to finish writing before it
@@ -57,7 +56,6 @@ export class RunTeardownService {
     private readonly callTokens: CallTokenRegistry,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
-    private readonly mirrors: TurnMirrorService,
   ) {}
 
   /**
@@ -86,7 +84,6 @@ export class RunTeardownService {
     // here must not leave the durable rows half-deleted.
     this.callTokens.revokeRun(runId);
     this.partials.forgetRun(runId);
-    this.mirrors.drop(runId);
 
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },

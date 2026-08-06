@@ -35,41 +35,11 @@ function write(rel: string, content: string): void {
 }
 
 describe('ClaudeAdapter.readMcpFolderFacts', () => {
-  it('reports the project .mcp.json server names as project scope', async () => {
-    write(
-      '.mcp.json',
-      JSON.stringify({ mcpServers: { sentry: {}, docs: {} } }),
-    );
-
+  it('reports nothing off for a folder with no config at all', async () => {
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.projectServers).toEqual(['sentry', 'docs']);
-  });
-
-  it('reports no project servers for a folder with no .mcp.json', async () => {
-    const facts = await adapter().readMcpFolderFacts(cwd);
-
-    expect(facts.projectServers).toEqual([]);
-    expect(facts.userDisabled).toEqual([]);
-  });
-
-  it('does not throw when .mcp.json is malformed', async () => {
-    // A broken file in the user's own repo must degrade to "no project
-    // servers" — every row then renders read-only — never fail the listing.
-    write('.mcp.json', '{ "mcpServers": ');
-
-    const facts = await adapter().readMcpFolderFacts(cwd);
-
-    expect(facts.projectServers).toEqual([]);
-  });
-
-  it('does not throw when .mcp.json is a directory', async () => {
-    mkdirSync(join(cwd, '.mcp.json'));
-
-    await expect(adapter().readMcpFolderFacts(cwd)).resolves.toEqual({
-      projectServers: [],
-      userDisabled: [],
-    });
+    expect(facts.disabled).toEqual([]);
+    expect(facts.lockedOff).toEqual([]);
   });
 
   it('reports a server the user disabled in .claude/settings.json', async () => {
@@ -80,7 +50,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toContain('sentry');
+    expect(facts.lockedOff).toContain('sentry');
   });
 
   it('reports a server the user disabled in .claude/settings.local.json', async () => {
@@ -91,7 +61,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toContain('docs');
+    expect(facts.lockedOff).toContain('docs');
   });
 
   it('unions both project settings files rather than letting one win', async () => {
@@ -109,7 +79,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toEqual(
+    expect(facts.lockedOff).toEqual(
       expect.arrayContaining(['from-shared', 'from-local']),
     );
   });
@@ -126,7 +96,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled.filter((n) => n === 'sentry')).toHaveLength(1);
+    expect(facts.lockedOff.filter((n) => n === 'sentry')).toHaveLength(1);
   });
 
   it('keeps reading the other settings files when one is malformed', async () => {
@@ -138,7 +108,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toContain('docs');
+    expect(facts.lockedOff).toContain('docs');
   });
 
   it('reports a server the user disabled in ~/.claude/settings.json', async () => {
@@ -154,7 +124,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toContain('from-home');
+    expect(facts.lockedOff).toContain('from-home');
   });
 
   it('unions the home file with the project ones', async () => {
@@ -171,7 +141,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toEqual(
+    expect(facts.lockedOff).toEqual(
       expect.arrayContaining(['from-home', 'from-project']),
     );
   });
@@ -201,10 +171,10 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.userDisabled).toContain('sentry');
+    expect(facts.lockedOff).toContain('sentry');
   });
 
-  it('reads project servers and user-disabled names together', async () => {
+  it('reads a rejected name alongside the rest', async () => {
     write(
       '.mcp.json',
       JSON.stringify({ mcpServers: { sentry: {}, docs: {} } }),
@@ -216,17 +186,15 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
 
     const facts = await adapter().readMcpFolderFacts(cwd);
 
-    expect(facts.projectServers).toEqual(['sentry', 'docs']);
-    expect(facts.userDisabled).toContain('docs');
+    expect(facts.lockedOff).toContain('docs');
   });
 });
 
 describe('AgentAdapter.readMcpFolderFacts default', () => {
   it('knows nothing, so every row renders read-only', async () => {
-    // The honest answer for a CLI whose config layout is unverified: no
-    // project servers means no switches, rather than a control whose effect
-    // has never been observed for that CLI. cursor-agent takes this default,
-    // which is what keeps milestone 2 out of its way.
+    // The honest answer for a CLI whose config layout is unverified: nothing
+    // known means no switches, rather than a control whose effect has never
+    // been observed for that CLI. cursor-agent takes this default.
     class Unverified extends AgentAdapter {
       getConfig(): never {
         throw new Error('not needed for this default');
@@ -244,6 +212,6 @@ describe('AgentAdapter.readMcpFolderFacts default', () => {
 
     await expect(
       new Unverified().readMcpFolderFacts('/anywhere'),
-    ).resolves.toEqual({ projectServers: [], userDisabled: [] });
+    ).resolves.toEqual({ disabled: [], lockedOff: [] });
   });
 });

@@ -43,17 +43,17 @@ export class CapabilitiesService {
   }
 
   /**
-   * Every registered CLI's interactive-terminal answer, asked of its own
+   * Every registered CLI's handoff answer, asked of its own
    * adapter. Iterated, never listed — same rule as the plugin row above.
    *
-   * `terminalCommand` is asked with a placeholder session id because the
-   * question here is "does this CLI have a mirror AT ALL", not "can it mirror
-   * this thread": a `no-session` refusal is a not-YET and still means the CLI
-   * supports one. Only `unsupported` is the permanent answer this reports.
+   * `handoffTarget` is asked with a placeholder session id because the
+   * question here is "can this CLI reopen its conversations AT ALL", not "can
+   * it reopen this thread": a `no-session` refusal is a not-YET and still
+   * means the CLI can. Only `unsupported` is the permanent answer.
    */
   private terminalCapabilities(): AgentTerminalCapability[] {
     return [...this.adapters.all()].map(([agent, adapter]) => {
-      const resolved = adapter.terminalCommand({
+      const resolved = adapter.handoffTarget({
         sessionId: 'capability-probe',
         model: null,
       });

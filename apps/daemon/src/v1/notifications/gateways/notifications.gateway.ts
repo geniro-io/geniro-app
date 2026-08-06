@@ -3,6 +3,7 @@ import {
   ConnectedSocket,
   MessageBody,
   type OnGatewayConnection,
+  type OnGatewayDisconnect,
   type OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
@@ -17,6 +18,7 @@ import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { extractStringField } from '../../agents/utils/ws-payload';
+import { WsPresenceService } from '../services/ws-presence.service';
 
 /**
  * Defensively read a `verdict` payload: `{runId, requestId, allow, answer?}`.
@@ -90,7 +92,11 @@ function extractRunId(data: unknown): string | null {
  */
 @WebSocketGateway({ path: '/ws', cors: { origin: '*' } })
 export class NotificationsGateway
-  implements OnGatewayConnection, OnGatewayInit, OnModuleDestroy
+  implements
+    OnGatewayConnection,
+    OnGatewayDisconnect,
+    OnGatewayInit,
+    OnModuleDestroy
 {
   private readonly logger = new Logger(NotificationsGateway.name);
   private busSubscription?: Subscription;
@@ -101,6 +107,7 @@ export class NotificationsGateway
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly bus: AgentEventBus,
     private readonly approvals: ApprovalRegistry,
+    private readonly presence: WsPresenceService,
   ) {}
 
   afterInit(server: Server): void {
@@ -164,9 +171,17 @@ export class NotificationsGateway
 
   handleConnection(client: Socket): void {
     if (!enforceWsHandshakeAuth(client, this.runtime)) {
+      // Deliberately NOT counted: a socket that failed the token check was
+      // never a client, and counting it would keep the daemon believing
+      // someone is using it.
       return;
     }
+    this.presence.opened(client.id);
     client.emit('hello', { version: this.runtime.version });
+  }
+
+  handleDisconnect(client: Socket): void {
+    this.presence.closed(client.id);
   }
 
   @SubscribeMessage('join')

@@ -343,10 +343,56 @@ describe('toolGroupSummary', () => {
   });
 
   it('a single plain tool reads "Used 1 tool"', () => {
+    // Nothing else describes a Read, so the total is the only report there is.
     const group = groupTranscript([
       call('Read', 't1', { file_path: '/a.ts' }),
     ])[0] as ToolGroupEntry;
     expect(toolGroupSummary(group.pairs)).toBe('Used 1 tool');
+  });
+
+  it('does not count the same action twice when the breakdown covers it all', () => {
+    // "Used 1 tool · ran 1 command" reported one action as two figures. The
+    // total is dropped exactly when every call already has a named bucket.
+    const group = groupTranscript([
+      call('Bash', 't1', { command: 'ls' }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Ran 1 command');
+  });
+
+  it('keeps the total as soon as one call falls outside the breakdown', () => {
+    // A Read is reported by nothing else, so dropping the total would hide it.
+    const group = groupTranscript([
+      call('Bash', 't1', { command: 'ls' }),
+      call('Read', 't2', { file_path: '/a.ts' }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Used 2 tools · ran 1 command');
+  });
+
+  it('counts CALLS, not distinct files, when deciding the total is redundant', () => {
+    // Three edits to one file are three accounted calls and one edited file.
+    // Comparing the DISPLAYED figures instead would have kept "Used 3 tools ·
+    // edited 1 file" — the very line the drop exists to avoid.
+    const group = groupTranscript([
+      call('Edit', 't1', {
+        file_path: '/a.ts',
+        old_string: 'a',
+        new_string: 'b',
+      }),
+      call('Edit', 't2', {
+        file_path: '/a.ts',
+        old_string: 'b',
+        new_string: 'c',
+      }),
+      call('Edit', 't3', {
+        file_path: '/a.ts',
+        old_string: 'c',
+        new_string: 'd',
+      }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Edited 1 file');
   });
 });
 
@@ -553,6 +599,57 @@ describe('withLiveText', () => {
     const block = overlaid[0] as TurnBlockEntry;
     expect(block.nodeId).toBe(NODE);
     expect(block.entries).toHaveLength(2);
+  });
+
+  it('puts a live row AFTER a user message, never back inside the older block', () => {
+    // The reported symptom: press stop, send again, and the new turn’s
+    // “Thinking…” appeared above the message that started it. The fold breaks
+    // a turn block on a user message, so the agent’s previous block sits
+    // further up — and the overlay used to search BACKWARDS for it.
+    const blocks = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'earlier answer' }, null, 'assistant'),
+        item('turn_complete', { usage: {} }, null),
+        item('message', { text: 'do it again' }, null, 'user'),
+      ]),
+    );
+
+    const overlaid = withLiveText(
+      blocks,
+      new Map([[CHAT_LIVE_KEY, live({ thinkingStretch: 1 })]]),
+    );
+
+    // A block of its own, at the very end — after the user message.
+    const last = overlaid[overlaid.length - 1] as TurnBlockEntry;
+    expect(last.type).toBe('turn-block');
+    expect(last.entries).toHaveLength(1);
+    expect(liveRowPayload(overlaid)).toMatchObject({ live: 'thinking' });
+    // The earlier block is untouched — the row did not land inside it.
+    const earlier = overlaid[0] as TurnBlockEntry;
+    expect(earlier.entries).toHaveLength(1);
+  });
+
+  it('puts a live row AFTER an answered question card, where its durable copy lands', () => {
+    // Answer a question and the streaming reply used to render ABOVE the
+    // answer, then snap below it the moment the text went durable — the
+    // durable item’s seq always put it after the verdict. Both must agree.
+    const blocks = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'which one?' }, null, 'assistant'),
+        item('approval_verdict', { id: 'a1', allow: true }, null),
+      ]),
+    );
+
+    const overlaid = withLiveText(
+      blocks,
+      new Map([[CHAT_LIVE_KEY, live({ text: 'working on it' })]]),
+    );
+
+    expect(overlaid.map((e) => e.type)).toEqual([
+      'turn-block',
+      'item',
+      'turn-block',
+    ]);
   });
 });
 

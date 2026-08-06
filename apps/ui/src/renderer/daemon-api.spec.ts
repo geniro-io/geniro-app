@@ -88,17 +88,15 @@ describe('createDaemonApis', () => {
     stubFetch({
       ok: false,
       status: 400,
-      text: () => Promise.resolve('TERMINAL_UNSUPPORTED'),
+      text: () => Promise.resolve('HANDOFF_NODE_REQUIRED'),
     });
 
     // This exact format is load-bearing: the renderer surfaces it verbatim and
     // Chats' 404-detection parses the "(status)" segment.
     await expect(
-      createDaemonApis(handle).terminals.createTerminal({
-        createTerminalDto: { runId: 'r1' },
-      }),
+      createDaemonApis(handle).handoff.resolveHandoff({ runId: 'r1' }),
     ).rejects.toThrow(
-      'daemon POST /v1/terminals failed (400): TERMINAL_UNSUPPORTED',
+      'daemon GET /v1/handoff?runId=r1 failed (400): HANDOFF_NODE_REQUIRED',
     );
   });
 

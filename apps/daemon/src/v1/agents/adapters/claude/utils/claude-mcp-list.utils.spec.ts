@@ -31,6 +31,19 @@ const REAL_PENDING_OUTPUT = [
 const REAL_EMPTY_OUTPUT =
   'No MCP servers configured. Use `claude mcp add` to add a server.\n';
 
+/**
+ * Verbatim output for an OAuth server with no stored credentials, 2.1.223.
+ * Captured by adding `probe-linear` (`mcp add --transport http`) in a throwaway
+ * folder, running the real binary, and removing it. `claude mcp get` printed
+ * the same wording as its `Status:`.
+ */
+const REAL_NEEDS_AUTH_OUTPUT = [
+  'Checking MCP server health…',
+  '',
+  'probe-linear: https://mcp.linear.app/mcp (HTTP) - ! Needs authentication',
+  '',
+].join('\n');
+
 describe('parseMcpList', () => {
   it('reads a connected stdio server', () => {
     const [server] = parseMcpList(REAL_MIXED_OUTPUT);
@@ -92,6 +105,26 @@ describe('parseMcpList', () => {
     ]);
     expect(servers[0]?.detail).toBe('(run `claude` to approve)');
     expect(servers[0]?.target).toBe('/bin/echo hello');
+  });
+
+  it('reads an OAuth server with no credentials as needs_auth, not as unknown', () => {
+    // Reverting the marker sends this row back down the fallback path, where it
+    // comes out `status: 'unknown'` with `! Needs authentication` as its
+    // detail — which is what shipped, and what the panel then rendered as a
+    // bare `unknown` badge with nothing to act on (it shows a detail only for
+    // `failed`). Both assertions below fail on that revert.
+    const [server] = parseMcpList(REAL_NEEDS_AUTH_OUTPUT);
+
+    expect(server).toEqual({
+      name: 'probe-linear',
+      target: 'https://mcp.linear.app/mcp',
+      transport: 'http',
+      status: 'needs_auth',
+      // Null, not the wording again: the status already says the whole thing,
+      // and echoing it would put "Needs authentication" under a badge reading
+      // "needs auth".
+      detail: null,
+    });
   });
 
   it('returns nothing for the empty-folder sentence', () => {

@@ -322,9 +322,23 @@ export interface AgentSkillEntry {
  * `disabled` is one the user switched off in the CLI's own configuration, which
  * geniro cannot undo (cursor's `mcp disable`); it is distinct from the wire's
  * `disabled` flag, which also covers servers geniro itself suppressed.
+ *
+ * `needs_auth` is an OAuth server the CLI has no stored credentials for. It is
+ * NOT a failure and must not read as one: nothing is broken, the user has
+ * simply never signed in, and the fix is one command rather than a
+ * configuration hunt. It earned its own arm because it is the only status with
+ * an ACTION attached — see `AdapterConfig.mcp.loginArgs`. Folded into `failed`
+ * it would have been listed among things to debug; left as `unknown` (where the
+ * missing marker put it, probe-verified on claude 2.1.223) the row said nothing
+ * at all and offered nothing to do.
  */
 export type AgentMcpServerStatus =
-  'connected' | 'failed' | 'pending' | 'disabled' | 'unknown';
+  | 'connected'
+  | 'failed'
+  | 'pending'
+  | 'disabled'
+  | 'needs_auth'
+  | 'unknown';
 
 /**
  * One MCP server a CLI agent loads in a given working directory.
@@ -1040,6 +1054,35 @@ export interface AdapterConfig {
      * but it cannot undo a rejection whose every source copy the CLI unions.
      */
     readonly userDisabledReason: string;
+    /**
+     * Argv that signs this CLI in to ONE MCP server, with the server's name
+     * appended — `['mcp', 'login']` for both CLIs today. Null when the CLI has
+     * no such command, and then {@link loginUnavailableReason} says so.
+     *
+     * A VALUE, not a method: what differs per CLI is the words, not the
+     * mechanism, so `AgentAdapter.mcpLoginTarget` is concrete over this.
+     *
+     * The daemon RESOLVES this and never runs it. Probe-verified on claude
+     * 2.1.223: `claude mcp login <name>` refuses outright — in browser mode AND
+     * under `--no-browser` — when stdin is not a terminal ("stdin isn't a
+     * terminal, so authentication can't be completed here"), exiting non-zero
+     * ~1.6s in, before any OAuth callback could arrive. That is an upfront
+     * refusal rather than a timeout, so no amount of waiting or piping makes a
+     * headless spawn work. The invocation therefore goes where a TTY exists:
+     * the user's own terminal, through the handoff module. Giving the daemon a
+     * PTY instead would reintroduce the native module M4 deliberately deleted.
+     */
+    readonly loginArgs: readonly string[] | null;
+    /**
+     * Why no server of this CLI can be signed in to, or null when they can.
+     *
+     * Separate from {@link toggleUnavailableReason} for the same reason that one
+     * is separate from {@link listingUnavailableReason}: signing in and
+     * switching off are different capabilities, and a CLI that gains one
+     * without the other must not be handed a sentence answering the other
+     * question.
+     */
+    readonly loginUnavailableReason: string | null;
   };
 
   // ── Plugin directory ────────────────────────────────────────────────────

@@ -494,11 +494,20 @@ export class AgentMcpService {
     const disabled = new Set(facts.disabled);
     const lockedOff = new Set(facts.lockedOff);
     const toggle = adapter.getConfig().mcp;
+    // Answered on EVERY row, including the two early arms below: sign-in is a
+    // capability of the CLI, not of the toggle, and a CLI that cannot be
+    // switched can still be signed in to. Threading it through each arm is what
+    // stops the renderer inferring "signable" from a status — a stdio server
+    // never needs auth, and a `needs_auth` row on a CLI without the command
+    // would otherwise get a button that does nothing.
+    const signInUnavailableReason = adapter.getConfig().mcp
+      .loginUnavailableReason;
     return {
       servers: result.servers.map((server) => {
         if (toggle.toggleUnavailableReason !== null) {
           return {
             ...server,
+            signInUnavailableReason,
             scope: 'unknown' as const,
             // Not blanket-false: a CLI geniro cannot switch may still REPORT a
             // server as switched off in its own config (cursor's `mcp
@@ -512,6 +521,7 @@ export class AgentMcpService {
         if (factsUnavailable) {
           return {
             ...server,
+            signInUnavailableReason,
             scope: 'unknown' as const,
             disabled: server.status === 'disabled',
             toggleUnavailableReason: MCP_STATE_UNREADABLE_REASON,
@@ -520,6 +530,7 @@ export class AgentMcpService {
         const isLockedOff = lockedOff.has(server.name);
         return {
           ...server,
+          signInUnavailableReason,
           // Every scope is switchable now that the toggle writes the CLI's own
           // per-folder list, so the distinction the field used to draw (a
           // project server vs anything else) no longer decides anything. What

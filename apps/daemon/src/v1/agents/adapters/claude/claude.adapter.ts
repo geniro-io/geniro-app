@@ -43,6 +43,7 @@ import {
   CLAUDE_MCP_LIST_FAILED_MESSAGE,
   CLAUDE_MCP_LIST_TIMEOUT_MS,
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
+  CLAUDE_MCP_LOGIN_ARGS,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_CACHE_FILE,
@@ -221,6 +222,9 @@ export class ClaudeAdapter extends AgentAdapter {
         toggleUnavailableReason: null,
         userDisabledReason:
           'switched off in your own claude settings, which geniro cannot re-enable',
+        /** `claude mcp login <name>` — probe-verified on 2.1.223. */
+        loginArgs: CLAUDE_MCP_LOGIN_ARGS,
+        loginUnavailableReason: null,
       },
       plugin: {
         /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */

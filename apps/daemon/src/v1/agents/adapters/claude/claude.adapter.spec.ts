@@ -1756,6 +1756,23 @@ describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
   });
 });
 
+describe('ClaudeAdapter — signing in to an MCP server', () => {
+  it('composes the CLI’s real sign-in argv', () => {
+    // The literal subcommand, from `claude mcp --help` on 2.1.223:
+    //   login [options] <name>  Authenticate with an MCP server
+    // Spelled out here on purpose. The base's shared test derives the argv from
+    // the same config the code reads, so it cannot tell `mcp login` from any
+    // other pair of words; this is the assertion that would fail if the config
+    // drifted off what the binary accepts.
+    expect(new ClaudeAdapter().mcpLoginTarget('probe-linear')).toEqual({
+      ok: true,
+      kind: 'command',
+      command: 'claude',
+      args: ['mcp', 'login', 'probe-linear'],
+    });
+  });
+});
+
 describe('ClaudeAdapter geniro-key collision', () => {
   const ENDPOINT = {
     url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',

@@ -158,3 +158,120 @@ describe('HandoffService', () => {
     );
   });
 });
+
+/**
+ * Signing in reads no run at all — an MCP server belongs to a folder — so this
+ * builds the service with every run-shaped collaborator poisoned. A read that
+ * crept back in fails loudly here instead of quietly working in the one case
+ * where a run happens to exist.
+ */
+function buildLogin(
+  overrides: {
+    target?: HandoffResult;
+    loginUnavailableReason?: string | null;
+  } = {},
+) {
+  const mcpLoginTarget = vi.fn(
+    (): HandoffResult =>
+      overrides.target ?? {
+        ok: true,
+        kind: 'command',
+        command: 'claude',
+        args: ['mcp', 'login', 'probe-linear'],
+      },
+  );
+  const adapter = {
+    mcpLoginTarget,
+    getConfig: () => ({
+      mcp: {
+        loginUnavailableReason: overrides.loginUnavailableReason ?? null,
+      },
+    }),
+  };
+  const poisoned = {
+    getById: () => Promise.reject(new Error('a sign-in must not read a run')),
+    getByRunNode: () =>
+      Promise.reject(new Error('a sign-in must not read node state')),
+    get: () => Promise.reject(new Error('a sign-in must not read a workflow')),
+  };
+  const service = new HandoffService(
+    { fork: () => ({}) } as never,
+    poisoned as never,
+    poisoned as never,
+    poisoned as never,
+    { for: () => adapter } as never,
+  );
+  return { service, mcpLoginTarget };
+}
+
+describe('HandoffService — signing in to an MCP server', () => {
+  it('answers with the CLI’s sign-in command, run in the server’s own folder', () => {
+    const { service, mcpLoginTarget } = buildLogin();
+
+    const target = service.mcpLoginTarget({
+      agent: AgentKind.Claude,
+      cwd: process.cwd(),
+      server: 'probe-linear',
+    });
+
+    // The folder is load-bearing, not decoration: a server name resolves
+    // against the directory the CLI runs in, so the same name in another folder
+    // is a different server or none.
+    expect(mcpLoginTarget).toHaveBeenCalledWith('probe-linear');
+    expect(target).toMatchObject({
+      kind: 'command',
+      command: 'claude',
+      args: ['mcp', 'login', 'probe-linear'],
+      cwd: process.cwd(),
+      unavailableReason: null,
+    });
+  });
+
+  it('carries a pasteable line built from the same command it returns', () => {
+    // The button opens a terminal; the hover offers the line to copy. Two
+    // renderings that could disagree is how a pasted command stops matching it.
+    const { service } = buildLogin();
+
+    const target = service.mcpLoginTarget({
+      agent: AgentKind.Claude,
+      cwd: process.cwd(),
+      server: 'probe-linear',
+    });
+
+    expect(target.display).toBe([target.command, ...target.args].join(' '));
+  });
+
+  it('reports the CLI’s OWN reason when it cannot sign in at all', () => {
+    const { service } = buildLogin({
+      target: { ok: false, reason: 'unsupported' },
+      loginUnavailableReason: 'this CLI has no MCP sign-in',
+    });
+
+    const target = service.mcpLoginTarget({
+      agent: AgentKind.Claude,
+      cwd: process.cwd(),
+      server: 'probe-linear',
+    });
+
+    expect(target).toMatchObject({
+      kind: 'unavailable',
+      command: null,
+      unavailableReason: 'this CLI has no MCP sign-in',
+    });
+  });
+
+  it('refuses a folder that does not resolve, rather than opening a terminal that dies', () => {
+    // This string becomes the cwd of a process the USER's terminal spawns. A
+    // bad path has to fail as a bad request here — past this point the only
+    // feedback is a window that flashes open and closes.
+    const { service } = buildLogin();
+
+    expect(() =>
+      service.mcpLoginTarget({
+        agent: AgentKind.Claude,
+        cwd: '/nonexistent-folder-xyz-geniro',
+        server: 'probe-linear',
+      }),
+    ).toThrow();
+  });
+});

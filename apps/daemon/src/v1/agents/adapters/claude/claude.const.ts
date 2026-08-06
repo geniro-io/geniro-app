@@ -324,6 +324,31 @@ export const CLAUDE_MCP_CONNECTED_MARKER = 'Connected';
 export const CLAUDE_MCP_FAILED_MARKER = 'Failed to connect';
 export const CLAUDE_MCP_PENDING_MARKER = 'Pending approval';
 
+/**
+ * An OAuth server the CLI holds no credentials for. Probe-verified on 2.1.223,
+ * driven live against a `mcp add --transport http` server in a throwaway folder:
+ *
+ *     probe-linear: https://mcp.linear.app/mcp (HTTP) - ! Needs authentication
+ *
+ * `claude mcp get` prints the same wording as its `Status:`. The glyph is `!`
+ * and is excluded for the same reason the other three are — see the block above.
+ *
+ * Its absence was a live defect, not a gap: the row parsed, matched no marker,
+ * and came out `status: 'unknown'` with the wording as its detail — which the
+ * panel then did not render at all, since it shows a detail only for `failed`.
+ * A server one command away from working therefore appeared as a row with an
+ * unexplained badge and nothing to do about it.
+ */
+export const CLAUDE_MCP_NEEDS_AUTH_MARKER = 'Needs authentication';
+
+/**
+ * Argv that signs the CLI in to one server, with the server name appended.
+ *
+ * Named rather than written inline because it has the second reader that earns
+ * a name: `getConfig()` spells it, and the adapter's spec asserts on it.
+ */
+export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
+
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */
 export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';
 

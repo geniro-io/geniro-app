@@ -116,7 +116,7 @@ export interface AgentMcpServer {
      */
     transport: AgentMcpServerTransportEnum | null;
     /**
-     * Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config
+     * Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet
      * @type {string}
      * @memberof AgentMcpServer
      */
@@ -145,6 +145,12 @@ export interface AgentMcpServer {
      * @memberof AgentMcpServer
      */
     toggleUnavailableReason: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    signInUnavailableReason: string | null;
 }
 
 
@@ -166,6 +172,7 @@ export const AgentMcpServerStatusEnum = {
     Failed: 'failed',
     Pending: 'pending',
     Disabled: 'disabled',
+    NeedsAuth: 'needs_auth',
     Unknown: 'unknown'
 } as const;
 export type AgentMcpServerStatusEnum = typeof AgentMcpServerStatusEnum[keyof typeof AgentMcpServerStatusEnum];

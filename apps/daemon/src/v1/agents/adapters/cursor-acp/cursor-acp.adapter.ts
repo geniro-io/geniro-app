@@ -165,6 +165,21 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
         userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        /**
+         * `cursor-agent mcp login <identifier>` — "Authenticate with an MCP
+         * server configured in .cursor/mcp.json or ~/.cursor/mcp.json", read
+         * from the CLI's own `mcp --help`. Inline rather than named, per this
+         * adapter's rule: `getConfig()` is its only reader.
+         *
+         * Declared even though no cursor row can carry `needs_auth` today —
+         * `parseCursorMcpList` knows `ready` / `Error:` / `not loaded` /
+         * `disabled` and nothing that names authentication, and inventing a
+         * marker for wording never observed is how a parser silently matches
+         * nothing. The capability is real and stated here; the row that would
+         * offer it appears when the CLI's listing starts reporting one.
+         */
+        loginArgs: ['mcp', 'login'],
+        loginUnavailableReason: null,
       },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       plugin: {

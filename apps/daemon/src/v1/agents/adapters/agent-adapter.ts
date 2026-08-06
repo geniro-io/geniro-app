@@ -278,6 +278,32 @@ export abstract class AgentAdapter {
     };
   }
 
+  /**
+   * How the user signs this CLI in to ONE MCP server, or that it cannot.
+   *
+   * Shaped like {@link handoffTarget} and delivered the same way — resolved
+   * here, run by the user's own terminal — and that is a constraint rather than
+   * a preference: both CLIs' `mcp login` refuse a non-TTY stdin outright (the
+   * probe is recorded on `AdapterConfig.mcp.loginArgs`), so there is no
+   * headless spawn being passed over.
+   *
+   * Only `unsupported` can come back. A server NAME cannot be wrong here the
+   * way a session id can — the caller took it from a listing this same CLI
+   * produced — so there is no `no-session` counterpart to invent.
+   */
+  mcpLoginTarget(server: string): HandoffResult {
+    const { loginArgs } = this.getConfig().mcp;
+    if (loginArgs === null) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    return {
+      ok: true,
+      kind: 'command',
+      command: this.command,
+      args: [...loginArgs, server],
+    };
+  }
+
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */

@@ -226,6 +226,43 @@ describe('AgentAdapter.listEfforts', () => {
   }
 });
 
+describe('AgentAdapter.mcpLoginTarget', () => {
+  /** A CLI with no sign-in command — the shape neither shipped adapter has. */
+  class NoLoginAdapter extends ClaudeAdapter {
+    override getConfig(): AdapterConfig {
+      const base = super.getConfig();
+      return { ...base, mcp: { ...base.mcp, loginArgs: null } };
+    }
+  }
+
+  for (const { name, adapter } of ADAPTERS) {
+    it(`builds ${name}'s own sign-in invocation, ending in the server name`, () => {
+      const target = adapter.mcpLoginTarget('probe-linear');
+
+      // Composed from the adapter's OWN declared argv, never a spelled
+      // `['mcp','login']` here: a spec that retypes the words passes even when
+      // the adapter stops carrying them.
+      expect(target).toEqual({
+        ok: true,
+        kind: 'command',
+        command: expect.any(String),
+        args: [...(adapter.getConfig().mcp.loginArgs ?? []), 'probe-linear'],
+      });
+    });
+  }
+
+  it('refuses for a CLI that declares no sign-in command', () => {
+    // The defensive arm, entered deliberately. Both shipped CLIs have `mcp
+    // login`, so nothing else reaches it — and a `loginArgs: null` that spread
+    // an empty argv instead would compose `claude probe-linear`, opening a
+    // terminal that runs the server name as a prompt.
+    expect(new NoLoginAdapter().mcpLoginTarget('probe-linear')).toEqual({
+      ok: false,
+      reason: 'unsupported',
+    });
+  });
+});
+
 describe('AgentAdapter question channel', () => {
   /** Claude's AskUserQuestion shape — the only question payload that ships. */
   const QUESTION_INPUT = {

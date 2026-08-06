@@ -280,9 +280,16 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe('Null when the CLI does not report one'),
     status: z
-      .enum(['connected', 'failed', 'pending', 'disabled', 'unknown'])
+      .enum([
+        'connected',
+        'failed',
+        'pending',
+        'disabled',
+        'needs_auth',
+        'unknown',
+      ])
       .describe(
-        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config',
+        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet',
       ),
     detail: z
       .string()
@@ -303,6 +310,12 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe(
         'Why this row carries no switch, or null when it does. A sentence, so the UI never has to derive one from `scope`',
+      ),
+    signInUnavailableReason: z
+      .string()
+      .nullable()
+      .describe(
+        'Why this row offers no sign-in, or null when it does. Answered for EVERY row, not just `needs_auth` ones, so the UI never infers a capability from a status',
       ),
   })
   .meta({ id: 'AgentMcpServer' });

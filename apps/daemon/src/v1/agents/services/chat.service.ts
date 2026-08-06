@@ -46,6 +46,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
+import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
@@ -107,6 +108,7 @@ export class ChatService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly claudeProbe: ClaudeProbeService,
     private readonly skillHarvest: SkillHarvestStore,
+    private readonly mcpHarvest: McpHarvestStore,
     private readonly attachments: AttachmentStoreService,
     private readonly partials: PartialStreamService,
     private readonly teardown: RunTeardownService,
@@ -750,6 +752,19 @@ export class ChatService {
                 adapter.getConfig().kind,
                 cwd,
                 event.commands,
+              );
+              return;
+            }
+            if (event.type === 'mcp_servers') {
+              // What this turn actually loaded here — feeds the MCP panel so
+              // it need not re-dial every server to answer, never the
+              // transcript. A chat turn carries no plugin directory (only a
+              // graph node does), which is the null.
+              this.mcpHarvest.record(
+                adapter.getConfig().kind,
+                cwd,
+                null,
+                event.servers,
               );
               return;
             }

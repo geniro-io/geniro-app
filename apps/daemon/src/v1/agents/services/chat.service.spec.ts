@@ -37,6 +37,7 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
+import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunTeardownService } from './run-teardown.service';
@@ -327,6 +328,10 @@ function setup(
     record: vi.fn(),
     get: () => null,
   } as unknown as SkillHarvestStore;
+  const mcpHarvest = {
+    record: vi.fn(),
+    get: () => null,
+  } as unknown as McpHarvestStore;
   const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
     acceptEdits: 'pass',
     plan: 'pass',
@@ -385,6 +390,7 @@ function setup(
     adapters,
     claudeProbe,
     skillHarvest,
+    mcpHarvest,
     attachments,
     partials,
     teardown,
@@ -411,6 +417,7 @@ function setup(
     cursor,
     claudeProbe,
     skillHarvest,
+    mcpHarvest,
   };
 }
 
@@ -634,6 +641,45 @@ describe('ChatService', () => {
     // carries the harvested names.
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),
+    ).toEqual([]);
+  });
+
+  it('records an mcp_servers report for the run cwd, off the transcript', async () => {
+    // This seam is the whole supply of the MCP harvest: without it the panel
+    // falls back to `claude mcp list`, which starts every configured server in
+    // order to health-check it. A turn already reported them, for free.
+    const { service, itemDao, claude, mcpHarvest } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const codegraph = {
+      name: 'codegraph',
+      target: null,
+      transport: null,
+      status: 'connected' as const,
+      detail: null,
+    };
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'mcp_servers', servers: [codegraph] });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    // A chat carries no plugin directory — only a graph node does — and this
+    // null must match the key the panel's own read builds, or the harvest is
+    // written somewhere nothing ever looks.
+    expect(mcpHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      null,
+      [codegraph],
+    );
+    expect(
+      itemDao.items.filter((item) => item.payload.includes('codegraph')),
     ).toEqual([]);
   });
 

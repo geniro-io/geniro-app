@@ -45,6 +45,80 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('harvests init mcp_servers with the state each was in', () => {
+    // Captured verbatim from a live 2.1.222 turn. This is the whole point of
+    // the MCP harvest: the panel's alternative is `claude mcp list`, which
+    // HEALTH-CHECKS — it dials, and therefore starts, every configured server
+    // from cold (6.7s measured against nine of them). A wrong field name here
+    // ships green and silently leaves the panel on that cold path.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-1',
+        mcp_servers: [
+          { name: 'codegraph', status: 'connected' },
+          { name: 'ticktick', status: 'pending' },
+          { name: 'claude.ai n8n', status: 'failed' },
+        ],
+      }),
+    ).toEqual([
+      { type: 'session', sessionId: 'sess-1' },
+      {
+        type: 'mcp_servers',
+        servers: [
+          {
+            name: 'codegraph',
+            // Init reports a name and a state and nothing else — the command
+            // line is genuinely unknown here, and null is what says so.
+            target: null,
+            transport: null,
+            status: 'connected',
+            detail: null,
+          },
+          {
+            name: 'ticktick',
+            target: null,
+            transport: null,
+            status: 'pending',
+            detail: null,
+          },
+          {
+            name: 'claude.ai n8n',
+            target: null,
+            transport: null,
+            status: 'failed',
+            detail: null,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('keeps a server whose status it cannot read, calling it unknown', () => {
+    // The server is real either way. Dropping it would shrink the listing on a
+    // CLI wording change; calling it `failed` would invent a problem. A row
+    // with no usable name is the one thing genuinely not listable.
+    const [event] = mapClaudeMessage({
+      type: 'system',
+      subtype: 'init',
+      mcp_servers: [
+        { name: 'reworded', status: 'needs-auth' },
+        { name: 'no-status' },
+        { status: 'connected' },
+        'not-an-object',
+      ],
+    });
+
+    expect(event).toEqual({
+      type: 'mcp_servers',
+      servers: [
+        expect.objectContaining({ name: 'reworded', status: 'unknown' }),
+        expect.objectContaining({ name: 'no-status', status: 'unknown' }),
+      ],
+    });
+  });
+
   it('reports the model init names, so a window can be applied before turn end', () => {
     // The whole per-model window feature hangs off this one field. `assistant`
     // lines carry the CANONICAL id (`claude-opus-5`), which is not the key

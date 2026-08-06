@@ -18,6 +18,7 @@ import { resolveValidCwd } from '../utils/resolve-cwd';
 import { resolveValidPluginDir } from '../utils/resolve-plugin-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
+import { McpHarvestStore } from './mcp-harvest.store';
 import { ProcessRegistry } from './process-registry';
 
 /**
@@ -79,6 +80,46 @@ function keyOf(
   version: string | null,
 ): string {
   return `${agent}\u0000${cwd}\u0000${pluginDir ?? ''}\u0000${version ?? ''}`;
+}
+
+/**
+ * Fill a harvested row's unreported fields from a previous `mcp list` reading.
+ *
+ * A harvest knows a server's NAME and the state it was in; a listing knows how
+ * the CLI reaches it (`target`, `transport`), which `system/init` does not
+ * report at all. Neither is a superset, so serving one alone drops information
+ * we hold — and `target` is what the panel's row tooltip shows.
+ *
+ * Deliberately one-directional: the harvest decides which servers exist and
+ * what state they are in, and the listing only fills the blanks. A server the
+ * old listing knew about but this turn did not load is genuinely gone (the user
+ * switched it off, or removed it), so it must NOT be resurrected here.
+ */
+function enrich(
+  harvested: AgentMcpServer[],
+  listed: AgentMcpServer[] | undefined,
+): AgentMcpServer[] {
+  if (!listed?.length) {
+    return harvested;
+  }
+  const byName = new Map(listed.map((server) => [server.name, server]));
+  return harvested.map((server) => {
+    const known = byName.get(server.name);
+    if (!known) {
+      return server;
+    }
+    return {
+      ...server,
+      target: server.target ?? known.target,
+      transport: server.transport ?? known.transport,
+      // Only while the two agree on the state. A `detail` explains a STATUS —
+      // it is the reason a server failed — so pinning yesterday's failure
+      // reason under today's `connected` row would state a problem that no
+      // longer exists, and the panel renders exactly that string to the user.
+      detail:
+        server.detail ?? (server.status === known.status ? known.detail : null),
+    };
+  });
 }
 
 /** Constructor options — test seams, not user config. */
@@ -146,6 +187,7 @@ export class AgentMcpService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
+    private readonly harvest: McpHarvestStore,
     options: AgentMcpServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_MCP_TTL_MS;
@@ -256,6 +298,34 @@ export class AgentMcpService {
         projectDir,
         adapter,
         result: { ok: true, servers: cached.servers },
+      };
+    }
+    // Nothing fresh to serve, and asking the CLI means a COLD DIAL of every
+    // server. Before paying for that, take the answer a turn already gave us
+    // for this exact (agent, folder, plugin dir) — `system/init` names the
+    // servers the CLI loaded and the state each was in, at no cost, which is
+    // why the CLI's own `/mcp` is instant while this route was not.
+    //
+    // Below the TTL branch on purpose: a verified reading is strictly better
+    // than a harvested one (it carries each server's command line and a
+    // settled status), so the harvest is the floor, never the ceiling.
+    //
+    // Skipped on `refresh`, which is the one thing that must always reach the
+    // CLI. Init reports the state at TURN START and nothing later updates it,
+    // so a server that was still connecting stays `pending` in the harvest for
+    // as long as the harvest lives — and Reconnect is the only way it ever
+    // settles. Serving the harvest here would make that button inert.
+    const harvested = refresh
+      ? null
+      : this.harvest.get(agent, projectDir, plugin);
+    if (harvested !== null) {
+      return {
+        projectDir,
+        adapter,
+        // Merged with the LAPSED reading when there is one: the harvest has
+        // the fresher status, the old listing has the `target`/`transport`
+        // init never reports. Taking the union loses neither.
+        result: { ok: true, servers: enrich(harvested, cached?.servers) },
       };
     }
     // `Promise.resolve().then(…)` rather than a bare call: an adapter that

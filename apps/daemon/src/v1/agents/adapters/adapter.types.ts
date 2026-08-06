@@ -170,6 +170,25 @@ export type AgentEvent =
     }
   | {
       /**
+       * The MCP servers the CLI had loaded for this turn, with the connection
+       * status each was in when the turn began (claude's `system/init`
+       * `mcp_servers` — verified live on 2.1.222). Captured into the
+       * MCP-harvest store keyed by the turn's cwd and plugin directory — never
+       * a transcript item.
+       *
+       * Reported because the ALTERNATIVE is a cold re-dial: asking a CLI for
+       * its servers out of band starts every one of them to health-check it,
+       * which is what made the panel take seconds. A turn already knows.
+       *
+       * A CLI with no such report simply never emits this — there is nothing
+       * for an adapter to declare, because the harvest is an optimisation over
+       * `listMcpServers`, never the only source.
+       */
+      type: 'mcp_servers';
+      servers: AgentMcpServer[];
+    }
+  | {
+      /**
        * The model this turn is actually running as, named by the CLI at
        * session start (claude's `system/init` `model` — verified live on
        * 2.1.220, where it reads `claude-opus-5[1m]`).

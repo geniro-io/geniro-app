@@ -41,6 +41,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
@@ -407,6 +408,7 @@ function setup(
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
   skillHarvest: SkillHarvestStore;
+  mcpHarvest: McpHarvestStore;
   storeGet: ReturnType<typeof vi.fn>;
   /** Every run-status announcement the real bus carried, in order. */
   statusEvents: { runId: string; status: string }[];
@@ -467,6 +469,10 @@ function setup(
     record: vi.fn(),
     get: () => null,
   } as unknown as SkillHarvestStore;
+  const mcpHarvest = {
+    record: vi.fn(),
+    get: () => null,
+  } as unknown as McpHarvestStore;
   const storeGet = vi.fn();
   const workflowStore = { get: storeGet } as unknown as WorkflowStoreService;
   // A real bus, tapped: run-status announcements are a wire-visible effect of
@@ -519,6 +525,7 @@ function setup(
     callBroker,
     claudeProbe,
     skillHarvest,
+    mcpHarvest,
     workflowStore,
     teardown,
     {
@@ -546,6 +553,7 @@ function setup(
     mergeAcquire,
     mergeReleases,
     skillHarvest,
+    mcpHarvest,
     storeGet,
     statusEvents,
     deletedRuns,
@@ -1090,6 +1098,62 @@ describe('GraphExecutorService', () => {
     // The report never becomes a transcript row.
     expect(
       itemDao.items.filter((item) => item.payload.includes('compact')),
+    ).toEqual([]);
+  });
+
+  it("harvests a node turn's mcp_servers under the node's CANONICAL plugin dir", async () => {
+    // The plugin directory belongs in the key because a plugin ships its own
+    // MCP servers: two nodes on one CLI in one folder pointed at different
+    // ones genuinely load different sets. And it must be the CANONICAL form —
+    // `AgentMcpService` keys its own read by `resolveValidPluginDir`, so a raw
+    // path here files the harvest where nothing ever looks it up.
+    const target = join(dir, 'mcp-plugin-target');
+    const link = join(dir, 'mcp-plugin-link');
+    rmSync(link, { force: true });
+    mkdirSync(target, { recursive: true });
+    symlinkSync(target, link);
+    const { service, claude, itemDao, mcpHarvest } = setup();
+    const codegraph = {
+      name: 'codegraph',
+      target: null,
+      transport: null,
+      status: 'connected' as const,
+      detail: null,
+    };
+
+    await service.startRun({
+      slug: 'plugged',
+      workflow: triggered({
+        name: 'plugged',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            pluginDir: link,
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    claude.starts[0]!.emit({ type: 'mcp_servers', servers: [codegraph] });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(mcpHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      realpathSync(target),
+      [codegraph],
+    );
+    // The report never becomes a transcript row.
+    expect(
+      itemDao.items.filter((item) => item.payload.includes('codegraph')),
     ).toEqual([]);
   });
 

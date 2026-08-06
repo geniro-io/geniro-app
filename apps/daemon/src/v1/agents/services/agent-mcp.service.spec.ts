@@ -19,6 +19,7 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService } from './agent-mcp.service';
 import { AgentVersionService } from './agent-version.service';
+import { McpHarvestStore } from './mcp-harvest.store';
 import { ProcessRegistry } from './process-registry';
 
 const dirs: string[] = [];
@@ -32,6 +33,19 @@ function realDir(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mcp-svc-')));
   dirs.push(dir);
   return dir;
+}
+
+/**
+ * A harvest store nothing has ever reported into, on a throwaway file.
+ *
+ * The default file lives under the real userData dir, so a spec that let it
+ * through would read and WRITE the user's own harvest. Empty is also the right
+ * default for these specs: with no harvested answer the service falls through
+ * to asking the adapter, which is the path they are all about — the harvest
+ * short-circuit gets its own tests below.
+ */
+function emptyHarvest(): McpHarvestStore {
+  return new McpHarvestStore({ file: join(realDir(), 'mcp-harvest.json') });
 }
 
 afterEach(() => {
@@ -71,6 +85,7 @@ function server(name: string): AgentMcpServer {
 
 interface Harness {
   service: AgentMcpService;
+  harvest: McpHarvestStore;
   listMcpServers: ReturnType<typeof vi.fn>;
   readMcpFolderFacts: ReturnType<typeof vi.fn>;
   setNow: (ms: number) => void;
@@ -86,6 +101,11 @@ interface HarnessOptions {
    * the toggleable CLI. Set it to reach the other branch of `composeListing`.
    */
   toggleUnavailableReason?: string | null;
+  /**
+   * A harvest store already holding a turn's report. Defaults to empty, which
+   * is what sends every other test down the ask-the-adapter path.
+   */
+  harvest?: McpHarvestStore;
 }
 
 function harness(
@@ -99,6 +119,7 @@ function harness(
     version = '2.1.220',
     facts,
     toggleUnavailableReason = null,
+    harvest = emptyHarvest(),
   } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
@@ -146,6 +167,7 @@ function harness(
     registry,
     new ProcessRegistry(),
     new AgentVersionService(),
+    harvest,
     {
       now: () => now,
       resolveVersionFn: () => Promise.resolve(version),
@@ -157,6 +179,7 @@ function harness(
   );
   return {
     service,
+    harvest,
     listMcpServers,
     readMcpFolderFacts,
     setMcpServerEnabled,
@@ -328,6 +351,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new AgentVersionService(),
+      emptyHarvest(),
       {
         resolveVersionFn: () => Promise.resolve('1'),
       },
@@ -368,6 +392,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new AgentVersionService(),
+      emptyHarvest(),
       {
         resolveVersionFn: () => Promise.resolve(version),
       },
@@ -546,6 +571,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new AgentVersionService(),
+      emptyHarvest(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -639,6 +665,7 @@ describe('AgentMcpService.list', () => {
       registry,
       new ProcessRegistry(),
       new AgentVersionService(),
+      emptyHarvest(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -684,6 +711,7 @@ describe('AgentMcpService.list', () => {
       { for: () => adapter } as unknown as AgentAdapterRegistry,
       processes,
       new AgentVersionService(),
+      emptyHarvest(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -899,6 +927,7 @@ describe('AgentMcpService.setEnabled', () => {
       registry,
       new ProcessRegistry(),
       new AgentVersionService(),
+      emptyHarvest(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -931,5 +960,143 @@ describe('AgentMcpService.setEnabled', () => {
     await service.setEnabled(AgentKind.Claude, dirA, 'proj', false);
 
     expect(setMcpServerEnabled).toHaveBeenCalledWith(dirA, 'proj', false);
+  });
+});
+
+describe('the turn harvest', () => {
+  /** A harvest store already holding what a turn reported for `cwd`. */
+  function harvestOf(cwd: string, servers: AgentMcpServer[]): McpHarvestStore {
+    const store = new McpHarvestStore({
+      file: join(realDir(), 'mcp-harvest.json'),
+    });
+    store.record(AgentKind.Claude, cwd, null, servers);
+    return store;
+  }
+
+  const harvested = (
+    name: string,
+    status: AgentMcpServer['status'] = 'connected',
+  ): AgentMcpServer => ({
+    name,
+    target: null,
+    transport: null,
+    status,
+    detail: null,
+  });
+
+  it('answers from a turn’s report WITHOUT dialling the servers', async () => {
+    // THE point of the feature. Asking the adapter means `claude mcp list`,
+    // which health-checks by starting every configured server — 6.7s measured,
+    // and bounded by the slowest one. A turn already said this, for free.
+    const cwd = realDir();
+    const { service, listMcpServers } = harness(
+      () => Promise.reject(new Error('the CLI must not be asked')),
+      { harvest: harvestOf(cwd, [harvested('codegraph')]) },
+    );
+
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listMcpServers).not.toHaveBeenCalled();
+    expect(listing.servers.map((s) => s.name)).toEqual(['codegraph']);
+  });
+
+  it('still dials when the user asks for a refresh', async () => {
+    // Reconnect is the ONE way a settled status is re-read: init reports the
+    // state at turn start and nothing later updates it, so a `pending` server
+    // stays pending in the harvest forever. Serving the harvest here would
+    // make the button inert.
+    const cwd = realDir();
+    const { service, listMcpServers } = harness(
+      () => Promise.resolve([server('dialled')]),
+      { harvest: harvestOf(cwd, [harvested('codegraph', 'pending')]) },
+    );
+
+    const listing = await service.list(AgentKind.Claude, cwd, {
+      refresh: true,
+    });
+
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+    expect(listing.servers.map((s) => s.name)).toEqual(['dialled']);
+  });
+
+  it('prefers a FRESH dialled reading over the harvest', async () => {
+    // The harvest is the floor, never the ceiling: a verified reading carries
+    // each server's command line and a settled status, so it wins while it is
+    // still fresh.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('dialled')]), {
+      harvest: harvestOf(cwd, [harvested('codegraph')]),
+    });
+
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listing.servers.map((s) => s.name)).toEqual(['dialled']);
+  });
+
+  it('fills a harvested row’s command line from a LAPSED reading', async () => {
+    // Neither source is a superset: the harvest has the fresher status, the
+    // old listing has the `target` init never reports — and `target` is what
+    // the panel's row tooltip shows.
+    const cwd = realDir();
+    const { service, setNow } = harness(
+      () => Promise.resolve([server('codegraph')]),
+      { harvest: harvestOf(cwd, [harvested('codegraph', 'failed')]) },
+    );
+
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    setNow(1_000 + 10 * 60_000);
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row).toMatchObject({
+      name: 'codegraph',
+      target: 'node codegraph.js',
+      transport: 'stdio',
+      // The harvest's own, not the lapsed reading's `connected`.
+      status: 'failed',
+    });
+  });
+
+  it('does not resurrect a server the turn no longer loads', async () => {
+    // A server missing from the turn's report is genuinely gone — switched off
+    // or removed. Merging the old listing in as a union would put it back on
+    // screen, with a switch, after the user turned it off.
+    const cwd = realDir();
+    const { service, setNow } = harness(
+      () => Promise.resolve([server('kept'), server('removed')]),
+      { harvest: harvestOf(cwd, [harvested('kept')]) },
+    );
+
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    setNow(1_000 + 10 * 60_000);
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listing.servers.map((s) => s.name)).toEqual(['kept']);
+  });
+
+  it('drops a lapsed failure reason once the status has changed', async () => {
+    // A `detail` explains a STATUS. Pinning yesterday's failure reason under
+    // today's `connected` row would state a problem that no longer exists —
+    // and the panel renders that string to the user verbatim.
+    const cwd = realDir();
+    const { service, setNow } = harness(
+      () =>
+        Promise.resolve([
+          {
+            ...server('flaky'),
+            status: 'failed' as const,
+            detail: 'ECONNREFUSED',
+          },
+        ]),
+      { harvest: harvestOf(cwd, [harvested('flaky', 'connected')]) },
+    );
+
+    await service.list(AgentKind.Claude, cwd, { refresh: true });
+    setNow(1_000 + 10 * 60_000);
+    const [row] = (await service.list(AgentKind.Claude, cwd)).servers;
+
+    expect(row).toMatchObject({ status: 'connected', detail: null });
+    // ...but the command line, which does not depend on the status, survives.
+    expect(row?.target).toBe('node flaky.js');
   });
 });

@@ -39,7 +39,7 @@ export type SpawnFn = (
 
 /**
  * Default: node's `spawn` with all three stdio streams piped, and `detached` so
- * the child becomes its own process-group leader. That lets {@link runHeadlessCli}
+ * the child becomes its own process-group leader. That lets {@link runCliSession}
  * signal the WHOLE group on cancel/shutdown (`process.kill(-pid, …)`) and reap the
  * tool/MCP grandchildren a coding agent forks — a single-PID kill would orphan them.
  *
@@ -58,25 +58,31 @@ export const defaultSpawn: SpawnFn = (command, args, options) => {
   return child;
 };
 
-export interface RunCliOptions {
-  command: string;
-  args: string[];
-  cwd: string;
-  /** Extra env merged over `process.env` for the child. */
-  env?: Record<string, string>;
+/**
+ * When the child's stdin is closed — the one knob that decides whether a
+ * process serves one turn or many.
+ *
+ * - `payload` — closed immediately after the opening payload, so a CLI reading
+ *   its prompt from argv never blocks on stdin.
+ * - `turn` — closed on the turn's terminal event, so a stream-json CLI that
+ *   held a mid-turn dialogue stops waiting and exits. ONE turn per process.
+ * - `session` — never closed automatically; only {@link CliSession.close} ends
+ *   it. This is what lets one process serve turn after turn, which is the
+ *   whole point: the CLI's own MCP servers (and anything they own, up to a
+ *   browser the user is logged into) are booted once per RUN instead of once
+ *   per message.
+ */
+export type StdinLifetime = 'payload' | 'turn' | 'session';
+
+/** Everything one turn on a {@link CliSession} needs. */
+export interface CliTurnOptions {
   /**
-   * Written to the child's stdin before stdin is closed. When undefined, stdin
-   * is closed immediately with no payload (so a CLI that reads its prompt from
-   * args never blocks waiting on stdin).
+   * Written to the child's stdin to open this turn. Undefined = nothing to
+   * write (a CLI that takes its prompt from argv, or a protocol whose opening
+   * message comes from {@link CliTurnOptions.onStdinReady} instead).
    */
   stdinPayload?: string;
-  /**
-   * Keep stdin open after the payload so the turn can carry a mid-turn
-   * dialogue (the approval control protocol). Stdin is closed as soon as a
-   * terminal event is emitted, letting the CLI exit; without that close a
-   * stream-json CLI waits on stdin forever.
-   */
-  keepStdinOpen?: boolean;
+  onEvent: (event: AgentEvent) => void;
   /**
    * Encode one approval verdict as the stdin line the CLI expects (the
    * adapter owns the wire format). Undefined = this CLI has no approval
@@ -101,19 +107,61 @@ export interface RunCliOptions {
    * spawned without.
    */
   buildApprovalModePayload?: (mode: AgentApprovalMode) => string | undefined;
-  /** Maps each parsed stream-json object to zero or more normalized events. */
-  mapper: (obj: unknown) => AgentEvent[];
   /**
-   * Called once the child's stdin is wired and the one-shot payload (if any)
-   * has been written — before the handle is returned, so a client-initiated
-   * protocol can send its opening message ahead of any stdout. The writer
-   * returns false once the turn has settled. Requires `keepStdinOpen` for any
-   * protocol that writes more than once.
+   * Encode an in-protocol "stop what you are doing" as the stdin line the CLI
+   * expects. Undefined = this turn can only be stopped by killing it.
+   *
+   * Only consulted for a `session` stdin lifetime, and that restriction is the
+   * point rather than an optimization: on a one-turn process killing the group
+   * costs nothing extra, while on a run-scoped one it would tear down exactly
+   * the MCP servers the session exists to keep alive. Probe-verified on claude
+   * 2.1.223 — a `control_request`/`interrupt` was answered in 2ms and ended the
+   * turn with the process still running.
+   */
+  buildInterruptPayload?: () => string | undefined;
+  /**
+   * Called once this turn's opening payload (if any) has been written — before
+   * the handle is returned, so a client-initiated protocol can send its first
+   * message ahead of any stdout.
    */
   onStdinReady?: (io: TurnIo) => void;
-  onEvent: (event: AgentEvent) => void;
+}
+
+export interface CliSessionOptions {
+  command: string;
+  args: string[];
+  cwd: string;
+  /** Extra env merged over `process.env` for the child. */
+  env?: Record<string, string>;
+  stdinLifetime: StdinLifetime;
+  /** Maps each parsed stream-json object to zero or more normalized events. */
+  mapper: (obj: unknown) => AgentEvent[];
   spawn?: SpawnFn;
   logger?: { warn(message: string): void };
+}
+
+/**
+ * One CLI process, and the turns run on it.
+ *
+ * A `payload`/`turn` session hosts exactly one turn and dies with it — that is
+ * every caller that predates run-scoped sessions. A `session` one stays alive
+ * between turns, idle, holding its MCP servers up.
+ */
+export interface CliSession {
+  /**
+   * Open a turn on this process. Null when the process cannot take one: it is
+   * gone, its stdin has been closed, or a turn is already in flight. Callers
+   * treat null as "spawn a fresh process" rather than asking twice.
+   */
+  startTurn(turn: CliTurnOptions): AgentTurnHandle | null;
+  /** Alive, with no turn in flight — ready to take another one. */
+  readonly idle: boolean;
+  /** The process has not been observed to end. */
+  readonly alive: boolean;
+  /** Terminate the process group (the CLI plus every grandchild). */
+  close(): void;
+  /** Resolves once the process is gone. Never rejects. */
+  readonly closed: Promise<void>;
 }
 
 function errorMessage(err: unknown): string {
@@ -129,6 +177,17 @@ const STDERR_TAIL_BYTES = 2000;
 
 /** Grace after a SIGTERM cancel before the process group is force-killed (SIGKILL). */
 const SIGKILL_GRACE_MS = 2000;
+
+/**
+ * How long an in-protocol interrupt is given to end the turn before the cancel
+ * falls back to killing the process group.
+ *
+ * The fallback is what keeps Stop honest: an interrupt the CLI acknowledges but
+ * never acts on would otherwise leave the turn running with the user told it
+ * had stopped. Generous relative to the 2ms the acknowledgement itself took,
+ * because the CLI still has to unwind whatever tool call it was inside.
+ */
+const INTERRUPT_SETTLE_GRACE_MS = 5000;
 
 /**
  * How long `exit` waits for `close` before settling the turn itself.
@@ -154,58 +213,101 @@ function killProcessTree(child: SpawnedProcess, signal: NodeJS.Signals): void {
   killProcessGroup(child.pid, signal, () => child.kill(signal));
 }
 
+/** The mutable state of the one turn currently in flight. */
+interface TurnState {
+  settled: boolean;
+  /**
+   * Emit at most ONE terminal event per turn, whichever arrives first: a
+   * `result`-line `turn_complete` from the mapper, a signal-kill
+   * `turn_cancelled`, or an `error`. Without this gate a child that prints a
+   * success `result` AND then exits non-zero (or fires `error` then `close`)
+   * would emit two contradictory terminal items for one turn.
+   */
+  terminalEmitted: boolean;
+  /**
+   * A cancel() was requested: the CLI usually reacts by printing an is_error
+   * result line (or exiting non-zero) BEFORE the stop reaches us, and that
+   * error would win the one-terminal race — recording a fake failure for a
+   * deliberate stop. So after a cancel an `error` terminal is normalized to
+   * `turn_cancelled`; a genuine `turn_complete` that raced it still wins (the
+   * turn really finished).
+   */
+  cancelRequested: boolean;
+  resolveDone: () => void;
+  options: CliTurnOptions;
+  /** Fallback deadline armed when an in-protocol interrupt was delivered. */
+  interruptTimer: ReturnType<typeof setTimeout> | null;
+}
+
 /**
  * Spawn a headless CLI agent, reassemble its stdout NDJSON, map each object to
- * normalized {@link AgentEvent}s, and surface a single settle point. Terminal
- * conditions are normalized: a signal-kill (cancel/shutdown) yields a
+ * normalized {@link AgentEvent}s, and surface a single settle point per turn.
+ *
+ * Terminal conditions are normalized: a signal-kill (cancel/shutdown) yields a
  * `turn_cancelled`, a non-zero exit yields an `error` (with the stderr tail),
  * and a clean exit relies on the `result` line the mapper already turned into
- * `turn_complete`. `done` never rejects — every outcome is an event first.
+ * `turn_complete`. A turn handle's `done` never rejects — every outcome is an
+ * event first.
+ *
+ * **What settles a turn depends on the stdin lifetime**, and the difference is
+ * the whole reason this function has one:
+ *
+ * - `payload` / `turn` — the process serves this turn alone, so `done` waits
+ *   for the process to END (`close`, or the `exit` backstop). That is what
+ *   every caller before run-scoped sessions relies on: by the time `done`
+ *   resolves, stdout has fully drained and the child is gone.
+ * - `session` — the process outlives the turn, so `done` resolves on the
+ *   TERMINAL EVENT. Waiting for the process would never resolve at all.
  */
-export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
+export function runCliSession(opts: CliSessionOptions): CliSession {
   const spawnFn = opts.spawn ?? defaultSpawn;
+  const settlesOnTerminalEvent = opts.stdinLifetime === 'session';
 
-  let settled = false;
-  let resolveDone!: () => void;
+  let current: TurnState | null = null;
+  let processGone = false;
+  let stdinEnded = false;
   let killTimer: ReturnType<typeof setTimeout> | null = null;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
-  const done = new Promise<void>((resolve) => {
-    resolveDone = resolve;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
   });
-  const settle = (): void => {
-    if (!settled) {
-      settled = true;
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
-      if (exitTimer) {
-        clearTimeout(exitTimer);
-        exitTimer = null;
-      }
-      resolveDone();
+
+  const settleTurn = (turn: TurnState): void => {
+    if (turn.settled) {
+      return;
     }
+    turn.settled = true;
+    if (turn.interruptTimer) {
+      clearTimeout(turn.interruptTimer);
+      turn.interruptTimer = null;
+    }
+    if (current === turn) {
+      current = null;
+    }
+    // `killTimer` is deliberately NOT cleared here. It belongs to the PROCESS,
+    // not the turn: a cancel that settled the turn in protocol (or a
+    // `close()` taken while a turn was running) still needs its SIGTERM to
+    // escalate if the group ignores it. Only the process actually ending
+    // disarms it — see `endProcess`.
+    turn.resolveDone();
   };
 
-  // Emit at most ONE terminal event per turn, whichever arrives first: a
-  // `result`-line `turn_complete` from the mapper, a signal-kill
-  // `turn_cancelled`, or an `error`. Without this gate a child that prints a
-  // success `result` AND then exits non-zero (or fires `error` then `close`)
-  // would emit two contradictory terminal items for one turn.
-  let terminalEmitted = false;
-  // A cancel() was requested: the CLI usually reacts to the SIGTERM by
-  // printing an is_error result line (or exiting non-zero) BEFORE the
-  // signal-kill reaches `close`, and that error would win the one-terminal
-  // race — recording a fake failure for a deliberate stop. So after a cancel
-  // an `error` terminal is normalized to `turn_cancelled`; a genuine
-  // `turn_complete` that raced the kill still wins (the turn really finished).
-  let cancelRequested = false;
-  // Assigned once the child's stdin is wired; a kept-open stdin is closed on
-  // the terminal event so the stream-json CLI stops waiting and exits.
-  let endStdin: (() => void) | null = null;
+  /**
+   * Deliver an event to the turn it belongs to. Between turns there is nobody
+   * to tell — a stray line then is dropped with a warning rather than held for
+   * the next turn, which would attribute one turn's output to another.
+   */
   const emit = (event: AgentEvent): void => {
+    const turn = current;
+    if (!turn) {
+      opts.logger?.warn(
+        `${opts.command}: dropped a '${event.type}' event arriving between turns`,
+      );
+      return;
+    }
     const normalized: AgentEvent =
-      cancelRequested && event.type === 'error'
+      turn.cancelRequested && event.type === 'error'
         ? { type: 'turn_cancelled' }
         : event;
     if (
@@ -213,13 +315,20 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       normalized.type === 'turn_cancelled' ||
       normalized.type === 'error'
     ) {
-      if (terminalEmitted) {
+      if (turn.terminalEmitted) {
         return;
       }
-      terminalEmitted = true;
-      endStdin?.();
+      turn.terminalEmitted = true;
+      if (opts.stdinLifetime === 'turn') {
+        endStdin();
+      }
+      turn.options.onEvent(normalized);
+      if (settlesOnTerminalEvent) {
+        settleTurn(turn);
+      }
+      return;
     }
-    opts.onEvent(normalized);
+    turn.options.onEvent(normalized);
   };
 
   let child: SpawnedProcess;
@@ -229,18 +338,11 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
       env: buildChildEnv(opts.env),
     });
   } catch (err) {
-    emit({
-      type: 'error',
-      message: `failed to spawn ${opts.command}: ${errorMessage(err)}`,
-    });
-    settle();
-    return {
-      done,
-      cancel: () => {},
-      respondApproval: () => false,
-      sendUserMessage: () => false,
-      setApprovalMode: () => false,
-    };
+    // The session never existed, so none of the state above ever applies to it
+    // — the whole closure is abandoned for a stand-in. The failure still
+    // reaches the caller the way every other terminal condition does: as an
+    // `error` event on the first turn's own handle, never as a throw.
+    return deadSession(`failed to spawn ${opts.command}: ${errorMessage(err)}`);
   }
 
   const buffer = new NdjsonBuffer({
@@ -257,52 +359,75 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
 
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (chunk: string | Buffer) => {
-    const text = toUtf8(chunk);
-    buffer.push(text);
+    buffer.push(toUtf8(chunk));
   });
 
   let stderrTail = '';
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string | Buffer) => {
-    const text = toUtf8(chunk);
-    stderrTail = (stderrTail + text).slice(-STDERR_TAIL_BYTES);
+    stderrTail = (stderrTail + toUtf8(chunk)).slice(-STDERR_TAIL_BYTES);
   });
 
+  /** The process is gone: settle whatever was running and close the session. */
+  const endProcess = (): void => {
+    if (!processGone) {
+      processGone = true;
+      stdinEnded = true;
+      if (exitTimer) {
+        clearTimeout(exitTimer);
+        exitTimer = null;
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      resolveClosed();
+    }
+    if (current) {
+      settleTurn(current);
+    }
+  };
+
   child.on('error', (err: Error) => {
-    if (settled) {
+    if (processGone) {
       return;
     }
-    emit({
-      type: 'error',
-      message: `${opts.command} process error: ${err.message}`,
-    });
-    settle();
+    if (current && !current.settled) {
+      emit({
+        type: 'error',
+        message: `${opts.command} process error: ${err.message}`,
+      });
+    }
+    endProcess();
   });
 
   // `close` fires after stdio is fully drained AND the process has exited, so
   // every stdout line is parsed before the terminal event — `exit` can race the
-  // last chunk. Guard on `settled`: a child can surface a process-level `error`
-  // and THEN fire `close` with a non-zero code; without this guard both handlers
-  // emit a terminal event and the transcript records two contradictory ones.
+  // last chunk. Guard on `processGone`: a child can surface a process-level
+  // `error` and THEN fire `close` with a non-zero code; without this guard both
+  // handlers emit a terminal event and the transcript records two
+  // contradictory ones.
   const settleFromTermination = (
     code: number | null,
     signal: NodeJS.Signals | null,
   ): void => {
     buffer.flush();
-    if (signal) {
-      emit({ type: 'turn_cancelled' });
-    } else if (code !== null && code !== 0) {
-      const detail = stderrTail.trim();
-      emit({
-        type: 'error',
-        message: `${opts.command} exited with code ${code}${detail ? `: ${detail}` : ''}`,
-      });
+    if (current && !current.terminalEmitted) {
+      if (signal) {
+        emit({ type: 'turn_cancelled' });
+      } else if (code !== null && code !== 0) {
+        const detail = stderrTail.trim();
+        emit({
+          type: 'error',
+          message: `${opts.command} exited with code ${code}${detail ? `: ${detail}` : ''}`,
+        });
+      }
     }
-    settle();
+    endProcess();
   };
 
   child.on('close', (code, signal) => {
-    if (settled) {
+    if (processGone) {
       return;
     }
     settleFromTermination(code, signal);
@@ -325,17 +450,17 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
   //
   // `close` stays the PREFERRED path: this only arms a timer, so the ordinary
   // turn still settles on `close` with stdout fully drained, and the timer is
-  // cleared by `settle()`. Deliberately signals NOTHING — reaping the group
-  // here would SIGKILL the user's own MCP servers, and through them a browser
-  // session they are driving. A stray grandchild costs memory; the child
-  // journal and its next-boot reaper already own that problem.
+  // cleared once the process is accounted for. Deliberately signals NOTHING —
+  // reaping the group here would SIGKILL the user's own MCP servers, and
+  // through them a browser session they are driving. A stray grandchild costs
+  // memory; the child journal and its next-boot reaper already own that.
   child.on('exit', (code, signal) => {
-    if (settled || exitTimer) {
+    if (processGone || exitTimer) {
       return;
     }
     exitTimer = setTimeout(() => {
       exitTimer = null;
-      if (settled) {
+      if (processGone) {
         return;
       }
       settleFromTermination(code, signal);
@@ -343,13 +468,19 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
     exitTimer.unref?.();
   });
 
-  // The one write path to the child's stdin, shared by the approval verdict
-  // round-trip and by a client-initiated protocol driver. Re-reads `child.stdin`
-  // per call so a stream torn down mid-turn is caught here rather than by a
-  // stale reference, and never throws — a closed pipe is a dropped write, and
-  // the child's own `close` handler owns the terminal event.
-  const writeStdin = (payload: string): boolean => {
-    if (settled || terminalEmitted) {
+  /**
+   * The one write path to the child's stdin, shared by every turn and by a
+   * client-initiated protocol driver. Re-reads `child.stdin` per call so a
+   * stream torn down mid-turn is caught here rather than by a stale reference,
+   * and never throws — a closed pipe is a dropped write, and the process's own
+   * termination handlers own the terminal event.
+   *
+   * Guarded on the PROCESS, not on a turn: opening the next turn on an idle
+   * session is a legitimate write with no turn in flight. The three
+   * turn-scoped writers below add their own guard on top.
+   */
+  const sessionWrite = (payload: string): boolean => {
+    if (processGone || stdinEnded) {
       return false;
     }
     const stream = child.stdin;
@@ -364,120 +495,280 @@ export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
     }
   };
 
+  function endStdin(): void {
+    if (stdinEnded) {
+      return;
+    }
+    stdinEnded = true;
+    try {
+      child.stdin?.end();
+    } catch {
+      // Already closed with the child's exit — nothing to end.
+    }
+  }
+
   const stdin = child.stdin;
   if (stdin) {
     // A stdin that errors asynchronously (EPIPE — the CLI exited before we
     // finished writing) would otherwise throw an unhandled stream error and
     // crash the daemon; surface it as a normal terminal error instead.
     stdin.on('error', (err: Error) => {
-      if (settled) {
+      if (processGone) {
         return;
       }
       // After the terminal event the turn is already decided — a late EPIPE
       // (e.g. closing a kept-open stdin as the child exits) must not settle
       // early, or `close` would skip the final buffer flush and `done` would
       // resolve before stdout drains.
-      if (terminalEmitted) {
+      if (!current || current.terminalEmitted) {
         return;
       }
       emit({
         type: 'error',
         message: `${opts.command} stdin error: ${err.message}`,
       });
-      settle();
+      endProcess();
     });
+  }
+
+  const killGroup = (): void => {
+    // Kill the whole process group — the CLI plus any tool/MCP grandchildren —
+    // not just the direct child a single-PID SIGTERM would reach. Escalate to
+    // SIGKILL if the group is still alive after the grace window.
+    killProcessTree(child, 'SIGTERM');
+    if (!killTimer) {
+      killTimer = setTimeout(() => {
+        killTimer = null;
+        if (!processGone) {
+          killProcessTree(child, 'SIGKILL');
+        }
+      }, SIGKILL_GRACE_MS);
+      killTimer.unref?.();
+    }
+  };
+
+  const startTurn = (turnOptions: CliTurnOptions): AgentTurnHandle | null => {
+    if (processGone || stdinEnded || current !== null) {
+      return null;
+    }
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const turn: TurnState = {
+      settled: false,
+      terminalEmitted: false,
+      cancelRequested: false,
+      resolveDone: () => resolveDone(),
+      options: turnOptions,
+      interruptTimer: null,
+    };
+    current = turn;
+
     // The write/end can also throw synchronously (stdin already destroyed).
-    // Keep it inside the settle contract: surface an error event and settle
-    // rather than letting the throw unwind before the handle is returned.
+    // Keep it inside the settle contract: surface an error event and end the
+    // process rather than letting the throw unwind before the handle exists.
     try {
-      if (opts.stdinPayload !== undefined) {
-        stdin.write(opts.stdinPayload);
+      if (turnOptions.stdinPayload !== undefined) {
+        stdin?.write(turnOptions.stdinPayload);
       }
-      if (opts.keepStdinOpen) {
-        endStdin = () => {
-          endStdin = null;
-          try {
-            stdin.end();
-          } catch {
-            // Already closed with the child's exit — nothing to end.
-          }
-        };
-      } else {
-        stdin.end();
+      if (opts.stdinLifetime === 'payload') {
+        endStdin();
       }
     } catch (err) {
-      if (!settled) {
+      if (!turn.terminalEmitted) {
         emit({
           type: 'error',
           message: `failed to write ${opts.command} stdin: ${errorMessage(err)}`,
         });
-        settle();
       }
+      endProcess();
     }
-  }
 
-  // After the payload, before any stdout is parsed: a protocol whose FIRST
-  // message comes from the client (ACP's `initialize`) opens here. Runs inside
-  // the same synchronous window as the spawn, so the opening message is queued
-  // on stdin before the child can answer it.
-  opts.onStdinReady?.({ write: writeStdin, emit });
+    // After the payload, before any stdout is parsed: a protocol whose FIRST
+    // message comes from the client (ACP's `initialize`) opens here. Runs
+    // inside the same synchronous window as the write, so the opening message
+    // is queued on stdin before the child can answer it.
+    turnOptions.onStdinReady?.({ write: sessionWrite, emit });
+
+    /** A turn-scoped write: dead once this turn is decided. */
+    const turnWrite = (
+      build: (() => string | undefined) | undefined,
+    ): boolean => {
+      if (turn.settled || turn.terminalEmitted) {
+        return false;
+      }
+      const line = build?.();
+      if (line === undefined) {
+        return false;
+      }
+      return sessionWrite(line);
+    };
+
+    return {
+      done,
+      respondApproval: (id, allow, updatedInput) =>
+        turnWrite(() =>
+          turnOptions.buildApprovalResponse?.(id, allow, updatedInput),
+        ),
+      sendUserMessage: (message) =>
+        // Guarded like the verdict above, and for the same reason: a write that
+        // lands after the turn settled would be reported as delivered while the
+        // agent never sees it, and the caller would drop it from its queue.
+        turnWrite(() => turnOptions.buildFollowUpPayload?.(message)),
+      setApprovalMode: (mode) =>
+        // Same settle guard as the two writers above. It matters more here: a
+        // true reported for a write the turn never read would tell the user
+        // their permission posture changed when it did not.
+        turnWrite(() => turnOptions.buildApprovalModePayload?.(mode)),
+      cancel: () => {
+        if (turn.settled) {
+          return;
+        }
+        // An in-protocol stop is already under way, and the deadline armed
+        // below is what bounds it. A second press must NOT skip that grace:
+        // killing the group is exactly what takes the user's MCP servers — and
+        // a browser one of them owns — down with the turn, and "stop harder"
+        // is not what pressing Stop twice asks for.
+        if (turn.interruptTimer) {
+          return;
+        }
+        turn.cancelRequested = true;
+        // On a run-scoped session, stopping the TURN must not stop the
+        // PROCESS, for that same reason. Ask the CLI to stop in protocol, and
+        // fall back to the group kill only if it cannot be asked.
+        if (settlesOnTerminalEvent) {
+          const line = turnOptions.buildInterruptPayload?.();
+          if (line !== undefined && sessionWrite(line)) {
+            turn.interruptTimer = setTimeout(() => {
+              turn.interruptTimer = null;
+              if (!turn.settled) {
+                killGroup();
+              }
+            }, INTERRUPT_SETTLE_GRACE_MS);
+            turn.interruptTimer.unref?.();
+            return;
+          }
+        }
+        killGroup();
+      },
+    };
+  };
 
   return {
-    done,
-    respondApproval: (id, allow, updatedInput) => {
-      if (settled || terminalEmitted) {
-        return false;
-      }
-      const line = opts.buildApprovalResponse?.(id, allow, updatedInput);
-      if (line === undefined) {
-        return false;
-      }
-      return writeStdin(line);
+    startTurn,
+    get idle() {
+      return !processGone && !stdinEnded && current === null;
     },
-    sendUserMessage: (message) => {
-      // Guarded like the verdict above, and for the same reason: a write that
-      // lands after the turn settled would be reported as delivered while the
-      // agent never sees it, and the caller would drop it from its queue.
-      if (settled || terminalEmitted) {
-        return false;
-      }
-      const line = opts.buildFollowUpPayload?.(message);
-      if (line === undefined) {
-        return false;
-      }
-      return writeStdin(line);
+    get alive() {
+      return !processGone;
     },
-    setApprovalMode: (mode) => {
-      // Same settle guard as the two writers above. It matters more here: a
-      // true reported for a write the turn never read would tell the user
-      // their permission posture changed when it did not.
-      if (settled || terminalEmitted) {
-        return false;
-      }
-      const line = opts.buildApprovalModePayload?.(mode);
-      if (line === undefined) {
-        return false;
-      }
-      return writeStdin(line);
-    },
-    cancel: () => {
-      if (settled) {
+    close: () => {
+      if (processGone) {
         return;
       }
-      cancelRequested = true;
-      // Kill the whole process group — the CLI plus any tool/MCP grandchildren —
-      // not just the direct child a single-PID SIGTERM would reach. Escalate to
-      // SIGKILL if the group is still alive after the grace window.
-      killProcessTree(child, 'SIGTERM');
-      if (!killTimer) {
-        killTimer = setTimeout(() => {
-          killTimer = null;
-          if (!settled) {
-            killProcessTree(child, 'SIGKILL');
-          }
-        }, SIGKILL_GRACE_MS);
-        killTimer.unref?.();
+      if (current) {
+        current.cancelRequested = true;
       }
+      killGroup();
     },
+    closed,
   };
+}
+
+/**
+ * The session a spawn failure leaves behind: no process, and one turn's worth
+ * of bad news to deliver. Its first `startTurn` emits the spawn error and
+ * hands back an already-settled handle, so the caller's single settle point
+ * still fires exactly once; every later call answers null.
+ */
+function deadSession(message: string): CliSession {
+  let used = false;
+  return {
+    startTurn: (turnOptions) => {
+      if (used) {
+        return null;
+      }
+      used = true;
+      turnOptions.onEvent({ type: 'error', message });
+      return {
+        done: Promise.resolve(),
+        cancel: () => {},
+        respondApproval: () => false,
+        sendUserMessage: () => false,
+        setApprovalMode: () => false,
+      };
+    },
+    idle: false,
+    alive: false,
+    close: () => {},
+    closed: Promise.resolve(),
+  };
+}
+
+export interface RunCliOptions {
+  command: string;
+  args: string[];
+  cwd: string;
+  /** Extra env merged over `process.env` for the child. */
+  env?: Record<string, string>;
+  /**
+   * Written to the child's stdin before stdin is closed. When undefined, stdin
+   * is closed immediately with no payload (so a CLI that reads its prompt from
+   * args never blocks waiting on stdin).
+   */
+  stdinPayload?: string;
+  /**
+   * Keep stdin open after the payload so the turn can carry a mid-turn
+   * dialogue (the approval control protocol). Stdin is closed as soon as a
+   * terminal event is emitted, letting the CLI exit; without that close a
+   * stream-json CLI waits on stdin forever.
+   */
+  keepStdinOpen?: boolean;
+  buildApprovalResponse?: CliTurnOptions['buildApprovalResponse'];
+  buildFollowUpPayload?: CliTurnOptions['buildFollowUpPayload'];
+  buildApprovalModePayload?: CliTurnOptions['buildApprovalModePayload'];
+  /** Maps each parsed stream-json object to zero or more normalized events. */
+  mapper: (obj: unknown) => AgentEvent[];
+  onStdinReady?: CliTurnOptions['onStdinReady'];
+  onEvent: (event: AgentEvent) => void;
+  spawn?: SpawnFn;
+  logger?: { warn(message: string): void };
+}
+
+/**
+ * One CLI process serving exactly one turn — the shape every caller had before
+ * run-scoped sessions, kept as a thin façade over {@link runCliSession} rather
+ * than a second implementation of the same state machine.
+ *
+ * `done` still resolves only once the PROCESS is gone and its stdout has
+ * drained, which is what callers of this form rely on.
+ */
+export function runHeadlessCli(opts: RunCliOptions): AgentTurnHandle {
+  const session = runCliSession({
+    command: opts.command,
+    args: opts.args,
+    cwd: opts.cwd,
+    env: opts.env,
+    stdinLifetime: opts.keepStdinOpen ? 'turn' : 'payload',
+    mapper: opts.mapper,
+    spawn: opts.spawn,
+    logger: opts.logger,
+  });
+  const handle = session.startTurn({
+    stdinPayload: opts.stdinPayload,
+    onEvent: opts.onEvent,
+    buildApprovalResponse: opts.buildApprovalResponse,
+    buildFollowUpPayload: opts.buildFollowUpPayload,
+    buildApprovalModePayload: opts.buildApprovalModePayload,
+    onStdinReady: opts.onStdinReady,
+  });
+  // A fresh session always accepts its first turn — the session was created on
+  // the line above, so nothing can have taken the slot. Asserted rather than
+  // non-null-asserted so a future change to `startTurn`'s guards surfaces here
+  // instead of as a null handle inside an adapter.
+  if (!handle) {
+    throw new Error(`failed to open a turn on ${opts.command}`);
+  }
+  return handle;
 }

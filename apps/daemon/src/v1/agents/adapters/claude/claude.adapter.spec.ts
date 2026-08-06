@@ -1951,8 +1951,18 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     // everything finishes".
     const { spawn, child } = fakeSpawn();
     const handle = new ClaudeAdapter({ spawn }).start(
-      // A chat turn: `allowUserQuestions` is what keeps stdin open.
-      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      // A REAL chat turn. `approvalMode` is not decoration: `keepStdinOpen`
+      // answers false the moment it is undefined, so a fixture without one
+      // spawns with stdin ALREADY ENDED — and this test still passed, because
+      // the writer reported success for a write into a closed pipe. Since
+      // `ChatService.initialApproval` gives every chat run a mode, the mode is
+      // what makes the fixture match production and this assertion a real pin.
+      {
+        prompt: 'first',
+        cwd: '/proj',
+        approvalMode: 'ask',
+        allowUserQuestions: true,
+      },
       () => {},
     );
     const openingBytes = child.stdin.written.length;
@@ -1975,14 +1985,39 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
   it('reports false once the turn has settled, rather than dropping it silently', () => {
     // The caller keeps the message queued on false. A true here would have it
     // discarded while the agent never saw it.
+    //
+    // `approvalMode` for the same reason as the test above: without it stdin is
+    // closed from the start, so this would answer false whether or not the
+    // settle guard existed. With stdin genuinely open, the settle is the ONLY
+    // thing making it false.
     const { spawn, child } = fakeSpawn();
     const handle = new ClaudeAdapter({ spawn }).start(
-      { prompt: 'first', cwd: '/proj', allowUserQuestions: true },
+      {
+        prompt: 'first',
+        cwd: '/proj',
+        approvalMode: 'ask',
+        allowUserQuestions: true,
+      },
       () => {},
     );
     child.emit('close', 0, null);
 
     expect(handle.sendUserMessage({ text: 'too late' })).toBe(false);
+  });
+
+  it('reports false for a turn whose stdin was never kept open', () => {
+    // The turn shape with no permission dialogue: `keepStdinOpen` is false, so
+    // the pipe is ended right after the opening prompt and there is nowhere for
+    // a follow-up to go. Reporting true here — which is what a writer that only
+    // checked the turn's own settle flags did — has the caller drop a message
+    // the agent will never receive.
+    const { spawn } = fakeSpawn();
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'first', cwd: '/proj' },
+      () => {},
+    );
+
+    expect(handle.sendUserMessage({ text: 'nowhere to go' })).toBe(false);
   });
 });
 

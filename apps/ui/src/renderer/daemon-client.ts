@@ -82,6 +82,62 @@ const RUN_STATUS_VALUES: ReadonlySet<RunStatus> = new Set(
   Object.values(RunStatus),
 );
 
+/**
+ * One line of the daemon's debug log, as it arrives on the `debug` event.
+ *
+ * TWIN PARSER: mirrors `DebugEntrySchema`
+ * (apps/daemon/src/v1/diagnostics/diagnostics.types.ts). The HTTP read of the
+ * same shape IS generated (`DebugLogPageDto`), but this event carries no route
+ * so no generated type reaches it — a shape change on either side must be
+ * mirrored on the other.
+ */
+export interface DebugLogEntry {
+  seq: number;
+  at: string;
+  channel: string;
+  level: string;
+  message: string;
+  context: Record<string, string> | null;
+}
+
+/**
+ * Read a `debug` payload, or null when it is not one.
+ *
+ * Defensive for the reason every twin parser here is: a version skew must
+ * degrade to "the panel misses a line", never to a crashed app — and this one
+ * is the DEBUG panel, so failing loudly inside it would take out the surface
+ * someone is using precisely because something else is already wrong.
+ */
+export function parseDebugEntry(data: unknown): DebugLogEntry | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { seq, at, channel, level, message, context } = data as Record<
+    string,
+    unknown
+  >;
+  if (
+    typeof seq !== 'number' ||
+    typeof at !== 'string' ||
+    typeof channel !== 'string' ||
+    typeof level !== 'string' ||
+    typeof message !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    seq,
+    at,
+    channel,
+    level,
+    message,
+    context:
+      context && typeof context === 'object'
+        ? (context as Record<string, string>)
+        : null,
+  };
+}
+
 const JOIN_TIMEOUT_MS = 5_000;
 
 interface JoinWaiter {
@@ -117,8 +173,11 @@ export class DaemonClient {
     (event: RunStatusEvent) => void
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
+  private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
   private activeRunId: string | null = null;
   private hasConnected = false;
+  /** Whether the debug room should be re-joined after a reconnect. */
+  private debugStreaming = false;
 
   constructor(
     private readonly handle: DaemonHandle,
@@ -143,6 +202,12 @@ export class DaemonClient {
           joined = this.waitForJoin(this.activeRunId);
         }
         socket.emit('join', { runId: this.activeRunId });
+      }
+      // Same rule as the run room, and easy to miss: a reconnect lands a NEW
+      // socket that is in no rooms, so an open debug panel would go silent
+      // after a daemon restart and look like "nothing is happening".
+      if (this.debugStreaming) {
+        socket.emit('debug_subscribe', { on: true });
       }
       this.events.onOpen?.();
       if (isReconnect) {
@@ -212,6 +277,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'debug') {
+        const entry = parseDebugEntry(data);
+        if (entry) {
+          for (const listener of this.debugListeners) {
+            listener(entry);
+          }
+        }
+      }
       if (event === 'verdict_ack') {
         const ack = data as VerdictAck;
         for (const listener of this.verdictAckListeners) {
@@ -219,6 +292,28 @@ export class DaemonClient {
         }
       }
     });
+  }
+
+  /**
+   * Start or stop receiving the daemon's debug log on this socket.
+   *
+   * Explicitly opt-in, and that is the whole design: with the `agent-stdio`
+   * channel on, this stream is thousands of lines per turn, so a client that
+   * is not showing them must not be sent them. Re-issued on every reconnect
+   * for the same reason `join` is — rooms are per-socket and server-side, so a
+   * fresh socket lands in none of them.
+   */
+  setDebugStream(on: boolean): void {
+    this.debugStreaming = on;
+    this.socket?.emit('debug_subscribe', { on });
+  }
+
+  /** Subscribe to debug entries; returns an unsubscribe function. */
+  onDebugEntry(listener: (entry: DebugLogEntry) => void): () => void {
+    this.debugListeners.add(listener);
+    return () => {
+      this.debugListeners.delete(listener);
+    };
   }
 
   /** Subscribe to live assistant text (the non-durable growing bubble). */

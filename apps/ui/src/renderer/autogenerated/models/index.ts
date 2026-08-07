@@ -535,6 +535,141 @@ export interface CreateWorkflowDto {
      */
     workflow: Workflow;
 }
+
+/**
+ * 
+ * @export
+ */
+export const DebugChannel = {
+    Daemon: 'daemon',
+    Transcript: 'transcript',
+    AgentStdio: 'agent-stdio',
+    Ui: 'ui'
+} as const;
+export type DebugChannel = typeof DebugChannel[keyof typeof DebugChannel];
+
+/**
+ * 
+ * @export
+ * @interface DebugChannelsDto
+ */
+export interface DebugChannelsDto {
+    /**
+     * 
+     * @type {Array<DebugChannel>}
+     * @memberof DebugChannelsDto
+     */
+    channels: Array<DebugChannel>;
+}
+
+/**
+ * 
+ * @export
+ */
+export const DebugLevel = {
+    Trace: 'trace',
+    Debug: 'debug',
+    Info: 'info',
+    Warn: 'warn',
+    Error: 'error'
+} as const;
+export type DebugLevel = typeof DebugLevel[keyof typeof DebugLevel];
+
+/**
+ * 
+ * @export
+ * @interface DebugLogPageDto
+ */
+export interface DebugLogPageDto {
+    /**
+     * 
+     * @type {Array<DebugLogPageDtoEntriesInner>}
+     * @memberof DebugLogPageDto
+     */
+    entries: Array<DebugLogPageDtoEntriesInner>;
+    /**
+     * 
+     * @type {number}
+     * @memberof DebugLogPageDto
+     */
+    lastSeq: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DebugLogPageDto
+     */
+    dropped: number;
+    /**
+     * 
+     * @type {Array<DebugChannel>}
+     * @memberof DebugLogPageDto
+     */
+    channels: Array<DebugChannel>;
+    /**
+     * 
+     * @type {string}
+     * @memberof DebugLogPageDto
+     */
+    filePath: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface DebugLogPageDtoEntriesInner
+ */
+export interface DebugLogPageDtoEntriesInner {
+    /**
+     * Monotonic within one daemon launch
+     * @type {number}
+     * @memberof DebugLogPageDtoEntriesInner
+     */
+    seq: number;
+    /**
+     * ISO timestamp
+     * @type {string}
+     * @memberof DebugLogPageDtoEntriesInner
+     */
+    at: string;
+    /**
+     * 
+     * @type {DebugChannel}
+     * @memberof DebugLogPageDtoEntriesInner
+     */
+    channel: DebugChannel;
+    /**
+     * 
+     * @type {DebugLevel}
+     * @memberof DebugLogPageDtoEntriesInner
+     */
+    level: DebugLevel;
+    /**
+     * 
+     * @type {string}
+     * @memberof DebugLogPageDtoEntriesInner
+     */
+    message: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof DebugLogPageDtoEntriesInner
+     */
+    context: { [key: string]: string; } | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface DebugSettingsDto
+ */
+export interface DebugSettingsDto {
+    /**
+     * 
+     * @type {Array<DebugChannel>}
+     * @memberof DebugSettingsDto
+     */
+    channels: Array<DebugChannel>;
+}
 /**
  * 
  * @export
@@ -547,6 +682,178 @@ export interface DeletedDto {
      * @memberof DeletedDto
      */
     deleted: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface DiagnosticsReportDto
+ */
+export interface DiagnosticsReportDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDto
+     */
+    generatedAt: string;
+    /**
+     * 
+     * @type {DiagnosticsReportDtoDaemon}
+     * @memberof DiagnosticsReportDto
+     */
+    daemon: DiagnosticsReportDtoDaemon;
+    /**
+     * 
+     * @type {Array<DiagnosticsReportDtoAgentsInner>}
+     * @memberof DiagnosticsReportDto
+     */
+    agents: Array<DiagnosticsReportDtoAgentsInner>;
+    /**
+     * 
+     * @type {DiagnosticsReportDtoRuns}
+     * @memberof DiagnosticsReportDto
+     */
+    runs: DiagnosticsReportDtoRuns;
+    /**
+     * 
+     * @type {Array<DebugLogPageDtoEntriesInner>}
+     * @memberof DiagnosticsReportDto
+     */
+    recentEntries: Array<DebugLogPageDtoEntriesInner>;
+}
+/**
+ * 
+ * @export
+ * @interface DiagnosticsReportDtoAgentsInner
+ */
+export interface DiagnosticsReportDtoAgentsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoAgentsInner
+     */
+    kind: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoAgentsInner
+     */
+    binary: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoAgentsInner
+     */
+    version: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoAgentsInner
+     */
+    unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface DiagnosticsReportDtoDaemon
+ */
+export interface DiagnosticsReportDtoDaemon {
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    version: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    pid: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    host: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    port: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    uptimeSeconds: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    nodeVersion: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    platform: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    arch: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    userDataDir: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DiagnosticsReportDtoDaemon
+     */
+    logFilePath: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface DiagnosticsReportDtoRuns
+ */
+export interface DiagnosticsReportDtoRuns {
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoRuns
+     */
+    total: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoRuns
+     */
+    running: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoRuns
+     */
+    liveTurns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DiagnosticsReportDtoRuns
+     */
+    liveSessions: number;
 }
 
 /**
@@ -1050,6 +1357,33 @@ export const TriggerKind = {
     Manual: 'manual'
 } as const;
 export type TriggerKind = typeof TriggerKind[keyof typeof TriggerKind];
+
+/**
+ * 
+ * @export
+ * @interface UiLogDto
+ */
+export interface UiLogDto {
+    /**
+     * 
+     * @type {DebugLevel}
+     * @memberof UiLogDto
+     */
+    level: DebugLevel;
+    /**
+     * 
+     * @type {string}
+     * @memberof UiLogDto
+     */
+    message: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof UiLogDto
+     */
+    context?: { [key: string]: string; } | null;
+}
+
 
 /**
  * 

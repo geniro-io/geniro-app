@@ -4,6 +4,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Terminal,
   Workflow,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -78,11 +79,16 @@ export function NavRail({
   onNavigate,
   connected,
   daemonVersion,
+  debugOpen,
+  onToggleDebug,
 }: {
   view: AppView;
   onNavigate: (view: AppView) => void;
   connected: boolean;
   daemonVersion: string | null;
+  /** Whether the debug drawer is showing — the trigger's pressed state. */
+  debugOpen: boolean;
+  onToggleDebug: () => void;
 }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -144,6 +150,25 @@ export function NavRail({
           )}>
           <StatusDot tone={connected ? 'ok' : 'bad'} />
           {collapsed ? null : statusLabel}
+          {/* The debug drawer's trigger, deliberately HERE. This row is
+              already where the eye goes when something is wrong — it is the
+              only part of the shell that reports health — so the control for
+              "show me why" belongs beside it rather than in a menu. */}
+          <button
+            type="button"
+            aria-label="Debug log"
+            aria-pressed={debugOpen}
+            title="Debug log (⌥⌘L)"
+            onClick={onToggleDebug}
+            className={cn(
+              'flex size-6 items-center justify-center rounded-md outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
+              collapsed ? 'mt-1' : 'ml-auto',
+              debugOpen
+                ? 'text-sidebar-primary-strong'
+                : 'text-sidebar-foreground/70',
+            )}>
+            <Terminal aria-hidden="true" className="size-3.5 shrink-0" />
+          </button>
         </div>
       </div>
     </nav>

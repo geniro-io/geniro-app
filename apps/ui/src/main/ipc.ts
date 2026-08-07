@@ -9,12 +9,14 @@ import {
   gitDirSchema,
   onboardingInputSchema,
   openTerminalSchema,
+  revealPathSchema,
   secretNameSchema,
   secretValueSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
 import { deleteSecret, hasSecret, saveSecret } from './keychain';
 import { openInTerminal } from './open-terminal';
+import { revealPath } from './reveal-path';
 import { readSettings, updateSettings } from './settings';
 import { checkForUpdates } from './updater';
 
@@ -122,6 +124,12 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>
     switchBranch(gitDirSchema.parse(dir), branchNameSchema.parse(branch)),
+  );
+
+  // Reveals, never opens, and only inside the daemon's log directory — the
+  // confinement lives in `revealPath` beside the reason for it.
+  ipcMain.handle(IPC.revealPath, (_event, path: unknown) =>
+    revealPath(revealPathSchema.parse(path)),
   );
 
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {

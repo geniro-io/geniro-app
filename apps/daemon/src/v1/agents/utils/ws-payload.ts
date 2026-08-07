@@ -15,3 +15,21 @@ export function extractStringField(data: unknown, key: string): string | null {
   }
   return null;
 }
+
+/**
+ * The boolean sibling of {@link extractStringField}, for a toggle message.
+ *
+ * `null` means ABSENT, and is deliberately distinct from `false` — the caller
+ * decides what a missing flag means (`debug_subscribe` with no body plainly
+ * means "subscribe"), which it could not do if this collapsed the two.
+ */
+export function extractBooleanField(
+  data: unknown,
+  key: string,
+): boolean | null {
+  if (data && typeof data === 'object' && key in data) {
+    const value = (data as Record<string, unknown>)[key];
+    return typeof value === 'boolean' ? value : null;
+  }
+  return null;
+}

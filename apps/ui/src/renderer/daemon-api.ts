@@ -4,6 +4,7 @@ import {
   CapabilitiesApi,
   ChatsApi,
   Configuration,
+  DiagnosticsApi,
   HandoffApi,
   type Middleware,
   WorkflowsApi,
@@ -191,6 +192,7 @@ export interface DaemonApis {
   workflows: WorkflowsApi;
   capabilities: CapabilitiesApi;
   handoff: HandoffApi;
+  diagnostics: DiagnosticsApi;
 }
 
 /**
@@ -224,5 +226,6 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     workflows: new WorkflowsApi(config),
     capabilities: new CapabilitiesApi(config),
     handoff: new HandoffApi(config),
+    diagnostics: new DiagnosticsApi(config),
   };
 }

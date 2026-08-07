@@ -221,6 +221,18 @@ export interface GeniroApi {
   }): Promise<void>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
+  /**
+   * Show one of the daemon's own files in Finder — the debug log.
+   *
+   * Deliberately narrow: it REVEALS (selects in a file manager) rather than
+   * opens, so nothing here can be talked into executing what it is handed, and
+   * main refuses any path outside the daemon's log directory. The renderer is
+   * sandboxed and a path it supplies is not trusted just because the daemon
+   * gave it to us.
+   */
+  revealPath(
+    path: string,
+  ): Promise<{ revealed: boolean; reason: string | null }>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -243,4 +255,5 @@ export const IPC = {
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',
   switchBranch: 'geniro:switchBranch',
+  revealPath: 'geniro:revealPath',
 } as const satisfies Record<keyof GeniroApi, string>;

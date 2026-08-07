@@ -17,7 +17,11 @@ import { enforceWsHandshakeAuth } from '../../../auth/ws-auth';
 import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
-import { extractStringField } from '../../agents/utils/ws-payload';
+import {
+  extractBooleanField,
+  extractStringField,
+} from '../../agents/utils/ws-payload';
+import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { WsPresenceService } from '../services/ws-presence.service';
 
 /**
@@ -72,6 +76,17 @@ function runRoom(runId: string): string {
   return `run:${runId}`;
 }
 
+/**
+ * The room a client joins to receive the debug log.
+ *
+ * Not keyed by anything: the log is daemon-wide, and there is exactly one of
+ * it. A room rather than a broadcast because nobody should receive this unless
+ * they opened the panel — with `agent-stdio` on it is thousands of lines a
+ * turn, and a client that is not showing them would be paying to throw them
+ * away.
+ */
+const DEBUG_ROOM = 'debug';
+
 /** Defensively read a runId from a `join`/`leave` payload (string or `{runId}`). */
 function extractRunId(data: unknown): string | null {
   return extractStringField(data, 'runId');
@@ -102,12 +117,23 @@ export class NotificationsGateway
   private busSubscription?: Subscription;
   private deltaSubscription?: Subscription;
   private statusSubscription?: Subscription;
+  private debugSubscription?: Subscription;
+  /**
+   * Debug fan-out failures, counted rather than logged.
+   *
+   * Logging one would feed the very stream that just failed — `this.logger`
+   * writes into the debug sink — so an emit error would produce an entry,
+   * which would fail to emit, which would log again. A counter breaks that
+   * loop; the diagnostics report is where it surfaces.
+   */
+  private debugEmitFailures = 0;
 
   constructor(
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly bus: AgentEventBus,
     private readonly approvals: ApprovalRegistry,
     private readonly presence: WsPresenceService,
+    private readonly debugLog: DebugLogService,
   ) {}
 
   afterInit(server: Server): void {
@@ -161,12 +187,59 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`run status bus errored: ${String(err)}`),
     });
+    // The debug log goes to the DEBUG_ROOM, not to every client — the one
+    // stream here that nobody should receive by default. It carries the raw
+    // agent conversation when that channel is on, at thousands of lines a
+    // turn, and a client that never opened the panel has no use for a single
+    // one of them. Joining the room is the act of opening the panel.
+    //
+    // Isolated like its neighbours: a throw in this fan-out must not be able
+    // to kill transcript delivery, which is the half the app depends on.
+    this.debugSubscription = this.debugLog.stream().subscribe({
+      next: (entry) => {
+        try {
+          server.to(DEBUG_ROOM).emit('debug', entry);
+        } catch {
+          // Deliberately NOT `this.logger.error`: that call is itself a source
+          // of debug entries, so logging a fan-out failure through it feeds
+          // the stream that just failed and recurses. The counter is what
+          // records it instead.
+          this.debugEmitFailures += 1;
+        }
+      },
+      error: () => {
+        this.debugEmitFailures += 1;
+      },
+    });
   }
 
   onModuleDestroy(): void {
     this.busSubscription?.unsubscribe();
     this.deltaSubscription?.unsubscribe();
     this.statusSubscription?.unsubscribe();
+    this.debugSubscription?.unsubscribe();
+  }
+
+  /**
+   * Start/stop receiving debug entries on this socket.
+   *
+   * A room rather than a per-socket flag so the fan-out stays one `emit` no
+   * matter how many clients are watching, exactly like the run rooms.
+   */
+  @SubscribeMessage('debug_subscribe')
+  async debugSubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ): Promise<WsResponse<{ subscribed: boolean }>> {
+    // Default TRUE: `debug_subscribe` with no body plainly means "subscribe",
+    // and a missing field must not silently mean the opposite.
+    const on = extractBooleanField(data, 'on') ?? true;
+    if (on) {
+      await client.join(DEBUG_ROOM);
+    } else {
+      await client.leave(DEBUG_ROOM);
+    }
+    return { event: 'debug_subscribed', data: { subscribed: on } };
   }
 
   handleConnection(client: Socket): void {

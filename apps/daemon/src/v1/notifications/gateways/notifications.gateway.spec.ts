@@ -5,6 +5,7 @@ import type { RuntimeInfo } from '../../../auth/runtime';
 import type { ItemWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { WsPresenceService } from '../services/ws-presence.service';
 import { NotificationsGateway } from './notifications.gateway';
 
@@ -31,6 +32,15 @@ function fakeSocket(token: unknown): {
   };
 }
 
+/**
+ * The REAL service over a real bus — it holds nothing but in-memory buffers,
+ * and the gateway only ever reads its `stream()`. A double here would leave
+ * the debug fan-out asserting against the double rather than the fan-out.
+ */
+function debugLog(): DebugLogService {
+  return new DebugLogService(new AgentEventBus());
+}
+
 function wireItem(runId: string, seq: number): ItemWire {
   return {
     id: `i-${seq}`,
@@ -51,6 +61,7 @@ describe('NotificationsGateway', () => {
       new AgentEventBus(),
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -66,6 +77,7 @@ describe('NotificationsGateway', () => {
       new AgentEventBus(),
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     const socket = fakeSocket('good-token');
 
@@ -83,6 +95,7 @@ describe('NotificationsGateway', () => {
       new AgentEventBus(),
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     const socket = fakeSocket('good-token');
 
@@ -116,6 +129,7 @@ describe('NotificationsGateway', () => {
       new AgentEventBus(),
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -146,6 +160,7 @@ describe('NotificationsGateway', () => {
       new AgentEventBus(),
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     const socket = fakeSocket('good-token');
 
@@ -163,6 +178,7 @@ describe('NotificationsGateway', () => {
       bus,
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -211,6 +227,7 @@ describe('verdict round-trip', () => {
       new AgentEventBus(),
       approvals,
       new WsPresenceService(),
+      debugLog(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -227,6 +244,7 @@ describe('verdict round-trip', () => {
       new AgentEventBus(),
       new ApprovalRegistry(),
       new WsPresenceService(),
+      debugLog(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -255,6 +273,7 @@ describe('verdict round-trip', () => {
       new AgentEventBus(),
       approvals,
       new WsPresenceService(),
+      debugLog(),
     );
 
     track('req-a');

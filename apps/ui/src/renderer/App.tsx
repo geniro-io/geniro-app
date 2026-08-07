@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -13,7 +14,10 @@ import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
 import { type AppView, NavRail } from './components/nav-rail';
 import { cn } from './components/ui/utils';
+import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
+import { DebugPanel } from './debug/debug-panel';
+import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
 
 // Code-split the conditionally-rendered views: Graphs drags @xyflow/react +
@@ -60,7 +64,15 @@ export function App(): React.JSX.Element {
    */
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const clientRef = useRef<DaemonClient | null>(null);
+  // One set of clients per launch handle. Built here rather than inside the
+  // panel so a toggle does not construct five API objects, and so the UI error
+  // reporter below can share them.
+  const apis = useMemo(
+    () => (handle ? createDaemonApis(handle) : null),
+    [handle],
+  );
 
   const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
     clientRef.current?.close();
@@ -149,6 +161,31 @@ export function App(): React.JSX.Element {
     void connectDaemon();
   }, [connectDaemon]);
 
+  // This window's uncaught errors go to the daemon's log, so they outlive the
+  // console and sit in order beside what the daemon was doing.
+  useEffect(() => {
+    if (!apis) {
+      return;
+    }
+    return reportUiErrors(apis);
+  }, [apis]);
+
+  // ⌥⌘L for the debug drawer. A shortcut and not only a button because the
+  // moment you want it is usually the moment something is already misbehaving,
+  // and reaching for a control with the pointer is what you do afterwards.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      // `event.code`, not `event.key`: with Alt held, macOS rewrites the key
+      // for an `l` to `¬`, so matching on the character never fires.
+      if (event.altKey && event.metaKey && event.code === 'KeyL') {
+        event.preventDefault();
+        setDebugOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   if (phase === 'loading') {
     return <EmptyState>Loading…</EmptyState>;
   }
@@ -164,6 +201,8 @@ export function App(): React.JSX.Element {
         onNavigate={setView}
         connected={connected}
         daemonVersion={daemonVersion}
+        debugOpen={debugOpen}
+        onToggleDebug={() => setDebugOpen((open) => !open)}
       />
       {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
           content, so one long unbreakable string (a cwd path) would otherwise
@@ -209,6 +248,19 @@ export function App(): React.JSX.Element {
             </div>
           ) : null}
         </Suspense>
+        {/* BELOW the views and inside `main`, so it spans whatever screen is
+            open rather than belonging to one — the question it answers ("what
+            just happened when I did that") is always about the thing still on
+            screen above it. Mounted only while open: mounting it hidden would
+            keep the daemon streaming every agent-stdio line to a panel nobody
+            is looking at. */}
+        {debugOpen && apis && clientRef.current ? (
+          <DebugPanel
+            apis={apis}
+            client={clientRef.current}
+            onClose={() => setDebugOpen(false)}
+          />
+        ) : null}
       </main>
     </div>
   );

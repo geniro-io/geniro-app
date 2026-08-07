@@ -58,6 +58,16 @@ export const settingsPatchSchema = z.strictObject({
 export const gitDirSchema = absolutePath;
 
 /**
+ * A file the renderer asks to be revealed in Finder.
+ *
+ * Shape only — an absolute path. Being inside the daemon's log directory is
+ * the SECURITY check and lives in `revealPath`, where the boundary it is
+ * compared against is resolved: a schema cannot know where that directory is,
+ * and one that pretended to would give a false sense of where the gate is.
+ */
+export const revealPathSchema = absolutePath;
+
+/**
  * A git branch name. `git switch` takes this as an argv entry (no shell), so
  * the real risk is not injection but ARGUMENT injection: a name beginning with
  * `-` would be parsed as a flag. Git's own ref format forbids most of what is

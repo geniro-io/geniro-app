@@ -32,12 +32,42 @@ import {
   CHILD_JOURNAL_FILE_NAME,
   configureChildJournal,
 } from './v1/agents/utils/child-journal';
+import {
+  configureDebugSink,
+  DEBUG_LOG_DIR_NAME,
+} from './v1/diagnostics/utils/debug-sink';
+import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
+import { registerSecret } from './v1/diagnostics/utils/redact';
+import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 
 installCrashGuards();
 
 const startedAt = Date.now();
 const token = mintToken();
+
+// BEFORE the bootstrapper, and before the token can reach a log line.
+//
+// The sink has to exist ahead of Nest because the lines worth having when a
+// launch goes wrong — the instance lock, the schema sync, the stranded-child
+// reap — are all emitted before the first injectable exists. And the launch
+// token is registered here, one statement after it is minted, so there is no
+// window in which it could be written to a file unredacted. The Cursor key
+// rides the env from the Electron shell and is registered on the same rule.
+configureDebugSink({
+  dir: join(environment.userDataDir, DEBUG_LOG_DIR_NAME),
+});
+registerSecret(token, 'launch token');
+registerSecret(process.env.GENIRO_CURSOR_API_KEY, 'cursor api key');
+
+// The daemon logs down TWO paths and only one of them was going anywhere. The
+// vendored pino logger is teed by `createPinoSinkStream` below; everything
+// using `new Logger(X)` from @nestjs/common — nearly every service here, plus
+// Nest's own InstanceLoader/RouterExplorer/ExceptionHandler — went to the
+// console alone. This captures that second path, which is the one that says
+// WHY a boot failed. Console output is unchanged: SinkLogger extends
+// ConsoleLogger and only adds a destination.
+Logger.overrideLogger(new SinkLogger());
 const runtime: RuntimeInfo = {
   token,
   version: environment.version,
@@ -140,6 +170,12 @@ bootstrapper.addExtension(buildMetricExtension());
 bootstrapper.setupLogger({
   prettyPrint: environment.prettyLog,
   level: environment.logLevel,
+  // Everything the daemon logs ALSO lands in the debug sink — the ring the
+  // panel reads and the file under `<userData>/logs`. Without this the daemon
+  // only ever wrote to stdout, which in a packaged app launched from Finder
+  // goes nowhere: every line was discarded in exactly the build where a user
+  // would need it.
+  streams: [createPinoSinkStream()],
 });
 bootstrapper.addModules([AppModule.forRoot({ runtime })]);
 

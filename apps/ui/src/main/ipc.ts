@@ -1,4 +1,4 @@
-import { dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { app, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
@@ -39,6 +39,7 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
         connected: supervisor.isConnected(),
         handle: supervisor.getHandle(),
       },
+      isPackaged: app.isPackaged,
     };
   });
 

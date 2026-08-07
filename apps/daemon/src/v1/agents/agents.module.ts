@@ -22,7 +22,6 @@ import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { ContextWindowStore } from './services/context-window.store';
-import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { McpHarvestStore } from './services/mcp-harvest.store';
@@ -59,10 +58,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
     { provide: McpHarvestStore, useFactory: () => new McpHarvestStore() },
-    {
-      provide: CursorMcpCleanupService,
-      useFactory: () => new CursorMcpCleanupService(),
-    },
     {
       provide: AttachmentStoreService,
       useFactory: () => new AttachmentStoreService(),
@@ -179,8 +174,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     AgentEventBus,
     ApprovalRegistry,
     PartialStreamService,
-    // Exported for the terminals module: it turns these buffers into the
-    // live mirror sessions the panel attaches to.
+    // Exported for the graphs module: the executor reads this CLI's probed
+    // permission modes when it builds a node's turn, and `/v1/capabilities`
+    // publishes the same verdict to the builder.
     ClaudeProbeService,
     ProcessRegistry,
     // Exported so the graph executor's own run delete reaches the same
@@ -198,9 +194,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     // what it loaded, and that report is what keeps the MCP panel off a cold
     // re-dial.
     McpHarvestStore,
-    // Exported so a turn can be built with the servers the user switched off:
-    // the store holds geniro's neutral set and each adapter translates it.
-    CursorMcpCleanupService,
     ItemDao,
     NodeStateDao,
     RunDao,

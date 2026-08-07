@@ -82,15 +82,18 @@ export interface Settings {
    * rather than a reimplementation: Sources with breakpoints over the daemon's
    * own TypeScript, the CPU profiler, heap snapshots.
    *
-   * A setting rather than always-on. An open inspector port is arbitrary code
-   * execution inside the daemon for anything that can reach loopback — fine on
-   * a single-user machine, which is this app's whole premise, but not
-   * something to hand every packaged install without the user asking. Off by
-   * default; the choice persists, so it is one click once. Applying it needs a
-   * daemon respawn (an inspector is a process-launch flag), which the settings
-   * write triggers.
+   * **Three states, not two.** `null` is "not chosen", which resolves per
+   * build — on in dev, off when packaged (`resolveDaemonInspect`) — and an
+   * explicit boolean overrides that either way.
+   *
+   * A plain boolean could not express this, because dev and the packaged app
+   * share ONE userData dir (`app.setName('Geniro')` decides it, and both
+   * builds set the same name). Whatever a dev launch resolved would be
+   * written to the same settings.json a shipped launch then reads, so a
+   * boolean default would leak the dev answer into the packaged build — the
+   * exact case the split exists to prevent.
    */
-  daemonInspect: boolean;
+  daemonInspect: boolean | null;
 }
 
 /** Default settings written on first launch when no settings file exists. */
@@ -104,8 +107,35 @@ export const DEFAULT_SETTINGS: Settings = {
   lastEfforts: {},
   cliPaths: {},
   checkForUpdates: true,
-  daemonInspect: false,
+  daemonInspect: null,
 };
+
+/**
+ * Whether this launch spawns the daemon with an inspector.
+ *
+ * Unchosen means ON in dev and OFF when packaged, which is the honest default
+ * on both sides rather than one compromise for both. Developing the app is
+ * debugging it — there is no argument for making that a click — while a
+ * shipped install has a user who will never attach a debugger and gains
+ * nothing from the port, so the only thing an always-on default would add
+ * there is arbitrary code execution inside the daemon for anything that
+ * reaches loopback. That daemon holds the Cursor key in its env and spawns
+ * CLIs with the user's own permissions over their source tree.
+ *
+ * (Node's inspector does validate the `Host` header, so a random web page
+ * cannot attach — the exposure is to local processes, not to the network.
+ * That is a real limit on the risk, and still not zero.)
+ *
+ * An explicit choice always wins, in both directions: a developer who
+ * switched it off keeps it off, and a user who switched it on in a packaged
+ * build keeps it on.
+ */
+export function resolveDaemonInspect(
+  setting: boolean | null,
+  isPackaged: boolean,
+): boolean {
+  return setting ?? !isPackaged;
+}
 
 /**
  * Loopback port the daemon's inspector listens on when `daemonInspect` is on.
@@ -212,7 +242,19 @@ export interface OnboardingInput {
  */
 export interface GeniroApi {
   /** Current onboarding + daemon status. */
-  getStatus(): Promise<{ onboardingComplete: boolean; daemon: DaemonStatus }>;
+  getStatus(): Promise<{
+    onboardingComplete: boolean;
+    daemon: DaemonStatus;
+    /**
+     * Whether this is a packaged build. The renderer needs it for exactly one
+     * thing: settings whose unchosen state resolves per build
+     * (`resolveDaemonInspect`). A screen that showed the STORED `null` as
+     * "off" would tell the user no debugger port is open while the dev daemon
+     * is listening on one — and `import.meta.env.PROD` is not the same
+     * question, since a built-but-unpackaged run answers it the other way.
+     */
+    isPackaged: boolean;
+  }>;
   /** Daemon connection handle (host + port + token) for opening an authed WS. */
   getDaemonHandle(): Promise<DaemonHandle | null>;
   /** Subscribe to daemon restarts that rotate the loopback handle/token. */

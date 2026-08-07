@@ -24,6 +24,7 @@ const settings: SettingsShape = {
 };
 
 const geniro = {
+  getStatus: vi.fn(),
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   detectClis: vi.fn(),
@@ -48,6 +49,13 @@ async function mount(): Promise<void> {
 }
 
 beforeEach(() => {
+  // Packaged FALSE is the dev answer, and it is what makes the inspector's
+  // unchosen state resolve to on — the specs below assert on that.
+  geniro.getStatus.mockReset().mockResolvedValue({
+    onboardingComplete: true,
+    daemon: { connected: true, handle: null },
+    isPackaged: false,
+  });
   geniro.getSettings.mockReset().mockResolvedValue(settings);
   geniro.updateSettings.mockReset().mockResolvedValue(settings);
   geniro.detectClis.mockReset().mockResolvedValue([]);
@@ -305,30 +313,66 @@ describe('Settings diagnostics section', () => {
   const inspectToggle = (): HTMLButtonElement =>
     container.querySelector<HTMLButtonElement>('#settings-daemon-inspect')!;
 
-  it('seeds the daemon-inspector toggle from persisted settings', async () => {
-    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: true });
+  it('shows the unchosen inspector as ON in dev, and marks the default as not the user’s', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
     await mount();
 
-    // Seeded, not defaulted: the daemon it describes was spawned from this
-    // value, so a switch that always mounted off would misreport a daemon
-    // that IS listening — and a user who then "turned it on" would get a
-    // restart that changed nothing.
+    // The dev daemon IS listening on that port, so rendering the stored
+    // `null` as off would state the opposite of the machine's real state —
+    // for a setting whose entire subject is an open debugger port.
     expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
+    expect(inspectToggle().closest('section')?.textContent).toContain(
+      'default for dev',
+    );
   });
 
-  it('persists the daemon-inspector flip, which is what triggers the respawn', async () => {
+  it('shows the same unchosen inspector as OFF once packaged', async () => {
+    geniro.getStatus.mockResolvedValue({
+      onboardingComplete: true,
+      daemon: { connected: true, handle: null },
+      isPackaged: true,
+    });
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
     await mount();
+
+    // Same stored value, opposite answer. Dev and the installed app share one
+    // settings.json, so this split cannot come from the stored value alone —
+    // which is the whole reason the setting is not a plain boolean.
     expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
+    expect(inspectToggle().closest('section')?.textContent).toContain(
+      'default for the installed app',
+    );
+  });
+
+  it('keeps an explicit off through a dev launch, where the default says on', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: false });
+    await mount();
+
+    // A developer who deliberately closed the port must not have it reopened
+    // by the per-build default.
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
+    expect(inspectToggle().closest('section')?.textContent).not.toContain(
+      'default for',
+    );
+  });
+
+  it('writes an explicit boolean on flip, which is what triggers the respawn', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
+    await mount();
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
 
     await act(async () => {
       inspectToggle().dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    // The key must reach main under its own name: main restarts the daemon on
-    // `daemonInspect` specifically, so a patch that folded it in with anything
-    // else would save the setting and leave the daemon un-inspectable.
-    expect(geniro.updateSettings).toHaveBeenCalledWith({ daemonInspect: true });
-    expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
+    // `false`, never back to `null`: from an unchosen-but-on state, writing
+    // null would persist nothing and leave the switch stuck on. And the key
+    // must reach main under its own name — main restarts the daemon on
+    // `daemonInspect` specifically.
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      daemonInspect: false,
+    });
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
   });
 
   it('says which port to attach to, so the user is not left to guess', async () => {

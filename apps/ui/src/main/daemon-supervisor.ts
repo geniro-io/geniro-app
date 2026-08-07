@@ -4,7 +4,11 @@ import { dirname, join } from 'node:path';
 
 import { app } from 'electron';
 
-import { DAEMON_INSPECT_PORT, type DaemonHandle } from '../shared/contracts';
+import {
+  DAEMON_INSPECT_PORT,
+  type DaemonHandle,
+  resolveDaemonInspect,
+} from '../shared/contracts';
 import {
   type DaemonInfo,
   isPlausiblePid,
@@ -404,8 +408,9 @@ export class DaemonSupervisor {
     }
     // Settings cliPaths overrides ride the daemon env (GENIRO_-prefixed, so
     // they are stripped from every agent child); the daemon resolves them into
-    // the spawn command for headless turns AND PTY mirrors. A change in
-    // Settings applies on the next daemon spawn, like the Cursor key.
+    // the spawn command for headless turns and for the handoff invocation it
+    // hands back. A change in Settings applies on the next daemon spawn, like
+    // the Cursor key.
     const settings = readSettings();
     const cliPaths = settings.cliPaths;
     const claudeBin = cliPaths['claude']?.trim();
@@ -419,7 +424,10 @@ export class DaemonSupervisor {
     // `--inspect=9229` binds 127.0.0.1 today, but the debugger port is the one
     // place in this app where "probably loopback" is not good enough, since
     // anything that reaches it runs arbitrary code inside the daemon.
-    const inspectArgs = settings.daemonInspect
+    const inspectArgs = resolveDaemonInspect(
+      settings.daemonInspect,
+      app.isPackaged,
+    )
       ? [`--inspect=127.0.0.1:${DAEMON_INSPECT_PORT}`]
       : [];
     const child = this.spawn(process.execPath, [...inspectArgs, entry], {

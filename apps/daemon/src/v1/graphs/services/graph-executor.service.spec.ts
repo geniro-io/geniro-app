@@ -30,7 +30,6 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type ClaudeModesCapability,
-  type CursorCallsCapability,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
@@ -386,7 +385,6 @@ afterAll(() => {
 function setup(
   runtimePort: number | null = 4870,
   opts: {
-    cursorCalls?: CursorCallsCapability;
     claudeModes?: ClaudeModesCapability;
     mergeOk?: boolean;
     gitTracked?: boolean;
@@ -405,7 +403,6 @@ function setup(
   callBroker: CallBroker;
   /** Every live delta the real bus carried, in order. */
   deltas: RunDeltaEvent[];
-  ensureVerdict: ReturnType<typeof vi.fn>;
   claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
@@ -426,15 +423,6 @@ function setup(
   const approvals = new ApprovalRegistry();
   const callTokens = new CallTokenRegistry();
   const callBroker = new CallBroker();
-  // Probe verdict defaults to 'unknown' — cursor callers stay shut out unless
-  // a test opts into a 'pass' explicitly (mirrors a machine never probed).
-  const cursorCalls: CursorCallsCapability = opts.cursorCalls ?? {
-    status: 'unknown',
-    version: null,
-    probedAt: null,
-    reason: null,
-  };
-  const ensureVerdict = vi.fn(async () => cursorCalls);
   // Claude mode probe defaults to all-pass — the widened modes run as
   // requested unless a test opts into a probed FAIL explicitly.
   const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
@@ -558,7 +546,6 @@ function setup(
     approvals,
     callTokens,
     callBroker,
-    ensureVerdict,
     claudeEnsureVerdict,
     mergeAcquire,
     mergeReleases,
@@ -2915,8 +2902,8 @@ describe('GraphExecutorService — deleting a workflow run', () => {
 
   it('drops the run’s call surface, its tokens, its attachments, and announces it', async () => {
     // None of these cascade from the `runs` row: the broker and the token
-    // registry are in memory, attachments are files, and the PTY mirror lives
-    // in a module above this one and learns only by subscription.
+    // registry are in memory, attachments are files, and anything holding
+    // per-run state above this module learns only by subscription.
     const ctx = await setup();
     const run = await ctx.service.startRun({
       slug: 'calls',

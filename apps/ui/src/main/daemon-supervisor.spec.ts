@@ -134,6 +134,10 @@ function harness(opts: {
 }
 
 beforeEach(() => {
+  // Reset explicitly: it is a plain property, so a test that flips it to
+  // reach the packaged branch would otherwise leak into every later spec —
+  // silently changing whether the daemon spawns with an inspector.
+  mocks.app.isPackaged = false;
   mocks.getSecret.mockReturnValue(null);
   mocks.readSettings.mockReturnValue({
     ...DEFAULT_SETTINGS,
@@ -354,27 +358,9 @@ describe('DaemonSupervisor.start', () => {
     expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBeUndefined();
   });
 
-  it('leaves the daemon without an inspector unless the setting asks for one', async () => {
-    const h = harness({ pidfile: null });
-
-    await h.supervisor.start();
-
-    expect(h.spawned).toHaveLength(1);
-    // Nothing debugger-shaped at all, rather than "not the exact string we
-    // spell below": an inspector opened under any spelling is the thing this
-    // refuses, and `--inspect-brk` would additionally hang the daemon before
-    // it ever listened.
-    expect(h.spawned[0]?.args.filter((a) => a.startsWith('--inspect'))).toEqual(
-      [],
-    );
-  });
-
-  it('opens the inspector on loopback, ahead of the entry script, when the setting is on', async () => {
-    mocks.readSettings.mockReturnValue({
-      ...DEFAULT_SETTINGS,
-      onboardingComplete: true,
-      daemonInspect: true,
-    });
+  it('opens the inspector in dev by default, ahead of the entry script', async () => {
+    // DEFAULT_SETTINGS leaves `daemonInspect` unchosen, and `isPackaged` is
+    // false in this harness — the dev launch.
     const h = harness({ pidfile: null });
 
     await h.supervisor.start();
@@ -387,6 +373,51 @@ describe('DaemonSupervisor.start', () => {
       `--inspect=127.0.0.1:${DAEMON_INSPECT_PORT}`,
       '/bundle/daemon/dist/main.js',
     ]);
+  });
+
+  it('opens no inspector in a packaged build, from the same unchosen setting', async () => {
+    mocks.app.isPackaged = true;
+    const h = harness({ pidfile: null });
+
+    await h.supervisor.start();
+
+    expect(h.spawned).toHaveLength(1);
+    // Nothing debugger-shaped at all, rather than "not the exact string the
+    // test above spells": an inspector opened under any spelling is what this
+    // refuses, and `--inspect-brk` would additionally hang the daemon before
+    // it ever listened.
+    expect(h.spawned[0]?.args.filter((a) => a.startsWith('--inspect'))).toEqual(
+      [],
+    );
+  });
+
+  it('honours an explicit choice over the per-build default, in both directions', async () => {
+    mocks.readSettings.mockReturnValue({
+      ...DEFAULT_SETTINGS,
+      onboardingComplete: true,
+      daemonInspect: false,
+    });
+    const off = harness({ pidfile: null });
+    await off.supervisor.start();
+    // Dev, where the default is ON — a developer who closed the port keeps it
+    // closed.
+    expect(
+      off.spawned[0]?.args.filter((a) => a.startsWith('--inspect')),
+    ).toEqual([]);
+
+    mocks.app.isPackaged = true;
+    mocks.readSettings.mockReturnValue({
+      ...DEFAULT_SETTINGS,
+      onboardingComplete: true,
+      daemonInspect: true,
+    });
+    const on = harness({ pidfile: null });
+    await on.supervisor.start();
+    // Packaged, where the default is OFF — a user debugging an installed app
+    // gets the port they asked for.
+    expect(on.spawned[0]?.args).toContain(
+      `--inspect=127.0.0.1:${DAEMON_INSPECT_PORT}`,
+    );
   });
 
   it('terminates a spawned child that never becomes healthy before the startup deadline', async () => {

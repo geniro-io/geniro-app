@@ -110,7 +110,7 @@ describe('debugSink file', () => {
     configureDebugSink({ dir });
 
     debugSink.record('daemon', 'info', 'to disk');
-    await flushed();
+    await until(() => readdirSync(dir).length === 1);
 
     const files = readdirSync(dir);
     expect(files).toHaveLength(1);
@@ -128,9 +128,13 @@ describe('debugSink file', () => {
     for (let i = 0; i < 30; i++) {
       debugSink.record('daemon', 'info', `line ${i} ${'x'.repeat(40)}`);
     }
-    await flushed();
 
-    expect(readdirSync(dir).length).toBeLessThanOrEqual(2);
+    // Waits for the count to STOP CHANGING, not for it to be small. Waiting
+    // for "small" passes the instant it is read — right after the loop the
+    // opens are still pending and the directory is empty, so the assertion
+    // would hold before a single rotation had happened, and hold just as well
+    // with pruning deleted.
+    expect(await settledCount(dir)).toBeLessThanOrEqual(2);
   });
 
   it('keeps recording in memory when the file cannot be written', () => {
@@ -160,12 +164,62 @@ describe('debugSink file', () => {
 });
 
 /**
- * `createWriteStream` opens ASYNCHRONOUSLY and buffers until it has a handle,
- * so a file read immediately after a `record` sees nothing. One macrotask is
- * enough for the open to land.
+ * Wait for the filesystem to actually reach `condition`, polling.
+ *
+ * The sink's file work is asynchronous end to end — `createWriteStream` opens
+ * asynchronously and buffers until it has a handle, and a rotated file only
+ * becomes prunable on its stream's `'close'` event — so a read taken right
+ * after `record` sees a directory mid-flight.
+ *
+ * This replaced a fixed 20ms sleep, which was a real flake and not a
+ * theoretical one: it held when this spec ran alone and failed inside
+ * `pnpm full-check`, where the daemon and UI suites run at once and ~15
+ * rotations' worth of opens and closes no longer fit in the window. A sleep
+ * encodes a guess about machine load; this waits for the thing itself.
+ *
+ * It does NOT swallow a failure: on timeout it returns anyway, leaving the
+ * caller's own `expect` to report the real state. A helper that threw
+ * "timed out" here would hide which count was actually on disk.
  */
-function flushed(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 20));
+async function until(
+  condition: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/**
+ * How many log files remain once the directory stops changing.
+ *
+ * Rotation is a burst of asynchronous work — an open and a close per file,
+ * with the prune riding the close — so the count RISES and then falls. Any
+ * wait phrased as "until it is small enough" is satisfied by the empty
+ * directory that exists before the first open lands, which is how a version
+ * of this spec passed with pruning disabled entirely.
+ *
+ * Quiescence is the honest signal: read until several consecutive reads agree,
+ * then answer with that. On timeout it answers with the last read rather than
+ * throwing, so the caller's own assertion reports the real number.
+ */
+async function settledCount(dir: string, timeoutMs = 5_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let last = -1;
+  let stable = 0;
+  while (Date.now() < deadline) {
+    const count = readdirSync(dir).length;
+    stable = count === last ? stable + 1 : 0;
+    last = count;
+    // Five agreeing reads, 20ms apart: long enough to span one pending
+    // open+close pair, which is the shortest thing that could still change it.
+    if (stable >= 5 && count > 0) {
+      return count;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return last;
 }
 
 /** Distinct ISO stamps, so each rotation lands on its own filename. */

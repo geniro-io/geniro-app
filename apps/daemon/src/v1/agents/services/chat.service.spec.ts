@@ -2174,10 +2174,10 @@ describe('ChatService — delete is a one-way door', () => {
     expect(callTokens.get(run.id, 'orch')).toBeNull();
   });
 
-  it('announces the deletion so live mirrors can be dropped', async () => {
-    // The PTY mirror lives in a module ABOVE this one, so it learns by
-    // subscription. Without the announcement a `claude --resume` child would
-    // stay alive against a transcript that no longer exists.
+  it('announces the deletion so per-run state above this module can be dropped', async () => {
+    // Holders of per-run state live in modules ABOVE this one, so they learn
+    // by subscription. Without the announcement each would keep state keyed to
+    // a run that no longer exists, invisible and unreachable.
     const { service, run, deletedRuns } = await chatWithHistory();
     await service.delete(run.id);
     expect(deletedRuns).toEqual([run.id]);

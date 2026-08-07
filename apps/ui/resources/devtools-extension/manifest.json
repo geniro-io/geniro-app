@@ -1,0 +1,7 @@
+{
+  "manifest_version": 3,
+  "name": "Geniro",
+  "version": "1.0.0",
+  "description": "The daemon's log as a real Chrome DevTools panel, beside Elements and Network.",
+  "devtools_page": "devtools.html"
+}

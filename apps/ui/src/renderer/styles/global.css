@@ -329,3 +329,31 @@
 [data-slot='code-block'] .token.italic {
   font-style: italic;
 }
+
+/*
+ * A horizontal scroll region that ADMITS it scrolls.
+ *
+ * macOS draws overlay scrollbars: they take no layout space and are invisible
+ * at rest, so a wide block inside `overflow-x-auto` reads as simply cut off —
+ * measured on a 9-column transcript table, 229px hidden with a 0px scrollbar.
+ * Declaring a height on `::-webkit-scrollbar` opts that element out of overlay
+ * scrollbars entirely, so the track is always there when there is something to
+ * scroll, and absent when there is not.
+ *
+ * Tokens only, like every other colour in this file.
+ */
+@layer components {
+  .scroll-x-visible::-webkit-scrollbar {
+    height: 8px;
+  }
+  .scroll-x-visible::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scroll-x-visible::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+  }
+  .scroll-x-visible::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+}

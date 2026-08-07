@@ -115,18 +115,43 @@ describe('MarkdownContent — nothing overflows the transcript sideways', () => 
 });
 
 describe('MarkdownContent tables', () => {
-  it('lets a wide table scroll instead of hard-wrapping inside its wrapper', () => {
+  it('fits a table to the pane, and says so when it cannot', () => {
     const el = render(<MarkdownContent content={ALIGNED_TABLE} />);
     const wrapper = el.querySelector('table')?.parentElement;
     const table = el.querySelector('table');
 
-    // The wrapper is the scroll container...
+    // `w-full` so the table FITS and its cells wrap. This assertion is the
+    // inverse of the one it replaced, deliberately: that version reasoned that
+    // a table which never overflows never scrolls, and optimised for having
+    // something to scroll rather than for the reader seeing the table.
+    expect(table?.className).toContain('w-full');
+    // Cells stop shrinking at a readable floor, so a very wide table reaches
+    // the scroll fallback instead of becoming vertical letter stacks.
+    expect(el.querySelector('th')?.className).toContain('min-w-24');
+    expect(el.querySelector('td')?.className).toContain('min-w-24');
+    // And when the fallback IS reached it must be visible. macOS overlay
+    // scrollbars take no layout space and are invisible at rest — measured,
+    // 229px of a 9-column table hidden with a 0px scrollbar — so a scroll
+    // container with no forced track reads as simply cut off.
     expect(wrapper?.className).toContain('overflow-x-auto');
-    // ...and the table must NOT be pinned to its width, or there is never any
-    // overflow to scroll: content wraps to fit and long cells become unreadable
-    // columns instead. This is the whole fix — if `w-full` comes back, the
-    // table clips again.
-    expect(table?.className).not.toContain('w-full');
+    expect(wrapper?.className).toContain('scroll-x-visible');
+  });
+
+  it('wraps a long unbroken token in ORDINARY prose, not just in code and links', () => {
+    // The earlier pass put `break-all` on inline code and on links and stopped
+    // there, which left plain prose — what a USER's own message is entirely
+    // made of — overflowing: `whitespace-pre-wrap` breaks at spaces, and a
+    // 170-character token has none. Measured in a browser against a real
+    // transcript: a 643px paragraph reporting a 1244px scrollWidth.
+    //
+    // Asserted on the ROOT because `overflow-wrap` is inherited: one
+    // declaration there is what covers paragraphs, list items, headings,
+    // quotes and table cells at once.
+    const token = 'a'.repeat(170);
+    const el = render(<MarkdownContent content={`prose ${token} end`} />);
+
+    expect(el.firstElementChild?.className).toContain('break-words');
+    expect(el.querySelector('p')?.textContent).toContain(token);
   });
 
   it('carries GFM column alignment through to th and td', () => {

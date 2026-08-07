@@ -75,6 +75,17 @@ export function App(): React.JSX.Element {
   );
 
   const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
+    // Published for the DevTools extension's Geniro panel, which runs in an
+    // extension origin with no preload and no module graph of ours — its only
+    // channel to this page is `inspectedWindow.eval`, so the host, port and
+    // per-launch token have to be reachable from a plain global. Re-published
+    // on every attach because a daemon restart rotates the token, and a panel
+    // holding the old one would be silently unauthorised.
+    //
+    // Not a leak: this is a loopback session token the renderer already holds
+    // and sends on every request, in a window only this app loads.
+    (window as unknown as { __geniroDaemon: DaemonHandle }).__geniroDaemon =
+      daemonHandle;
     clientRef.current?.close();
     setConnected(false);
     const client = new DaemonClient(daemonHandle, {

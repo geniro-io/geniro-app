@@ -120,6 +120,65 @@ describe('DaemonClient', () => {
     });
   });
 
+  it('reports a failed connection ATTEMPT, with the reason', () => {
+    // Socket.IO retries forever and reports nothing else, so without this the
+    // renderer cannot tell "still connecting" from "will never connect" — and
+    // a daemon that is down produced no signal in the UI at all.
+    const onError = vi.fn();
+    const client = new DaemonClient(handle, { onError });
+    client.connect();
+
+    mocks.handlers.connect_error?.(
+      new Error('xhr poll error: connect ECONNREFUSED 127.0.0.1:8123'),
+    );
+
+    expect(onError).toHaveBeenCalledWith(
+      'xhr poll error: connect ECONNREFUSED 127.0.0.1:8123 (127.0.0.1:8123)',
+    );
+  });
+
+  it('names the endpoint, because Socket.IO’s own wording does not', () => {
+    // Observed against a dead port: the whole reason reaching the UI was
+    // "websocket error". True, and useless for the one thing the user can
+    // act on — which port are we dialling, and is anything on it. Host and
+    // port are negotiated per launch, so this client is the only place that
+    // knows them.
+    const onError = vi.fn();
+    const client = new DaemonClient(handle, { onError });
+    client.connect();
+
+    mocks.handlers.connect_error?.(new Error('websocket error'));
+
+    expect(onError).toHaveBeenCalledWith('websocket error (127.0.0.1:8123)');
+  });
+
+  it('never hands the renderer an empty reason to render', () => {
+    // A transport error with a blank message would put an empty sentence on
+    // the connection strip, which reads as a broken UI rather than a failure.
+    const onError = vi.fn();
+    const client = new DaemonClient(handle, { onError });
+    client.connect();
+
+    mocks.handlers.connect_error?.(new Error(''));
+
+    expect(onError).toHaveBeenCalledWith(
+      'could not reach the daemon (127.0.0.1:8123)',
+    );
+  });
+
+  it('passes the disconnect REASON on, rather than just the fact', () => {
+    // "transport close" (the daemon exited) and "io server disconnect" (it
+    // rejected us) are different problems with different fixes.
+    const onClose = vi.fn();
+    const client = new DaemonClient(handle, { onClose });
+    client.connect();
+    fireConnect();
+
+    mocks.handlers.disconnect?.('transport close');
+
+    expect(onClose).toHaveBeenCalledWith('transport close');
+  });
+
   it('leaveRun clears the active room so a later reconnect does not rejoin it', async () => {
     const client = new DaemonClient(handle, {});
     client.connect();

@@ -460,6 +460,83 @@ afterEach(async () => {
   document.body.replaceChildren(); // reset the jsdom document between tests
 });
 
+describe('Chats transcript — no sideways scroll', () => {
+  it('states overflow-x-hidden rather than inheriting a horizontal scroller', async () => {
+    // `overflow-y-auto` alone does NOT leave the other axis alone: CSS
+    // resolves a `visible` axis to `auto` whenever its neighbour scrolls, so
+    // this box was a horizontal scroller by omission. Measured in the running
+    // app at 1100px wide — scrollWidth 759 against clientWidth 620 — and the
+    // whole conversation could be dragged off its own pane.
+    //
+    // jsdom computes no layout, so the class is the only observable here; the
+    // things that actually overflowed are pinned where they render, in
+    // markdown-content.spec.tsx.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const scroller = [...container.querySelectorAll('div')].find((el) =>
+      el.className.includes('overflow-y-auto'),
+    )!;
+    expect(classesOf(scroller)).toContain('overflow-x-hidden');
+  });
+});
+
+describe('Chats transcript — item identity', () => {
+  it('keeps two items that share a seq, de-duping by id instead', async () => {
+    // The renderer half of the duplicate-seq defect. The daemon issued one
+    // seq to a user message and to the assistant's reply, and this list —
+    // which de-duped by SEQ — dropped whichever arrived second. That was
+    // reliably the reply, so the reported symptom was "it just deletes its
+    // last message".
+    //
+    // The daemon can no longer issue one twice, but transcripts written
+    // before that fix still hold such a pair, and identity was never seq's
+    // job in the first place: `id` is what the replay/live seam re-delivers.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitItem({ ...msg(1, 'user', 'and also this'), id: 'user-dup' });
+    });
+    await act(async () => {
+      // SAME seq, different row — exactly what the corrupted transcript holds.
+      emitItem({ ...msg(1, 'assistant', 'on it'), id: 'assistant-dup' });
+    });
+
+    expect(container.textContent).toContain('and also this');
+    expect(container.textContent).toContain('on it');
+  });
+
+  it('still drops a genuine re-delivery of the same item', async () => {
+    // The seam this de-dupe exists for: a reconnect replays rows the live
+    // channel already delivered. Same id, so it must collapse — otherwise
+    // the fix above would trade a dropped message for a doubled one.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'echoed once'));
+    });
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'echoed once'));
+    });
+
+    // Counted in the TRANSCRIPT alone: the sidebar row carries the same text
+    // as its preview line, so counting the whole document would report two
+    // for a single rendered message and pass whatever this list did.
+    const transcript = [...container.querySelectorAll('div')].find((el) =>
+      el.className.includes('overflow-y-auto'),
+    )!;
+    expect(transcript.textContent!.split('echoed once').length - 1).toBe(1);
+  });
+});
+
 describe('Chats transcript auto-scroll', () => {
   /**
    * The scroll container is the sentinel's PARENT. jsdom computes no layout,
@@ -2709,7 +2786,11 @@ describe('Chats queued messages', () => {
     const send = composerButton(container, 'Send')!;
     const bottomRow = send.parentElement!.parentElement!;
     const card = bottomRow.parentElement!;
-    const topRow = card.firstElementChild!;
+    // The identity row is the card's PREVIOUS SIBLING, not its first child.
+    // It was lifted out so the card's border encloses the message alone: what
+    // those chips state is where the run happens, which is context for the
+    // message rather than part of it.
+    const topRow = card.previousElementSibling!;
     const textarea = card.querySelector('textarea')!;
 
     // Identity above the text; per-turn settings below it.
@@ -2722,13 +2803,19 @@ describe('Chats queued messages', () => {
     expect(labelsIn(bottomRow)).toContain('Model');
     expect(labelsIn(bottomRow)).not.toContain('Folder for new chats');
 
-    // The text sits BETWEEN them — not merely present somewhere in the card.
-    const order = [...card.children];
-    expect(order.indexOf(topRow)).toBeLessThan(
-      order.findIndex((el) => el.contains(textarea)),
-    );
-    expect(order.findIndex((el) => el.contains(textarea))).toBeLessThan(
-      order.indexOf(bottomRow),
+    // OUTSIDE the card, and before it. Pinned as its own claim: putting the
+    // row back inside is a one-line change that every other assertion here
+    // would still pass.
+    expect(card.contains(topRow)).toBe(false);
+    expect(
+      topRow.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // The text still sits BETWEEN the two rows — the top one now above the
+    // card entirely, the bottom one inside it under the textarea.
+    const inCard = [...card.children];
+    expect(inCard.findIndex((el) => el.contains(textarea))).toBeLessThan(
+      inCard.indexOf(bottomRow),
     );
 
     // Above the text, wrapping is CORRECT — nothing shares that line, so the
@@ -2744,6 +2831,57 @@ describe('Chats queued messages', () => {
         '[aria-label$="more options"], [title="More options"]',
       ),
     ).toBeNull();
+    expect(
+      topRow.querySelector(
+        '[aria-label$="more options"], [title="More options"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('puts the context ring with the turn’s settings, not beside Stop', async () => {
+    // It reads as one of this turn's settings, because that is what it is
+    // about: model, effort and how much room is left are the three facts
+    // describing the request being composed. Pinned to the actions it sat
+    // against the one control that destroys work (Stop), separated from
+    // everything it belongs with.
+    // A settled turn that REPORTED its usage: the meter renders nothing at
+    // all without a context figure to show, so a run with none would let this
+    // pass by finding nothing anywhere.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      {
+        ...msg(1, 'assistant', 'done'),
+        id: 'tc',
+        kind: 'turn_complete',
+        role: null,
+        payload: {
+          usage: { contextTokens: 26_000, contextWindowTokens: 200_000 },
+          stopReason: 'end_turn',
+        },
+      } as unknown as ChatItem,
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // While a turn streams the composer offers Send only once there is
+    // something to send, so type first rather than depending on the run's
+    // status here — the placement being pinned is the same either way.
+    await type(container, 'x');
+
+    const send = composerButton(container, 'Send')!;
+    const actions = send.parentElement!;
+    const chipBox = actions.previousElementSibling!;
+    const meter = container.querySelector('[data-slot="context-meter"]')!;
+
+    expect(meter).not.toBeNull();
+    expect(chipBox.contains(meter)).toBe(true);
+    expect(actions.contains(meter)).toBe(false);
+    // AFTER the effort chip specifically — model, then effort, then how full.
+    const effort = chipBox.querySelector('[aria-label="Reasoning effort"]');
+    expect(effort).not.toBeNull();
+    expect(
+      effort!.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('lets the BOTTOM row’s chips stack rather than run under Send', async () => {

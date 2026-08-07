@@ -38,6 +38,7 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import { EffortsService } from './efforts.service';
+import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -417,6 +418,10 @@ function setup(
   // Real, like its neighbours: it holds an in-memory map of CLI processes, and
   // a double would hide whether a delete actually closes the run's own.
   const sessions = new AgentSessionRegistry();
+  // The REAL allocator over the fake DAO, like its neighbours: it IS the thing
+  // that keeps a turn's writes and a mid-turn follow-up from sharing a seq, so
+  // a double here would leave the duplicate-seq tests pinning the double.
+  const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -427,6 +432,7 @@ function setup(
     callTokens,
     partials,
     attachments,
+    seqs,
   );
   const service = new ChatService(
     em,
@@ -445,6 +451,7 @@ function setup(
     partials,
     teardown,
     efforts,
+    seqs,
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -601,6 +608,44 @@ describe('ChatService', () => {
 
     claude.finish();
     await drain();
+  });
+
+  it('gives a mid-turn message a seq the running turn has not already reserved', async () => {
+    // THE duplicate-seq defect, reproduced on a real transcript: a user item
+    // and the assistant's reply both landed on seq 5927, and the renderer —
+    // which de-dupes the replay/live seam BY seq — dropped the second to
+    // arrive. That was the agent's answer, so the reported symptom was "it
+    // just deletes its last message".
+    //
+    // It was deterministic, not a race. The turn seeded a closure-local
+    // counter from `maxSeq` ONCE and incremented it per item, while this path
+    // re-read `maxSeq` from the table — which cannot see a counter's
+    // reservations — so it was handed the value the turn had already claimed
+    // for its next durable item, on every mid-turn follow-up.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'first');
+
+    // The follow-up goes in FIRST, then the turn writes its next item. That
+    // order is what the defect needed, and reversing it would pass either way.
+    await service.sendMessage(run.id, 'and also this');
+    claude.emit({ type: 'text', text: 'on it' });
+    claude.finish();
+    await drain();
+
+    const rows = await itemDao.getByRun(run.id);
+    const seqs = rows.map((row) => row.seq);
+    expect(new Set(seqs).size).toBe(seqs.length);
+    // Not merely unique — the follow-up must sit BEFORE the reply it preceded,
+    // or the transcript reads with the answer above the question.
+    const followUp = rows.findIndex(
+      (row) => JSON.parse(row.payload).text === 'and also this',
+    );
+    const reply = rows.findIndex(
+      (row) => JSON.parse(row.payload).text === 'on it',
+    );
+    expect(followUp).toBeGreaterThanOrEqual(0);
+    expect(reply).toBeGreaterThan(followUp);
   });
 
   it('refuses with RUN_BUSY when the running turn cannot take one', async () => {

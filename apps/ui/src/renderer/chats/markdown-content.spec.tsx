@@ -70,6 +70,50 @@ describe('MarkdownContent code', () => {
   });
 });
 
+describe('MarkdownContent — nothing overflows the transcript sideways', () => {
+  // The transcript pane could be dragged sideways, clipping the conversation
+  // off its own edge. Its scroller now states `overflow-x-hidden`, so anything
+  // still overflowing would be CLIPPED rather than reachable — which makes
+  // these three the load-bearing half of that fix, not cosmetics.
+
+  it('breaks a long inline-code path instead of running past the pane', () => {
+    // Inline code in this transcript is overwhelmingly an absolute path or a
+    // branch name: one token, and for a path not one a browser breaks on its
+    // own (it breaks AFTER `/`, never before, so a long leading directory
+    // still overhangs). `break-words` is not enough — it only breaks a word
+    // that cannot fit on a line by itself.
+    const el = render(
+      <MarkdownContent content="see `/Users/someone/Desktop/Projects/Geniro/geniro-app/apps/daemon/src/v1/agents/services/chat.service.ts` for it" />,
+    );
+    const code = el.querySelector('code');
+
+    expect(code?.className).toContain('break-all');
+  });
+
+  it('breaks a long autolinked URL', () => {
+    // Measured as the widest single offender in a real transcript: the link
+    // TEXT is the URL, so there is nothing shorter to fall back on.
+    const el = render(
+      <MarkdownContent content="https://ticktick.com/webapp/#p/69981be521481104e25a00d1/tasks/6a744fe9556d915e8f3c2a6d" />,
+    );
+    const link = el.querySelector('a');
+
+    expect(link?.getAttribute('href')).toContain('ticktick.com');
+    expect(link?.className).toContain('break-all');
+  });
+
+  it('keeps a wide table’s overflow inside its own wrapper', () => {
+    // The wrapper is a flex ITEM, whose min-width defaults to its content — so
+    // without `min-w-0` it grew to the table's full width, `overflow-x-auto`
+    // had nothing left to clip, and the overflow was handed to the transcript.
+    const el = render(<MarkdownContent content={ALIGNED_TABLE} />);
+    const wrapper = el.querySelector('table')?.parentElement;
+
+    expect(wrapper?.className).toContain('min-w-0');
+    expect(wrapper?.className).toContain('max-w-full');
+  });
+});
+
 describe('MarkdownContent tables', () => {
   it('lets a wide table scroll instead of hard-wrapping inside its wrapper', () => {
     const el = render(<MarkdownContent content={ALIGNED_TABLE} />);

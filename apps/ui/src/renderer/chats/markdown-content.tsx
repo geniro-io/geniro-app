@@ -105,8 +105,17 @@ const COMPONENTS: Components = {
   ),
   // Only INLINE code reaches here: a fenced block is intercepted by `pre`
   // below, which renders CodeBlock instead of these children.
+  //
+  // `break-all`, not `break-words`. What inline code holds in this transcript
+  // is overwhelmingly an absolute path, a branch name or a hash — one token
+  // with no space in it and, for a path, no break opportunity a browser will
+  // take either (it will break after `/` but not before, so a long leading
+  // directory still overhangs). `break-words` only breaks a word that cannot
+  // fit ON ITS OWN LINE, which is why a 60-character path in the middle of a
+  // paragraph ran straight out of the pane. Ugly mid-token wrapping is the
+  // right trade here: the alternative was text the reader could not see.
   code: ({ children }) => (
-    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] break-all">
       {children}
     </code>
   ),
@@ -129,12 +138,16 @@ const COMPONENTS: Components = {
       </div>
     );
   },
+  // `break-all` for the same reason as inline code, and this one was measured
+  // as the widest offender in a real transcript: an autolinked URL is a single
+  // unbreakable token whose link TEXT is the URL, and one of them pushed the
+  // transcript 139px past its pane.
   a: ({ children, href }) => (
     <a
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="text-primary underline underline-offset-2">
+      className="text-primary underline underline-offset-2 break-all">
       {children}
     </a>
   ),
@@ -149,7 +162,13 @@ const COMPONENTS: Components = {
     // never overflows never scrolls, however wide its content really is.
     // Letting it size to its content is what hands the wrapper something to
     // scroll.
-    <div className="overflow-x-auto not-first:mt-2">
+    // `min-w-0` + `max-w-full`: this wrapper is a flex ITEM, whose min-width
+    // defaults to its content — so it grew to the table's full width and
+    // `overflow-x-auto` had nothing left to clip, handing the overflow to the
+    // transcript instead. Measured: a 4-column file table reached 239px past
+    // the pane. Constrained, the table scrolls INSIDE this box, which is what
+    // the wrapper was always for.
+    <div className="max-w-full min-w-0 overflow-x-auto not-first:mt-2">
       <table className="border-collapse text-xs">{children}</table>
     </div>
   ),

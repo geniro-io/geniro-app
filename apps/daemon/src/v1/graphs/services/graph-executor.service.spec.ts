@@ -42,6 +42,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
@@ -513,6 +514,10 @@ function setup(
     callTokens,
     partials,
     attachments,
+    // A workflow run allocates its own seq from the executor's single-owner
+    // counter, so nothing here reserves through this — it is present only
+    // because the shared teardown forgets whatever a chat run left behind.
+    new ItemSeqAllocator(em, itemDao as unknown as ItemDao),
   );
   const service = new GraphExecutorService(
     em,

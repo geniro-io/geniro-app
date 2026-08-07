@@ -95,9 +95,16 @@ function FoldedReason({
         {detail}
       </span>
       {foldable ? (
+        // Smaller than the reason it folds, and deliberately so. This is a
+        // disclosure control, not a peer of the failure text — at the row's
+        // own size it read as the loudest thing in a panel whose actual
+        // content is the server list, and it drew the eye ahead of the error
+        // it belongs to. `text-[11px]` matches the other in-row controls (the
+        // Sign in button), and dropping the underline to a hover affordance
+        // leaves the row quiet until pointed at.
         <button
           type="button"
-          className="shrink-0 text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          className="shrink-0 text-[11px] leading-4 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           onClick={() => setExpanded((value) => !value)}>
           {expanded ? 'Show less' : 'Show more'}
         </button>
@@ -233,27 +240,44 @@ function McpGroup({
 }: {
   title: string;
   count: number;
-  children: React.ReactNode;
+  /** Absent when {@link count} is 0 — there is nothing to disclose. */
+  children?: React.ReactNode;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  // An EMPTY group is still a statement, and that is why it renders. Hidden at
+  // zero, "no servers need signing in here" and "this build has no such
+  // section" look identical — which is exactly how the section was reported
+  // missing on a folder where every server happened to be signed in. Shown
+  // with its count, the answer is on screen either way. It is inert rather
+  // than merely empty: a disclosure that opens onto nothing is a worse lie
+  // than no disclosure at all.
+  const disclosable = count > 0;
   return (
     <div className="flex flex-col">
       <button
         type="button"
-        aria-expanded={open}
+        aria-expanded={disclosable ? open : undefined}
+        disabled={!disclosable}
         onClick={() => setOpen((value) => !value)}
-        className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors outline-none hover:bg-accent/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        className={cn(
+          'flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+          disclosable && 'hover:bg-accent/40 hover:text-foreground',
+          // Not `disabled:opacity-50`: at 50% this text drops below AA on the
+          // card, and the row is the one thing the reader came to check.
+          !disclosable && 'cursor-default opacity-70',
+        )}>
         <ChevronRight
           aria-hidden="true"
           className={cn(
             'size-3 shrink-0 transition-transform',
-            open && 'rotate-90',
+            open && disclosable && 'rotate-90',
+            !disclosable && 'invisible',
           )}
         />
         <span className="font-medium">{title}</span>
         <span>· {count}</span>
       </button>
-      {open ? (
+      {open && disclosable ? (
         <ul className="m-0 flex list-none flex-col p-0">{children}</ul>
       ) : null}
     </div>
@@ -276,7 +300,9 @@ function McpGroup({
  * ones a reader can do something about, which is exactly why they must not sit
  * among the working ones: unfolded, a folder with several of them buried the
  * servers that are actually running. Folded, the group's own count is the
- * standing statement that they exist.
+ * standing statement of how many there are — INCLUDING none, which is why the
+ * group renders at zero too. Hidden at zero it took a folder with no
+ * signed-out server to make the whole feature look absent.
  */
 export function McpSection({
   listing,
@@ -398,11 +424,12 @@ export function McpSection({
           {rest.length > 0 ? (
             <ul className="m-0 flex list-none flex-col p-0">{rest.map(row)}</ul>
           ) : null}
-          {signedOut.length > 0 ? (
-            <McpGroup title="Needs sign-in" count={signedOut.length}>
-              {signedOut.map(row)}
-            </McpGroup>
-          ) : null}
+          {/* Rendered UNCONDITIONALLY once a listing exists, empty included —
+              see {@link McpGroup}. The condition here is that we have an
+              answer at all, not that the answer is non-zero. */}
+          <McpGroup title="Needs sign-in" count={signedOut.length}>
+            {signedOut.map(row)}
+          </McpGroup>
         </>
       )}
     </div>

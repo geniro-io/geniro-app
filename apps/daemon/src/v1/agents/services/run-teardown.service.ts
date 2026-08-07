@@ -8,6 +8,7 @@ import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AttachmentStoreService } from './attachment-store.service';
+import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 
@@ -58,6 +59,7 @@ export class RunTeardownService {
     private readonly callTokens: CallTokenRegistry,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -93,6 +95,9 @@ export class RunTeardownService {
     // here must not leave the durable rows half-deleted.
     this.callTokens.revokeRun(runId);
     this.partials.forgetRun(runId);
+    // Dropped only AFTER the caller's work has settled (above), so nothing can
+    // still be reserving against a tail we are discarding.
+    this.seqs.forget(runId);
 
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },

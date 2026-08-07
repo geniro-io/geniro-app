@@ -7,7 +7,21 @@ import { type LiveTextEvent, parseLiveText } from './chats/live-text';
 export interface DaemonClientEvents {
   onOpen?: () => void;
   onMessage?: (event: string, data: unknown) => void;
-  onClose?: () => void;
+  /** `reason` is Socket.IO's own word for why the socket dropped. */
+  onClose?: (reason: string) => void;
+  /**
+   * A connection ATTEMPT failed — the daemon is not answering, or it refused
+   * the handshake token.
+   *
+   * Separate from `onClose` because the two are different facts and only this
+   * one is actionable: a close is a live connection ending (often the daemon
+   * restarting, and Socket.IO reconnects on its own), while this fires on
+   * every retry of a connection that was never made. Without it a daemon that
+   * is down produces no signal at all beyond a status dot changing colour —
+   * which is the reported "if we have a problem with the api/connection we
+   * should see it in the UI".
+   */
+  onError?: (message: string) => void;
 }
 
 /**
@@ -146,12 +160,27 @@ export class DaemonClient {
           });
       }
     });
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason: string) => {
       this.rejectAllJoins('socket disconnected before joining run');
       for (const listener of this.disconnectListeners) {
         listener();
       }
-      this.events.onClose?.();
+      this.events.onClose?.(reason);
+    });
+    // Every failed ATTEMPT, including each automatic retry. Socket.IO keeps
+    // retrying forever and reports nothing else, so this is the only place the
+    // renderer can learn that the daemon is unreachable or rejecting the
+    // token — the difference between "still connecting" and "will never
+    // connect", which the UI otherwise had no way to tell the user about.
+    socket.on('connect_error', (err: Error) => {
+      // The ADDRESS is included because Socket.IO's own wording for a refused
+      // loopback connection is the bare "websocket error" — true, and useless
+      // for the one question the user can act on: which port are we dialling,
+      // and is anything listening on it. The client is the only place that
+      // knows, since host and port are negotiated per launch.
+      const endpoint = `${this.handle.host}:${this.handle.port}`;
+      const reason = err.message || 'could not reach the daemon';
+      this.events.onError?.(`${reason} (${endpoint})`);
     });
     socket.onAny((event: string, data: unknown) => {
       this.events.onMessage?.(event, data);

@@ -312,11 +312,25 @@ export function Chats({
       if (last === undefined || item.seq > last.seq) {
         return [...prev, item];
       }
-      // The replay/live seam (or a reconnect delta) can re-deliver or reorder a
-      // seq: de-dupe by seq, then insert in seq order.
-      if (prev.some((existing) => existing.seq === item.seq)) {
-        return prev; // de-dupe the replay/live seam by seq
+      // The replay/live seam (or a reconnect delta) can re-deliver an item:
+      // de-dupe, then insert in seq order.
+      //
+      // BY ID, never by seq. Identity is what `id` means and what the seam
+      // actually re-delivers — the same row twice — while `seq` is only the
+      // ORDER. Treating a repeated seq as a repeated item made this the second
+      // half of the duplicate-seq defect: the daemon issued one value to two
+      // different rows, and this silently dropped whichever arrived second,
+      // which was reliably the agent's reply ("it deletes its last message").
+      // The daemon can no longer issue one twice (`ItemSeqAllocator`), but a
+      // transcript written before that fix still holds such a pair, and an
+      // ordering number is the wrong thing to establish identity with in any
+      // case: this way those rows come back on the next replay instead of
+      // staying invisible forever.
+      if (prev.some((existing) => existing.id === item.id)) {
+        return prev;
       }
+      // A stable sort keeps two rows that DO share a seq in arrival order,
+      // rather than letting their relative position flip between renders.
       return [...prev, item].sort((a, b) => a.seq - b.seq);
     });
     if (item.seq > lastSeqRef.current) {
@@ -2055,103 +2069,103 @@ export function Chats({
                       onHighlight={setSkillHighlight}
                     />
                   ) : null}
-                  <ComposerCard>
-                    <ComposerTopRow>
+                  <ComposerTopRow>
+                    <Select
+                      variant="ghost"
+                      value={target}
+                      aria-label="Agent or workflow for new runs"
+                      searchPlaceholder="Search agents, workflows…"
+                      groups={[
+                        {
+                          label: 'Agents',
+                          // An agent the machine cannot run is SHOWN and
+                          // refused, not hidden: a row that quietly vanishes
+                          // leaves the user hunting for it, while a disabled
+                          // one with its reason beside it explains itself.
+                          // The current target is never refused — a run
+                          // already on it would otherwise have a picker that
+                          // cannot display its own value.
+                          items: CLI_KINDS.map((kind) => {
+                            const detected = cliDetections?.find(
+                              (d) => d.kind === kind,
+                            );
+                            const missing =
+                              detected !== undefined &&
+                              !detected.found &&
+                              kind !== target;
+                            return {
+                              value: kind,
+                              label: kind,
+                              ...(missing
+                                ? { disabled: true, hint: 'not installed' }
+                                : {}),
+                            };
+                          }),
+                        },
+                        ...(workflows.length > 0
+                          ? [
+                              {
+                                label: 'Workflows',
+                                items: workflows.map((wf) => ({
+                                  value: `wf:${wf.slug}`,
+                                  label: wf.name,
+                                  icon: <WorkflowIcon />,
+                                })),
+                              },
+                            ]
+                          : []),
+                      ]}
+                      onValueChange={changeTarget}
+                    />
+                    <FolderSelect
+                      folder={folder}
+                      recentFolders={recentFolders}
+                      onChoose={chooseFolder}
+                      onBrowse={() => void pickFolder()}
+                    />
+                    <BranchSelect
+                      info={git.info}
+                      switching={git.switching}
+                      onSwitch={(branch) => void git.switchTo(branch)}
+                    />
+                    {workflowSlug && triggers.length > 0 ? (
                       <Select
                         variant="ghost"
-                        value={target}
-                        aria-label="Agent or workflow for new runs"
-                        searchPlaceholder="Search agents, workflows…"
+                        value={triggerId}
+                        aria-label="Trigger the run starts from"
                         groups={[
                           {
-                            label: 'Agents',
-                            // An agent the machine cannot run is SHOWN and
-                            // refused, not hidden: a row that quietly vanishes
-                            // leaves the user hunting for it, while a disabled
-                            // one with its reason beside it explains itself.
-                            // The current target is never refused — a run
-                            // already on it would otherwise have a picker that
-                            // cannot display its own value.
-                            items: CLI_KINDS.map((kind) => {
-                              const detected = cliDetections?.find(
-                                (d) => d.kind === kind,
-                              );
-                              const missing =
-                                detected !== undefined &&
-                                !detected.found &&
-                                kind !== target;
-                              return {
-                                value: kind,
-                                label: kind,
-                                ...(missing
-                                  ? { disabled: true, hint: 'not installed' }
-                                  : {}),
-                              };
-                            }),
+                            items: triggers.map((entry) => ({
+                              value: entry.id,
+                              label: `${entry.name} · ${entry.trigger} trigger`,
+                              icon: <Zap />,
+                            })),
                           },
-                          ...(workflows.length > 0
-                            ? [
-                                {
-                                  label: 'Workflows',
-                                  items: workflows.map((wf) => ({
-                                    value: `wf:${wf.slug}`,
-                                    label: wf.name,
-                                    icon: <WorkflowIcon />,
-                                  })),
-                                },
-                              ]
-                            : []),
                         ]}
-                        onValueChange={changeTarget}
+                        onValueChange={setTriggerId}
                       />
-                      <FolderSelect
-                        folder={folder}
-                        recentFolders={recentFolders}
-                        onChoose={chooseFolder}
-                        onBrowse={() => void pickFolder()}
+                    ) : null}
+                    {!workflowSlug ? (
+                      // Approval mode of the next chat — graph runs keep their
+                      // per-node modes from the workflow YAML instead.
+                      <ApprovalModeSelect
+                        supportedModes={composerApprovalModes}
+                        // A mode this CLI does not honour shows as the "cli
+                        // default" placeholder rather than a lie — the user
+                        // may have picked it while another agent was selected.
+                        value={
+                          composerApprovalModes?.includes(approvalMode)
+                            ? approvalMode
+                            : null
+                        }
+                        planSupported={
+                          capabilities?.claudeModes.plan === 'pass'
+                        }
+                        onChange={changeApprovalMode}
                       />
-                      <BranchSelect
-                        info={git.info}
-                        switching={git.switching}
-                        onSwitch={(branch) => void git.switchTo(branch)}
-                      />
-                      {workflowSlug && triggers.length > 0 ? (
-                        <Select
-                          variant="ghost"
-                          value={triggerId}
-                          aria-label="Trigger the run starts from"
-                          groups={[
-                            {
-                              items: triggers.map((entry) => ({
-                                value: entry.id,
-                                label: `${entry.name} · ${entry.trigger} trigger`,
-                                icon: <Zap />,
-                              })),
-                            },
-                          ]}
-                          onValueChange={setTriggerId}
-                        />
-                      ) : null}
-                      {!workflowSlug ? (
-                        // Approval mode of the next chat — graph runs keep their
-                        // per-node modes from the workflow YAML instead.
-                        <ApprovalModeSelect
-                          supportedModes={composerApprovalModes}
-                          // A mode this CLI does not honour shows as the "cli
-                          // default" placeholder rather than a lie — the user
-                          // may have picked it while another agent was selected.
-                          value={
-                            composerApprovalModes?.includes(approvalMode)
-                              ? approvalMode
-                              : null
-                          }
-                          planSupported={
-                            capabilities?.claudeModes.plan === 'pass'
-                          }
-                          onChange={changeApprovalMode}
-                        />
-                      ) : null}
-                    </ComposerTopRow>
+                    ) : null}
+                  </ComposerTopRow>
+                  <ComposerCard>
                     <AttachmentStrip
                       attachments={attachments.attachments}
                       onRemove={attachments.remove}
@@ -2260,7 +2274,32 @@ export function Chats({
                 />
               ) : null}
 
-              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+              {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
+                  CSS resolves a `visible` axis to `auto` whenever the other
+                  axis scrolls, so this box was a horizontal scroller by
+                  omission — measured at 1100px wide: scrollWidth 759 against
+                  clientWidth 620, and the whole conversation could be dragged
+                  sideways off its own pane.
+
+                  `hidden` and not `clip`, which was tried: CSS computes a
+                  `clip` axis back to `hidden` as soon as its neighbour
+                  scrolls, so the two are the same declaration here and only
+                  one of them says what the browser will do.
+
+                  Nothing reachable is lost: every genuinely wide thing in a
+                  transcript (a fenced code block, a GFM table) is its OWN
+                  `overflow-x-auto` box and still scrolls inside itself, and
+                  the sources that overflowed as TEXT (long URLs, inline code
+                  holding a path) are fixed where they render, in
+                  `markdown-content.tsx`.
+
+                  Below ~1000px `scrollWidth` still reads wider than
+                  `clientWidth` — Chromium counts layout overflow those inner
+                  scroll containers have already clipped. Verified in the
+                  browser that it is inert: at 900px a horizontal wheel gesture
+                  and a `scrollIntoView` on the widest descendant both leave
+                  `scrollLeft` at 0. */}
+              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
                 {transcriptEntries.map((entry) => {
                   if (
                     entry.type !== 'item' ||
@@ -2415,9 +2454,8 @@ export function Chats({
                       onHighlight={setSkillHighlight}
                     />
                   ) : null}
-                  <ComposerCard>
-                    <ComposerTopRow>
-                      {/* Informational run-identity chips — static Chips carrying
+                  <ComposerTopRow>
+                    {/* Informational run-identity chips — static Chips carrying
                       no chevron, never disabled Buttons: disabled kills hover
                       (so the cwd title tooltip could never fire) and 50%
                       opacity drops the text below AA contrast.
@@ -2426,52 +2464,52 @@ export function Chats({
                       them: it is fixed for the run's whole life, so it belongs
                       to the header's identity line, not to a row of controls
                       that change things. */}
-                      {activeRun?.cwd ? (
-                        <Chip title={activeRun.cwd} className="max-w-52">
-                          <FolderOpen />
-                          <span className="truncate">
-                            {folderName(activeRun.cwd)}
-                          </span>
-                        </Chip>
-                      ) : null}
-                      {/* Read-only: the branch is live repo state, but a run's
+                    {activeRun?.cwd ? (
+                      <Chip title={activeRun.cwd} className="max-w-52">
+                        <FolderOpen />
+                        <span className="truncate">
+                          {folderName(activeRun.cwd)}
+                        </span>
+                      </Chip>
+                    ) : null}
+                    {/* Read-only: the branch is live repo state, but a run's
                       turns are all against the tree it started on, so switching
                       it under an open transcript would silently re-point the
                       work. The new-run composer above is where it is chosen. */}
-                      <BranchSelect info={runGit.info} readOnly />
-                      {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
-                        <Chip>
-                          <Zap />
-                          <span className="max-w-52 truncate">
-                            {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                          </span>
-                        </Chip>
-                      ) : null}
-                      {activeRun &&
-                      activeRun.workflowId === null &&
-                      activeRun.agentKind ? (
-                        /* The permission posture belongs with what the run
+                    <BranchSelect info={runGit.info} readOnly />
+                    {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
+                      <Chip>
+                        <Zap />
+                        <span className="max-w-52 truncate">
+                          {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                        </span>
+                      </Chip>
+                    ) : null}
+                    {activeRun &&
+                    activeRun.workflowId === null &&
+                    activeRun.agentKind ? (
+                      /* The permission posture belongs with what the run
                         IS, not with how this turn thinks — and it is
                         editable at any time, mid-turn included: the daemon
                         hands the change to the turn already running. */
-                        <ApprovalModeSelect
-                          supportedModes={
-                            capabilities
-                              ? (approvalModesByAgent.get(
-                                  activeRun.agentKind,
-                                ) ?? [])
-                              : null
-                          }
-                          value={activeRun.approval}
-                          planSupported={
-                            capabilities?.claudeModes.plan === 'pass'
-                          }
-                          onChange={(approval) =>
-                            void changeRunSettings({ approval })
-                          }
-                        />
-                      ) : null}
-                    </ComposerTopRow>
+                      <ApprovalModeSelect
+                        supportedModes={
+                          capabilities
+                            ? (approvalModesByAgent.get(activeRun.agentKind) ??
+                              [])
+                            : null
+                        }
+                        value={activeRun.approval}
+                        planSupported={
+                          capabilities?.claudeModes.plan === 'pass'
+                        }
+                        onChange={(approval) =>
+                          void changeRunSettings({ approval })
+                        }
+                      />
+                    ) : null}
+                  </ComposerTopRow>
+                  <ComposerCard>
                     <AttachmentStrip
                       attachments={attachments.attachments}
                       onRemove={attachments.remove}
@@ -2508,31 +2546,6 @@ export function Chats({
                     <ComposerBottomRow
                       actions={
                         <>
-                          {/* The context readout, immediately left of the
-                          actions. It lived in the transcript header — a row
-                          the eye leaves as soon as the conversation starts —
-                          while the question it answers ("how much room is
-                          left") is asked at the moment of composing the next
-                          message, which is here. */}
-                          <ContextMeter
-                            contextTokens={
-                              activeRun?.workflowId
-                                ? null
-                                : (agents[0]?.contextTokens ?? null)
-                            }
-                            contextWindowTokens={
-                              activeRun?.workflowId
-                                ? null
-                                : (agents[0]?.contextWindowTokens ?? null)
-                            }
-                            // Opens UPWARD here, unlike the agents panel. This
-                            // row sits at the bottom of the composer, inside
-                            // the app shell's `overflow-hidden` main — roughly
-                            // 20px below a panel that is 50-68px tall — so a
-                            // downward readout is clipped, and the ring shows
-                            // no figures of its own to fall back on.
-                            side="top"
-                          />
                           {streaming ? (
                             <>
                               {hasContent && activeRun?.workflowId == null ? (
@@ -2614,6 +2627,37 @@ export function Chats({
                             onChange={(effort) =>
                               void changeRunSettings({ effort })
                             }
+                          />
+                          {/* The context readout, DIRECTLY after the effort
+                          chip rather than over beside Send.
+
+                          It reads as one of this turn's settings, because that
+                          is what it is about: model, effort and how much room
+                          is left are the three facts describing the request
+                          you are composing. Pinned to the actions it sat
+                          against the one control that destroys work (Stop),
+                          separated from everything it belongs with, and its
+                          readout panel opened against the send button. Here it
+                          also wraps with the chips instead of squeezing the
+                          actions. */}
+                          <ContextMeter
+                            contextTokens={
+                              activeRun.workflowId
+                                ? null
+                                : (agents[0]?.contextTokens ?? null)
+                            }
+                            contextWindowTokens={
+                              activeRun.workflowId
+                                ? null
+                                : (agents[0]?.contextWindowTokens ?? null)
+                            }
+                            // Opens UPWARD. This row sits at the bottom of the
+                            // composer, inside the app shell's
+                            // `overflow-hidden` main — roughly 20px below a
+                            // panel that is 50-68px tall — so a downward
+                            // readout is clipped, and the ring shows no figures
+                            // of its own to fall back on.
+                            side="top"
                           />
                         </>
                       ) : null}

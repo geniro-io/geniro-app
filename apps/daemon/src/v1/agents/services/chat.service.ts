@@ -47,6 +47,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { EffortsService } from './efforts.service';
+import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
@@ -134,6 +135,7 @@ export class ChatService {
     private readonly partials: PartialStreamService,
     private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -168,11 +170,17 @@ export class ChatService {
         if (this.registry.has(run.id)) {
           continue; // an in-flight turn legitimately owns this run
         }
-        let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
-        await this.persist(em, run.id, seq++, 'error', null, {
-          message:
-            'run interrupted — the daemon stopped before this turn finished',
-        });
+        await this.persist(
+          em,
+          run.id,
+          await this.seqs.reserve(run.id),
+          'error',
+          null,
+          {
+            message:
+              'run interrupted — the daemon stopped before this turn finished',
+          },
+        );
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         for (const request of unansweredRequests(
@@ -181,7 +189,7 @@ export class ChatService {
           await this.persist(
             em,
             run.id,
-            seq++,
+            await this.seqs.reserve(run.id),
             'unanswerable',
             null,
             request.payload,
@@ -518,10 +526,14 @@ export class ChatService {
     // settle it, and its badge lied in every list that showed it. Cancel is
     // the user saying "this is over": make the row say so.
     if (!isTerminalRunStatus(run.status)) {
-      const seq = (await this.itemDao.maxSeq(runId, em)) + 1;
-      await this.persist(em, runId, seq, 'turn_cancelled', null, {
-        reason: 'cancelled with no turn in flight',
-      });
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'turn_cancelled',
+        null,
+        { reason: 'cancelled with no turn in flight' },
+      );
       await this.setRunStatus(em, runId, 'cancelled');
       this.logger.warn(
         `cancel found no live turn for run ${runId} — reconciled its status from '${run.status}' to cancelled`,
@@ -614,11 +626,20 @@ export class ChatService {
         this.attachments.save(runId, image.mediaType, image.data),
       );
 
-      let seq = (await this.itemDao.maxSeq(runId, em)) + 1;
-      const userWire = await this.persist(em, runId, seq++, 'message', 'user', {
-        text,
-        ...(attachments.length > 0 ? { images: attachments } : {}),
-      });
+      // Every write below allocates from the run's ONE allocator rather than
+      // from a counter local to this turn. A turn is not the only writer of
+      // its run's transcript — a follow-up message handed to it mid-flight
+      // (`deliverIntoRunningTurn`) writes a user item on its own request
+      // chain — and a local counter cannot see that row, so it reissued the
+      // seq the follow-up had just taken. See {@link ItemSeqAllocator}.
+      const userWire = await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'message',
+        'user',
+        { text, ...(attachments.length > 0 ? { images: attachments } : {}) },
+      );
 
       const adapter: AgentAdapter = this.adapterFor(agentKind);
 
@@ -641,9 +662,14 @@ export class ChatService {
             : { supported: {} },
         );
         if (resolved.degradeReason !== null) {
-          await this.persist(em, runId, seq++, 'system', null, {
-            message: resolved.degradeReason,
-          });
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'system',
+            null,
+            { message: resolved.degradeReason },
+          );
         }
         approvalMode = resolved.mode;
       }
@@ -888,7 +914,7 @@ export class ChatService {
                 await this.persist(
                   em,
                   runId,
-                  seq++,
+                  await this.seqs.reserve(runId),
                   mapped.kind,
                   mapped.role,
                   mapped.payload,
@@ -926,7 +952,7 @@ export class ChatService {
                       await this.persist(
                         em,
                         runId,
-                        seq++,
+                        await this.seqs.reserve(runId),
                         'approval_verdict',
                         null,
                         {
@@ -956,7 +982,7 @@ export class ChatService {
             await this.persist(
               em,
               runId,
-              seq++,
+              await this.seqs.reserve(runId),
               mapped.kind,
               mapped.role,
               mapped.payload,
@@ -1012,7 +1038,7 @@ export class ChatService {
             await this.persist(
               em,
               runId,
-              seq++,
+              await this.seqs.reserve(runId),
               'unanswerable',
               null,
               unanswerablePayload(approval),
@@ -1028,10 +1054,14 @@ export class ChatService {
           // item row the live plane is ever allowed to create.
           const tail = this.partials.takeTail(runId, SINGLE_AGENT_NODE, null);
           if (tail !== null) {
-            await this.persist(em, runId, seq++, 'message', 'assistant', {
-              text: tail,
-              partial: true,
-            }).catch((err: unknown) => {
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'message',
+              'assistant',
+              { text: tail, partial: true },
+            ).catch((err: unknown) => {
               this.logger.error(
                 `run ${runId} partial-text flush failed: ${err instanceof Error ? err.message : String(err)}`,
               );
@@ -1047,9 +1077,14 @@ export class ChatService {
                 );
               },
             );
-            await this.persist(em, runId, seq++, 'error', null, {
-              message,
-            }).catch((err: unknown) => {
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'error',
+              null,
+              { message },
+            ).catch((err: unknown) => {
               this.logger.error(
                 `run ${runId} terminal failure item write failed: ${err instanceof Error ? err.message : String(err)}`,
               );
@@ -1060,10 +1095,14 @@ export class ChatService {
             // The turn ended with no terminal event (e.g. a clean exit with no
             // result line). Persist+emit a synthetic turn_complete so the client
             // always receives a terminal item and never wedges waiting for one.
-            await this.persist(em, runId, seq++, 'turn_complete', null, {
-              usage: null,
-              stopReason: null,
-            });
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'turn_complete',
+              null,
+              { usage: null, stopReason: null },
+            );
             await this.setRunStatus(em, runId, 'completed').catch(
               (err: unknown) => {
                 this.logger.error(
@@ -1161,7 +1200,15 @@ export class ChatService {
     // Its OWN seq, allocated now: the follow-up belongs after everything the
     // turn has already written, not at the position it would have had when the
     // user pressed send.
-    const seq = (await this.itemDao.maxSeq(runId, em)) + 1;
+    //
+    // From the run's ALLOCATOR, never from `maxSeq`. This is the exact seam
+    // the duplicate-seq defect lived in: the turn running underneath this call
+    // holds reservations the table cannot show, so a database read handed this
+    // message the number the turn had already claimed for its next item — and
+    // the renderer, which de-dupes by seq, then dropped whichever arrived
+    // second. That was reliably the agent's reply, which is why the reported
+    // symptom was "it deletes its last message".
+    const seq = await this.seqs.reserve(runId);
     return this.persist(em, runId, seq, 'message', 'user', {
       text,
       ...(attachments.length > 0 ? { images: attachments } : {}),

@@ -23,6 +23,7 @@ import { ChatService } from './services/chat.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
+import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { McpHarvestStore } from './services/mcp-harvest.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -127,6 +128,7 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
         ),
     },
     RunTeardownService,
+    ItemSeqAllocator,
     ItemDao,
     NodeStateDao,
     RunDao,

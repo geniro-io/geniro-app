@@ -63,7 +63,11 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
   ipcMain.handle(IPC.updateSettings, async (event, patch: unknown) => {
     const parsed = settingsPatchSchema.parse(patch);
     const settings = updateSettings(parsed);
-    if (parsed.cliPaths !== undefined) {
+    // Both of these are read when the daemon PROCESS is launched — CLI paths
+    // ride its env, and the inspector is a launch flag — so neither can take
+    // effect on the running one. Respawning here is what makes the toggle mean
+    // what it says the moment it is flipped.
+    if (parsed.cliPaths !== undefined || parsed.daemonInspect !== undefined) {
       await restartAndNotify(event);
     }
     return settings;
@@ -131,6 +135,12 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
   ipcMain.handle(IPC.revealPath, (_event, path: unknown) =>
     revealPath(revealPathSchema.parse(path)),
   );
+
+  // No schema: there is no input. Acts on the SENDER's own WebContents rather
+  // than on a looked-up window, so this cannot be aimed at another window.
+  ipcMain.handle(IPC.toggleDevTools, (event) => {
+    event.sender.toggleDevTools();
+  });
 
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {
     const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);

@@ -3,6 +3,7 @@ import {
   FolderOpen,
   Pause,
   Play,
+  SquareCode,
   Trash2,
   X,
 } from 'lucide-react';
@@ -244,6 +245,22 @@ export function DebugPanel({
               <FolderOpen className="size-3.5 shrink-0" />
             </Button>
           ) : null}
+          {/* Sits HERE, not in a menu: the two are consulted for the same
+              symptom and the answer is often in the other one. What this panel
+              cannot show — the DOM, a stylesheet, the actual request that
+              404'd — is one click away, and the reverse is signposted in the
+              title so nobody hunts for daemon logs in a Console that will
+              never have them. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6"
+            aria-label="Open Chrome DevTools"
+            title="Chrome DevTools (⌥⌘I) — DOM, Console, and this window’s requests. The daemon and the agent CLIs are separate processes; they only appear here."
+            onClick={() => void window.geniro.toggleDevTools()}>
+            <SquareCode className="size-3.5 shrink-0" />
+          </Button>
           <Button
             type="button"
             variant="ghost"

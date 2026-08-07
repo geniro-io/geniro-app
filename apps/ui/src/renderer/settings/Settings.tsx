@@ -5,6 +5,7 @@ import {
   CLI_KINDS,
   type CliDetection,
   type CliKind,
+  DAEMON_INSPECT_PORT,
   type Settings as SettingsShape,
 } from '../../shared/contracts';
 import { AgentConfigList } from '../components/agent-config-list';
@@ -45,12 +46,15 @@ export function Settings(): React.JSX.Element {
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [daemonInspect, setDaemonInspect] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const checkForUpdatesDirtyRef = useRef(false);
+  const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
     checkForUpdates: 0,
+    daemonInspect: 0,
     other: 0,
   });
 
@@ -90,6 +94,9 @@ export function Settings(): React.JSX.Element {
       setBinaryPaths((prev) => ({ ...s.cliPaths, ...prev }));
       if (!checkForUpdatesDirtyRef.current) {
         setCheckForUpdates(s.checkForUpdates);
+      }
+      if (!daemonInspectDirtyRef.current) {
+        setDaemonInspect(s.daemonInspect);
       }
     });
     void window.geniro.detectClis().then(setClis);
@@ -132,7 +139,9 @@ export function Settings(): React.JSX.Element {
           ? 'cliPaths'
           : patch.checkForUpdates !== undefined
             ? 'checkForUpdates'
-            : 'other';
+            : patch.daemonInspect !== undefined
+              ? 'daemonInspect'
+              : 'other';
       const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
@@ -219,6 +228,17 @@ export function Settings(): React.JSX.Element {
       checkForUpdatesDirtyRef.current = true;
       setCheckForUpdates(next);
       void persist({ checkForUpdates: next });
+    },
+    [persist],
+  );
+
+  const onToggleInspect = useCallback(
+    (next: boolean): void => {
+      daemonInspectDirtyRef.current = true;
+      setDaemonInspect(next);
+      // Main restarts the daemon on this key — an inspector is a launch flag,
+      // so there is nothing to apply to the process already running.
+      void persist({ daemonInspect: next });
     },
     [persist],
   );
@@ -324,6 +344,36 @@ export function Settings(): React.JSX.Element {
         {updateStatus ? (
           <p className="text-xs text-muted-foreground">{updateStatus}</p>
         ) : null}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Diagnostics</h2>
+        <div className="flex items-center gap-3">
+          <Switch
+            id="settings-daemon-inspect"
+            checked={daemonInspect}
+            onCheckedChange={onToggleInspect}
+          />
+          <Label htmlFor="settings-daemon-inspect" className="cursor-pointer">
+            Attach a debugger to the daemon
+          </Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Runs the daemon with a Node inspector on{' '}
+          <code className="rounded bg-muted px-1 py-0.5">
+            127.0.0.1:{DAEMON_INSPECT_PORT}
+          </code>
+          , so Chrome DevTools can attach to it from{' '}
+          <code className="rounded bg-muted px-1 py-0.5">chrome://inspect</code>{' '}
+          — breakpoints, profiler and heap snapshots over the daemon itself.
+          This window’s own DevTools (⌥⌘I) cannot see the daemon: it is a
+          separate process.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Toggling this restarts the daemon, and anything able to reach loopback
+          can run code inside it while the port is open — leave it off unless
+          you are debugging.
+        </p>
       </section>
     </div>
   );

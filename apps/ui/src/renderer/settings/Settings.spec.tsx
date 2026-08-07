@@ -7,7 +7,7 @@ import type {
   GeniroApi,
   Settings as SettingsShape,
 } from '../../shared/contracts';
-import { DEFAULT_SETTINGS } from '../../shared/contracts';
+import { DAEMON_INSPECT_PORT, DEFAULT_SETTINGS } from '../../shared/contracts';
 import { Settings } from './Settings';
 
 (
@@ -72,22 +72,27 @@ describe('Settings updates section', () => {
   it('seeds the update toggle from persisted settings', async () => {
     await mount();
 
-    const toggle = container.querySelector('[role="switch"]');
+    const toggle = container.querySelector('#settings-check-updates');
     expect(toggle?.getAttribute('aria-checked')).toBe('false');
   });
 
   it('names the toggle through a real associated label, not a duplicate button', async () => {
     await mount();
 
-    const toggle = container.querySelector('[role="switch"]')!;
+    const toggle = container.querySelector('#settings-check-updates')!;
     const label = container.querySelector<HTMLLabelElement>(
       `label[for="${toggle.id}"]`,
     );
-    expect(toggle.id).not.toBe('');
+    expect(toggle.getAttribute('role')).toBe('switch');
     expect(label?.textContent).toBe('Check for app updates on launch');
-    // Exactly one switch: the old raw-button label doubled the toggle surface
-    // with no state semantics for assistive tech.
-    expect(container.querySelectorAll('[role="switch"]')).toHaveLength(1);
+    // Exactly one switch IN THIS SECTION: the old raw-button label doubled the
+    // toggle surface with no state semantics for assistive tech. Scoped to the
+    // section rather than the page, because unrelated settings legitimately
+    // add their own switches — a page-wide count would fail on the next one
+    // instead of on the duplication it exists to catch.
+    expect(
+      toggle.closest('section')?.querySelectorAll('[role="switch"]'),
+    ).toHaveLength(1);
   });
 
   it('does not overwrite a user toggle when the initial settings read resolves late', async () => {
@@ -293,5 +298,44 @@ describe('Settings key removal', () => {
 
     expect(geniro.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
     expect(removeButton()).toBeUndefined();
+  });
+});
+
+describe('Settings diagnostics section', () => {
+  const inspectToggle = (): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>('#settings-daemon-inspect')!;
+
+  it('seeds the daemon-inspector toggle from persisted settings', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: true });
+    await mount();
+
+    // Seeded, not defaulted: the daemon it describes was spawned from this
+    // value, so a switch that always mounted off would misreport a daemon
+    // that IS listening — and a user who then "turned it on" would get a
+    // restart that changed nothing.
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('persists the daemon-inspector flip, which is what triggers the respawn', async () => {
+    await mount();
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
+
+    await act(async () => {
+      inspectToggle().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The key must reach main under its own name: main restarts the daemon on
+    // `daemonInspect` specifically, so a patch that folded it in with anything
+    // else would save the setting and leave the daemon un-inspectable.
+    expect(geniro.updateSettings).toHaveBeenCalledWith({ daemonInspect: true });
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('says which port to attach to, so the user is not left to guess', async () => {
+    await mount();
+
+    const section = inspectToggle().closest('section')!;
+    expect(section.textContent).toContain(`127.0.0.1:${DAEMON_INSPECT_PORT}`);
+    expect(section.textContent).toContain('chrome://inspect');
   });
 });

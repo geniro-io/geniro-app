@@ -52,6 +52,7 @@ export const settingsPatchSchema = z.strictObject({
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
   checkForUpdates: z.boolean().optional(),
+  daemonInspect: z.boolean().optional(),
 });
 
 /** A directory a git command may run in. */

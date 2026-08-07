@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     lastEfforts: {},
     cliPaths: {},
     checkForUpdates: true,
+    daemonInspect: false,
   };
   return {
     handlers,
@@ -68,7 +69,8 @@ function handler(channel: string): IpcHandler {
 
 describe('registerIpc daemon configuration refresh', () => {
   const send = vi.fn();
-  const event = { sender: { send } };
+  const toggleDevTools = vi.fn();
+  const event = { sender: { send, toggleDevTools } };
   const restart = vi.fn(async () => ({
     host: '127.0.0.1',
     port: 4823,
@@ -100,6 +102,28 @@ describe('registerIpc daemon configuration refresh', () => {
     restart.mockClear();
     await handler(IPC.updateSettings)(event, { checkForUpdates: false });
     expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('restarts after the daemon-inspector toggle, which only a new process can honour', async () => {
+    await handler(IPC.updateSettings)(event, { daemonInspect: true });
+
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ daemonInspect: true });
+    // Without the respawn the switch reads "on" while the running daemon has
+    // no inspector — chrome://inspect finds nothing and the setting is a lie.
+    expect(restart).toHaveBeenCalledOnce();
+
+    restart.mockClear();
+    await handler(IPC.updateSettings)(event, { daemonInspect: false });
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it('toggles DevTools on the calling window only', async () => {
+    await handler(IPC.toggleDevTools)(event);
+
+    // The SENDER's own WebContents. Resolving a window some other way (a
+    // focused-window lookup, an index) is what would let one window open
+    // another's inspector.
+    expect(toggleDevTools).toHaveBeenCalledOnce();
   });
 
   it('accepts the composer chips the renderer remembers, and still refuses an unknown key', async () => {

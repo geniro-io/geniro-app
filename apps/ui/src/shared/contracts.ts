@@ -73,6 +73,24 @@ export interface Settings {
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
   checkForUpdates: boolean;
+  /**
+   * Spawn the daemon with a Node inspector on loopback, so real Chrome
+   * DevTools can attach to it from `chrome://inspect`.
+   *
+   * The daemon is a separate Node process, so the renderer's DevTools can see
+   * nothing of it. This is what closes that gap, and it is the genuine article
+   * rather than a reimplementation: Sources with breakpoints over the daemon's
+   * own TypeScript, the CPU profiler, heap snapshots.
+   *
+   * A setting rather than always-on. An open inspector port is arbitrary code
+   * execution inside the daemon for anything that can reach loopback — fine on
+   * a single-user machine, which is this app's whole premise, but not
+   * something to hand every packaged install without the user asking. Off by
+   * default; the choice persists, so it is one click once. Applying it needs a
+   * daemon respawn (an inspector is a process-launch flag), which the settings
+   * write triggers.
+   */
+  daemonInspect: boolean;
 }
 
 /** Default settings written on first launch when no settings file exists. */
@@ -86,7 +104,23 @@ export const DEFAULT_SETTINGS: Settings = {
   lastEfforts: {},
   cliPaths: {},
   checkForUpdates: true,
+  daemonInspect: false,
 };
+
+/**
+ * Loopback port the daemon's inspector listens on when `daemonInspect` is on.
+ *
+ * 9229 deliberately — it is node's own default, and the one address
+ * `chrome://inspect` discovers with no configuration. A tidier private port
+ * would mean every user's first step is "add 127.0.0.1:<x> under Configure",
+ * which is the step people give up at.
+ *
+ * The Electron MAIN process is never launched with `--inspect` here, so
+ * nothing else in this app claims it. If something outside does, node reports
+ * the address as in use and the daemon still starts — the inspector is the
+ * only thing lost.
+ */
+export const DAEMON_INSPECT_PORT = 9229;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // App updates (GitHub Releases version check — the ad-hoc build reports a newer
@@ -233,6 +267,23 @@ export interface GeniroApi {
   revealPath(
     path: string,
   ): Promise<{ revealed: boolean; reason: string | null }>;
+  /**
+   * Toggle Chrome DevTools on this window — the same Elements / Console /
+   * Network panels a browser gives you, because the renderer IS a browser.
+   *
+   * It answers a different question from the debug panel and neither replaces
+   * the other. DevTools sees ONE process, this one: the DOM, renderer
+   * exceptions, and every HTTP call and `/ws` frame the renderer sends. It
+   * cannot see the daemon or a spawned CLI at all — those are separate
+   * processes with no page and no renderer network stack, which is why the
+   * daemon log, the transcript stream and `agent-stdio` exist in the debug
+   * panel instead, and why reaching the daemon's own internals needs
+   * `daemonInspect` rather than this.
+   *
+   * Electron's default menu already binds this to ⌥⌘I; the button exists so it
+   * is findable from the place a user already looks when something is wrong.
+   */
+  toggleDevTools(): Promise<void>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -256,4 +307,5 @@ export const IPC = {
   openInTerminal: 'geniro:openInTerminal',
   switchBranch: 'geniro:switchBranch',
   revealPath: 'geniro:revealPath',
+  toggleDevTools: 'geniro:toggleDevTools',
 } as const satisfies Record<keyof GeniroApi, string>;

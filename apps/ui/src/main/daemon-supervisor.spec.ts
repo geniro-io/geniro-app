@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Settings } from '../shared/contracts';
-import { DEFAULT_SETTINGS } from '../shared/contracts';
+import { DAEMON_INSPECT_PORT, DEFAULT_SETTINGS } from '../shared/contracts';
 
 const mocks = vi.hoisted(() => ({
   app: {
@@ -64,7 +64,7 @@ function info(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
 interface Harness {
   supervisor: DaemonSupervisor;
   child: FakeChild;
-  spawned: { env?: NodeJS.ProcessEnv }[];
+  spawned: { env?: NodeJS.ProcessEnv; args: string[] }[];
   kills: { pid: number; signal: NodeJS.Signals }[];
   removed: string[];
   setPidfile(next: DaemonInfo | null): void;
@@ -85,15 +85,16 @@ function harness(opts: {
 }): Harness {
   let pidfile = opts.pidfile;
   const child = new FakeChild();
-  const spawned: { env?: NodeJS.ProcessEnv }[] = [];
+  const spawned: { env?: NodeJS.ProcessEnv; args: string[] }[] = [];
   const kills: { pid: number; signal: NodeJS.Signals }[] = [];
   const killedPids = new Set<number>();
   const removed: string[] = [];
   const options: DaemonSupervisorOptions = {
     spawn: ((cmd: string, args: string[], o: { env?: NodeJS.ProcessEnv }) => {
       void cmd;
-      void args;
-      spawned.push(o);
+      // argv is recorded, not discarded: the daemon's inspector is a LAUNCH
+      // flag, so argv is the only place the debugger toggle is observable.
+      spawned.push({ ...o, args });
       // The spawned daemon "writes" its pidfile with the child's own pid.
       pidfile = info({ pid: child.pid, version: '0.2.0' });
       return child;
@@ -351,6 +352,41 @@ describe('DaemonSupervisor.start', () => {
     expect(h.spawned).toHaveLength(1);
     expect(h.spawned[0]?.env?.GENIRO_CLAUDE_BIN).toBe('/opt/tools/claude');
     expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBeUndefined();
+  });
+
+  it('leaves the daemon without an inspector unless the setting asks for one', async () => {
+    const h = harness({ pidfile: null });
+
+    await h.supervisor.start();
+
+    expect(h.spawned).toHaveLength(1);
+    // Nothing debugger-shaped at all, rather than "not the exact string we
+    // spell below": an inspector opened under any spelling is the thing this
+    // refuses, and `--inspect-brk` would additionally hang the daemon before
+    // it ever listened.
+    expect(h.spawned[0]?.args.filter((a) => a.startsWith('--inspect'))).toEqual(
+      [],
+    );
+  });
+
+  it('opens the inspector on loopback, ahead of the entry script, when the setting is on', async () => {
+    mocks.readSettings.mockReturnValue({
+      ...DEFAULT_SETTINGS,
+      onboardingComplete: true,
+      daemonInspect: true,
+    });
+    const h = harness({ pidfile: null });
+
+    await h.supervisor.start();
+
+    expect(h.spawned).toHaveLength(1);
+    // Order is load-bearing, not cosmetic: node reads `--inspect` only from
+    // the argv AHEAD of the script path — placed after, it is handed to the
+    // daemon as one of its own arguments and silently does nothing.
+    expect(h.spawned[0]?.args).toEqual([
+      `--inspect=127.0.0.1:${DAEMON_INSPECT_PORT}`,
+      '/bundle/daemon/dist/main.js',
+    ]);
   });
 
   it('terminates a spawned child that never becomes healthy before the startup deadline', async () => {

@@ -97,8 +97,13 @@ async function mount(apis: DaemonApis, client: DaemonClient): Promise<void> {
 beforeEach(() => {
   // jsdom has no scrollIntoView; the panel's tail-follow effect calls it.
   Element.prototype.scrollIntoView = vi.fn();
-  (window as unknown as { geniro: { revealPath: unknown } }).geniro = {
+  (
+    window as unknown as {
+      geniro: { revealPath: unknown; toggleDevTools: unknown };
+    }
+  ).geniro = {
     revealPath: vi.fn().mockResolvedValue({ revealed: true, reason: null }),
+    toggleDevTools: vi.fn().mockResolvedValue(undefined),
   };
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -140,6 +145,29 @@ describe('DebugPanel', () => {
 
     await act(async () => root.unmount());
     expect(setDebugStream).toHaveBeenLastCalledWith(false);
+  });
+
+  it('opens Chrome DevTools from the panel, without closing it', async () => {
+    // The two are consulted for the SAME symptom and each holds half the
+    // answer, so reaching the browser's inspector must not cost the daemon
+    // view that is already on screen.
+    const { apis } = makeApis({ entries: [entry(1)], lastSeq: 1 });
+    const { client } = makeClient();
+    await mount(apis, client);
+
+    const devtools = [...container.querySelectorAll('button')].find((b) =>
+      b.getAttribute('aria-label')?.includes('DevTools'),
+    )!;
+    await act(async () => devtools.click());
+
+    expect(
+      (
+        window as unknown as {
+          geniro: { toggleDevTools: ReturnType<typeof vi.fn> };
+        }
+      ).geniro.toggleDevTools,
+    ).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('line 1');
   });
 
   it('holds the list still while paused, and does not buffer', async () => {

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { Logger, Module } from '@nestjs/common';
 
 import { environment } from '../../environments';
+import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { ClaudeProbeService } from './adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
@@ -21,8 +22,8 @@ import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { ContextWindowStore } from './services/context-window.store';
-import { CursorMcpCleanupService } from './services/cursor-mcp-cleanup.service';
 import { EffortsService } from './services/efforts.service';
+import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { McpHarvestStore } from './services/mcp-harvest.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -32,6 +33,7 @@ import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
+import { defaultSpawn } from './utils/spawn-cli';
 
 /**
  * Single-agent chat (M2): the AgentAdapter subclasses, persistence DAOs, the in-proc
@@ -56,10 +58,6 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
     { provide: McpHarvestStore, useFactory: () => new McpHarvestStore() },
-    {
-      provide: CursorMcpCleanupService,
-      useFactory: () => new CursorMcpCleanupService(),
-    },
     {
       provide: AttachmentStoreService,
       useFactory: () => new AttachmentStoreService(),
@@ -127,6 +125,7 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
         ),
     },
     RunTeardownService,
+    ItemSeqAllocator,
     ItemDao,
     NodeStateDao,
     RunDao,
@@ -136,6 +135,11 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
       // (never the OS-shared tmpdir) — they carry the per-run call token.
       useFactory: () =>
         new ClaudeAdapter({
+          // The `agent-stdio` debug channel, wired at the ONE seam every
+          // adapter already shares. Inert unless that channel is switched on,
+          // and it knows nothing about which CLI it is wrapping — see
+          // `createTeeingSpawn` for why the spawn is the right seam.
+          spawn: createTeeingSpawn(defaultSpawn),
           mcpConfigDir: join(environment.userDataDir, 'tmp'),
           // The command-catalog probe's throwaway workspace — daemon-owned,
           // never a user folder.
@@ -150,7 +154,10 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
     {
       provide: CursorAcpAdapter,
       useFactory: () =>
-        new CursorAcpAdapter({ logger: new Logger(CursorAcpAdapter.name) }),
+        new CursorAcpAdapter({
+          spawn: createTeeingSpawn(defaultSpawn),
+          logger: new Logger(CursorAcpAdapter.name),
+        }),
     },
     {
       // Factory because the trailing options bag is a test seam, not a DI token.
@@ -167,8 +174,9 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
     AgentEventBus,
     ApprovalRegistry,
     PartialStreamService,
-    // Exported for the terminals module: it turns these buffers into the
-    // live mirror sessions the panel attaches to.
+    // Exported for the graphs module: the executor reads this CLI's probed
+    // permission modes when it builds a node's turn, and `/v1/capabilities`
+    // publishes the same verdict to the builder.
     ClaudeProbeService,
     ProcessRegistry,
     // Exported so the graph executor's own run delete reaches the same
@@ -186,15 +194,17 @@ import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
     // what it loaded, and that report is what keeps the MCP panel off a cold
     // re-dial.
     McpHarvestStore,
-    // Exported so a turn can be built with the servers the user switched off:
-    // the store holds geniro's neutral set and each adapter translates it.
-    CursorMcpCleanupService,
     ItemDao,
     NodeStateDao,
     RunDao,
     ClaudeAdapter,
     CursorAcpAdapter,
     AgentAdapterRegistry,
+    // Exported for the diagnostics report, which names each CLI and the
+    // version that binary answers with. Through this ONE service so the
+    // report costs no new spawn: it serves the same per-binary memo the rest
+    // of the daemon reads.
+    AgentVersionService,
   ],
 })
 export class AgentsModule {}

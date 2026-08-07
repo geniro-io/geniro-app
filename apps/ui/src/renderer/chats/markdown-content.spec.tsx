@@ -70,19 +70,88 @@ describe('MarkdownContent code', () => {
   });
 });
 
+describe('MarkdownContent — nothing overflows the transcript sideways', () => {
+  // The transcript pane could be dragged sideways, clipping the conversation
+  // off its own edge. Its scroller now states `overflow-x-hidden`, so anything
+  // still overflowing would be CLIPPED rather than reachable — which makes
+  // these three the load-bearing half of that fix, not cosmetics.
+
+  it('breaks a long inline-code path instead of running past the pane', () => {
+    // Inline code in this transcript is overwhelmingly an absolute path or a
+    // branch name: one token, and for a path not one a browser breaks on its
+    // own (it breaks AFTER `/`, never before, so a long leading directory
+    // still overhangs). `break-words` is not enough — it only breaks a word
+    // that cannot fit on a line by itself.
+    const el = render(
+      <MarkdownContent content="see `/Users/someone/Desktop/Projects/Geniro/geniro-app/apps/daemon/src/v1/agents/services/chat.service.ts` for it" />,
+    );
+    const code = el.querySelector('code');
+
+    expect(code?.className).toContain('break-all');
+  });
+
+  it('breaks a long autolinked URL', () => {
+    // Measured as the widest single offender in a real transcript: the link
+    // TEXT is the URL, so there is nothing shorter to fall back on.
+    const el = render(
+      <MarkdownContent content="https://ticktick.com/webapp/#p/69981be521481104e25a00d1/tasks/6a744fe9556d915e8f3c2a6d" />,
+    );
+    const link = el.querySelector('a');
+
+    expect(link?.getAttribute('href')).toContain('ticktick.com');
+    expect(link?.className).toContain('break-all');
+  });
+
+  it('keeps a wide table’s overflow inside its own wrapper', () => {
+    // The wrapper is a flex ITEM, whose min-width defaults to its content — so
+    // without `min-w-0` it grew to the table's full width, `overflow-x-auto`
+    // had nothing left to clip, and the overflow was handed to the transcript.
+    const el = render(<MarkdownContent content={ALIGNED_TABLE} />);
+    const wrapper = el.querySelector('table')?.parentElement;
+
+    expect(wrapper?.className).toContain('min-w-0');
+    expect(wrapper?.className).toContain('max-w-full');
+  });
+});
+
 describe('MarkdownContent tables', () => {
-  it('lets a wide table scroll instead of hard-wrapping inside its wrapper', () => {
+  it('fits a table to the pane, and says so when it cannot', () => {
     const el = render(<MarkdownContent content={ALIGNED_TABLE} />);
     const wrapper = el.querySelector('table')?.parentElement;
     const table = el.querySelector('table');
 
-    // The wrapper is the scroll container...
+    // `w-full` so the table FITS and its cells wrap. This assertion is the
+    // inverse of the one it replaced, deliberately: that version reasoned that
+    // a table which never overflows never scrolls, and optimised for having
+    // something to scroll rather than for the reader seeing the table.
+    expect(table?.className).toContain('w-full');
+    // Cells stop shrinking at a readable floor, so a very wide table reaches
+    // the scroll fallback instead of becoming vertical letter stacks.
+    expect(el.querySelector('th')?.className).toContain('min-w-24');
+    expect(el.querySelector('td')?.className).toContain('min-w-24');
+    // And when the fallback IS reached it must be visible. macOS overlay
+    // scrollbars take no layout space and are invisible at rest — measured,
+    // 229px of a 9-column table hidden with a 0px scrollbar — so a scroll
+    // container with no forced track reads as simply cut off.
     expect(wrapper?.className).toContain('overflow-x-auto');
-    // ...and the table must NOT be pinned to its width, or there is never any
-    // overflow to scroll: content wraps to fit and long cells become unreadable
-    // columns instead. This is the whole fix — if `w-full` comes back, the
-    // table clips again.
-    expect(table?.className).not.toContain('w-full');
+    expect(wrapper?.className).toContain('scroll-x-visible');
+  });
+
+  it('wraps a long unbroken token in ORDINARY prose, not just in code and links', () => {
+    // The earlier pass put `break-all` on inline code and on links and stopped
+    // there, which left plain prose — what a USER's own message is entirely
+    // made of — overflowing: `whitespace-pre-wrap` breaks at spaces, and a
+    // 170-character token has none. Measured in a browser against a real
+    // transcript: a 643px paragraph reporting a 1244px scrollWidth.
+    //
+    // Asserted on the ROOT because `overflow-wrap` is inherited: one
+    // declaration there is what covers paragraphs, list items, headings,
+    // quotes and table cells at once.
+    const token = 'a'.repeat(170);
+    const el = render(<MarkdownContent content={`prose ${token} end`} />);
+
+    expect(el.firstElementChild?.className).toContain('break-words');
+    expect(el.querySelector('p')?.textContent).toContain(token);
   });
 
   it('carries GFM column alignment through to th and td', () => {

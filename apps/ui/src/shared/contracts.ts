@@ -73,6 +73,27 @@ export interface Settings {
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
   checkForUpdates: boolean;
+  /**
+   * Spawn the daemon with a Node inspector on loopback, so real Chrome
+   * DevTools can attach to it from `chrome://inspect`.
+   *
+   * The daemon is a separate Node process, so the renderer's DevTools can see
+   * nothing of it. This is what closes that gap, and it is the genuine article
+   * rather than a reimplementation: Sources with breakpoints over the daemon's
+   * own TypeScript, the CPU profiler, heap snapshots.
+   *
+   * **Three states, not two.** `null` is "not chosen", which resolves per
+   * build — on in dev, off when packaged (`resolveDaemonInspect`) — and an
+   * explicit boolean overrides that either way.
+   *
+   * A plain boolean could not express this, because dev and the packaged app
+   * share ONE userData dir (`app.setName('Geniro')` decides it, and both
+   * builds set the same name). Whatever a dev launch resolved would be
+   * written to the same settings.json a shipped launch then reads, so a
+   * boolean default would leak the dev answer into the packaged build — the
+   * exact case the split exists to prevent.
+   */
+  daemonInspect: boolean | null;
 }
 
 /** Default settings written on first launch when no settings file exists. */
@@ -86,7 +107,50 @@ export const DEFAULT_SETTINGS: Settings = {
   lastEfforts: {},
   cliPaths: {},
   checkForUpdates: true,
+  daemonInspect: null,
 };
+
+/**
+ * Whether this launch spawns the daemon with an inspector.
+ *
+ * Unchosen means ON in dev and OFF when packaged, which is the honest default
+ * on both sides rather than one compromise for both. Developing the app is
+ * debugging it — there is no argument for making that a click — while a
+ * shipped install has a user who will never attach a debugger and gains
+ * nothing from the port, so the only thing an always-on default would add
+ * there is arbitrary code execution inside the daemon for anything that
+ * reaches loopback. That daemon holds the Cursor key in its env and spawns
+ * CLIs with the user's own permissions over their source tree.
+ *
+ * (Node's inspector does validate the `Host` header, so a random web page
+ * cannot attach — the exposure is to local processes, not to the network.
+ * That is a real limit on the risk, and still not zero.)
+ *
+ * An explicit choice always wins, in both directions: a developer who
+ * switched it off keeps it off, and a user who switched it on in a packaged
+ * build keeps it on.
+ */
+export function resolveDaemonInspect(
+  setting: boolean | null,
+  isPackaged: boolean,
+): boolean {
+  return setting ?? !isPackaged;
+}
+
+/**
+ * Loopback port the daemon's inspector listens on when `daemonInspect` is on.
+ *
+ * 9229 deliberately — it is node's own default, and the one address
+ * `chrome://inspect` discovers with no configuration. A tidier private port
+ * would mean every user's first step is "add 127.0.0.1:<x> under Configure",
+ * which is the step people give up at.
+ *
+ * The Electron MAIN process is never launched with `--inspect` here, so
+ * nothing else in this app claims it. If something outside does, node reports
+ * the address as in use and the daemon still starts — the inspector is the
+ * only thing lost.
+ */
+export const DAEMON_INSPECT_PORT = 9229;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // App updates (GitHub Releases version check — the ad-hoc build reports a newer
@@ -178,7 +242,19 @@ export interface OnboardingInput {
  */
 export interface GeniroApi {
   /** Current onboarding + daemon status. */
-  getStatus(): Promise<{ onboardingComplete: boolean; daemon: DaemonStatus }>;
+  getStatus(): Promise<{
+    onboardingComplete: boolean;
+    daemon: DaemonStatus;
+    /**
+     * Whether this is a packaged build. The renderer needs it for exactly one
+     * thing: settings whose unchosen state resolves per build
+     * (`resolveDaemonInspect`). A screen that showed the STORED `null` as
+     * "off" would tell the user no debugger port is open while the dev daemon
+     * is listening on one — and `import.meta.env.PROD` is not the same
+     * question, since a built-but-unpackaged run answers it the other way.
+     */
+    isPackaged: boolean;
+  }>;
   /** Daemon connection handle (host + port + token) for opening an authed WS. */
   getDaemonHandle(): Promise<DaemonHandle | null>;
   /** Subscribe to daemon restarts that rotate the loopback handle/token. */
@@ -221,6 +297,35 @@ export interface GeniroApi {
   }): Promise<void>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
+  /**
+   * Show one of the daemon's own files in Finder — the debug log.
+   *
+   * Deliberately narrow: it REVEALS (selects in a file manager) rather than
+   * opens, so nothing here can be talked into executing what it is handed, and
+   * main refuses any path outside the daemon's log directory. The renderer is
+   * sandboxed and a path it supplies is not trusted just because the daemon
+   * gave it to us.
+   */
+  revealPath(
+    path: string,
+  ): Promise<{ revealed: boolean; reason: string | null }>;
+  /**
+   * Toggle Chrome DevTools on this window — the same Elements / Console /
+   * Network panels a browser gives you, because the renderer IS a browser.
+   *
+   * It answers a different question from the debug panel and neither replaces
+   * the other. DevTools sees ONE process, this one: the DOM, renderer
+   * exceptions, and every HTTP call and `/ws` frame the renderer sends. It
+   * cannot see the daemon or a spawned CLI at all — those are separate
+   * processes with no page and no renderer network stack, which is why the
+   * daemon log, the transcript stream and `agent-stdio` exist in the debug
+   * panel instead, and why reaching the daemon's own internals needs
+   * `daemonInspect` rather than this.
+   *
+   * Electron's default menu already binds this to ⌥⌘I; the button exists so it
+   * is findable from the place a user already looks when something is wrong.
+   */
+  toggleDevTools(): Promise<void>;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -243,4 +348,6 @@ export const IPC = {
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',
   switchBranch: 'geniro:switchBranch',
+  revealPath: 'geniro:revealPath',
+  toggleDevTools: 'geniro:toggleDevTools',
 } as const satisfies Record<keyof GeniroApi, string>;

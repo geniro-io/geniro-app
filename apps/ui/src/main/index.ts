@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { app, BrowserWindow, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
@@ -48,6 +48,42 @@ function schemeOf(url: string): string {
     return new URL(url).protocol;
   } catch {
     return '';
+  }
+}
+
+/** The unpacked DevTools extension that adds the "Geniro" panel. */
+const DEVTOOLS_EXTENSION_PATH = join(
+  app.getAppPath(),
+  'resources',
+  'devtools-extension',
+);
+
+/**
+ * Register the Geniro panel inside Chrome DevTools.
+ *
+ * This is what makes the daemon's log a REAL DevTools tab — beside Elements,
+ * Console and Network, following the user's DevTools theme — rather than a
+ * panel of ours that merely resembles one. The renderer's own drawer stays: it
+ * is the surface you consult while USING the app, and it is the only one
+ * available when DevTools is closed.
+ *
+ * Loaded on every boot by design — Electron stopped remembering extensions
+ * across runs — and into the DEFAULT session, which is the one the window
+ * uses. A failure is logged and swallowed: an absent debug tab must never be
+ * the reason the app does not start, and Electron supports only a subset of
+ * the extension APIs, so this is the kind of thing that can break under an
+ * Electron upgrade.
+ */
+async function loadDevToolsExtension(): Promise<void> {
+  if (!existsSync(DEVTOOLS_EXTENSION_PATH)) {
+    return;
+  }
+  try {
+    await session.defaultSession.extensions.loadExtension(
+      DEVTOOLS_EXTENSION_PATH,
+    );
+  } catch (err) {
+    console.error('failed to load the Geniro DevTools panel', err);
   }
 }
 
@@ -162,6 +198,7 @@ function main(): void {
 
     registerIpc(supervisor);
     checkOnLaunch(readSettings().checkForUpdates);
+    await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
     // and the renderer bundle load overlap the spawn + health poll instead of

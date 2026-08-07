@@ -78,6 +78,14 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
       GeniroApi['switchBranch']
     >,
+  revealPath: (path) =>
+    ipcRenderer.invoke(IPC.revealPath, path) as ReturnType<
+      GeniroApi['revealPath']
+    >,
+  toggleDevTools: () =>
+    ipcRenderer.invoke(IPC.toggleDevTools) as ReturnType<
+      GeniroApi['toggleDevTools']
+    >,
 };
 
 contextBridge.exposeInMainWorld('geniro', api);

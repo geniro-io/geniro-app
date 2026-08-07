@@ -30,7 +30,6 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type ClaudeModesCapability,
-  type CursorCallsCapability,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
@@ -42,6 +41,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
@@ -385,7 +385,6 @@ afterAll(() => {
 function setup(
   runtimePort: number | null = 4870,
   opts: {
-    cursorCalls?: CursorCallsCapability;
     claudeModes?: ClaudeModesCapability;
     mergeOk?: boolean;
     gitTracked?: boolean;
@@ -404,7 +403,6 @@ function setup(
   callBroker: CallBroker;
   /** Every live delta the real bus carried, in order. */
   deltas: RunDeltaEvent[];
-  ensureVerdict: ReturnType<typeof vi.fn>;
   claudeEnsureVerdict: ReturnType<typeof vi.fn>;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
@@ -425,15 +423,6 @@ function setup(
   const approvals = new ApprovalRegistry();
   const callTokens = new CallTokenRegistry();
   const callBroker = new CallBroker();
-  // Probe verdict defaults to 'unknown' — cursor callers stay shut out unless
-  // a test opts into a 'pass' explicitly (mirrors a machine never probed).
-  const cursorCalls: CursorCallsCapability = opts.cursorCalls ?? {
-    status: 'unknown',
-    version: null,
-    probedAt: null,
-    reason: null,
-  };
-  const ensureVerdict = vi.fn(async () => cursorCalls);
   // Claude mode probe defaults to all-pass — the widened modes run as
   // requested unless a test opts into a probed FAIL explicitly.
   const claudeModes: ClaudeModesCapability = opts.claudeModes ?? {
@@ -513,6 +502,10 @@ function setup(
     callTokens,
     partials,
     attachments,
+    // A workflow run allocates its own seq from the executor's single-owner
+    // counter, so nothing here reserves through this — it is present only
+    // because the shared teardown forgets whatever a chat run left behind.
+    new ItemSeqAllocator(em, itemDao as unknown as ItemDao),
   );
   const service = new GraphExecutorService(
     em,
@@ -553,7 +546,6 @@ function setup(
     approvals,
     callTokens,
     callBroker,
-    ensureVerdict,
     claudeEnsureVerdict,
     mergeAcquire,
     mergeReleases,
@@ -2910,8 +2902,8 @@ describe('GraphExecutorService — deleting a workflow run', () => {
 
   it('drops the run’s call surface, its tokens, its attachments, and announces it', async () => {
     // None of these cascade from the `runs` row: the broker and the token
-    // registry are in memory, attachments are files, and the PTY mirror lives
-    // in a module above this one and learns only by subscription.
+    // registry are in memory, attachments are files, and anything holding
+    // per-run state above this module learns only by subscription.
     const ctx = await setup();
     const run = await ctx.service.startRun({
       slug: 'calls',

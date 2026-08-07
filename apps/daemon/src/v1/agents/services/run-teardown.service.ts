@@ -8,6 +8,7 @@ import { RunDao } from '../dao/run.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AttachmentStoreService } from './attachment-store.service';
+import { ItemSeqAllocator } from './item-seq.allocator';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 
@@ -35,9 +36,10 @@ export const DELETE_SETTLE_TIMEOUT_MS = 5_000;
  *
  * Every store the run touched is then cleared, because none of them cascade:
  * `Item.runId` is a plain string column with no FK, `node_state` is keyed by
- * `(runId, nodeId)`, attachments are files on disk, PTY mirrors are in memory,
- * and call tokens are in a registry. A delete that dropped only the `runs` row
- * would leave every one of those behind, invisible and unreachable.
+ * `(runId, nodeId)`, attachments are files on disk, and live CLI sessions,
+ * partial streams, seq allocations and call tokens all live in in-memory
+ * registries. A delete that dropped only the `runs` row would leave every one
+ * of those behind, invisible and unreachable.
  *
  * What it deliberately does NOT do is decide WHICH runs may be deleted, or wait
  * for the caller's own notion of "finished": the run-kind guard and the settle
@@ -58,6 +60,7 @@ export class RunTeardownService {
     private readonly callTokens: CallTokenRegistry,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -93,6 +96,9 @@ export class RunTeardownService {
     // here must not leave the durable rows half-deleted.
     this.callTokens.revokeRun(runId);
     this.partials.forgetRun(runId);
+    // Dropped only AFTER the caller's work has settled (above), so nothing can
+    // still be reserving against a tail we are discarding.
+    this.seqs.forget(runId);
 
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },
@@ -106,11 +112,11 @@ export class RunTeardownService {
     this.attachments.removeRun(runId);
 
     // Announced last, once the run genuinely no longer exists: modules above
-    // this one (the PTY mirror) hold per-run state and drop it on this signal.
+    // this one hold per-run state and drop it on this signal.
     this.bus.publishRunDeleted(runId);
 
     this.logger.log(
-      `deleted run ${runId}: ${items} item(s), ${nodeStates} node state(s), attachments and live mirrors dropped`,
+      `deleted run ${runId}: ${items} item(s), ${nodeStates} node state(s), attachments dropped`,
     );
     return { deleted: true };
   }

@@ -5,10 +5,13 @@ import {
   CLI_KINDS,
   type CliDetection,
   type CliKind,
+  DAEMON_INSPECT_PORT,
+  resolveDaemonInspect,
   type Settings as SettingsShape,
 } from '../../shared/contracts';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
@@ -45,16 +48,25 @@ export function Settings(): React.JSX.Element {
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  // The STORED tri-state, not the effective one: `null` means "not chosen",
+  // and the switch below renders what that resolves to for this build.
+  const [storedInspect, setStoredInspect] = useState<boolean | null>(null);
+  const [isPackaged, setIsPackaged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const checkForUpdatesDirtyRef = useRef(false);
+  const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
     checkForUpdates: 0,
+    daemonInspect: 0,
     other: 0,
   });
 
   const keyPresent = (hasStoredKey ?? false) || cursorKey.trim() !== '';
+  // What the daemon was actually spawned with — the switch must report the
+  // port's real state, not the stored `null`.
+  const inspectEnabled = resolveDaemonInspect(storedInspect, isPackaged);
 
   // Latest binary paths for the debounced persist timer (it fires after the
   // state that triggered it has committed).
@@ -91,7 +103,11 @@ export function Settings(): React.JSX.Element {
       if (!checkForUpdatesDirtyRef.current) {
         setCheckForUpdates(s.checkForUpdates);
       }
+      if (!daemonInspectDirtyRef.current) {
+        setStoredInspect(s.daemonInspect);
+      }
     });
+    void window.geniro.getStatus().then((s) => setIsPackaged(s.isPackaged));
     void window.geniro.detectClis().then(setClis);
     void window.geniro.hasSecret('cursor.apiKey').then(setHasStoredKey);
   }, []);
@@ -132,7 +148,9 @@ export function Settings(): React.JSX.Element {
           ? 'cliPaths'
           : patch.checkForUpdates !== undefined
             ? 'checkForUpdates'
-            : 'other';
+            : patch.daemonInspect !== undefined
+              ? 'daemonInspect'
+              : 'other';
       const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
@@ -219,6 +237,21 @@ export function Settings(): React.JSX.Element {
       checkForUpdatesDirtyRef.current = true;
       setCheckForUpdates(next);
       void persist({ checkForUpdates: next });
+    },
+    [persist],
+  );
+
+  const onToggleInspect = useCallback(
+    (next: boolean): void => {
+      daemonInspectDirtyRef.current = true;
+      // Flipping the switch always writes an EXPLICIT boolean, never back to
+      // `null`. Touching it is the choice; leaving it alone is what keeps the
+      // per-build default. Writing `null` here would make the toggle
+      // un-flippable in dev, where auto already resolves to on.
+      setStoredInspect(next);
+      // Main restarts the daemon on this key — an inspector is a launch flag,
+      // so there is nothing to apply to the process already running.
+      void persist({ daemonInspect: next });
     },
     [persist],
   );
@@ -324,6 +357,46 @@ export function Settings(): React.JSX.Element {
         {updateStatus ? (
           <p className="text-xs text-muted-foreground">{updateStatus}</p>
         ) : null}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Diagnostics</h2>
+        <div className="flex items-center gap-3">
+          <Switch
+            id="settings-daemon-inspect"
+            checked={inspectEnabled}
+            onCheckedChange={onToggleInspect}
+          />
+          <Label htmlFor="settings-daemon-inspect" className="cursor-pointer">
+            Attach a debugger to the daemon
+          </Label>
+          {storedInspect === null ? (
+            // Named so the state is legible: the switch is showing a default
+            // this build chose, not something the user set. Without it, a
+            // developer who never opened Settings has no way to learn the
+            // port is open.
+            <Badge variant="secondary">
+              default for {isPackaged ? 'the installed app' : 'dev'}
+            </Badge>
+          ) : null}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Runs the daemon with a Node inspector on{' '}
+          <code className="rounded bg-muted px-1 py-0.5">
+            127.0.0.1:{DAEMON_INSPECT_PORT}
+          </code>
+          , so Chrome DevTools can attach to it from{' '}
+          <code className="rounded bg-muted px-1 py-0.5">chrome://inspect</code>{' '}
+          — breakpoints, profiler and heap snapshots over the daemon itself.
+          This window’s own DevTools (⌥⌘I) cannot see the daemon: it is a
+          separate process.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          On by default in development and off in the installed app. Toggling it
+          restarts the daemon, and while the port is open any process on this
+          machine can run code inside the daemon — which is why a shipped
+          install, where nobody is debugging, does not open one.
+        </p>
       </section>
     </div>
   );

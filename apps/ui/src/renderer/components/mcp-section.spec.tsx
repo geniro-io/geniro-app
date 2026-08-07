@@ -226,6 +226,11 @@ describe('McpSection', () => {
       (button) => button.textContent === 'Show more',
     );
     expect(toggle).toBeDefined();
+    // Smaller than the reason it folds. At the row's own size it read as the
+    // loudest thing in the panel and drew the eye ahead of the failure it
+    // belongs to — this is a disclosure control, not a peer of the message.
+    expect(toggle!.className).toContain('text-[11px]');
+    expect(reason.className).not.toContain('text-[11px]');
 
     act(() => {
       toggle!.click();
@@ -411,6 +416,29 @@ describe('McpSection — servers that need signing in', () => {
     // Present in the count, absent from the DOM until asked for.
     expect(el.textContent).toContain('working');
     expect(el.textContent).not.toContain('linear');
+  });
+
+  it('still shows the group, at zero, when every server is signed in', () => {
+    // Reported as "I don't see the unauthorized MCP section" — on a folder
+    // where the CLI reported no signed-out server at all. Hidden at zero, the
+    // section's absence says nothing about WHY it is absent, so "none here"
+    // and "this build has no such section" look identical and the only way to
+    // tell them apart is to read the source.
+    const el = render({
+      listing: listing({ name: 'working' }, { name: 'also-working' }),
+      loading: false,
+    });
+
+    const zero = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Needs sign-in'),
+    );
+    expect(zero).toBeDefined();
+    expect(zero!.textContent).toContain('0');
+    // Inert, not merely empty: a disclosure that opens onto nothing is a
+    // worse lie than no disclosure. It also claims no expanded state, so
+    // nothing announces a collapsed region that does not exist.
+    expect(zero!.disabled).toBe(true);
+    expect(zero!.getAttribute('aria-expanded')).toBeNull();
   });
 
   it('reveals them when the group is opened', () => {

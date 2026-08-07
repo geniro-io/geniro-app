@@ -149,10 +149,11 @@ constants or types to name**, every pure helper in
 `<name>/utils/<name>-<subject>.utils.ts`, and that CLI's own probe and per-turn
 lifecycle services (`claude/claude-probe.service.ts`). **A file named after one
 CLI never lives outside that CLI's directory** — not in `services/`, not in
-`utils/`, not in another module. Specs move with their file. (`v1/agents`'s
-`cursor-mcp-cleanup` util + service are the one live exception, and an expiring
-one: they clean up after the DELETED legacy transport and are removed a release
-after shipping.)
+`utils/`, not in another module. Specs move with their file. There is no
+exception: the one that used to stand here (`cursor-mcp-cleanup`, a one-release
+boot sweep of residue the deleted legacy transport left in users' worktrees)
+was written down as expiring and has since been deleted. Write the expiry down
+if you ever need another.
 
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol

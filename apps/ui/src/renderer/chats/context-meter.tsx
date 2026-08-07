@@ -94,6 +94,11 @@ export function ContextMeter({
   if (contextTokens === null || windowTokens === null) {
     return (
       <span
+        // The SAME `data-slot` as the ring branch below, so "where in the
+        // composer does the meter sit" is one query regardless of which shape
+        // it currently takes. (Both branches render something; the case with
+        // nothing to say returned null above.)
+        data-slot="context-meter"
         className={cn(
           'flex items-center gap-2 text-xs text-muted-foreground',
           className,
@@ -115,7 +120,9 @@ export function ContextMeter({
   const fraction = contextTokens / windowTokens;
   const percent = Math.round(fraction * 100);
   return (
-    <span className={cn('relative flex items-center', className)}>
+    <span
+      data-slot="context-meter"
+      className={cn('relative flex items-center', className)}>
       <button
         ref={triggerRef}
         type="button"

@@ -52,10 +52,23 @@ export const settingsPatchSchema = z.strictObject({
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
   checkForUpdates: z.boolean().optional(),
+  // Nullable, not just optional: `null` is the "unchosen, resolve per build"
+  // state, and it must be writable so a user can hand the choice back.
+  daemonInspect: z.boolean().nullable().optional(),
 });
 
 /** A directory a git command may run in. */
 export const gitDirSchema = absolutePath;
+
+/**
+ * A file the renderer asks to be revealed in Finder.
+ *
+ * Shape only — an absolute path. Being inside the daemon's log directory is
+ * the SECURITY check and lives in `revealPath`, where the boundary it is
+ * compared against is resolved: a schema cannot know where that directory is,
+ * and one that pretended to would give a false sense of where the gate is.
+ */
+export const revealPathSchema = absolutePath;
 
 /**
  * A git branch name. `git switch` takes this as an argv entry (no shell), so

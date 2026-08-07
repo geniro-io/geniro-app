@@ -281,16 +281,16 @@ export function AgentsPanel({
     thread: AgentThread,
   ) => Promise<HandoffTargetDto>;
   /**
-   * Which CLI kinds have an INTERACTIVE (`--resume`) terminal, per the daemon's
-   * own capability report. Only a CALL thread needs it: a call thread is a
-   * sub-session of the node, and the live mirror is keyed by the node, so only
-   * the interactive mirror can target one.
+   * Which CLI kinds can reopen a conversation INTERACTIVELY (`--resume`), per
+   * the daemon's own capability report. Only a CALL thread needs it: a call
+   * thread is a sub-session of the node, so only a CLI that can resume a
+   * specific session can be pointed at one.
    *
-   * Read rather than hardcoded, because "which CLI has one" is the adapter
+   * Read rather than hardcoded, because "which CLI can" is the adapter
    * layer's fact (`AdapterConfig.terminal`), and a list written here is how a
-   * second CLI gaining a mirror silently keeps its threads unopenable. Absent
-   * (still loading) offers nothing, which errs toward not showing a control
-   * that would fail.
+   * second CLI gaining the ability silently keeps its threads unopenable.
+   * Absent (still loading) offers nothing, which errs toward not showing a
+   * control that would fail.
    */
   interactiveTerminalAgents?: ReadonlySet<string>;
   onClose: () => void;

@@ -105,8 +105,17 @@ const COMPONENTS: Components = {
   ),
   // Only INLINE code reaches here: a fenced block is intercepted by `pre`
   // below, which renders CodeBlock instead of these children.
+  //
+  // `break-all`, not `break-words`. What inline code holds in this transcript
+  // is overwhelmingly an absolute path, a branch name or a hash — one token
+  // with no space in it and, for a path, no break opportunity a browser will
+  // take either (it will break after `/` but not before, so a long leading
+  // directory still overhangs). `break-words` only breaks a word that cannot
+  // fit ON ITS OWN LINE, which is why a 60-character path in the middle of a
+  // paragraph ran straight out of the pane. Ugly mid-token wrapping is the
+  // right trade here: the alternative was text the reader could not see.
   code: ({ children }) => (
-    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] break-all">
       {children}
     </code>
   ),
@@ -129,12 +138,16 @@ const COMPONENTS: Components = {
       </div>
     );
   },
+  // `break-all` for the same reason as inline code, and this one was measured
+  // as the widest offender in a real transcript: an autolinked URL is a single
+  // unbreakable token whose link TEXT is the URL, and one of them pushed the
+  // transcript 139px past its pane.
   a: ({ children, href }) => (
     <a
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="text-primary underline underline-offset-2">
+      className="text-primary underline underline-offset-2 break-all">
       {children}
     </a>
   ),
@@ -144,19 +157,39 @@ const COMPONENTS: Components = {
     </blockquote>
   ),
   table: ({ children }) => (
-    // No `w-full`: it forces the table to the wrapper's width, so wrappable
-    // content hard-wraps inside instead of overflowing — and a table that
-    // never overflows never scrolls, however wide its content really is.
-    // Letting it size to its content is what hands the wrapper something to
-    // scroll.
-    <div className="overflow-x-auto not-first:mt-2">
-      <table className="border-collapse text-xs">{children}</table>
+    // `min-w-0` + `max-w-full`: this wrapper is a flex ITEM, whose min-width
+    // defaults to its content — so it grew to the table's full width and
+    // `overflow-x-auto` had nothing left to clip, handing the overflow to the
+    // transcript instead. Measured: a 4-column file table reached 239px past
+    // the pane.
+    //
+    // `scroll-x-visible` is what stops the FALLBACK from lying. macOS overlay
+    // scrollbars are invisible at rest, so a table wider than the pane looked
+    // cut off rather than scrollable — 229px hidden with nothing on screen
+    // saying so. The utility opts this element out of overlay scrollbars, so
+    // the track appears exactly when there is something to scroll.
+    <div className="max-w-full min-w-0 overflow-x-auto not-first:mt-2 scroll-x-visible">
+      {/*
+        `w-full` so the table FITS the pane by default and its cells wrap,
+        rather than sizing to its content and scrolling. An earlier pass here
+        argued the opposite — that a table which never overflows never scrolls
+        — which optimised for the wrong thing: the reader wants to SEE the
+        table, and scrolling is the fallback for one too wide to fit even
+        wrapped, not the goal.
+      */}
+      <table className="w-full border-collapse text-xs">{children}</table>
     </div>
   ),
+  // `min-w-24` is the readability floor that makes the fallback meaningful.
+  // Without it `w-full` divides the pane by the column count, so a 20-column
+  // table squeezes each cell to a vertical stack of single letters — fitting,
+  // and unreadable. With it, a table stops shrinking at ~96px per column and
+  // scrolls beyond that, which is the point where scrolling genuinely beats
+  // wrapping.
   th: ({ children, style, align }) => (
     <th
       className={cn(
-        'border border-border bg-muted/50 px-2 py-1 font-semibold',
+        'min-w-24 border border-border bg-muted/50 px-2 py-1 font-semibold',
         alignClass(style, align),
       )}>
       {children}
@@ -165,7 +198,7 @@ const COMPONENTS: Components = {
   td: ({ children, style, align }) => (
     <td
       className={cn(
-        'border border-border px-2 py-1 align-top',
+        'min-w-24 border border-border px-2 py-1 align-top',
         alignClass(style, align),
       )}>
       {children}
@@ -183,7 +216,21 @@ export const MarkdownContent = memo(function MarkdownContent({
   className?: string;
 }): React.JSX.Element {
   return (
-    <div className={cn('min-w-0 text-sm leading-relaxed', className)}>
+    // `break-words` HERE and not on each renderer below, because
+    // `overflow-wrap` is an INHERITED property: one declaration on the root
+    // reaches paragraphs, list items, headings, quotes and table cells at
+    // once, and a renderer added later is covered without its author knowing
+    // it must be. The stronger `break-all` on `code` and `a` still wins where
+    // it is set, which is what those two need.
+    //
+    // Measured, not precautionary: a 170-character token in ordinary prose
+    // (`whitespace-pre-wrap` breaks at spaces, and there are none inside one)
+    // left a paragraph 643px wide reporting a 1244px scrollWidth — the text
+    // past the pane simply could not be read. The earlier pass fixed the
+    // markdown that happened to be code or a link and left plain prose, which
+    // is what a USER's own message is made of.
+    <div
+      className={cn('min-w-0 text-sm leading-relaxed break-words', className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
         {content}
       </ReactMarkdown>

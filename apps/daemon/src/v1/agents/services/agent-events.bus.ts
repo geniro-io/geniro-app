@@ -72,12 +72,12 @@ export class AgentEventBus {
    * A run and everything it owned has been deleted.
    *
    * A third stream rather than a direct call, because the things that must
-   * react live in modules ABOVE this one: `TerminalsModule` imports
-   * `AgentsModule`, so the chat service cannot inject `TerminalSessionsService` without a
-   * module cycle. Announcing the deletion downward inverts that dependency —
-   * anything holding per-run state subscribes and cleans up its own, which is
-   * also how a second such holder gets added later without touching the
-   * deleting code.
+   * react live in modules ABOVE this one — `GraphsModule` imports
+   * `AgentsModule`, so the chat service cannot inject a graph-side holder
+   * without a module cycle. Announcing the deletion downward inverts that
+   * dependency: anything holding per-run state subscribes and cleans up its
+   * own, which is also how a second such holder gets added later without
+   * touching the deleting code.
    *
    * Fired AFTER the durable rows are gone, so a subscriber can never observe a
    * half-deleted run.

@@ -7,7 +7,7 @@ import type {
   GeniroApi,
   Settings as SettingsShape,
 } from '../../shared/contracts';
-import { DEFAULT_SETTINGS } from '../../shared/contracts';
+import { DAEMON_INSPECT_PORT, DEFAULT_SETTINGS } from '../../shared/contracts';
 import { Settings } from './Settings';
 
 (
@@ -24,6 +24,7 @@ const settings: SettingsShape = {
 };
 
 const geniro = {
+  getStatus: vi.fn(),
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   detectClis: vi.fn(),
@@ -48,6 +49,13 @@ async function mount(): Promise<void> {
 }
 
 beforeEach(() => {
+  // Packaged FALSE is the dev answer, and it is what makes the inspector's
+  // unchosen state resolve to on — the specs below assert on that.
+  geniro.getStatus.mockReset().mockResolvedValue({
+    onboardingComplete: true,
+    daemon: { connected: true, handle: null },
+    isPackaged: false,
+  });
   geniro.getSettings.mockReset().mockResolvedValue(settings);
   geniro.updateSettings.mockReset().mockResolvedValue(settings);
   geniro.detectClis.mockReset().mockResolvedValue([]);
@@ -72,22 +80,27 @@ describe('Settings updates section', () => {
   it('seeds the update toggle from persisted settings', async () => {
     await mount();
 
-    const toggle = container.querySelector('[role="switch"]');
+    const toggle = container.querySelector('#settings-check-updates');
     expect(toggle?.getAttribute('aria-checked')).toBe('false');
   });
 
   it('names the toggle through a real associated label, not a duplicate button', async () => {
     await mount();
 
-    const toggle = container.querySelector('[role="switch"]')!;
+    const toggle = container.querySelector('#settings-check-updates')!;
     const label = container.querySelector<HTMLLabelElement>(
       `label[for="${toggle.id}"]`,
     );
-    expect(toggle.id).not.toBe('');
+    expect(toggle.getAttribute('role')).toBe('switch');
     expect(label?.textContent).toBe('Check for app updates on launch');
-    // Exactly one switch: the old raw-button label doubled the toggle surface
-    // with no state semantics for assistive tech.
-    expect(container.querySelectorAll('[role="switch"]')).toHaveLength(1);
+    // Exactly one switch IN THIS SECTION: the old raw-button label doubled the
+    // toggle surface with no state semantics for assistive tech. Scoped to the
+    // section rather than the page, because unrelated settings legitimately
+    // add their own switches — a page-wide count would fail on the next one
+    // instead of on the duplication it exists to catch.
+    expect(
+      toggle.closest('section')?.querySelectorAll('[role="switch"]'),
+    ).toHaveLength(1);
   });
 
   it('does not overwrite a user toggle when the initial settings read resolves late', async () => {
@@ -293,5 +306,80 @@ describe('Settings key removal', () => {
 
     expect(geniro.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
     expect(removeButton()).toBeUndefined();
+  });
+});
+
+describe('Settings diagnostics section', () => {
+  const inspectToggle = (): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>('#settings-daemon-inspect')!;
+
+  it('shows the unchosen inspector as ON in dev, and marks the default as not the user’s', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
+    await mount();
+
+    // The dev daemon IS listening on that port, so rendering the stored
+    // `null` as off would state the opposite of the machine's real state —
+    // for a setting whose entire subject is an open debugger port.
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
+    expect(inspectToggle().closest('section')?.textContent).toContain(
+      'default for dev',
+    );
+  });
+
+  it('shows the same unchosen inspector as OFF once packaged', async () => {
+    geniro.getStatus.mockResolvedValue({
+      onboardingComplete: true,
+      daemon: { connected: true, handle: null },
+      isPackaged: true,
+    });
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
+    await mount();
+
+    // Same stored value, opposite answer. Dev and the installed app share one
+    // settings.json, so this split cannot come from the stored value alone —
+    // which is the whole reason the setting is not a plain boolean.
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
+    expect(inspectToggle().closest('section')?.textContent).toContain(
+      'default for the installed app',
+    );
+  });
+
+  it('keeps an explicit off through a dev launch, where the default says on', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: false });
+    await mount();
+
+    // A developer who deliberately closed the port must not have it reopened
+    // by the per-build default.
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
+    expect(inspectToggle().closest('section')?.textContent).not.toContain(
+      'default for',
+    );
+  });
+
+  it('writes an explicit boolean on flip, which is what triggers the respawn', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
+    await mount();
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('true');
+
+    await act(async () => {
+      inspectToggle().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // `false`, never back to `null`: from an unchosen-but-on state, writing
+    // null would persist nothing and leave the switch stuck on. And the key
+    // must reach main under its own name — main restarts the daemon on
+    // `daemonInspect` specifically.
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      daemonInspect: false,
+    });
+    expect(inspectToggle().getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('says which port to attach to, so the user is not left to guess', async () => {
+    await mount();
+
+    const section = inspectToggle().closest('section')!;
+    expect(section.textContent).toContain(`127.0.0.1:${DAEMON_INSPECT_PORT}`);
+    expect(section.textContent).toContain('chrome://inspect');
   });
 });

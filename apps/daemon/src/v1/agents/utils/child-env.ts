@@ -8,13 +8,13 @@
  *   inside a Claude Code session (e.g. `pnpm dev` in its terminal). It names
  *   the OUTER session's identity; a spawned agent's conversation is never
  *   that session, so the daemon must not advertise it to children — an agent
- *   or its tools binding to it would cross-wire thread resume, session
- *   capture, and per-thread terminal mirrors onto one session file.
+ *   or its tools binding to it would cross-wire thread resume and session
+ *   capture onto one session file.
  * - {@link CLAUDE_CREDENTIAL_KEYS} — Anthropic credentials inherited when the
  *   app/daemon was launched from a shell that exports them. Stripping them
  *   keeps the cursor→claude and claude→cursor directions symmetric: only the
- *   definitionally-claude spawn paths (the Claude adapter's turns, the
- *   claude-only PTY mirror) re-inject them via {@link claudeCredentialEnv}.
+ *   definitionally-claude spawn paths (the Claude adapter's turns and probes)
+ *   re-inject them via {@link claudeCredentialEnv}.
  */
 const CLAUDE_CREDENTIAL_KEYS = [
   'ANTHROPIC_API_KEY',

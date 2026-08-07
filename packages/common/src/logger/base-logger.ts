@@ -21,7 +21,8 @@ export abstract class BaseLogger
   protected constructor(public readonly params: ILoggerParams) {
     super();
 
-    const { level, prettyPrint, environment, appName, appVersion } = params;
+    const { level, prettyPrint, environment, appName, appVersion, streams } =
+      params;
 
     this.level = level;
     this.prettyPrint = prettyPrint;
@@ -35,11 +36,31 @@ export abstract class BaseLogger
       level: this.level ?? 'info',
     };
 
-    const stream = pretty({ colorize: true });
+    const console = this.prettyPrint
+      ? pretty({ colorize: true })
+      : P.destination(1);
 
-    this.pino = this.prettyPrint
-      ? P<'system'>(pinoOptions, stream)
-      : P<'system'>(pinoOptions);
+    this.pino = streams?.length
+      ? // `multistream` needs an explicit level per destination or it applies
+        // its own default of `info` and silently swallows the debug lines the
+        // logger was configured to emit. The logger's own level still gates
+        // everything upstream of this, so `trace` here means "whatever got
+        // this far", not "more than was asked for".
+        P<'system'>(
+          pinoOptions,
+          P.multistream(
+            [console, ...streams].map((stream) => ({
+              stream,
+              level: 'trace' as const,
+            })),
+            { levels: { ...P.levels.values, system: 99 } },
+          ),
+        )
+      : // Unchanged for every caller that passes no extra stream: pino's own
+        // default destination, not a wrapper around it.
+        this.prettyPrint
+        ? P<'system'>(pinoOptions, console)
+        : P<'system'>(pinoOptions);
   }
 
   /**

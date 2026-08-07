@@ -1,12 +1,20 @@
 import * as React from 'react';
 
 /**
- * The composer's control rows — chips ABOVE the textarea, the turn's own
- * settings and the send/stop actions BELOW it.
+ * The composer's control rows — the run-identity chips ABOVE the card, the
+ * turn's own settings and the send/stop actions INSIDE it, below the textarea.
  *
  * ONE pair for BOTH composers (the new-run card and the open transcript's
  * follow-up card): they carry the same rows, and a rule fixed in one copy is
  * exactly what the split exists to keep from drifting.
+ *
+ * **Why the top row sits outside the card.** It used to be the card's first
+ * band, which read as part of the input: a bordered box whose top strip was
+ * pickers and whose bottom was the text you type. What those chips actually
+ * state is where the run HAPPENS — its agent, folder, branch, permission
+ * posture — which is context for the message, not part of it. Lifting them out
+ * puts the card's border around the message alone and leaves the chips as free
+ * pills above it, which is also how the reference this was drawn from reads.
  *
  * **Why two rows, and why no overflow menu.** These replaced a single row under
  * the textarea that measured its own children and folded whatever did not fit
@@ -42,7 +50,13 @@ export function ComposerTopRow({
     return null;
   }
   return (
-    <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1 px-2 pt-2 empty:hidden">
+    // `px-1` rather than the card's `px-2`: the chips have their own inner
+    // padding, so aligning their TEXT with the textarea's would need the
+    // padding of neither. One notch in keeps the row visually hung off the
+    // card's left edge without indenting it.
+    // `pb-1.5` is the only gap to the card — the row is a caption for it, and
+    // spacing it like a sibling block would break that reading.
+    <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1 px-1 pb-1.5 empty:hidden">
       {children}
     </div>
   );
@@ -52,11 +66,11 @@ export function ComposerBottomRow({
   children,
   actions,
 }: {
-  /** The per-turn chips: model and effort. */
+  /** The per-turn chips: model, effort, and the context meter beside them. */
   children: React.ReactNode;
   /**
-   * Context meter, then Send / Stop. Never wraps and never shrinks — the one
-   * control that aborts work the user is watching must stay where it was.
+   * Send / Stop. Never wraps and never shrinks — the one control that aborts
+   * work the user is watching must stay where it was.
    */
   actions: React.ReactNode;
 }): React.JSX.Element {

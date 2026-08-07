@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      Styled against DevTools' OWN theme variables (--sys-color-*), which the
+      host page sets on :root. That is what makes this read as a DevTools panel
+      rather than as our app embedded in one: it follows the user's DevTools
+      light/dark choice with no theme plumbing of ours. The fallbacks after
+      each var() are what a non-DevTools host (or an older frontend) gets.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: var(--source-code-font-family, ui-monospace, Menlo, monospace);
+        font-size: var(--source-code-font-size, 11px);
+        background: var(--sys-color-cdt-base-container, Canvas);
+        color: var(--sys-color-on-surface, CanvasText);
+      }
+      #toolbar {
+        position: sticky;
+        top: 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 6px;
+        background: var(--sys-color-cdt-base-container, Canvas);
+        border-bottom: 1px solid var(--sys-color-divider, rgba(128, 128, 128, 0.35));
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        padding: 2px 6px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: var(--sys-color-state-hover-on-subtle, rgba(128, 128, 128, 0.15));
+      }
+      button[aria-pressed='true'] {
+        background: var(--sys-color-tonal-container, rgba(100, 140, 255, 0.25));
+        border-color: var(--sys-color-divider, rgba(128, 128, 128, 0.35));
+      }
+      input {
+        font: inherit;
+        color: inherit;
+        background: var(--sys-color-cdt-base, Field);
+        border: 1px solid var(--sys-color-neutral-outline, rgba(128, 128, 128, 0.4));
+        border-radius: 3px;
+        padding: 2px 6px;
+        min-width: 140px;
+      }
+      #status {
+        margin-left: auto;
+        opacity: 0.7;
+        padding-right: 4px;
+      }
+      #rows {
+        display: table;
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .row {
+        display: table-row;
+      }
+      .row:hover {
+        background: var(--sys-color-state-hover-on-subtle, rgba(128, 128, 128, 0.12));
+      }
+      .row > span {
+        display: table-cell;
+        padding: 1px 6px;
+        vertical-align: top;
+        border-bottom: 1px solid var(--sys-color-divider, rgba(128, 128, 128, 0.15));
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .at,
+      .ch {
+        white-space: nowrap;
+        width: 1%;
+        opacity: 0.65;
+      }
+      .msg {
+        width: 100%;
+      }
+      .lv-error .msg {
+        color: var(--sys-color-error, #d93025);
+      }
+      .lv-warn .msg {
+        color: var(--sys-color-orange, #b06000);
+      }
+      .lv-debug .msg,
+      .lv-trace .msg {
+        opacity: 0.7;
+      }
+      .ctx {
+        opacity: 0.6;
+      }
+      #empty {
+        padding: 12px;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar">
+      <button id="ch-daemon" aria-pressed="true" data-channel="daemon">Daemon</button>
+      <button id="ch-transcript" aria-pressed="true" data-channel="transcript">Transcript</button>
+      <button id="ch-agent" aria-pressed="false" data-channel="agent-stdio">Agent I/O</button>
+      <button id="ch-ui" aria-pressed="true" data-channel="ui">UI</button>
+      <input id="filter" type="search" placeholder="Filter" />
+      <button id="clear" title="Clear this view — the log file is untouched">Clear</button>
+      <span id="status">connecting…</span>
+    </div>
+    <div id="empty">Waiting for the daemon…</div>
+    <div id="rows"></div>
+    <script src="panel.js"></script>
+  </body>
+</html>

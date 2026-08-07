@@ -10,6 +10,7 @@ import { InstanceLockLifecycle } from './utils/instance-lock.lifecycle';
 import { PidfileLifecycle } from './utils/pidfile.lifecycle';
 import { AgentsModule } from './v1/agents/agents.module';
 import { ProcessRegistry } from './v1/agents/services/process-registry';
+import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
@@ -41,6 +42,7 @@ export class AppModule {
         RunsModule,
         AgentsModule,
         GraphsModule,
+        DiagnosticsModule,
         NotificationsModule,
         HandoffModule,
       ],

@@ -507,8 +507,18 @@ describe('Chats transcript — item identity', () => {
       emitItem({ ...msg(1, 'assistant', 'on it'), id: 'assistant-dup' });
     });
 
-    expect(container.textContent).toContain('and also this');
-    expect(container.textContent).toContain('on it');
+    // Scoped to the TRANSCRIPT, like its sibling below, and for a reason this
+    // spec learned the hard way: `addItem` also writes the sidebar row's
+    // preview, and it does so OUTSIDE the de-dupe. Asserting on the whole
+    // container therefore passed with the de-dupe reverted to `seq` — the
+    // dropped message was still on screen, in the sidebar. Verified: with
+    // `existing.seq === item.seq` restored, the container-wide version of this
+    // test stayed green while the transcript was genuinely missing a row.
+    const transcript = [...container.querySelectorAll('div')].find((el) =>
+      el.className.includes('overflow-y-auto'),
+    )!;
+    expect(transcript.textContent).toContain('and also this');
+    expect(transcript.textContent).toContain('on it');
   });
 
   it('still drops a genuine re-delivery of the same item', async () => {

@@ -198,6 +198,60 @@ describe('mapEventToItem', () => {
   });
 });
 
+describe('mapEventToItem — sub-agent origin', () => {
+  const SUB = 'toolu_01GffB3XLs9hgFTpZLrsex4f';
+
+  it('stamps the origin onto the payload the renderer reads', () => {
+    // TWIN PARSER: `apps/ui/src/renderer/chats/subagent-payload.ts` reads this
+    // exact key off the payload. The payload is `z.unknown()` on the wire, so
+    // no generated type ties the two sides together — this literal is the
+    // contract, and renaming the key here without renaming it there silently
+    // returns the transcript to one interleaved flat run.
+    expect(
+      mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'Bash',
+        input: { command: 'echo hi' },
+        parentToolUseId: SUB,
+      }),
+    ).toEqual({
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: {
+        id: 't1',
+        name: 'Bash',
+        input: { command: 'echo hi' },
+        parentToolUseId: SUB,
+      },
+    });
+  });
+
+  it('adds NO key at all for main-thread work', () => {
+    // The common case by a wide margin, and every row of it is a database
+    // write: an always-present `parentToolUseId: null` would cost a field on
+    // every row to say nothing.
+    const item = mapEventToItem({
+      type: 'tool_call',
+      id: 't1',
+      name: 'Bash',
+      input: null,
+    });
+    expect(item?.payload).not.toHaveProperty('parentToolUseId');
+  });
+
+  it('does not resurrect an ephemeral event just because it has an origin', () => {
+    // The ephemeral plane is never a database row, origin or not.
+    expect(
+      mapEventToItem({
+        type: 'context_progress',
+        contextTokens: 10,
+        parentToolUseId: SUB,
+      }),
+    ).toBeNull();
+  });
+});
+
 describe('terminalStatus', () => {
   it('maps each terminal event to its run status', () => {
     expect(

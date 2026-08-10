@@ -185,7 +185,32 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
   if (!root) {
     return [];
   }
+  // Stamped ONCE, around the whole switch, because the field describes the LINE
+  // rather than any block on it — every event this line produces came from the
+  // same thread. Doing it here also means an arm added later cannot forget it.
+  //
+  // An empty string is normalized to null, and that is not defensive noise:
+  // `asString` passes `''` through, so without this a line carrying one would
+  // suppress the context meter for the whole turn AND be persisted as a
+  // sub-agent row — while the renderer half of this twin rejects `''` and calls
+  // the same row the main thread's. Two readings of one shape must not disagree
+  // about which thread wrote it.
+  const parentToolUseId = asString(root.parent_tool_use_id) || null;
+  return mapClaudeLine(root, parentToolUseId).map((event) =>
+    parentToolUseId === null ? event : { ...event, parentToolUseId },
+  );
+}
 
+/**
+ * The per-line mapping, with the sub-agent origin already read off the root.
+ *
+ * `parentToolUseId` is passed in rather than re-read because one arm needs to
+ * BRANCH on it and not merely carry it: see the `assistant` case.
+ */
+function mapClaudeLine(
+  root: Record<string, unknown>,
+  parentToolUseId: string | null,
+): AgentEvent[] {
   switch (asString(root.type)) {
     case 'system': {
       if (asString(root.subtype) === 'thinking_tokens') {
@@ -253,7 +278,17 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
       const events: AgentEvent[] = [];
       // Lifted BEFORE the content blocks so the meter moves as soon as the
       // request lands, rather than trailing the words it produced.
-      const contextTokens = readClaudeAssistantContext(message);
+      //
+      // MAIN THREAD ONLY. A sub-agent's assistant line carries the usage of its
+      // OWN request — a fresh, nearly empty context — and the meter shows one
+      // number for the conversation. Reporting both made it fall to a few
+      // thousand tokens the moment a sub-agent spoke and snap back on the next
+      // main-thread line, which is the jumping the user reported. Probe-verified
+      // on 2.1.226: sub-agent `assistant` lines set `parent_tool_use_id` to the
+      // id of the `Agent` tool call that started them, main-thread ones set it
+      // null.
+      const contextTokens =
+        parentToolUseId === null ? readClaudeAssistantContext(message) : null;
       if (contextTokens !== null) {
         events.push({ type: 'context_progress', contextTokens });
       }

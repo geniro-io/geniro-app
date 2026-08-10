@@ -46,8 +46,67 @@ export interface DaemonInfo {
   token: string;
   /** Daemon package version (semver). */
   version: string;
+  /**
+   * The entry script this daemon is actually RUNNING, and how it looked when
+   * it started.
+   *
+   * `version` cannot answer "is this daemon the current build" — it is the
+   * package version, unchanged between rebuilds. The full account of what that
+   * cost, and of which unidentifiable cases are adopted anyway, lives at the
+   * one site that decides: `DaemonSupervisor.mayAdopt`.
+   *
+   * `path` is what makes the comparison safe: a supervisor may only call a
+   * daemon stale when it started from the SAME file the supervisor itself
+   * would start. One run from TypeScript source by `pnpm daemon:dev` reports a
+   * different path and is left alone.
+   */
+  entry: DaemonEntryStamp;
   /** ISO-8601 timestamp the daemon became healthy. */
   startedAt: string;
+}
+
+/** How an entry script looked at the moment a daemon started from it. */
+export interface DaemonEntryStamp {
+  /** Absolute path of the script the daemon is running. */
+  path: string;
+  /** Its mtime in epoch ms, or null when it could not be read. */
+  mtimeMs: number | null;
+  /** Its size in bytes, or null when it could not be read. */
+  size: number | null;
+}
+
+/**
+ * Stamp an entry script, for {@link DaemonInfo.entry}.
+ *
+ * TWIN PARSER: `apps/ui/src/main/daemon-pidfile.ts` re-implements this and
+ * compares its result against the value written here. The two apps share no
+ * code — the Electron main process must not pull the Nest graph into its
+ * bundle, so the pidfile IS the whole contract — and the mtime+size choice
+ * must therefore change on both sides together, or every daemon reads as a
+ * different build and is restarted on every launch.
+ *
+ * mtime AND size, not a content hash: the entry is read on every launch and on
+ * every adoption check, a hash would have to read the whole bundle each time,
+ * and the pair already separates every rebuild that matters — probe-verified
+ * that a turbo cache hit leaves both untouched while any real build `rm -rf`s
+ * `dist/` and recompiles, moving mtime even for a change that never reaches
+ * `main.js` itself.
+ *
+ * Both null when the file cannot be read. That is "cannot confirm", and the
+ * reader decides what to do with it — which is NOT uniformly "replace": see
+ * `DaemonSupervisor.mayAdopt`, where an unreadable stamp on either side adopts
+ * rather than kill a healthy daemon on no evidence.
+ */
+export function stampEntry(
+  path: string,
+  statFile: (path: string) => { mtimeMs: number; size: number },
+): DaemonEntryStamp {
+  try {
+    const stats = statFile(path);
+    return { path, mtimeMs: stats.mtimeMs, size: stats.size };
+  } catch {
+    return { path, mtimeMs: null, size: null };
+  }
 }
 
 /** True when `value` is a bindable TCP port (integer in 1..65535). */

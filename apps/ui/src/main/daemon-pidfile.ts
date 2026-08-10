@@ -21,7 +21,61 @@ export interface DaemonInfo {
   port: number;
   token: string;
   version: string;
+  /**
+   * The entry script the running daemon started from, as it looked then.
+   *
+   * Null when the daemon did not report one. Only this app writes this pidfile
+   * and the field has been written since it existed, so a null dates the daemon
+   * to before the staleness check — which `DaemonSupervisor.mayAdopt` treats as
+   * stale and replaces, unlike the other unidentifiable cases it adopts.
+   */
+  entry: DaemonEntryStamp | null;
   startedAt: string;
+}
+
+/** How an entry script looked when a daemon started from it. */
+export interface DaemonEntryStamp {
+  path: string;
+  mtimeMs: number | null;
+  size: number | null;
+}
+
+/**
+ * Stamp an entry script the same way the daemon stamps its own.
+ *
+ * TWIN PARSER: `apps/daemon/src/utils/handshake.ts` `stampEntry` produces the
+ * value this compares against. The two apps share no code — the pidfile is the
+ * whole contract, and this file is deliberately its reader-side mirror (see the
+ * header) — so the mtime+size choice must be changed on both sides together or
+ * every daemon reads as a different build and is restarted on every launch.
+ *
+ * `statFile` is a parameter for one reason only: to keep this signature
+ * identical to the twin's, so the two read as the same function. Every caller
+ * passes `statSync`.
+ */
+export function stampEntry(
+  path: string,
+  statFile: (path: string) => { mtimeMs: number; size: number },
+): DaemonEntryStamp {
+  try {
+    const stats = statFile(path);
+    return { path, mtimeMs: stats.mtimeMs, size: stats.size };
+  } catch {
+    return { path, mtimeMs: null, size: null };
+  }
+}
+
+function parseEntryStamp(raw: unknown): DaemonEntryStamp | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const v = raw as Record<string, unknown>;
+  if (typeof v.path !== 'string' || v.path.length === 0) {
+    return null;
+  }
+  const num = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+  return { path: v.path, mtimeMs: num(v.mtimeMs), size: num(v.size) };
 }
 
 /** Whether a process id could ever name a real running process. */
@@ -66,6 +120,11 @@ export function parseDaemonInfo(raw: unknown): DaemonInfo | null {
       port: v.port,
       token: v.token,
       version: v.version,
+      // NOT part of the validity test above: a pidfile without it still names
+      // a daemon that is genuinely there and genuinely serving. It is only
+      // unidentifiable as a build, which the supervisor handles by declining
+      // to adopt it rather than by ignoring it.
+      entry: parseEntryStamp(v.entry),
       startedAt: v.startedAt,
     };
   }

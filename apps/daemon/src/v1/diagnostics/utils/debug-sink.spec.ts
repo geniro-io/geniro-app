@@ -110,7 +110,17 @@ describe('debugSink file', () => {
     configureDebugSink({ dir });
 
     debugSink.record('daemon', 'info', 'to disk');
-    await until(() => readdirSync(dir).length === 1);
+    // Wait for the CONTENT, not merely for the file to exist.
+    // `createWriteStream` creates the file — with its mode — the moment it
+    // opens, and writes only afterwards, so waiting on the directory listing
+    // alone returns while the file is still empty and the last assertion below
+    // reads `[]`. Seen 1 run in 3 under full-suite load and never in isolation,
+    // which is what made it look like an unrelated failure.
+    await until(() =>
+      readdirSync(dir).some((name) =>
+        readFileSync(join(dir, name), 'utf8').includes('to disk'),
+      ),
+    );
 
     const files = readdirSync(dir);
     expect(files).toHaveLength(1);

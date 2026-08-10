@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,6 +59,11 @@ function info(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
     port: 4823,
     token: 'tok',
     version: '0.1.0',
+    // The entry `make()` below resolves to. It does not exist on disk, so the
+    // supervisor cannot stat its own copy and falls back to the version gate —
+    // which is what every test in this file is about. A NULL stamp would not do
+    // that: it means "older than the staleness check" and is replaced.
+    entry: { path: '/bundle/daemon/dist/main.js', mtimeMs: 1, size: 2 },
     startedAt: '2026-07-04T00:00:00Z',
     ...overrides,
   };
@@ -656,5 +664,184 @@ describe('DaemonSupervisor.stop', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('DaemonSupervisor — a rebuilt daemon must not be adopted', () => {
+  // The defect this pins, measured on the author's own machine: `pnpm dev` was
+  // serving a daemon compiled FOUR DAYS earlier, missing a whole module that
+  // had landed since. `version` is the package version, identical across every
+  // rebuild, so the adoption check could never see it — and a rebuild appeared
+  // to change nothing.
+  let dir: string;
+  let entry: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-entry-'));
+    entry = join(dir, 'main.js');
+    writeFileSync(entry, '// build one');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function supervisorFor(
+    initial: DaemonInfo,
+    kills: { pid: number; signal: NodeJS.Signals }[],
+    spawned: { count: number },
+    /** Overrides the resolved entry, for the "cannot stat my own" case. */
+    resolved?: string,
+  ): DaemonSupervisor {
+    const killed = new Set<number>();
+    let pidfile = initial;
+    return new DaemonSupervisor({
+      spawn: ((): FakeChild => {
+        spawned.count += 1;
+        const child = new FakeChild();
+        // A freshly spawned daemon writes its OWN pidfile, stamped with the
+        // entry as it stands now. Without this the supervisor goes on reading
+        // the stale record it has just replaced.
+        const stats = statSync(entry);
+        pidfile = info({
+          pid: child.pid,
+          entry: { path: entry, mtimeMs: stats.mtimeMs, size: stats.size },
+        });
+        return child;
+      }) as unknown as DaemonSupervisorOptions['spawn'],
+      readDaemonInfo: () => pidfile,
+      isAlive: (pid) => !killed.has(pid),
+      checkHealth: async () => true,
+      checkIdentity: async () => true,
+      killPid: (pid, signal) => {
+        kills.push({ pid, signal });
+        if (signal === 'SIGKILL') {
+          killed.add(pid);
+        }
+      },
+      resolveEntry: () => resolved ?? entry,
+      bundledVersion: () => '0.1.0',
+      removePidfile: () => undefined,
+      pollIntervalMs: 1,
+      shutdownGraceMs: 5,
+    });
+  }
+
+  it('adopts a daemon started from the entry file as it stands now', async () => {
+    const stats = statSync(entry);
+    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+    const spawned = { count: 0 };
+    const supervisor = supervisorFor(
+      info({
+        entry: { path: entry, mtimeMs: stats.mtimeMs, size: stats.size },
+      }),
+      kills,
+      spawned,
+    );
+
+    const handle = await supervisor.start();
+
+    expect(handle.port).toBe(4823);
+    expect(spawned.count).toBe(0);
+    expect(kills).toEqual([]);
+  });
+
+  it('replaces a daemon whose entry file has been rebuilt since it started', async () => {
+    const before = statSync(entry);
+    // A rebuild: same path, same package version, different bytes. Without the
+    // entry stamp this daemon is indistinguishable from the one above and is
+    // adopted — which is the whole bug.
+    writeFileSync(entry, '// build two, appreciably longer than build one');
+    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+    const spawned = { count: 0 };
+    const supervisor = supervisorFor(
+      info({
+        pid: 1111,
+        entry: { path: entry, mtimeMs: before.mtimeMs, size: before.size },
+      }),
+      kills,
+      spawned,
+    );
+
+    await supervisor.start();
+
+    expect(spawned.count).toBe(1);
+    expect(kills.map((k) => k.pid)).toContain(1111);
+  });
+
+  it('leaves a daemon started from a DIFFERENT entry alone', async () => {
+    // `pnpm daemon:dev` runs TypeScript source, not this dist bundle. It is a
+    // different thing, not an old one, and killing it would take down a
+    // developer's watch loop mid-edit.
+    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+    const spawned = { count: 0 };
+    const supervisor = supervisorFor(
+      info({
+        entry: { path: join(dir, 'src', 'main.ts'), mtimeMs: 1, size: 1 },
+      }),
+      kills,
+      spawned,
+    );
+
+    await supervisor.start();
+
+    expect(spawned.count).toBe(0);
+    expect(kills).toEqual([]);
+  });
+
+  it('REPLACES a daemon that reported no entry at all', async () => {
+    // The launch this whole check exists for. Only this app writes the pidfile
+    // and the field has been written since it existed, so its absence dates the
+    // daemon to before the check — i.e. it is the multi-day-stale one, running
+    // on the one launch where it is guaranteed to be there. Adopting it here
+    // would make the feature miss its own target case.
+    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+    const spawned = { count: 0 };
+    const supervisor = supervisorFor(
+      info({ pid: 2222, entry: null }),
+      kills,
+      spawned,
+    );
+
+    await supervisor.start();
+
+    expect(spawned.count).toBe(1);
+    expect(kills.map((k) => k.pid)).toContain(2222);
+  });
+
+  it('adopts when it cannot stat its OWN entry', async () => {
+    // Nothing to compare against. Killing a healthy daemon on no evidence
+    // costs the user their in-flight turn, so "cannot tell" leaves it alone.
+    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+    const spawned = { count: 0 };
+    const gone = join(dir, 'gone.js');
+    const supervisor = supervisorFor(
+      info({ entry: { path: gone, mtimeMs: 1, size: 1 } }),
+      kills,
+      spawned,
+      gone,
+    );
+
+    await supervisor.start();
+
+    expect(spawned.count).toBe(0);
+    expect(kills).toEqual([]);
+  });
+
+  it('adopts a daemon whose RECORDED stamp is unreadable, instead of looping', async () => {
+    // The respawned daemon would record the same unreadable stamp, so treating
+    // this as stale terminates and respawns on every launch, forever.
+    const kills: { pid: number; signal: NodeJS.Signals }[] = [];
+    const spawned = { count: 0 };
+    const supervisor = supervisorFor(
+      info({ entry: { path: entry, mtimeMs: null, size: null } }),
+      kills,
+      spawned,
+    );
+
+    await supervisor.start();
+
+    expect(spawned.count).toBe(0);
+    expect(kills).toEqual([]);
   });
 });

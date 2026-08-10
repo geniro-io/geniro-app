@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { app } from 'electron';
@@ -14,6 +14,7 @@ import {
   isPlausiblePid,
   PIDFILE_NAME,
   readDaemonInfo,
+  stampEntry,
 } from './daemon-pidfile';
 import { getSecret } from './keychain';
 import { loginShellPath } from './login-shell-path';
@@ -59,7 +60,15 @@ function pidfilePath(): string {
  * Locate the built daemon entry. A packaged app ships the daemon as a
  * self-contained tree under Resources/daemon (see scripts/build-mac.mjs);
  * dev launches resolve the workspace dist relative to the bundled main
- * process. Building @geniro/daemon is a dev prerequisite (turbo orders it).
+ * process.
+ *
+ * `dist/main.js` is produced by `pnpm build` alone, never by `electron-vite
+ * dev` — so until turbo's `dev` task gained `dependsOn: ["^build"]`, launching
+ * the app ran whatever compile happened to be lying here. Measured: source on
+ * the latest `main`, `dist/main.js` from four days earlier, and a daemon
+ * relaunched that morning still serving it. The `@geniro/daemon` dependency in
+ * this app's package.json exists ONLY to give turbo that ordering edge — the
+ * renderer imports nothing from it.
  */
 function resolveDaemonEntry(): string {
   const candidates = [
@@ -234,6 +243,57 @@ export class DaemonSupervisor {
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
   }
 
+  /**
+   * Whether a running daemon may be adopted, or is a stale build to replace.
+   *
+   * Named for what it DECIDES, not for what it proves: several inputs are
+   * unidentifiable rather than current, and every one of them is adopted
+   * anyway. Restarting a healthy daemon costs the user their in-flight turn,
+   * so "cannot tell" resolves toward leaving it alone — deliberately, and only
+   * where the alternative would be a kill on no evidence.
+   *
+   * `version` cannot make this call: it is the package version, unchanged
+   * between rebuilds, so a rebuilt daemon was adopted over and the app went on
+   * serving the previous compile. Measured here as a `pnpm dev` daemon four
+   * days old, missing a module that had landed since, so a rebuild appeared to
+   * change nothing and the instrumentation written to diagnose a bug never ran.
+   * The stamp is mtime+size of the entry script: probe-verified that a turbo
+   * CACHE HIT leaves both untouched (so an unchanged tree does not churn the
+   * daemon), while any real build `rm -rf`s `dist/` and recompiles, moving
+   * mtime even for a change that never reaches `main.js` itself.
+   *
+   * The adopt-anyway cases, each for its own reason:
+   * - a DIFFERENT path — `pnpm daemon:dev` on TypeScript source, or a packaged
+   *   daemon beside a dev one. A different thing, not an older one, and
+   *   killing it would take down a developer's watch loop.
+   * - an entry THIS process cannot stat — nothing to compare against.
+   * - a recorded stamp that is unreadable on both sides, which would otherwise
+   *   terminate and respawn a daemon that records the same unreadable stamp
+   *   again, every launch, forever.
+   *
+   * A daemon that reported NO stamp is the one unidentifiable case that is
+   * still replaced: only this app writes this pidfile, and the field has been
+   * written since it existed, so its absence dates the daemon to before this
+   * check — which is exactly the multi-day-stale daemon the check exists for,
+   * running on the one launch where it is guaranteed to be there.
+   */
+  private mayAdopt(existing: DaemonInfo, entry: string): boolean {
+    if (existing.entry === null) {
+      return false;
+    }
+    const mine = stampEntry(entry, statSync);
+    if (existing.entry.path !== mine.path) {
+      return true;
+    }
+    if (mine.mtimeMs === null || existing.entry.mtimeMs === null) {
+      return true;
+    }
+    return (
+      existing.entry.mtimeMs === mine.mtimeMs &&
+      existing.entry.size === mine.size
+    );
+  }
+
   start(): Promise<DaemonHandle> {
     if (this.stopping) {
       return Promise.reject(new Error('daemon supervisor is stopping'));
@@ -262,7 +322,8 @@ export class DaemonSupervisor {
         (await this.checkIdentity(existingHandle))
       ) {
         const bundled = this.bundledVersion(entry);
-        if (bundled === null || existing.version === bundled) {
+        const versionMatches = bundled === null || existing.version === bundled;
+        if (versionMatches && this.mayAdopt(existing, entry)) {
           // Reuse a daemon another UI instance already started.
           this.owned = false;
           this.currentPid = existing.pid;

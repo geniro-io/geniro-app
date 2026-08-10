@@ -186,6 +186,78 @@ describe('MarkdownContent tables', () => {
   });
 });
 
+describe('MarkdownContent — a table whose header row is blank', () => {
+  /**
+   * The shape an agent actually emits when it wants a bare label/value table:
+   * a header row of empty cells above the separator. remark-gfm parses this as
+   * a real header, so the `th` fill paints a grey band over nothing.
+   */
+  const HEADERLESS_TABLE = [
+    '|  |  |',
+    '| --- | --- |',
+    '| Fixed | 19 |',
+    '| Refuted | F6 |',
+  ].join('\n');
+
+  it('renders no header row at all when every header cell is empty', () => {
+    const el = render(<MarkdownContent content={HEADERLESS_TABLE} />);
+    // The band the user reported IS the thead. Asserting on the element rather
+    // than on its class is what makes this pin the behaviour: restyling `th`
+    // and leaving the row in place would still show an empty bordered stripe.
+    expect(el.querySelector('thead')).toBeNull();
+    expect(el.querySelectorAll('th')).toHaveLength(0);
+    // The data survives — this drops a blank header, not the table.
+    expect(el.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(el.textContent).toContain('Fixed');
+    expect(el.textContent).toContain('Refuted');
+  });
+
+  it('keeps a header that has text, fill and all', () => {
+    const el = render(<MarkdownContent content={ALIGNED_TABLE} />);
+    expect(el.querySelector('thead')).not.toBeNull();
+    expect(el.querySelectorAll('th')).toHaveLength(3);
+    // The fill is correct HERE — it is what separates a real header from the
+    // body. Dropping it everywhere would have been the wrong fix.
+    expect(el.querySelector('th')?.className).toContain('bg-muted/50');
+  });
+
+  it('keeps a header where only one cell has text', () => {
+    // Partial headers are common in generated tables and are still headers;
+    // the suppression is for a row that says nothing at all.
+    const el = render(
+      <MarkdownContent
+        content={['| name |  |', '| --- | --- |', '| a | b |'].join('\n')}
+      />,
+    );
+    expect(el.querySelector('thead')).not.toBeNull();
+    expect(el.querySelector('thead')?.textContent).toContain('name');
+  });
+
+  it('KEEPS a header whose cells hold only an image', () => {
+    // The suppression drops the whole `thead`, children included — so a
+    // text-only test does not merely leave a band on screen, it deletes a
+    // header somebody wrote. An image has no text node anywhere beneath it.
+    const el = render(
+      <MarkdownContent
+        content={['| ![chart](a.png) |', '| --- |', '| 1 |'].join('\n')}
+      />,
+    );
+    expect(el.querySelector('thead')).not.toBeNull();
+    expect(el.querySelectorAll('thead img')).toHaveLength(1);
+  });
+
+  it('treats a whitespace-only header as empty', () => {
+    // `|   |   |` differs from `|  |  |` only in spaces, and a reader cannot
+    // tell them apart — so neither may produce a band.
+    const el = render(
+      <MarkdownContent
+        content={['|   |   |', '| --- | --- |', '| a | b |'].join('\n')}
+      />,
+    );
+    expect(el.querySelector('thead')).toBeNull();
+  });
+});
+
 describe('alignClass — the align-PROP fallback', () => {
   it('reads the style react-markdown actually produces today', () => {
     // Probe-verified: react-markdown translates the hast `align` property into

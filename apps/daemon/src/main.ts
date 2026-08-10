@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { MikroORM } from '@mikro-orm/core';
@@ -17,7 +18,7 @@ import type { RuntimeInfo } from './auth/runtime';
 import mikroOrmConfig from './db/mikro-orm.config';
 import { environment } from './environments';
 import { installCrashGuards } from './utils/crash-guards';
-import type { DaemonInfo } from './utils/handshake';
+import { type DaemonInfo, stampEntry } from './utils/handshake';
 import {
   acquireInstanceLock,
   DAEMON_LOCK_FILE_NAME,
@@ -113,6 +114,11 @@ bootstrapper.addExtension(
           port,
           token,
           version: environment.version,
+          // `process.argv[1]` and not the resolved module path: it is the file
+          // the supervisor named on the command line, so it is the same string
+          // the supervisor will stamp when deciding whether this daemon is its
+          // own current build.
+          entry: stampEntry(process.argv[1] ?? '', statSync),
           startedAt: new Date(startedAt).toISOString(),
         };
         writePidfile(environment.pidfilePath, info);

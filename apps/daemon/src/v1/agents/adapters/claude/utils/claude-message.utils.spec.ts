@@ -525,6 +525,160 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
   });
 });
 
+describe('mapClaudeMessage — sub-agent origin', () => {
+  /**
+   * Captured verbatim from `claude -p --output-format stream-json --verbose` on
+   * 2.1.226 (2026-08-10), from a turn that launched one sub-agent, trimmed to
+   * the fields under test. The whole defect is that these lines are
+   * indistinguishable from main-thread ones, so a fabricated fixture would pin
+   * our guess about the CLI rather than the CLI.
+   *
+   * In that capture `parent_tool_use_id` appeared on the 12 `assistant`/`user`
+   * lines and nowhere else: null on the 9 main-thread ones, and set to the id
+   * of the `Agent` tool call on the 3 the sub-agent produced.
+   */
+  const AGENT_TOOL_USE_ID = 'toolu_01GffB3XLs9hgFTpZLrsex4f';
+
+  it('marks a sub-agent tool call with the call that started it', () => {
+    expect(
+      mapClaudeMessage({
+        type: 'assistant',
+        parent_tool_use_id: AGENT_TOOL_USE_ID,
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
+              name: 'Bash',
+              input: { command: 'echo hello-from-subagent' },
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'tool_call',
+        id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
+        name: 'Bash',
+        input: { command: 'echo hello-from-subagent' },
+        parentToolUseId: AGENT_TOOL_USE_ID,
+      },
+    ]);
+  });
+
+  it('leaves a main-thread line unmarked, rather than stamping a null', () => {
+    // `parent_tool_use_id: null` is what the CLI sends for the ordinary case,
+    // and it must not become a key on every row in the database.
+    const events = mapClaudeMessage({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: { content: [{ type: 'text', text: 'done.' }] },
+    });
+    expect(events).toEqual([{ type: 'text', text: 'done.' }]);
+    expect(events[0]).not.toHaveProperty('parentToolUseId');
+  });
+
+  it('marks a sub-agent tool RESULT too, so a pair stays together', () => {
+    // The result arrives on a `user` line, a different arm of the switch —
+    // which is exactly why the stamp is applied around the switch and not
+    // inside one case.
+    expect(
+      mapClaudeMessage({
+        type: 'user',
+        parent_tool_use_id: AGENT_TOOL_USE_ID,
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
+              content: 'hello-from-subagent',
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'tool_result',
+        id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
+        name: null,
+        result: 'hello-from-subagent',
+        isError: false,
+        parentToolUseId: AGENT_TOOL_USE_ID,
+      },
+    ]);
+  });
+
+  it('does NOT report a sub-agent request as the conversation’s context', () => {
+    // THE METER BUG. A sub-agent's own request is a fresh, nearly empty
+    // context; reporting it dropped the pill to a few thousand tokens and the
+    // next main-thread line snapped it back. The usage below is deliberately
+    // well-formed — dropping it is a decision about WHOSE context it is, not a
+    // parse failure.
+    const events = mapClaudeMessage({
+      type: 'assistant',
+      parent_tool_use_id: AGENT_TOOL_USE_ID,
+      message: {
+        content: [{ type: 'text', text: 'looking' }],
+        usage: {
+          input_tokens: 4,
+          cache_creation_input_tokens: 11_000,
+          cache_read_input_tokens: 0,
+          output_tokens: 9,
+        },
+      },
+    });
+    expect(events.some((event) => event.type === 'context_progress')).toBe(
+      false,
+    );
+    expect(events).toEqual([
+      { type: 'text', text: 'looking', parentToolUseId: AGENT_TOOL_USE_ID },
+    ]);
+  });
+
+  it('treats an EMPTY parent id as the main thread, not as a sub-agent', () => {
+    // `asString` passes `''` straight through, so without normalization this
+    // line would suppress the context meter for the whole turn and persist as
+    // a sub-agent row — while the renderer half of the twin rejects `''` and
+    // calls the same row the main thread's. Two readings of one shape must not
+    // disagree about who wrote it.
+    const events = mapClaudeMessage({
+      type: 'assistant',
+      parent_tool_use_id: '',
+      message: {
+        content: [{ type: 'text', text: 'hi' }],
+        usage: { input_tokens: 7, cache_read_input_tokens: 3 },
+      },
+    });
+    expect(events).toContainEqual({
+      type: 'context_progress',
+      contextTokens: 10,
+    });
+    expect(events.every((event) => !('parentToolUseId' in event))).toBe(true);
+  });
+
+  it('still reports the MAIN thread’s context from the same shape', () => {
+    // The companion to the test above: without this pair, gating the meter on
+    // "has no parent" and gating it on "always off" look identical.
+    const events = mapClaudeMessage({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [{ type: 'text', text: 'looking' }],
+        usage: {
+          input_tokens: 4,
+          cache_creation_input_tokens: 11_000,
+          cache_read_input_tokens: 0,
+          output_tokens: 9,
+        },
+      },
+    });
+    expect(events).toContainEqual({
+      type: 'context_progress',
+      contextTokens: 4 + 11_000,
+    });
+  });
+});
+
 describe('mapClaudeStreamEvent', () => {
   it('lifts an assistant text increment', () => {
     expect(mapClaudeStreamEvent(textDelta('The sea'))).toEqual([

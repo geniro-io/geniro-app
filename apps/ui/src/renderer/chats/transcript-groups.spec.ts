@@ -15,6 +15,7 @@ import {
   type TurnBlockEntry,
   withLiveText,
 } from './transcript-groups';
+import { payloadString } from './transcript-item';
 
 let seq = 0;
 function item(
@@ -124,6 +125,90 @@ describe('groupTranscript', () => {
   it('an orphan tool_result (no known call) stays a plain item entry', () => {
     const entries = groupTranscript([result('mystery', 'out')]);
     expect(entries.map((e) => e.type)).toEqual(['item']);
+  });
+});
+
+describe('groupTranscript — sub-agent work', () => {
+  const SUB_A = 'toolu_agent_a';
+  const SUB_B = 'toolu_agent_b';
+
+  /** A tool call the CLI attributed to a sub-agent rather than the main thread. */
+  const subCall = (name: string, id: string, parent: string): ChatItem =>
+    item('tool_call', { id, name, input: {}, parentToolUseId: parent }, 'orch');
+  const subSays = (text: string, parent: string): ChatItem =>
+    item('message', { text, parentToolUseId: parent }, 'orch', 'assistant');
+
+  it('does NOT let a sub-agent’s chatter split the main thread’s group', () => {
+    // THE FLOOD. Sub-agent output arrives on the same stream interleaved with
+    // the main thread's, so keying groups by node alone let every sub-agent
+    // message close the main group — which is how eleven consecutive Bash
+    // calls came to render as eleven separate flat rows.
+    const entries = groupTranscript([
+      call('Bash', 'm1'),
+      subSays('working on it', SUB_A),
+      call('Bash', 'm2'),
+      subSays('still working', SUB_A),
+      call('Bash', 'm3'),
+    ]);
+
+    const groups = entries.filter(
+      (entry): entry is ToolGroupEntry => entry.type === 'tools',
+    );
+    const main = groups.filter((group) => group.parentToolUseId === null);
+    expect(main).toHaveLength(1);
+    // By tool-call id from the payload, not the item id: the item counter is
+    // module-global, so absolute ids depend on which tests ran before this one.
+    expect(
+      main[0]?.pairs.map((pair) => payloadString(pair.call.payload, 'id')),
+    ).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('keeps two concurrent sub-agents in separate groups, and out of the main one', () => {
+    const entries = groupTranscript([
+      call('Bash', 'm1'),
+      subCall('Bash', 'a1', SUB_A),
+      subCall('Bash', 'b1', SUB_B),
+      subCall('Read', 'a2', SUB_A),
+      call('Read', 'm2'),
+    ]);
+
+    const groups = entries.filter(
+      (entry): entry is ToolGroupEntry => entry.type === 'tools',
+    );
+    const byOrigin = new Map(
+      groups.map((group) => [group.parentToolUseId, group]),
+    );
+    // Three origins, three groups — never one interleaved run.
+    expect(groups).toHaveLength(3);
+    expect(byOrigin.get(null)?.pairs).toHaveLength(2);
+    expect(byOrigin.get(SUB_A)?.pairs).toHaveLength(2);
+    expect(byOrigin.get(SUB_B)?.pairs).toHaveLength(1);
+  });
+
+  it('pairs a sub-agent’s result with its call across a main-thread line', () => {
+    // Pairing goes through the payload's tool id, not the group key — so a
+    // result must still find its call after the main thread has spoken in
+    // between, which is the ordinary case once two threads interleave.
+    const entries = groupTranscript([
+      subCall('Bash', 'a1', SUB_A),
+      item('message', { text: 'meanwhile' }, 'orch', 'assistant'),
+      item('tool_result', { id: 'a1', name: null, result: 'ok' }, 'orch'),
+    ]);
+    const group = entries.find(
+      (entry): entry is ToolGroupEntry => entry.type === 'tools',
+    );
+    expect(group?.parentToolUseId).toBe(SUB_A);
+    expect(group?.pairs[0]?.result).not.toBeNull();
+  });
+
+  it('leaves an ordinary transcript with no sub-agents unchanged', () => {
+    const entries = groupTranscript([
+      call('Bash', 't1'),
+      result('t1'),
+      call('Read', 't2'),
+    ]);
+    expect(entries.map((entry) => entry.type)).toEqual(['tools']);
+    expect((entries[0] as ToolGroupEntry).parentToolUseId).toBeNull();
   });
 });
 

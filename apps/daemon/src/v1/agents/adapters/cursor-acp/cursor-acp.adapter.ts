@@ -203,6 +203,20 @@ export class CursorAcpAdapter extends AgentAdapter {
         unavailableReason:
           'cursor-agent has no verified way to load a plugin directory',
       },
+      followUp: {
+        /**
+         * ACP's `session/prompt` is ONE request per turn — there is no frame
+         * that adds a user message to a prompt already in flight. So the
+         * adapter leaves `buildFollowUpPayload` at its default, the turn handle
+         * answers false, and the chat route 409s RUN_BUSY.
+         *
+         * The renderer shows this sentence on the disabled "send now" control:
+         * the message still goes out the moment the turn ends, and saying why
+         * it waits is the difference between a queue and a dead button.
+         */
+        unavailableReason:
+          'cursor-agent takes one prompt per turn — ACP has no channel for a message mid-turn',
+      },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
        * plain no: `cursor-agent --resume <id>` ACCEPTS an ACP session id and

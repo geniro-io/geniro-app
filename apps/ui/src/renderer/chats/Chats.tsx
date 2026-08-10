@@ -1,12 +1,10 @@
 import {
   ArrowUp,
-  Clock,
   FolderOpen,
   Plus,
   Square,
   Trash2,
   Workflow as WorkflowIcon,
-  X,
   Zap,
 } from 'lucide-react';
 import {
@@ -81,6 +79,7 @@ import {
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
+import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import { displayRunStatus } from './run-status';
 import { nextFollowState } from './scroll-follow';
@@ -300,6 +299,20 @@ export function Chats({
   // RUN_BUSY backoff used to early-return every OTHER run's drain too, so one
   // busy chat silently held the whole app's queues.
   const drainingRef = useRef<Set<string>>(new Set());
+  /**
+   * Is this view still on screen? The drain's RUN_BUSY backoff runs for
+   * seconds while holding nothing but a closure, so without this a retry keeps
+   * firing after the component is gone and POSTs into a run nobody is
+   * watching. Assigned in the effect BODY, not merely cleared in the cleanup,
+   * so a StrictMode remount does not leave the ref stuck false.
+   */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const addItem = useCallback((item: ChatItem): void => {
     if (item.runId !== activeRunIdRef.current) {
@@ -1235,6 +1248,12 @@ export function Chats({
         }));
       try {
         for (let attempt = 0; ; attempt += 1) {
+          // Torn down while we waited — see `mountedRef`. Checked at the TOP of
+          // every iteration rather than beside the delay, so it also catches a
+          // retry that was already scheduled when the view went away.
+          if (!mountedRef.current) {
+            return;
+          }
           // The head keeps its live Remove control for the whole in-flight
           // window — which the RUN_BUSY backoff can stretch to seconds — so
           // honour a removal that landed while we were waiting. Sending anyway
@@ -1280,14 +1299,25 @@ export function Chats({
    * The open transcript's composer: a follow-up into the ACTIVE chat run —
    * never a run start (workflow runs take one task; their composer is off).
    *
-   * While the agent is working the message is still SENT, not parked. The
-   * daemon hands it to the turn already in flight when the CLI has a channel
-   * for one (claude's stream-json stdin does; it acts on it at the next tool
-   * boundary), and answers RUN_BUSY when it does not — only then does the
-   * message join the queue and wait for the turn to end. Trying first is the
-   * whole change: parking unconditionally, as this did, turned "send this
-   * next" into "send this after everything finishes", which on a long turn is
-   * minutes of the agent working on a request the user has already replaced.
+   * While the agent is working the message is HELD in this run's queue and
+   * shown in the strip above the composer — it is not handed to the CLI, and
+   * it becomes a transcript bubble only when it is actually POSTed.
+   *
+   * This is the inverse of what it used to do, and the inversion is the fix.
+   * Sending unconditionally meant that on claude — whose stream-json stdin
+   * takes a message into a turn already running — a second thought typed while
+   * the agent worked was injected at the next tool boundary. So a message the
+   * user meant as "do this next" silently redirected the turn in flight, with
+   * no moment left at which they could edit or withdraw it. Holding it gives
+   * them that moment; mid-turn delivery survives as the strip's explicit "send
+   * now" ({@link steerQueued}), offered only where the daemon says the CLI has
+   * a channel for one.
+   *
+   * The RUN_BUSY catch below is NOT redundant with the hold. `streaming` is
+   * the renderer's belief and RUN_BUSY is the daemon's fact; they disagree
+   * whenever the run list has not loaded yet, or a turn wedged without
+   * settling. Every one of those disagreements used to surface a raw 409 as a
+   * red banner.
    */
   const sendFollowUp = useCallback(async (): Promise<void> => {
     const text = input.trim();
@@ -1299,7 +1329,13 @@ export function Chats({
     // Queueing is a chat-run concept — the workflow composer is disabled.
     const queueable =
       runsRef.current.find((r) => r.id === runId)?.workflowId == null;
-    if (streaming && !queueable) {
+    if (streaming) {
+      if (!queueable) {
+        return;
+      }
+      setInput('');
+      enqueueMessage(runId, { text, images });
+      attachments.clear();
       return;
     }
     try {
@@ -1334,6 +1370,73 @@ export function Chats({
       setInput((current) => (current.length === 0 ? text : current));
     }
   }, [input, streaming, startTurn, enqueueMessage, attachments]);
+
+  /** Rewrite a queued message before it goes out. Text only — an attachment
+   *  cannot be re-pasted into a one-line field, and losing one silently is
+   *  worse than making the user remove the entry and retype it. */
+  const editQueued = useCallback((index: number, text: string): void => {
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    setQueues((prev) => ({
+      ...prev,
+      [runId]: (prev[runId] ?? []).map((message, i) =>
+        i === index ? { ...message, text } : message,
+      ),
+    }));
+  }, []);
+
+  const removeQueued = useCallback((index: number): void => {
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    setQueues((prev) => ({
+      ...prev,
+      [runId]: (prev[runId] ?? []).filter((_, i) => i !== index),
+    }));
+  }, []);
+
+  /**
+   * Send one queued message into the turn already running — the opt-in half of
+   * the hold in {@link sendFollowUp}, offered only where the daemon reports
+   * the CLI has a mid-turn channel.
+   *
+   * A RUN_BUSY here is not a failure to report: it means the daemon disagreed
+   * with the capability report at this instant (the turn settled as the POST
+   * flew, or the CLI declined the write), and the message is still queued and
+   * still going out when the turn ends. Showing a red banner for it would name
+   * a problem the user has no action for.
+   */
+  const steerQueued = useCallback(
+    async (index: number): Promise<void> => {
+      const runId = activeRunIdRef.current;
+      if (!runId) {
+        return;
+      }
+      const message = (queuesRef.current[runId] ?? [])[index];
+      if (!message) {
+        return;
+      }
+      try {
+        await startTurn(runId, message.text, message.images);
+        // Dropped by IDENTITY, never by index: the automatic drain can shift
+        // the queue while this POST is in flight, and an index filter would
+        // then remove somebody else's message.
+        setQueues((prev) => ({
+          ...prev,
+          [runId]: (prev[runId] ?? []).filter((queued) => queued !== message),
+        }));
+      } catch (err) {
+        if (isRunBusyError(err)) {
+          return;
+        }
+        setError(String(err));
+      }
+    },
+    [startTurn],
+  );
 
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
@@ -1525,6 +1628,27 @@ export function Chats({
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
+  /**
+   * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
+   * can — what decides whether the strip offers "send now".
+   *
+   * Derived from the daemon's report for the same reason as the two sets
+   * above: `AdapterConfig.followUp` is the fact, and the moment the renderer
+   * decides it by agent name, a CLI that gains the channel keeps a dead
+   * control. Undefined-safe by construction — while capabilities are loading
+   * there is no row, and the honest answer is "not right now", which reads as
+   * a disabled button rather than one that queues without saying so.
+   */
+  const steerUnavailableReason = useMemo((): string | null => {
+    const agent = activeRun?.agentKind;
+    if (!agent) {
+      return 'This run has no agent that could take a message mid-turn';
+    }
+    const row = (capabilities?.followUps ?? []).find((f) => f.agent === agent);
+    return row
+      ? row.unavailableReason
+      : `Checking whether ${agent} can take a message mid-turn…`;
+  }, [capabilities, activeRun]);
 
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agent kinds the current composer's message reaches, and in which
@@ -2484,54 +2608,13 @@ export function Chats({
               ) : null}
 
               <div className="flex flex-col gap-2 border-t border-border p-3">
-                {queued.length > 0 ? (
-                  <div
-                    className="flex flex-col gap-1"
-                    aria-label="Queued messages">
-                    {queued.map((message, index) => (
-                      <div
-                        // Index keys are safe here: rows are removed by index and
-                        // duplicate texts are legitimate queue entries.
-                        key={`${index}-${message.text}`}
-                        className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-                        <Clock aria-hidden="true" className="size-3 shrink-0" />
-                        <span
-                          className="min-w-0 flex-1 truncate"
-                          title={message.text}>
-                          {message.text ||
-                            (message.images.length === 1
-                              ? '1 image'
-                              : `${message.images.length} images`)}
-                        </span>
-                        {message.text && message.images.length > 0 ? (
-                          <span className="shrink-0">
-                            {message.images.length === 1
-                              ? '+1 image'
-                              : `+${message.images.length} images`}
-                          </span>
-                        ) : null}
-                        <span className="shrink-0">sends next</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-5 shrink-0"
-                          aria-label={`Remove queued message ${index + 1}`}
-                          title="Remove from queue"
-                          onClick={() =>
-                            setQueues((prev) => ({
-                              ...prev,
-                              [activeRunId]: (prev[activeRunId] ?? []).filter(
-                                (_, i) => i !== index,
-                              ),
-                            }))
-                          }>
-                          <X className="size-3 shrink-0" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+                <QueuedStrip
+                  messages={queued}
+                  steerUnavailableReason={steerUnavailableReason}
+                  onEdit={editQueued}
+                  onRemove={removeQueued}
+                  onSteer={(index) => void steerQueued(index)}
+                />
 
                 {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
@@ -2618,15 +2701,16 @@ export function Chats({
                                   type="button"
                                   size="icon"
                                   className="size-8 rounded-full"
-                                  // It SENDS. The message goes into the turn
-                                  // already running whenever the agent's CLI can
-                                  // take one mid-turn, and only falls back to the
-                                  // queue when it cannot — so a label promising
-                                  // "later" was wrong for the common case, and
-                                  // the queue strip above the composer is what
-                                  // says when the fallback happened.
-                                  aria-label="Send"
-                                  title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
+                                  // It QUEUES while a turn is running, and the
+                                  // label says so. It used to say "Send" and
+                                  // mean it — the message went into the turn in
+                                  // flight — which is the behaviour the strip
+                                  // replaced: there was no moment at which the
+                                  // user could still edit or withdraw it.
+                                  // Mid-turn delivery is now the strip's own
+                                  // "send now", one click away.
+                                  aria-label="Queue"
+                                  title="Queue — goes out when the turn ends, or send it now from the queue above"
                                   onClick={() => void sendFollowUp()}>
                                   <ArrowUp className="size-4 shrink-0" />
                                 </Button>

@@ -445,6 +445,19 @@ beforeEach(() => {
       { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
       { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
     ],
+    // Which CLIs can be handed a message MID-turn — what decides whether the
+    // queue strip offers "send now". Stated here for the same reason as the
+    // rows above: the renderer reads the daemon's answer, so a fixture that
+    // omitted it would leave every Steer control disabled and quietly make
+    // those specs untestable.
+    followUps: [
+      { agent: 'claude', unavailableReason: null },
+      {
+        agent: 'cursor-agent',
+        unavailableReason:
+          'cursor-agent takes one prompt per turn — ACP has no channel for a message mid-turn',
+      },
+    ],
   });
   handoffApi.resolveHandoff.mockReset();
   handoffApi.resolveMcpLogin.mockReset();
@@ -2659,11 +2672,12 @@ describe('Chats queued messages', () => {
    * The daemon's refusal to take a message into a turn that is already
    * running — a CLI with no mid-turn channel, or a turn already settling.
    *
-   * Every spec below arms one, because that refusal is what PARKS a message
-   * now: the composer always offers a mid-turn message to the running turn
-   * first, and only a RUN_BUSY sends it to the queue. A spec that armed
-   * nothing would exercise the delivery path and never reach the queue at
-   * all.
+   * NOT what parks a message any more, and the specs below no longer arm one
+   * to reach the queue: a message written mid-turn is HELD in the renderer and
+   * never offered, so nothing has to refuse it. What still meets a real
+   * RUN_BUSY is the DRAIN — it POSTs the instant the terminal item lands,
+   * which can beat the daemon's release of the turn slot — so where this is
+   * still armed below, it is exercising the drain's retry, not the composer.
    */
   const busy = (): Error =>
     // The daemon's ACTUAL body, not a shorthand: a Fastify JSON error envelope.
@@ -2722,7 +2736,6 @@ describe('Chats queued messages', () => {
     // answer about a screenshot it never received), and reaches the daemon as
     // base64 on the send body.
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'look at this'));
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -2732,7 +2745,7 @@ describe('Chats queued messages', () => {
     expect(staged(container)).toHaveLength(1);
 
     await type(container, 'look at this');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
 
     // Staged images clear with the text once queued.
     expect(staged(container)).toHaveLength(0);
@@ -2953,13 +2966,14 @@ describe('Chats queued messages', () => {
 
   // run1 is 'running' with an empty history → the open transcript arms the
   // working state (Stop) straight from activation.
-  it('SENDS a mid-turn message rather than parking it, when the daemon takes it', async () => {
-    // The composer used to park every mid-turn message unconditionally, which
-    // turned "send this next" into "send this after everything finishes" —
-    // minutes on a long turn, for a request that had already replaced the one
-    // the agent was working on. It now offers it to the running turn first;
-    // the daemon writes it into the CLI's still-open stdin and answers with
-    // the persisted item.
+  it('HOLDS a mid-turn message instead of pushing it into the running turn', async () => {
+    // The defect this fixes, and the reason it is asserted on the POST rather
+    // than on the strip: the composer used to send every mid-turn message
+    // immediately, and on claude the daemon really did write it into the CLI's
+    // still-open stdin. So a second thought typed while the agent worked was
+    // injected at the next tool boundary — it silently redirected the turn in
+    // flight, and there was no moment left at which the user could edit or
+    // withdraw it. Nothing may reach the daemon here.
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'actually, do this'));
     const { client } = makeClient();
     const container = await mount(client);
@@ -2968,29 +2982,31 @@ describe('Chats queued messages', () => {
     expect(composerButton(container, 'Stop')).not.toBeNull();
 
     await type(container, 'actually, do this');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
 
-    expect(api.sendChatMessage).toHaveBeenCalledWith({
-      runId: 'r1',
-      sendMessageDto: { text: 'actually, do this' },
-    });
-    // Nothing waiting: it went straight into the turn.
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
     expect(
-      container.querySelector('[aria-label="Queued messages"]'),
-    ).toBeNull();
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('actually, do this');
   });
 
-  it('does not surface the daemon’s RUN_BUSY as an error — that is the queue', async () => {
-    // The fallback is documented behaviour, not a failure, and a red banner
-    // for it would report something the user has no action for.
+  it('does not surface a DRAIN’s RUN_BUSY as an error — it is retried', async () => {
+    // The drain races the daemon's release of the turn slot, so a 409 there is
+    // documented behaviour rather than a failure, and a red banner for it
+    // would report something the user has no action for.
     api.sendChatMessage.mockRejectedValueOnce(busy());
-    const { client } = makeClient();
+    const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'later then');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
+    // Only the DRAIN reaches the daemon, and it is what meets the refusal.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
 
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain('RUN_BUSY');
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
@@ -2999,18 +3015,17 @@ describe('Chats queued messages', () => {
 
   it('queues a message written mid-turn and auto-sends it when the turn ends', async () => {
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'queued question'));
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     expect(composerButton(container, 'Stop')).not.toBeNull();
 
     await type(container, 'queued question');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
 
-    // Offered to the running turn and REFUSED, so it waits — visibly, above
-    // the composer — instead of being lost.
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    // Held, not offered: it waits visibly above the composer, and the daemon
+    // has not heard of it yet.
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
     const queueRegion = container.querySelector(
       '[aria-label="Queued messages"]',
     )!;
@@ -3032,7 +3047,6 @@ describe('Chats queued messages', () => {
   });
 
   it('Cmd+Enter also queues while the agent is working', async () => {
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -3048,7 +3062,7 @@ describe('Chats queued messages', () => {
       );
     });
 
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('via keyboard');
@@ -3056,10 +3070,7 @@ describe('Chats queued messages', () => {
 
   it('drains ONE queued message per settled turn, in order', async () => {
     api.sendChatMessage
-      // Both are offered to the running turn and refused, which is what puts
-      // them in the queue; the drain then delivers them one per settled turn.
-      .mockRejectedValueOnce(busy())
-      .mockRejectedValueOnce(busy())
+      // Both are held client-side, so the ONLY calls are the drain's.
       .mockResolvedValueOnce(msg(10, 'user', 'first'))
       .mockResolvedValueOnce(msg(12, 'user', 'second'));
     const { client, emitItem } = makeClient();
@@ -3067,14 +3078,14 @@ describe('Chats queued messages', () => {
     await clickRun(container, 'My chat');
 
     await type(container, 'first');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await type(container, 'second');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
 
     await act(async () => {
       emitItem(terminal(5));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
       sendMessageDto: { text: 'first' },
@@ -3087,7 +3098,7 @@ describe('Chats queued messages', () => {
     await act(async () => {
       emitItem(terminal(11));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(4);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
       sendMessageDto: { text: 'second' },
@@ -3099,7 +3110,6 @@ describe('Chats queued messages', () => {
     // in-flight window it disappeared from the pending list — visibly gone,
     // and impossible to remove — then reappeared if the send failed.
     let settleSend!: (item: ChatItem) => void;
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     api.sendChatMessage.mockImplementationOnce(
       () =>
         new Promise<ChatItem>((resolve) => {
@@ -3111,7 +3121,7 @@ describe('Chats queued messages', () => {
     await clickRun(container, 'My chat');
 
     await type(container, 'in flight');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await act(async () => {
       emitItem(terminal(5));
     });
@@ -3138,15 +3148,14 @@ describe('Chats queued messages', () => {
     // in its RUN_BUSY backoff early-returned every other run's drain.
     let settleFirst!: (item: ChatItem) => void;
     api.sendChatMessage
-      // Each run's mid-turn offer is refused, which is what queues it.
-      .mockRejectedValueOnce(busy())
+      // Both messages are held client-side, so each run's only call is its
+      // own drain — the first of which never settles.
       .mockImplementationOnce(
         () =>
           new Promise<ChatItem>((resolve) => {
             settleFirst = resolve;
           }),
       )
-      .mockRejectedValueOnce(busy())
       .mockResolvedValueOnce(msg(20, 'user', 'second run'));
     api.listChats.mockResolvedValue([
       run1,
@@ -3157,21 +3166,21 @@ describe('Chats queued messages', () => {
 
     await clickRun(container, 'My chat');
     await type(container, 'first run');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await act(async () => {
       emitItem(terminal(5));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
     // Second chat, while the first send is still hanging.
     await clickRun(container, 'Second chat');
     await type(container, 'second run');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await act(async () => {
       emitItem({ ...terminal(5), runId: 'r2' });
     });
 
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(4);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r2',
       sendMessageDto: { text: 'second run' },
@@ -3182,13 +3191,12 @@ describe('Chats queued messages', () => {
   });
 
   it('a removed queued message never sends', async () => {
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'changed my mind');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await act(async () => {
       container
         .querySelector('button[aria-label="Remove queued message 1"]')!
@@ -3201,8 +3209,8 @@ describe('Chats queued messages', () => {
     await act(async () => {
       emitItem(terminal(5));
     });
-    // Only the refused mid-turn offer — the drain sent nothing.
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    // Nothing ever reached the daemon: it was held, then withdrawn.
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 
   it('a queued message removed DURING the busy backoff is not delivered anyway', async () => {
@@ -3221,13 +3229,12 @@ describe('Chats queued messages', () => {
       await clickRun(container, 'My chat');
 
       await type(container, 'changed my mind');
-      await clickButton(container, 'Send');
+      await clickButton(container, 'Queue');
       await act(async () => {
         emitItem(terminal(5));
       });
-      // The mid-turn offer was refused (which queued it) and the drain's
-      // first attempt was refused too; the head is now in the backoff.
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      // The drain's first attempt was refused; the head is now in the backoff.
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         container
@@ -3240,7 +3247,7 @@ describe('Chats queued messages', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -3250,20 +3257,17 @@ describe('Chats queued messages', () => {
     api.sendChatMessage.mockRejectedValue(
       new Error('daemon POST failed (400)'),
     );
-    // The mid-turn offer is refused as BUSY (that is what queues it); the
-    // drain's own attempt then hits the 400 this spec is about.
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'unlucky');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await act(async () => {
       emitItem(terminal(5));
     });
 
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain('daemon POST failed (400)');
     // The message survives, editable/removable — and does NOT auto-retry
     // (no turn started, so no terminal item will fire the drain).
@@ -3278,8 +3282,6 @@ describe('Chats queued messages', () => {
       // The terminal item races the daemon's claim release: first two sends
       // hit RUN_BUSY, the third lands.
       api.sendChatMessage
-        // The mid-turn offer, refused — that is what queues it.
-        .mockRejectedValueOnce(busy())
         .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
         .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
         .mockResolvedValueOnce(msg(10, 'user', 'delayed'));
@@ -3288,20 +3290,20 @@ describe('Chats queued messages', () => {
       await clickRun(container, 'My chat');
 
       await type(container, 'delayed');
-      await clickButton(container, 'Send');
+      await clickButton(container, 'Queue');
       await act(async () => {
         emitItem(terminal(5));
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(300);
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(600);
       });
-      expect(api.sendChatMessage).toHaveBeenCalledTimes(4);
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(3);
 
       // Third attempt succeeded: no error line, nothing left queued.
       expect(container.textContent).not.toContain('RUN_BUSY');
@@ -3314,13 +3316,12 @@ describe('Chats queued messages', () => {
   });
 
   it('the queue SURVIVES leaving the transcript and shows again on return', async () => {
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'kept safe');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     // Leave for the new-run composer — the queue is hidden there, not lost.
     await act(async () => {
       container
@@ -3337,25 +3338,151 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('kept safe');
-    // Only the refused mid-turn offer: nothing was delivered.
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    // Nothing was delivered: the run never settled, so the drain never ran.
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('a drain in its backoff STOPS when the view is torn down', async () => {
+    // The backoff holds nothing but a closure, so it outlives the component:
+    // before the guard, a retry scheduled here kept firing after unmount and
+    // POSTed into the shared mock — which is how this suite went flaky, with
+    // a LATER test failing on a call it never made. In the app the same leak
+    // is a message delivered to a run nobody is watching any more.
+    vi.useFakeTimers();
+    try {
+      api.sendChatMessage.mockRejectedValue(busy());
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      await type(container, 'orphaned');
+      await clickButton(container, 'Queue');
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      // The drain's first attempt was refused; it is now in the backoff.
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        for (const root of roots) {
+          root.unmount();
+        }
+      });
+      roots.length = 0;
+
+      // Every retry window elapses with the view gone: nothing more goes out.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a queued message can be REWRITTEN before it goes out', async () => {
+    // The point of holding a message is that the user can still change it.
+    // Asserted on the delivered body, not on the row's text: rendering the
+    // edit while sending the original is exactly the failure worth catching.
+    api.sendChatMessage.mockResolvedValue(
+      msg(10, 'user', 'the second thought'),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'the first thought');
+    await clickButton(container, 'Queue');
+
+    await clickButton(container, 'Edit queued message 1');
+    const field = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Edit queued message 1"]',
+    )!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(field, 'the second thought');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'the second thought' },
+    });
+  });
+
+  it('“send now” pushes a queued message into the turn already running', async () => {
+    // The opt-in half of the hold: mid-turn delivery is still available, but
+    // it is now a deliberate click rather than what every Enter did.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'urgent'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'urgent');
+    await clickButton(container, 'Queue');
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    // Still mid-turn — nothing settled it.
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'urgent' },
+    });
+    // It left the queue, so the drain cannot send it a second time.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+
+  it('withholds “send now” from a CLI with no mid-turn channel, and says why', async () => {
+    // Read off the daemon's capability report, never from the agent's name:
+    // this run is a cursor chat, whose ACP transport takes one prompt per
+    // turn. Offering the control anyway would be a button that silently does
+    // nothing, which is what the capability field exists to prevent.
+    api.listChats.mockResolvedValue([{ ...run1, agentKind: 'cursor-agent' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'urgent');
+    await clickButton(container, 'Queue');
+
+    const steer = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send queued message 1 now"]',
+    )!;
+    expect(steer.disabled).toBe(true);
+    expect(steer.title).toContain('one prompt per turn');
+
+    await clickButton(container, 'Send queued message 1 now');
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 
   it('reopening a run that SETTLED while away drains its queue automatically', async () => {
     api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'later message'));
-    api.sendChatMessage.mockRejectedValueOnce(busy());
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
     await type(container, 'later message');
-    await clickButton(container, 'Send');
+    await clickButton(container, 'Queue');
     await act(async () => {
       container
         .querySelector('[aria-label="New chat"]')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
 
     // While away the turn finished — the reopened transcript replays a
     // history that ends on a terminal item, which fires the drain.

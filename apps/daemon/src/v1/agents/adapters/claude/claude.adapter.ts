@@ -232,6 +232,15 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */
         unavailableReason: null,
       },
+      followUp: {
+        /**
+         * A stream-json stdin is a CONVERSATION: a second `{"type":"user"}`
+         * line on a still-open pipe is acted on at the next tool boundary
+         * (probe-verified on 2.1.222). `buildFollowUpPayload` is the override
+         * this null promises — the two are pinned together by spec.
+         */
+        unavailableReason: null,
+      },
       handoff: {
         kind: 'resume-command',
         resumeFlag: CLAUDE_RESUME_FLAG,

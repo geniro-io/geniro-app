@@ -1110,6 +1110,32 @@ export interface AdapterConfig {
     readonly unavailableReason: string | null;
   };
 
+  // ── A message into a turn that is already running ───────────────────────
+  /**
+   * Whether this CLI can be handed a user message MID-TURN — the fact behind
+   * `buildFollowUpPayload`, lifted into config so it can be reported.
+   *
+   * The method alone could never answer this for the renderer: it is
+   * `protected`, per-turn, and only tells you what happened AFTER a message was
+   * already written. The composer needs to know BEFORE it offers the control,
+   * because the queue's "send now" is exactly this capability and an agent
+   * without it must not be offered a button that silently parks the message.
+   *
+   * MUST agree with `buildFollowUpPayload`: null here promises the override
+   * exists. The two are pinned together in `agent-adapter.spec.ts` — a config
+   * claiming a channel the adapter never implements would have the composer
+   * promise immediate delivery and the daemon answer RUN_BUSY.
+   */
+  readonly followUp: {
+    /**
+     * Why this CLI cannot take a message into a running turn, or `null` when it
+     * can. A SENTENCE, like the two reasons above, because the renderer shows
+     * it on the disabled control — "not available" with no cause is the silent
+     * refusal these fields exist to replace.
+     */
+    readonly unavailableReason: string | null;
+  };
+
   // ── Handing the conversation to the user ────────────────────────────────
   /**
    * How this CLI reopens one of ITS OWN sessions interactively, so the user can

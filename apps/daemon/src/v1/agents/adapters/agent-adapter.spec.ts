@@ -19,6 +19,7 @@ import type {
   AgentEvent,
   AgentModel,
   AgentTurnInput,
+  FollowUpMessage,
 } from './adapter.types';
 import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
@@ -227,6 +228,58 @@ describe('AgentAdapter.listEfforts', () => {
       expect(adapter.listEfforts()).not.toBe(adapter.getConfig().efforts);
     });
   }
+});
+
+describe('AgentAdapter.followUp declares what buildFollowUpPayload does', () => {
+  /**
+   * `buildFollowUpPayload` is protected and per-turn, so the renderer can only
+   * learn about it through `config.followUp`. That makes the two a promise and
+   * its implementation, in different files, with nothing in the type system
+   * tying them together — so this is the tie.
+   *
+   * A config claiming a channel the adapter never implements is the failure
+   * that matters: the composer would offer "send now", the daemon would answer
+   * RUN_BUSY, and the message would silently sit in the queue the button said
+   * it was skipping.
+   */
+  const payloadFor = (adapter: AgentAdapter): string | undefined =>
+    (
+      adapter as unknown as {
+        buildFollowUpPayload(message: FollowUpMessage): string | undefined;
+      }
+    ).buildFollowUpPayload({ text: 'a follow-up', images: undefined });
+
+  for (const { name, adapter } of ADAPTERS) {
+    it(`${name} says the same thing in its config and in its code`, () => {
+      const configSaysItCan =
+        adapter.getConfig().followUp.unavailableReason === null;
+
+      expect(payloadFor(adapter) !== undefined).toBe(configSaysItCan);
+    });
+  }
+
+  it('is not vacuous — the shipped pair covers BOTH answers', () => {
+    // Without this the loop above passes if every adapter answers "cannot",
+    // which is exactly what a careless `followUp` copy-paste onto a new
+    // adapter would produce.
+    const answers = ADAPTERS.map(
+      ({ adapter }) => adapter.getConfig().followUp.unavailableReason === null,
+    );
+
+    expect(new Set(answers)).toEqual(new Set([true, false]));
+  });
+
+  it('gives a REASON, never a bare cannot', () => {
+    for (const { adapter } of ADAPTERS) {
+      const reason = adapter.getConfig().followUp.unavailableReason;
+      // The renderer prints this on the disabled control. An empty string
+      // would render as a control that refuses without saying why — the
+      // silent refusal every capability field here exists to replace.
+      if (reason !== null) {
+        expect(reason.trim().length).toBeGreaterThan(0);
+      }
+    }
+  });
 });
 
 describe('AgentAdapter.mcpLoginTarget', () => {

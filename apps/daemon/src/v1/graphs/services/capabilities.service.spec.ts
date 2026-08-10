@@ -90,6 +90,40 @@ describe('CapabilitiesService', () => {
   });
 });
 
+describe('CapabilitiesService — a message into a running turn', () => {
+  const followUps = (): Map<string, string | null> =>
+    new Map(
+      service()
+        .service.capabilitiesWire()
+        .followUps.map((f) => [f.agent, f.unavailableReason]),
+    );
+
+  it('answers for EVERY registered CLI, so the queue never allowlists one', () => {
+    expect([...followUps().keys()]).toEqual([...registry().all().keys()]);
+  });
+
+  it('carries each adapter’s OWN reason, verbatim', () => {
+    // Same rule as the plugin row: the composer prints this string on the
+    // disabled "send now", so a sentence composed at the wire layer is one the
+    // adapter cannot keep true.
+    expect(followUps().get('claude')).toBe(
+      new ClaudeAdapter().getConfig().followUp.unavailableReason,
+    );
+    expect(followUps().get('cursor-agent')).toBe(
+      new CursorAcpAdapter().getConfig().followUp.unavailableReason,
+    );
+  });
+
+  it('states claude’s channel as null and cursor’s absence as a real sentence', () => {
+    // The two live values. This is what decides whether the strip's Steer
+    // control is offered at all — cursor's ACP `session/prompt` is one request
+    // per turn, so its message genuinely cannot go out before the turn ends.
+    expect(followUps().get('claude')).toBeNull();
+    expect(followUps().get('cursor-agent')).toEqual(expect.any(String));
+    expect(followUps().get('cursor-agent')).not.toBe('');
+  });
+});
+
 describe('CapabilitiesService — the interactive terminal', () => {
   it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
     expect(

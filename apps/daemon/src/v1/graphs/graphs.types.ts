@@ -475,6 +475,33 @@ export type AgentApprovalCapability = z.infer<
   typeof AgentApprovalCapabilitySchema
 >;
 
+/**
+ * Whether ONE CLI can be handed a user message MID-TURN — the wire home for
+ * `AdapterConfig.followUp`.
+ *
+ * It exists for the same reason as the three rows above, and after the same
+ * failure in the same place: the composer's queue offers a "send now" that
+ * pushes a queued message into the turn already running, and only claude has a
+ * channel for one. Without this row the strip would have to decide by agent
+ * name — or, worse, offer the control to every CLI and let the daemon answer
+ * RUN_BUSY, which looks to the user like a button that does nothing.
+ */
+export const AgentFollowUpCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * Why this CLI cannot take a message into a running turn, or null when it
+     * can. A sentence for the same reason as the rows above: the renderer puts
+     * it on the disabled control, so the user learns their message is waiting
+     * for the turn to end rather than being ignored.
+     */
+    unavailableReason: z.string().nullable(),
+  })
+  .meta({ id: 'AgentFollowUpCapability' });
+export type AgentFollowUpCapability = z.infer<
+  typeof AgentFollowUpCapabilitySchema
+>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
@@ -491,6 +518,9 @@ export const CapabilitiesWireSchema = z.object({
   approvals: z
     .array(AgentApprovalCapabilitySchema)
     .describe('Per-CLI tool-approval modes, one entry per known agent'),
+  followUps: z
+    .array(AgentFollowUpCapabilitySchema)
+    .describe('Per-CLI mid-turn follow-up support, one entry per known agent'),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

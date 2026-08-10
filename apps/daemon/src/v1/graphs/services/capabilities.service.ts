@@ -4,6 +4,7 @@ import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.se
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type {
   AgentApprovalCapability,
+  AgentFollowUpCapability,
   AgentPluginCapability,
   AgentTerminalCapability,
   CapabilitiesWire,
@@ -27,7 +28,22 @@ export class CapabilitiesService {
       plugins: this.pluginCapabilities(),
       interactiveTerminals: this.terminalCapabilities(),
       approvals: this.approvalCapabilities(),
+      followUps: this.followUpCapabilities(),
     };
+  }
+
+  /**
+   * Every registered CLI's mid-turn follow-up answer, read off its own config.
+   *
+   * Iterated, never listed — the same rule as the three below, and what lets
+   * the composer's queue offer "send now" on the CLIs that have a channel for
+   * one without ever learning an agent's name.
+   */
+  private followUpCapabilities(): AgentFollowUpCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      unavailableReason: adapter.getConfig().followUp.unavailableReason,
+    }));
   }
 
   /**

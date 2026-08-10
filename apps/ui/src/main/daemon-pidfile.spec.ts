@@ -9,7 +9,100 @@ import {
   type DaemonInfo,
   parseDaemonInfo,
   readDaemonInfo,
+  stampEntry,
 } from './daemon-pidfile';
+
+describe('the entry stamp — the twin parser’s only mechanical link', () => {
+  it('parses the exact JSON the daemon writes', () => {
+    // The daemon builds this object in `apps/daemon/src/utils/handshake.ts`
+    // `stampEntry` and it reaches here through JSON. If either side renames a
+    // key, every daemon reads as unstamped and is replaced on every launch —
+    // and nothing else in either suite would notice.
+    const parsed = parseDaemonInfo({
+      pid: 1,
+      host: DAEMON_LOOPBACK_HOST,
+      port: 4823,
+      token: 't',
+      version: '0.1.0',
+      entry: { path: '/bundle/daemon/dist/main.js', mtimeMs: 17, size: 8508 },
+      startedAt: '2026-08-10T00:00:00Z',
+    });
+    expect(parsed?.entry).toEqual({
+      path: '/bundle/daemon/dist/main.js',
+      mtimeMs: 17,
+      size: 8508,
+    });
+  });
+
+  it('round-trips a stamp this side produced through JSON', () => {
+    const stamped = stampEntry('/bundle/daemon/dist/main.js', () => ({
+      mtimeMs: 17,
+      size: 8508,
+    }));
+    const wire: unknown = JSON.parse(JSON.stringify(stamped));
+    expect(
+      parseDaemonInfo({
+        pid: 1,
+        host: DAEMON_LOOPBACK_HOST,
+        port: 4823,
+        token: 't',
+        version: '0.1.0',
+        entry: wire,
+        startedAt: '2026-08-10T00:00:00Z',
+      })?.entry,
+    ).toEqual(stamped);
+  });
+
+  it('reads a stamp with no usable path as no stamp at all', () => {
+    // Not the same as a valid stamp with null numbers: a stamp naming no file
+    // cannot be compared to anything, so it must not present as comparable.
+    for (const entry of [null, 'x', {}, { path: '' }, { mtimeMs: 1 }]) {
+      expect(
+        parseDaemonInfo({
+          pid: 1,
+          host: DAEMON_LOOPBACK_HOST,
+          port: 4823,
+          token: 't',
+          version: '0.1.0',
+          entry,
+          startedAt: '2026-08-10T00:00:00Z',
+        })?.entry,
+      ).toBeNull();
+    }
+  });
+
+  it('nulls a non-finite mtime or size rather than carrying it through', () => {
+    const parsed = parseDaemonInfo({
+      pid: 1,
+      host: DAEMON_LOOPBACK_HOST,
+      port: 4823,
+      token: 't',
+      version: '0.1.0',
+      entry: { path: '/x/main.js', mtimeMs: 'soon', size: null },
+      startedAt: '2026-08-10T00:00:00Z',
+    });
+    expect(parsed?.entry).toEqual({
+      path: '/x/main.js',
+      mtimeMs: null,
+      size: null,
+    });
+  });
+
+  it('still accepts a pidfile with no entry at all', () => {
+    // A daemon older than the field. It must parse — it is a real running
+    // daemon — and only the ADOPTION decision treats it as stale.
+    const parsed = parseDaemonInfo({
+      pid: 1,
+      host: DAEMON_LOOPBACK_HOST,
+      port: 4823,
+      token: 't',
+      version: '0.1.0',
+      startedAt: '2026-08-10T00:00:00Z',
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.entry).toBeNull();
+  });
+});
 
 function valid(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
   return {
@@ -18,6 +111,8 @@ function valid(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
     port: 4823,
     token: 'token',
     version: '1.0.0',
+    entry: null,
+    pidStartedAtMs: null,
     startedAt: '2026-07-10T00:00:00Z',
     ...overrides,
   };

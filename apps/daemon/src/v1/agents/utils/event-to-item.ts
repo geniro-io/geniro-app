@@ -7,10 +7,37 @@ import type { AgentEvent } from '../adapters/adapter.types';
  * persisted item shape regardless of which flow drove the adapter.
  */
 
-/** Map a normalized event to the persisted transcript item it becomes. */
-export function mapEventToItem(
-  event: AgentEvent,
-): { kind: ItemKind; role: string | null; payload: unknown } | null {
+/** One persisted transcript row, before it is given a `seq` and written. */
+interface MappedItem {
+  kind: ItemKind;
+  role: string | null;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Map a normalized event to the persisted transcript item it becomes.
+ *
+ * TWIN PARSER: `apps/ui/src/renderer/chats/subagent-payload.ts` reads back the
+ * `parentToolUseId` stamped here. An item payload is `z.unknown()` on the wire
+ * BY DESIGN — every kind carries a different shape — so no generated type
+ * crosses to the renderer and the two sides are independent readings of one
+ * shape. Rename the key here and that file must change with it.
+ */
+export function mapEventToItem(event: AgentEvent): MappedItem | null {
+  const item = mapEventBody(event);
+  if (item === null || event.parentToolUseId == null) {
+    return item;
+  }
+  // On the PAYLOAD rather than as a column: it means the same thing for every
+  // kind, and a row with no sub-agent origin — the overwhelming majority —
+  // carries nothing extra at all.
+  return {
+    ...item,
+    payload: { ...item.payload, parentToolUseId: event.parentToolUseId },
+  };
+}
+
+function mapEventBody(event: AgentEvent): MappedItem | null {
   switch (event.type) {
     case 'session':
       return null; // captured into node_state, not a transcript item

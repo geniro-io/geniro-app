@@ -156,3 +156,30 @@ describe('ToolGroup', () => {
     expect(container.textContent).toContain('…');
   });
 });
+
+describe('ToolGroup — delegated work', () => {
+  it('says on screen that a group is a sub-agent’s', () => {
+    // The user-visible half of the sub-agent fix. The grouping is pinned in
+    // transcript-groups.spec.ts, but the reported complaint was "rows nobody
+    // asked for, with nothing explaining where they came from" — that part
+    // lives only in this span, and deleting it leaves every data test green.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 's1',
+          name: 'Bash',
+          input: { command: 'echo hi' },
+          parentToolUseId: 'toolu_agent_a',
+        }),
+      ]),
+    );
+    expect(container.textContent).toContain('sub-agent');
+  });
+
+  it('says nothing extra about the agent’s own work', () => {
+    render(
+      makeGroup([toolItem('tool_call', { id: 'm1', name: 'Bash', input: {} })]),
+    );
+    expect(container.textContent).not.toContain('sub-agent');
+  });
+});

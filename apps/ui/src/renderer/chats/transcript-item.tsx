@@ -9,6 +9,7 @@ import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { subagentIdOf } from './subagent-payload';
 import { toolInputBody, toolResultBody } from './tool-render';
 
 /** What the transcript knows about a workflow node (for display only). */
@@ -69,7 +70,12 @@ export const TranscriptItem = memo(function TranscriptItem({
       const text = payloadString(item.payload, 'text') ?? '';
       const attachments = messageAttachments(item.payload);
       return (
-        <MessageBubble variant={item.role === 'user' ? 'user' : 'assistant'}>
+        <MessageBubble
+          variant={item.role === 'user' ? 'user' : 'assistant'}
+          // The SenderRow frame names the AGENT, which is the same agent for a
+          // sub-agent's prose as for its own — so without this a delegate's
+          // report reads as the words of the agent the user is talking to.
+          role={subagentIdOf(item) === null ? undefined : tag('sub-agent')}>
           <MessageAttachments runId={item.runId} attachments={attachments} />
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
@@ -95,7 +101,11 @@ export const TranscriptItem = memo(function TranscriptItem({
         );
       }
       return (
-        <MessageBubble variant="reasoning" role="thinking">
+        <MessageBubble
+          variant="reasoning"
+          role={
+            subagentIdOf(item) === null ? 'thinking' : tag('sub-agent thinking')
+          }>
           <div className="whitespace-pre-wrap italic break-words">
             {payloadString(item.payload, 'text') ?? ''}
           </div>

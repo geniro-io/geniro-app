@@ -51,6 +51,49 @@ function readFence(
 }
 
 /**
+ * Elements that ARE content while having no text of their own.
+ *
+ * A void or replaced element has no text node underneath it, so a text-only
+ * test reads a header of `| ![chart](a.png) |` as empty and — because the
+ * `thead` renderer returns null rather than restyling — deletes the images
+ * along with the row. The header the reader loses there is one somebody wrote.
+ */
+const VOID_CONTENT_TAGS = new Set(['img', 'input', 'br', 'hr', 'svg', 'video']);
+
+/**
+ * Whether a table's header row renders anything at all.
+ *
+ * A table written with an empty header — `| | |` above the `|---|---|`
+ * separator — is still a valid GFM table, and remark-gfm still emits a full
+ * `<thead><tr><th></th><th></th></tr></thead>` for it. The `th` renderer below
+ * fills its cells with `bg-muted/50`, so an empty header paints a grey band
+ * across the table with nothing written in it. That band is not a style
+ * decision anyone made; it is a header nobody wrote.
+ *
+ * The question is "does this render anything", NOT "does this have text" — the
+ * difference is a header cell holding only an image, which has no text node
+ * anywhere beneath it and would otherwise be dropped along with its row.
+ *
+ * Read off the hast NODE rather than the rendered children, for the same
+ * reason {@link readFence} does: `children` is already React elements by then,
+ * and a cell holding an empty string is indistinguishable from one holding
+ * markup this renderer maps to nothing. The node says plainly what is
+ * underneath.
+ */
+function rendersContent(node: HastNode | undefined): boolean {
+  if (node === undefined) {
+    return false;
+  }
+  if (typeof node.value === 'string' && node.value.trim() !== '') {
+    return true;
+  }
+  if (node.tagName !== undefined && VOID_CONTENT_TAGS.has(node.tagName)) {
+    return true;
+  }
+  return (node.children ?? []).some(rendersContent);
+}
+
+/**
  * A GFM column's alignment (`:---`, `:---:`, `---:`) as a utility class.
  *
  * PROBE-VERIFIED against this stack, and NOT what the plan predicted:
@@ -180,6 +223,13 @@ const COMPONENTS: Components = {
       <table className="w-full border-collapse text-xs">{children}</table>
     </div>
   ),
+  // Dropped entirely when the header row is blank, rather than restyled: a
+  // header with no text is not a header the reader is missing the styling of,
+  // it is a row that says nothing and costs a band of colour plus a line of
+  // height to say it. Keeping the element and only dropping its fill would
+  // leave an empty bordered stripe, which reads as a rendering fault too.
+  thead: ({ children, node }) =>
+    rendersContent(node) ? <thead>{children}</thead> : null,
   // `min-w-24` is the readability floor that makes the fallback meaningful.
   // Without it `w-full` divides the pane by the column count, so a 20-column
   // table squeezes each cell to a vertical stack of single letters — fitting,

@@ -26,6 +26,8 @@ describe('pidfile', () => {
     port: 47615,
     token: 'deadbeef',
     version: '0.1.0',
+    entry: { path: '/bundle/daemon/dist/main.js', mtimeMs: 1, size: 2 },
+    pidStartedAtMs: 1_786_000_000_000,
     startedAt: new Date(0).toISOString(),
   });
 

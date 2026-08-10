@@ -86,8 +86,9 @@ Rules:
   `@ApiOperation({ operationId })` + `@ApiTags` on the controller → regenerate.
 - **Carve-out — anything OUTSIDE the HTTP contract is a deliberate TWIN PARSER.**
   The "extract, never mirror" rule governs code sharing *within the daemon*,
-  where a shared module is reachable. Payloads that never pass through a typed
-  HTTP response — a CLI tool payload, a WS envelope — have no generated type, and
+  where a shared module is reachable. Anything that never passes through a typed
+  HTTP response — a CLI tool payload, a WS envelope, an on-disk handshake file —
+  has no generated type, and
   there is no shared package spanning the two sides. For those the deliberate
   answer is a **twin parser**: an independent implementation on each side
   carrying a reciprocal `TWIN PARSER:` doc block that cross-references its twin.
@@ -100,7 +101,15 @@ Rules:
   `apps/ui/src/renderer/chats/attachment-payload.ts` (the `{id, mediaType}`
   image rows inside a message item's `z.unknown()` payload — the payload is
   untyped on the wire BY DESIGN, since each item kind carries a different
-  shape, so no generated type reaches the renderer).
+  shape, so no generated type reaches the renderer); the same payload's
+  `parentToolUseId` (which sub-agent produced a row):
+  `apps/daemon/src/v1/agents/utils/event-to-item.ts` ↔
+  `apps/ui/src/renderer/chats/subagent-payload.ts`; and the pidfile's `entry`
+  stamp: `apps/daemon/src/utils/handshake.ts` `stampEntry` ↔
+  `apps/ui/src/main/daemon-pidfile.ts` `stampEntry` — the one twin that is NOT
+  daemon↔renderer but daemon↔Electron-main, where the two apps share no code at
+  all (importing daemon source would pull the Nest graph into the main bundle),
+  so the file on disk is the entire contract.
 - Unit tests (`*.spec.ts`) are co-located in the same directory as the file under test and move with it.
 - When adding a file to a module, place it in its kind-directory from the start; never park it at the module root "temporarily".
 - Only create the directories the module actually needs — no empty placeholder dirs.

@@ -77,7 +77,32 @@ export interface AgentUsage {
  * ToolCallComplete/TurnComplete/TurnCancelled/Error), plus a `session` event
  * carrying the CLI session id for resume.
  */
-export type AgentEvent =
+export type AgentEvent = AgentEventOrigin & AgentEventBody;
+
+/**
+ * WHICH thread of one turn produced an event.
+ *
+ * A CLI that runs sub-agents emits their output on the SAME stream as the main
+ * thread's, so without this every consumer reads one interleaved sequence and
+ * cannot tell the two apart. That is not a cosmetic gap: a sub-agent's own
+ * assistant line carries its own small, fresh context usage, so attributing it
+ * to the turn made the context meter jump backwards and snap forward again,
+ * and its tool calls landed in the transcript as top-level rows beside the main
+ * thread's.
+ *
+ * ABSENT means the main thread — the overwhelmingly common case, and the
+ * reading for any CLI that does not report this at all (no ACP agent sets it).
+ * Deliberately not `string | null`: one state deserves one representation, and
+ * a nullable form invites an adapter to write `=== null` at a read site that
+ * would then miss every main-thread event. A present value is the id of the
+ * tool call that started the sub-agent, so it doubles as the key joining a
+ * sub-agent's rows to the parent row they belong under.
+ */
+interface AgentEventOrigin {
+  parentToolUseId?: string;
+}
+
+type AgentEventBody =
   | { type: 'text'; text: string }
   | {
       /**

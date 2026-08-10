@@ -115,6 +115,16 @@ export const ToolGroup = memo(function ToolGroup({
             open && 'rotate-90',
           )}
         />
+        {/*
+          Said out loud, because the alternative is what the user reported:
+          rows of commands nobody in this conversation asked for, with nothing
+          on screen explaining where they came from. The parent tool call's id
+          is not shown — it means nothing to a reader — only the fact of the
+          delegation.
+        */}
+        {group.parentToolUseId === null ? null : (
+          <span className="shrink-0 text-muted-foreground/70">sub-agent</span>
+        )}
         <span className="truncate">{toolGroupSummary(group.pairs)}</span>
         {running ? <Spinner /> : null}
       </button>

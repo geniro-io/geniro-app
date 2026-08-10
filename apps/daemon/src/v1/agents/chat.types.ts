@@ -337,6 +337,12 @@ export const AgentMcpListingWireSchema = z
       .describe(
         'A cold read is running; these rows are not the answer yet. Ask again.',
       ),
+    interactiveOnlyNote: z
+      .string()
+      .nullable()
+      .describe(
+        "What this CLI loads only in its OWN interactive session, so the panel's completeness is not mistaken for lost rows; null when there is no such gap",
+      ),
   })
   // Three fields, but only three LEGAL states — reading, refused, answered. The
   // combinations below are representable and mean nothing, and every consumer

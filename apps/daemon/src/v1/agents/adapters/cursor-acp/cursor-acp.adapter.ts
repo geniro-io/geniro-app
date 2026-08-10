@@ -164,6 +164,13 @@ export class CursorAcpAdapter extends AgentAdapter {
          * reason above is set.
          */
         toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        /**
+         * Null: no such split is known for this CLI. `cursor-agent mcp list`
+         * reports what the folder configures, and nothing has been observed
+         * that its ACP session loads on top of that. A note invented here
+         * would be a claim about the CLI nobody verified.
+         */
+        interactiveOnlyNote: null,
         userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
         /**
          * `cursor-agent mcp login <identifier>` — "Authenticate with an MCP

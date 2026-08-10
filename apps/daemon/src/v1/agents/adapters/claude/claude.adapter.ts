@@ -222,6 +222,20 @@ export class ClaudeAdapter extends AgentAdapter {
          * `local` scope the old settings-file route could not reach.
          */
         toggleUnavailableReason: null,
+        /**
+         * Probe-verified on 2.1.226, and the reason it is a NOTE rather than
+         * extra rows: the CLI's own `/mcp` panel carries a
+         * "Built-in MCPs (always available)" group — `claude-in-chrome` and
+         * `computer-use` — that a headless turn does not load at all. A
+         * headless `system/init` advertises 210 tools, 177 of them `mcp__`,
+         * and NONE matching either name; `claude mcp list` says "List
+         * CONFIGURED MCP servers" and reports neither. There is no channel
+         * that would let geniro list them honestly, and no reason to want one:
+         * both are interactive-session integrations, so a row here would
+         * promise the agent tools it will not have.
+         */
+        interactiveOnlyNote:
+          'claude also loads claude-in-chrome and computer-use in its own interactive session. They are not loaded in the headless turns geniro runs, so they are not listed here.',
         userDisabledReason:
           'switched off in your own claude settings, which geniro cannot re-enable',
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */

@@ -382,6 +382,7 @@ describe('AgentsPanel — MCP servers', () => {
   const claudeListing: AgentMcpListing = {
     unavailableReason: null,
     pending: false,
+    interactiveOnlyNote: null,
     servers: [
       {
         name: 'sentry',
@@ -662,6 +663,7 @@ describe('AgentsPanel — MCP servers', () => {
                 unavailableReason:
                   'could not read MCP servers — cursor-agent did not answer',
                 pending: false,
+                interactiveOnlyNote: null,
               },
             ],
           ])
@@ -693,7 +695,12 @@ describe('AgentsPanel — MCP servers', () => {
           new Map<string, AgentMcpListing>([
             [
               scope('claude'),
-              { servers: [], unavailableReason: null, pending: false },
+              {
+                servers: [],
+                unavailableReason: null,
+                pending: false,
+                interactiveOnlyNote: null,
+              },
             ],
           ])
         }
@@ -808,6 +815,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     return {
       unavailableReason: null,
       pending: false,
+      interactiveOnlyNote: null,
       servers: [
         {
           name,
@@ -892,6 +900,7 @@ describe('AgentsPanel — MCP toggle', () => {
     return {
       unavailableReason: null,
       pending: false,
+      interactiveOnlyNote: null,
       servers: [
         {
           target: 'node x.js',

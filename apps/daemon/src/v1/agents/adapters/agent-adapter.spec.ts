@@ -230,6 +230,30 @@ describe('AgentAdapter.listEfforts', () => {
   }
 });
 
+describe('AgentAdapter.mcp.interactiveOnlyNote', () => {
+  it('claude names the built-ins its headless turns do NOT load', () => {
+    // Probe evidence behind this, on 2.1.226: the CLI's own `/mcp` panel shows
+    // a "Built-in MCPs (always available)" group holding claude-in-chrome and
+    // computer-use, while a headless `system/init` advertises 210 tools (177
+    // of them `mcp__`) with neither name among them. The panel is therefore
+    // CORRECT to omit the rows — this sentence is what stops the user reading
+    // that correctness as lost data.
+    const note = new ClaudeAdapter().getConfig().mcp.interactiveOnlyNote;
+
+    expect(note).toContain('claude-in-chrome');
+    expect(note).toContain('computer-use');
+    // It must say the servers are not loaded, not merely not listed: "not
+    // shown" would read as a geniro limitation the user should report.
+    expect(note).toContain('not loaded');
+  });
+
+  it('cursor claims no such split, because none was verified', () => {
+    expect(
+      new CursorAcpAdapter().getConfig().mcp.interactiveOnlyNote,
+    ).toBeNull();
+  });
+});
+
 describe('AgentAdapter.followUp declares what buildFollowUpPayload does', () => {
   /**
    * `buildFollowUpPayload` is protected and per-turn, so the renderer can only

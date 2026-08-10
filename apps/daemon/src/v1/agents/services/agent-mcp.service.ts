@@ -593,8 +593,18 @@ export class AgentMcpService {
     // `pending` is the CALLER's fact — whether a dial is still running — not
     // anything this overlay can see, so each caller adds it.
   ): Promise<Omit<AgentMcpListingWire, 'pending'>> {
+    // Read once, applied to BOTH exits: the note describes the CLI, not this
+    // read, so a refused listing owes it just as much as a successful one —
+    // arguably more, since a panel showing no rows at all is exactly where the
+    // user starts wondering what happened to the servers they can see in their
+    // terminal.
+    const interactiveOnlyNote = adapter.getConfig().mcp.interactiveOnlyNote;
     if (!result.ok) {
-      return { servers: [], unavailableReason: result.reason };
+      return {
+        servers: [],
+        unavailableReason: result.reason,
+        interactiveOnlyNote,
+      };
     }
     let factsUnavailable = false;
     const facts = await adapter
@@ -668,6 +678,7 @@ export class AgentMcpService {
         };
       }),
       unavailableReason: null,
+      interactiveOnlyNote,
     };
   }
 }

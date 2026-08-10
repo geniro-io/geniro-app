@@ -117,6 +117,12 @@ export interface AgentMcpListingDto {
      * @memberof AgentMcpListingDto
      */
     pending: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpListingDto
+     */
+    interactiveOnlyNote: string | null;
 }
 /**
  * 

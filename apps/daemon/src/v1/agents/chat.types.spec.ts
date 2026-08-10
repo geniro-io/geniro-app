@@ -19,6 +19,7 @@ const answered = {
   ],
   unavailableReason: null,
   pending: false,
+  interactiveOnlyNote: null,
 };
 
 describe('AgentMcpListingWireSchema — three fields, three legal states', () => {
@@ -29,6 +30,7 @@ describe('AgentMcpListingWireSchema — three fields, three legal states', () =>
         servers: [],
         unavailableReason: null,
         pending: true,
+        interactiveOnlyNote: null,
       }).success,
     ).toBe(true);
     // …refused…
@@ -37,6 +39,7 @@ describe('AgentMcpListingWireSchema — three fields, three legal states', () =>
         servers: [],
         unavailableReason: 'cursor-agent could not be listed',
         pending: false,
+        interactiveOnlyNote: null,
       }).success,
     ).toBe(true);
     // …answered, including the genuinely-empty folder.
@@ -46,6 +49,7 @@ describe('AgentMcpListingWireSchema — three fields, three legal states', () =>
         servers: [],
         unavailableReason: null,
         pending: false,
+        interactiveOnlyNote: null,
       }).success,
     ).toBe(true);
   });
@@ -59,6 +63,7 @@ describe('AgentMcpListingWireSchema — three fields, three legal states', () =>
         servers: [],
         unavailableReason: 'could not read MCP servers',
         pending: true,
+        interactiveOnlyNote: null,
       }).success,
     ).toBe(false);
   });

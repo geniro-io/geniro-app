@@ -1086,6 +1086,20 @@ export interface AdapterConfig {
      */
     readonly toggleUnavailableReason: string | null;
     /**
+     * What this CLI loads in its OWN interactive session that a headless turn
+     * never gets — the sentence the panel shows under the rows — or null when
+     * there is no such difference.
+     *
+     * This exists because a LISTING cannot say it. The panel is complete for
+     * the turns geniro actually runs, and the user compares it against their
+     * terminal's `/mcp`, which shows more; with nothing said, the only
+     * available conclusion is that geniro lost some rows. Stating the gap is
+     * the whole fix — the missing servers must NOT be listed, because they are
+     * genuinely not loaded and a row for one would promise tools the agent
+     * does not have.
+     */
+    readonly interactiveOnlyNote: string | null;
+    /**
      * Why a row the user turned down in their OWN config carries no switch.
      *
      * The one remaining reason a switchable CLI still shows a locked row: the

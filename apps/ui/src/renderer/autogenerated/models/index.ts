@@ -61,6 +61,27 @@ export interface AgentEffortDto {
      */
     label: string;
 }
+/**
+ * 
+ * @export
+ * @interface AgentFollowUpCapability
+ */
+export interface AgentFollowUpCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentFollowUpCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentFollowUpCapability
+     */
+    unavailableReason: string | null;
+}
+
+
 
 /**
  * 
@@ -96,6 +117,12 @@ export interface AgentMcpListingDto {
      * @memberof AgentMcpListingDto
      */
     pending: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpListingDto
+     */
+    interactiveOnlyNote: string | null;
 }
 /**
  * 
@@ -418,6 +445,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     approvals: Array<AgentApprovalCapability>;
+    /**
+     * Per-CLI mid-turn follow-up support, one entry per known agent
+     * @type {Array<AgentFollowUpCapability>}
+     * @memberof CapabilitiesDto
+     */
+    followUps: Array<AgentFollowUpCapability>;
 }
 
 /**

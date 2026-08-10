@@ -391,6 +391,26 @@ export const CLAUDE_MCP_EMPTY_MARKER = 'No MCP servers configured';
 export const CLAUDE_MCP_LIST_UNREADABLE_MESSAGE =
   'could not read MCP servers — the claude output format may have changed';
 
+// ── Context compaction ────────────────────────────────────────────────────
+
+/**
+ * The `system` subtype announcing that the CLI compacted the conversation.
+ *
+ * POST-HOC BY CONSTRUCTION — this is the one fact to keep in mind when reading
+ * anything built on it. Binary evidence on 2.1.226: the CLI's own TUI drives
+ * its "Compacting conversation…" spinner from internal `compact_start` /
+ * `compact_progress` / `compact_end` events, and NONE of those is serialized
+ * to the stream — only this boundary is, and it carries `session_id` the way
+ * every other emitted system line does. It marks the start of the new,
+ * compacted segment, so by the time we see it the work is finished and the
+ * turn is about to continue.
+ *
+ * So a live "compacting…" state is NOT obtainable from the headless stream. Do
+ * not add one on a timer or on a silence heuristic: the honest signal is that
+ * it HAPPENED, which is what explains the context meter suddenly dropping.
+ */
+export const CLAUDE_COMPACT_BOUNDARY_SUBTYPE = 'compact_boundary';
+
 // ── Messages ──────────────────────────────────────────────────────────────
 
 /** Fallback for an error `result` line that carries no text of its own. */
@@ -398,3 +418,26 @@ export const CLAUDE_RUN_FAILED_MESSAGE = 'claude run failed';
 
 /** What the CLI is told when the user denies a permission request. */
 export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';
+
+/**
+ * How the CLI reports that its own permission channel died under it.
+ *
+ * The failing tool comes back with `Tool permission request failed:
+ * AbortError: Stream closed` as its RESULT TEXT — an ordinary tool result, not
+ * an error line — which is why nothing in the daemon reacted to it and why 239
+ * of them accumulated unremarked in one database.
+ *
+ * BOTH halves must be present, and only the stable halves are named: the
+ * middle varies (the CLI's own issue tracker carries `Error: Stream closed`
+ * beside `AbortError: Stream closed`), while the prefix and the closed stream
+ * do not. Matching claude's own wording rather than anything stream-shaped is
+ * why this is a marker in claude's constants and not a regex somewhere generic.
+ */
+export const CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS: readonly string[] = [
+  'Tool permission request failed',
+  'Stream closed',
+];
+
+/** The `system` item a user sees when the channel above has dropped. */
+export const CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE =
+  'claude could not reach its permission channel for that tool call, so the CLI refused it — this was not your decision, and the turn continues.';

@@ -222,6 +222,20 @@ export class ClaudeAdapter extends AgentAdapter {
          * `local` scope the old settings-file route could not reach.
          */
         toggleUnavailableReason: null,
+        /**
+         * Probe-verified on 2.1.226, and the reason it is a NOTE rather than
+         * extra rows: the CLI's own `/mcp` panel carries a
+         * "Built-in MCPs (always available)" group — `claude-in-chrome` and
+         * `computer-use` — that a headless turn does not load at all. A
+         * headless `system/init` advertises 210 tools, 177 of them `mcp__`,
+         * and NONE matching either name; `claude mcp list` says "List
+         * CONFIGURED MCP servers" and reports neither. There is no channel
+         * that would let geniro list them honestly, and no reason to want one:
+         * both are interactive-session integrations, so a row here would
+         * promise the agent tools it will not have.
+         */
+        interactiveOnlyNote:
+          'claude also loads claude-in-chrome and computer-use in its own interactive session. They are not loaded in the headless turns geniro runs, so they are not listed here.',
         userDisabledReason:
           'switched off in your own claude settings, which geniro cannot re-enable',
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */
@@ -230,6 +244,15 @@ export class ClaudeAdapter extends AgentAdapter {
       },
       plugin: {
         /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */
+        unavailableReason: null,
+      },
+      followUp: {
+        /**
+         * A stream-json stdin is a CONVERSATION: a second `{"type":"user"}`
+         * line on a still-open pipe is acted on at the next tool boundary
+         * (probe-verified on 2.1.222). `buildFollowUpPayload` is the override
+         * this null promises — the two are pinned together by spec.
+         */
         unavailableReason: null,
       },
       handoff: {
@@ -294,8 +317,11 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * The answer rides back as AskUserQuestion's `response` field — the
-   * probe-verified free-text channel claude surfaces to the model.
+   * The answer rides back on ONE of AskUserQuestion's two channels, chosen by
+   * how many questions the card carried: `answers` (a map keyed by question
+   * text) for a lone question, `response` (one free-text reply, which REPLACES
+   * the structured list) for several. `withResponse` owns that choice and the
+   * probe behind it.
    */
   override withAnswer(input: unknown, answer: string): unknown {
     return withResponse(input, answer);

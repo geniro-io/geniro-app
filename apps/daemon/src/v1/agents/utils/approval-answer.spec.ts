@@ -32,10 +32,12 @@ describe('foldApprovalAnswer', () => {
     expect(
       foldApprovalAnswer(claude, QUESTION_TOOL, QUESTION_INPUT, true, 'Red'),
     ).toEqual(claude.withAnswer(QUESTION_INPUT, 'Red'));
-    // The adapter's answer channel is claude's `updatedInput.response`.
+    // For a LONE question the adapter's channel is `updatedInput.answers`,
+    // keyed by the question's own text; `response` carries a reply given
+    // INSTEAD of answering.
     expect(
       foldApprovalAnswer(claude, QUESTION_TOOL, QUESTION_INPUT, true, 'Red'),
-    ).toEqual({ ...QUESTION_INPUT, response: 'Red' });
+    ).toEqual({ ...QUESTION_INPUT, answers: { 'Which color?': 'Red' } });
     expect(answerFoldsInto(QUESTION_TOOL, QUESTION_TOOL, true, 'Red')).toBe(
       true,
     );

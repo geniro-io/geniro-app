@@ -432,6 +432,23 @@ export function McpSection({
           </McpGroup>
         </>
       )}
+      {/* What the CLI loads only in its OWN interactive session, in its own
+          words. Shown BELOW the rows and after every other branch — including
+          "No servers" and a refusal — because it is the answer to a question
+          the list itself provokes: the user compares this panel against their
+          terminal's `/mcp`, sees fewer entries here, and has no way to tell a
+          complete list from a broken one. The servers it names are genuinely
+          not loaded in a headless turn, so listing them as rows would promise
+          the agent tools it will not have.
+
+          Which CLI has such a gap, and what to say about it, is the daemon's
+          answer (`AdapterConfig.mcp.interactiveOnlyNote`) — this section never
+          learns an agent's name. */}
+      {listing?.interactiveOnlyNote ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          {listing.interactiveOnlyNote}
+        </p>
+      ) : null}
     </div>
   );
 }

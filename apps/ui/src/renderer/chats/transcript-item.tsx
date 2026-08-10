@@ -96,7 +96,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       return (
         <MessageBubble variant="reasoning" role="thinking">
-          <div className="whitespace-pre-wrap italic">
+          <div className="whitespace-pre-wrap italic break-words">
             {payloadString(item.payload, 'text') ?? ''}
           </div>
         </MessageBubble>
@@ -251,7 +251,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
       return (
         <MessageBubble variant="call" role={tag(`📞 call → ${callee}`)}>
-          <div className="whitespace-pre-wrap">
+          <div className="whitespace-pre-wrap break-words">
             {payloadString(item.payload, 'message') ?? ''}
           </div>
         </MessageBubble>
@@ -274,7 +274,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       return (
         <MessageBubble variant="error" role={tag(`✗ call failed ← ${callee}`)}>
-          <div className="whitespace-pre-wrap">
+          <div className="whitespace-pre-wrap break-words">
             {payloadString(item.payload, 'error') ?? 'call failed'}
           </div>
         </MessageBubble>
@@ -294,7 +294,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         : '';
       return (
         <MessageBubble variant="call" role="❓ question">
-          <div className="whitespace-pre-wrap">
+          <div className="whitespace-pre-wrap break-words">
             {payloadString(item.payload, 'question') ?? ''}
             {optionLine ? (
               <span className="text-muted-foreground">{`\n(${optionLine})`}</span>
@@ -310,7 +310,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (outcome === 'answered') {
         return (
           <MessageBubble variant="call" role={tag(`💬 answered → ${callee}`)}>
-            <div className="whitespace-pre-wrap">
+            <div className="whitespace-pre-wrap break-words">
               {payloadString(item.payload, 'answer') ?? ''}
             </div>
           </MessageBubble>
@@ -318,7 +318,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       return (
         <MessageBubble variant="error" role={tag('✗ question')}>
-          <div className="whitespace-pre-wrap">
+          <div className="whitespace-pre-wrap break-words">
             {outcome === 'timeout'
               ? 'timed out — the caller never answered'
               : outcome === 'undelivered'

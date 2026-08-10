@@ -6,7 +6,6 @@ import {
   Square,
   Trash2,
   Workflow as WorkflowIcon,
-  X,
   Zap,
 } from 'lucide-react';
 import {
@@ -79,8 +78,11 @@ import {
   liveTextKey,
 } from './live-text';
 import { AttachmentLoaderContext } from './message-attachments';
+import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
+import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
+import { displayRunStatus } from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
@@ -109,10 +111,54 @@ import { useGitInfo } from './use-git-info';
 /**
  * A follow-up typed while the agent was still working. It carries its images
  * alongside its text so nothing is lost between queueing and sending.
+ *
+ * The `id` is what every other site addresses the message BY. Object identity
+ * cannot do it: editing mints a new object, so an identity filter written
+ * against the pre-edit object silently matches nothing and the message is sent
+ * a second time. An index cannot do it either: the drain shifts the array while
+ * a send is in flight, so an index captured at render time addresses a
+ * different message by the time the user clicks.
  */
 interface QueuedMessage {
+  id: string;
   text: string;
   images: SendMessageDtoImagesInner[];
+}
+
+/** Client-side only — this id never reaches the daemon. */
+const randomId = (): string => crypto.randomUUID();
+
+/**
+ * May a REPLAYED transcript release this run's queue?
+ *
+ * The one rule, in one place. A replay carries every past turn's terminal item,
+ * so no individual row may fire the drain — but a replay is also the only
+ * signal that a turn ended while this client was not listening (another chat
+ * was open, or the socket was down), and a queue owed its send must not wait
+ * forever for a live event that already happened.
+ *
+ * `endedOnTerminal` may only AUTHORIZE, and the daemon's own status may only
+ * authorize — but an UNKNOWN run authorizes nothing. `run?.status !== 'running'`
+ * alone reads `undefined` as idle, which would send into a run this client
+ * knows nothing about; erring toward not sending costs a delay the next
+ * activation clears, while erring the other way delivers into a live turn.
+ *
+ * The status row alone cannot decide it either: three writers touch it and it
+ * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
+ * That is why a terminal tail authorizes even while the row still says running.
+ */
+function queueMayDrainAfterReplay(
+  run: ChatRun | undefined,
+  lastItem: ChatItem | undefined,
+): boolean {
+  if (run === undefined) {
+    return false;
+  }
+  const endedOnTerminal =
+    lastItem !== undefined &&
+    TERMINAL_KINDS.has(lastItem.kind) &&
+    lastItem.nodeId === null;
+  return endedOnTerminal || run.status !== 'running';
 }
 
 /** Is this stored/foreign string one of the daemon's approval modes? */
@@ -256,6 +302,18 @@ export function Chats({
   // history fetch while the cached run.status is still 'running' and the history
   // snapshot predates that terminal item.
   const sawTerminalRef = useRef(false);
+  /**
+   * The same thing, but LIVE items only.
+   *
+   * `sawTerminalRef` answers "has any turn ended since this run was activated",
+   * which a fail-fast run needs (its terminal item is in the replayed history).
+   * It cannot answer the question the activation below actually has — "did a
+   * turn end while I was fetching" — because every chat past its first turn
+   * replays a `turn_complete` and would set it. That made re-opening a working
+   * multi-turn chat show Send instead of Stop, which is the opposite of what
+   * that code promises.
+   */
+  const sawLiveTerminalRef = useRef(false);
 
   /**
    * What each running run is DOING right now, keyed by run id — "running
@@ -278,11 +336,13 @@ export function Chats({
   useEffect(() => {
     queuesRef.current = queues;
   }, [queues]);
+  // Minted HERE rather than at the three call sites, so no caller can enqueue a
+  // message without one.
   const enqueueMessage = useCallback(
-    (runId: string, message: QueuedMessage): void => {
+    (runId: string, message: Omit<QueuedMessage, 'id'>): void => {
       setQueues((prev) => ({
         ...prev,
-        [runId]: [...(prev[runId] ?? []), message],
+        [runId]: [...(prev[runId] ?? []), { ...message, id: randomId() }],
       }));
     },
     [],
@@ -298,8 +358,33 @@ export function Chats({
   // RUN_BUSY backoff used to early-return every OTHER run's drain too, so one
   // busy chat silently held the whole app's queues.
   const drainingRef = useRef<Set<string>>(new Set());
+  /**
+   * Is this view still on screen? The drain's RUN_BUSY backoff runs for
+   * seconds while holding nothing but a closure, so without this a retry keeps
+   * firing after the component is gone and POSTs into a run nobody is
+   * watching. Assigned in the effect BODY, not merely cleared in the cleanup,
+   * so a StrictMode remount does not leave the ref stuck false.
+   */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  const addItem = useCallback((item: ChatItem): void => {
+  /**
+   * `live` says this item arrived on the wire as it happened, rather than out
+   * of a history replay.
+   *
+   * REQUIRED, with no default — and that is the guard, not the prose. A default
+   * made the dangerous call the natural one: `forEach(addItem)` passes the
+   * ARRAY INDEX as the flag, falsy for the first item and truthy for every one
+   * after, which is exactly the replayed-drain bug this parameter exists to
+   * prevent. Requiring it moves the rule from a comment a reader may skip to an
+   * error the compiler raises.
+   */
+  const addItem = useCallback((item: ChatItem, live: boolean): void => {
     if (item.runId !== activeRunIdRef.current) {
       return;
     }
@@ -355,6 +440,9 @@ export function Chats({
     // while sibling branches are still running.
     if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
       sawTerminalRef.current = true;
+      if (live) {
+        sawLiveTerminalRef.current = true;
+      }
       setStreaming(false);
       // Mirror the daemon's settle write into the sidebar list — without this
       // a finished run keeps its stale 'running' badge until an app restart.
@@ -381,7 +469,15 @@ export function Chats({
       );
       // The turn ended — fire the next queued message into this chat (the
       // early return above guarantees item.runId IS the active run).
-      if ((queuesRef.current[item.runId]?.length ?? 0) > 0) {
+      //
+      // LIVE items only. A replayed transcript carries every past turn's
+      // terminal item, so re-opening a chat that is still working used to
+      // drain the queue straight into the turn in flight — and claude accepts
+      // a mid-turn follow-up, so it genuinely went. That is the exact
+      // behaviour the queue exists to prevent, and Steer is the only sanctioned
+      // way to reach a running turn. A replay's own drain decision is made once
+      // by the caller, from the run's settled status.
+      if (live && (queuesRef.current[item.runId]?.length ?? 0) > 0) {
         drainQueueRef.current(item.runId);
       }
     }
@@ -657,6 +753,7 @@ export function Chats({
       activeRunIdRef.current = runId;
       lastSeqRef.current = -1;
       sawTerminalRef.current = false;
+      sawLiveTerminalRef.current = false;
       pendingScrollRef.current = true;
       setActiveRunId(runId);
       setItems([]);
@@ -674,19 +771,32 @@ export function Chats({
         if (activeRunIdRef.current !== runId) {
           return;
         }
-        history.forEach(addItem);
+        history.forEach((item) => addItem(item, false));
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
         // RUN_BUSY. Derive it from the run's status + whether the replayed
         // transcript already ended on a terminal item.
         const run = runsRef.current.find((r) => r.id === runId);
         const last = history.at(-1);
+        const endedOnTerminal =
+          !!last && TERMINAL_KINDS.has(last.kind) && last.nodeId === null;
         if (
           run?.status === 'running' &&
-          !sawTerminalRef.current &&
-          (!last || !(TERMINAL_KINDS.has(last.kind) && last.nodeId === null))
+          !sawLiveTerminalRef.current &&
+          !endedOnTerminal
         ) {
           setStreaming(true);
+        } else if (
+          queueMayDrainAfterReplay(run, last) &&
+          (queuesRef.current[runId]?.length ?? 0) > 0
+        ) {
+          // The ONE drain decision a replay is allowed to make, and it is taken
+          // from the daemon's own run status rather than from any transcript
+          // row: the turn this chat was on finished while the user was looking
+          // at another one, so the queue is owed its send. While the run is
+          // still `running` nothing is sent — Steer is the only way into a live
+          // turn.
+          drainQueueRef.current(runId);
         }
       } catch (err) {
         if (activeRunIdRef.current === runId) {
@@ -726,7 +836,10 @@ export function Chats({
     // failed only AFTER a run had been created, as "exited with code 1".
     void window.geniro.detectClis().then(setCliDetections);
     refreshRuns();
-    const unsubscribeItem = client.onItem(addItem);
+    // Wrapped, not passed bare: this is the one site that means LIVE, and an
+    // arrow pins the arity so a future emitter argument cannot land on the
+    // `live` flag.
+    const unsubscribeItem = client.onItem((item) => addItem(item, true));
     const unsubscribeLiveText = client.onLiveText((event) => {
       // Throwaway by design — only ever shown for the run on screen, and
       // dropped wholesale on a run switch or a disconnect.
@@ -756,7 +869,26 @@ export function Chats({
       }
       void chatApi
         .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
-        .then((items) => items.forEach(addItem))
+        // A replay, not live: no individual row here may fire the drain, or a
+        // transcript several turns long would send into the turn in flight.
+        //
+        // But this delta is ALSO the only place a turn that ended while the
+        // socket was down is ever seen, so the same single decision the
+        // activation replay takes has to be taken here too. An earlier version
+        // of this comment claimed the queue would go out "on the next live
+        // terminal item, or on the next activation" — neither fires when the
+        // turn already ended offline, so the queue simply stopped forever, and
+        // on cursor there is not even a Steer control to release it by hand.
+        .then((items) => {
+          items.forEach((item) => addItem(item, false));
+          const run = runsRef.current.find((r) => r.id === active);
+          if (
+            queueMayDrainAfterReplay(run, items.at(-1)) &&
+            (queuesRef.current[active]?.length ?? 0) > 0
+          ) {
+            drainQueueRef.current(active);
+          }
+        })
         // Same stale-run guard as activateRun's catch: if the user switched
         // runs while this delta-fetch was in flight, A's error must not paint
         // over B (addItem is already run-scoped by item.runId; setError is not).
@@ -1161,7 +1293,7 @@ export function Chats({
         sendMessageDto: { text, ...(images.length ? { images } : {}) },
       });
       attachments.clear();
-      addItem(userItem);
+      addItem(userItem, true);
     } catch (err) {
       setError(String(err));
       setStreaming(false);
@@ -1203,7 +1335,7 @@ export function Chats({
         runId,
         sendMessageDto: { text, ...(images?.length ? { images } : {}) },
       });
-      addItem(userItem);
+      addItem(userItem, true);
     },
     [chatApi, addItem],
   );
@@ -1229,20 +1361,42 @@ export function Chats({
       const dropHead = (): void =>
         setQueues((prev) => ({
           ...prev,
-          [runId]: (prev[runId] ?? []).filter((queued) => queued !== next),
+          [runId]: (prev[runId] ?? []).filter(
+            (queued) => queued.id !== next.id,
+          ),
         }));
       try {
         for (let attempt = 0; ; attempt += 1) {
+          // Torn down while we waited — see `mountedRef`. Checked at the TOP of
+          // every iteration rather than beside the delay, so it also catches a
+          // retry that was already scheduled when the view went away.
+          if (!mountedRef.current) {
+            return;
+          }
           // The head keeps its live Remove control for the whole in-flight
           // window — which the RUN_BUSY backoff can stretch to seconds — so
           // honour a removal that landed while we were waiting. Sending anyway
-          // would deliver a message the UI already told the user was cancelled,
-          // and `dropHead`'s identity filter would then quietly no-op.
-          if (!(queuesRef.current[runId] ?? []).includes(next)) {
+          // would deliver a message the UI already told the user was cancelled.
+          // By id, not by object: an EDIT during this window replaces the
+          // object, and an identity check would read that as a removal.
+          // Re-READ the entry; never just check that it is still there. The
+          // backoff below can hold this loop for seconds, the head keeps its
+          // live Edit control throughout, and an edit KEEPS the id — so a
+          // presence check passes while `next` still holds the text the user
+          // replaced. Delivering that is worse than the double-send the id
+          // keying was introduced to stop: before it, the identity guard
+          // ABORTED here and the edit survived in the queue.
+          //
+          // A missing entry is the removal case the presence check covered, so
+          // this replaces that guard rather than adding a second one.
+          const current = (queuesRef.current[runId] ?? []).find(
+            (queued) => queued.id === next.id,
+          );
+          if (current === undefined) {
             return;
           }
           try {
-            await startTurn(runId, next.text, next.images);
+            await startTurn(runId, current.text, current.images);
             dropHead();
             return;
           } catch (err) {
@@ -1278,14 +1432,25 @@ export function Chats({
    * The open transcript's composer: a follow-up into the ACTIVE chat run —
    * never a run start (workflow runs take one task; their composer is off).
    *
-   * While the agent is working the message is still SENT, not parked. The
-   * daemon hands it to the turn already in flight when the CLI has a channel
-   * for one (claude's stream-json stdin does; it acts on it at the next tool
-   * boundary), and answers RUN_BUSY when it does not — only then does the
-   * message join the queue and wait for the turn to end. Trying first is the
-   * whole change: parking unconditionally, as this did, turned "send this
-   * next" into "send this after everything finishes", which on a long turn is
-   * minutes of the agent working on a request the user has already replaced.
+   * While the agent is working the message is HELD in this run's queue and
+   * shown in the strip above the composer — it is not handed to the CLI, and
+   * it becomes a transcript bubble only when it is actually POSTed.
+   *
+   * This is the inverse of what it used to do, and the inversion is the fix.
+   * Sending unconditionally meant that on claude — whose stream-json stdin
+   * takes a message into a turn already running — a second thought typed while
+   * the agent worked was injected at the next tool boundary. So a message the
+   * user meant as "do this next" silently redirected the turn in flight, with
+   * no moment left at which they could edit or withdraw it. Holding it gives
+   * them that moment; mid-turn delivery survives as the strip's explicit "send
+   * now" ({@link steerQueued}), offered only where the daemon says the CLI has
+   * a channel for one.
+   *
+   * The RUN_BUSY catch below is NOT redundant with the hold. `streaming` is
+   * the renderer's belief and RUN_BUSY is the daemon's fact; they disagree
+   * whenever the run list has not loaded yet, or a turn wedged without
+   * settling. Every one of those disagreements used to surface a raw 409 as a
+   * red banner.
    */
   const sendFollowUp = useCallback(async (): Promise<void> => {
     const text = input.trim();
@@ -1297,7 +1462,13 @@ export function Chats({
     // Queueing is a chat-run concept — the workflow composer is disabled.
     const queueable =
       runsRef.current.find((r) => r.id === runId)?.workflowId == null;
-    if (streaming && !queueable) {
+    if (streaming) {
+      if (!queueable) {
+        return;
+      }
+      setInput('');
+      enqueueMessage(runId, { text, images });
+      attachments.clear();
       return;
     }
     try {
@@ -1333,6 +1504,87 @@ export function Chats({
     }
   }, [input, streaming, startTurn, enqueueMessage, attachments]);
 
+  /** Rewrite a queued message before it goes out. Text only — an attachment
+   *  cannot be re-pasted into a one-line field, and losing one silently is
+   *  worse than making the user remove the entry and retype it. */
+  const editQueued = useCallback((id: string, text: string): void => {
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    setQueues((prev) => ({
+      ...prev,
+      [runId]: (prev[runId] ?? []).map((message) =>
+        message.id === id ? { ...message, text } : message,
+      ),
+    }));
+  }, []);
+
+  const removeQueued = useCallback((id: string): void => {
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    setQueues((prev) => ({
+      ...prev,
+      [runId]: (prev[runId] ?? []).filter((message) => message.id !== id),
+    }));
+  }, []);
+
+  /**
+   * Send one queued message into the turn already running — the opt-in half of
+   * the hold in {@link sendFollowUp}, offered only where the daemon reports
+   * the CLI has a mid-turn channel.
+   *
+   * A RUN_BUSY here is not a failure to report: it means the daemon disagreed
+   * with the capability report at this instant (the turn settled as the POST
+   * flew, or the CLI declined the write), and the message is still queued and
+   * still going out when the turn ends. Showing a red banner for it would name
+   * a problem the user has no action for.
+   */
+  const steerQueued = useCallback(
+    async (id: string): Promise<void> => {
+      const runId = activeRunIdRef.current;
+      if (!runId) {
+        return;
+      }
+      const queue = queuesRef.current[runId] ?? [];
+      const message = queue.find((queued) => queued.id === id);
+      if (!message) {
+        return;
+      }
+      // The automatic drain may already be sending this exact message: the head
+      // STAYS in the queue for the whole in-flight window (which the RUN_BUSY
+      // backoff can stretch to seconds), so its Steer control is live the whole
+      // time. Without this the click POSTs a second copy of a message that is
+      // already on its way, and the agent receives it twice — the same defect
+      // the id keying fixed on the drain's own path, reached from the sibling
+      // one. Only the HEAD is at risk; steering any other row while a drain
+      // runs is exactly what the control is for.
+      if (drainingRef.current.has(runId) && queue[0]?.id === id) {
+        return;
+      }
+      try {
+        await startTurn(runId, message.text, message.images);
+        // Dropped by ID, never by index and never by object: the automatic
+        // drain can shift the queue while this POST is in flight, so an index
+        // would remove somebody else's message — and an EDIT during the same
+        // window replaces the object, so an identity filter would match
+        // nothing and leave this message to go out a second time.
+        setQueues((prev) => ({
+          ...prev,
+          [runId]: (prev[runId] ?? []).filter((queued) => queued.id !== id),
+        }));
+      } catch (err) {
+        if (isRunBusyError(err)) {
+          return;
+        }
+        setError(String(err));
+      }
+    },
+    [startTurn],
+  );
+
   const cancel = useCallback(async (): Promise<void> => {
     const runId = activeRunIdRef.current;
     if (!runId) {
@@ -1356,13 +1608,37 @@ export function Chats({
   }, [chatApi, workflowApi]);
 
   const respondApproval = useCallback(
-    (item: ChatItem, allow: boolean, answer?: string): void => {
+    (
+      item: ChatItem,
+      allow: boolean,
+      answer?: string,
+      images?: SendMessageDtoImagesInner[],
+    ): void => {
       const requestId = payloadString(item.payload, 'id');
       if (requestId) {
         client.sendVerdict(item.runId, requestId, allow, answer);
       }
+      if (!images?.length) {
+        return;
+      }
+      // The verdict FIRST, then the picture. The answer reaches the model as
+      // `updatedInput.response` — a string field of the CLI's own tool input,
+      // with nowhere for bytes to go — so the image travels the one channel
+      // that carries real image blocks: a user message into the turn that the
+      // verdict just unblocked. The answer text already says one is coming.
+      //
+      // A RUN_BUSY here is not a failure: the turn settled as this flew, and
+      // the queue then delivers the image the moment the next turn can take
+      // it, exactly as it would for anything typed in the composer.
+      void startTurn(item.runId, '', images).catch((err: unknown) => {
+        if (isRunBusyError(err)) {
+          enqueueMessage(item.runId, { text: '', images });
+          return;
+        }
+        setError(String(err));
+      });
     },
-    [client],
+    [client, startTurn, enqueueMessage],
   );
 
   // Requests the daemon reported as already settled — invalid answers remain
@@ -1404,11 +1680,10 @@ export function Chats({
    * re-derived, so a card that shows as answered can never still count as
    * waiting here.
    */
-  const awaitingAnswer = useMemo(() => {
-    const keys = new Set<string>();
-    for (const item of items) {
+  const openRequestId = useCallback(
+    (item: ChatItem): string | null => {
       if (item.kind !== 'approval_request') {
-        continue;
+        return null;
       }
       const id = payloadString(item.payload, 'id');
       if (
@@ -1417,12 +1692,84 @@ export function Chats({
         unanswerableIds.has(id) ||
         deadRequestKeys.has(`${item.runId}:${id}`)
       ) {
-        continue;
+        return null;
       }
-      keys.add(liveTextKey(item.nodeId));
+      return id;
+    },
+    [verdicts, unanswerableIds, deadRequestKeys],
+  );
+  const awaitingAnswer = useMemo(() => {
+    const keys = new Set<string>();
+    for (const item of items) {
+      if (openRequestId(item) !== null) {
+        keys.add(liveTextKey(item.nodeId));
+      }
     }
     return keys;
-  }, [items, verdicts, unanswerableIds, deadRequestKeys]);
+  }, [items, openRequestId]);
+  /**
+   * EVERY open request, oldest first — lifted OUT of the transcript so none of
+   * them can scroll away.
+   *
+   * A card rendered in transcript order scrolls away like any other row, so a
+   * long turn leaves the agent parked on a question the user cannot see —
+   * "it is waiting for an answer but the block is hanging somewhere above".
+   * Worse, nothing on screen then explains why the run has gone quiet.
+   *
+   * EVERY open request is lifted out, not just the pinned one. A workflow run
+   * can have two nodes asking at once, and leaving the others in transcript
+   * order gave the older one a fully live card that scrolled away — the exact
+   * failure the pin was built to end, reintroduced for every question but the
+   * newest. The transcript leaves a marker in each slot instead of a second
+   * live copy, because two sets of buttons over one one-shot verdict channel is
+   * a race the card cannot win.
+   *
+   * Derived from the persisted items, so it survives a chat switch and a
+   * reload the same way the transcript does.
+   */
+  const openRequests = useMemo(
+    () => items.filter((item) => openRequestId(item) !== null),
+    [items, openRequestId],
+  );
+  /**
+   * The one shown: the NEWEST, which is what the turn is actually blocked on.
+   *
+   * The others stay MOUNTED and hidden rather than being unrendered, which is
+   * what keeps a half-typed answer alive when a newer question takes the pin.
+   * Unmounting resets the card's picks, its typed text and every staged
+   * attachment — and the user has no way to get any of it back.
+   */
+  const pinnedRequest = openRequests.at(-1) ?? null;
+  /**
+   * ONE card builder for both placements — the pinned slot and the settled
+   * transcript row. The two differ only in WHERE they hang, and a second copy
+   * of this JSX is how the pinned card would come to accept an answer the
+   * transcript row could not show.
+   */
+  const approvalCardFor = useCallback(
+    (item: ChatItem): React.JSX.Element => {
+      const requestId = payloadString(item.payload, 'id');
+      return (
+        <ApprovalCard
+          toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
+          input={(item.payload as { input?: unknown } | null)?.input ?? null}
+          verdict={requestId ? (verdicts.get(requestId) ?? null) : null}
+          expired={
+            requestId !== null &&
+            (unanswerableIds.has(requestId) ||
+              // A DIFFERENT plane, deliberately kept: the live verdict_ack
+              // round-trip, which is what corrects a card the daemon never got
+              // to annotate.
+              deadRequestKeys.has(`${item.runId}:${requestId}`))
+          }
+          onRespond={(allow, answer, images) =>
+            respondApproval(item, allow, answer, images)
+          }
+        />
+      );
+    },
+    [verdicts, unanswerableIds, deadRequestKeys, respondApproval],
+  );
 
   /**
    * When the turn currently in flight started — the header's running clock.
@@ -1460,6 +1807,27 @@ export function Chats({
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
+  /**
+   * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
+   * can — what decides whether the strip offers "send now".
+   *
+   * Derived from the daemon's report for the same reason as the two sets
+   * above: `AdapterConfig.followUp` is the fact, and the moment the renderer
+   * decides it by agent name, a CLI that gains the channel keeps a dead
+   * control. Undefined-safe by construction — while capabilities are loading
+   * there is no row, and the honest answer is "not right now", which reads as
+   * a disabled button rather than one that queues without saying so.
+   */
+  const steerUnavailableReason = useMemo((): string | null => {
+    const agent = activeRun?.agentKind;
+    if (!agent) {
+      return 'This run has no agent that could take a message mid-turn';
+    }
+    const row = (capabilities?.followUps ?? []).find((f) => f.agent === agent);
+    return row
+      ? row.unavailableReason
+      : `Checking whether ${agent} can take a message mid-turn…`;
+  }, [capabilities, activeRun]);
 
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agent kinds the current composer's message reaches, and in which
@@ -1495,18 +1863,19 @@ export function Chats({
   // Same scoping as the models above — whichever CLI the visible composer is
   // about, or none at all for a workflow target.
   const agentEfforts = useAgentEfforts(agentsApi, modelKind);
-  // Two independent git reads, because the two composers watch two different
-  // folders: the landing composer follows the folder picked for the NEXT run,
-  // the transcript composer the cwd its run was created with.
+  // ONE git read: the landing composer's, following the folder picked for the
+  // NEXT run — the only place a branch is chosen. The transcript composer used
+  // to run a second read for a read-only branch chip beside its own cwd; that
+  // chip is gone, and keeping the read alive would mean an IPC call per run
+  // whose only surviving effect was an error strip about a control nobody sees.
   const git = useGitInfo(folder);
-  const runGit = useGitInfo(activeRun?.cwd ?? null);
   // What each composer's error strip shows. The screen-level `error` wins, then
   // the shared attachment reader, then that composer's own git read — and the
   // strip is rendered from exactly this value, so a lone attachment failure
   // cannot be computed into the text of a strip whose visibility never
   // considered it (it was, and stayed invisible).
   const composerError = error ?? attachments.error ?? git.error;
-  const transcriptError = error ?? attachments.error ?? runGit.error;
+  const transcriptError = error ?? attachments.error;
   /**
    * Close the strip. Every source is cleared, not just the one on top: they are
    * layered, so clearing only `error` would swap one stale failure for an older
@@ -1516,7 +1885,6 @@ export function Chats({
     setError(null);
     attachments.clearError();
     git.clearError();
-    runGit.clearError();
   };
   const skillQuery = slashQuery(input);
   const skillMatches = useMemo(
@@ -1694,6 +2062,26 @@ export function Chats({
     return keys;
   }, [activeRun, activity, awaitingAnswer, streaming]);
   /**
+   * The badge for the run currently on screen.
+   *
+   * Only the ACTIVE run gets this treatment, and that is a limit of what is
+   * knowable rather than an oversight: `streaming` and `awaitingAnswer` are both
+   * derived from the open transcript's items, and the renderer holds no items
+   * for a chat it is not looking at. A background row keeps the daemon's own
+   * status, which the client-wide `run_status` broadcast already keeps honest.
+   */
+  const activeRunStatus = useMemo(
+    () =>
+      activeRun
+        ? displayRunStatus({
+            status: activeRun.status,
+            streaming,
+            awaitingAnswer: awaitingAnswer.size > 0,
+          })
+        : 'idle',
+    [activeRun, streaming, awaitingAnswer],
+  );
+  /**
    * The DURABLE fold, memoized on the items alone.
    *
    * Kept separate from the live overlay below on purpose. Folding both in one
@@ -1730,6 +2118,8 @@ export function Chats({
       // A 1:1 chat has exactly one agent; its working state is the run's,
       // and its one thread IS the conversation.
       const chatActivity = activity.get(CHAT_AGENT_KEY);
+      // `activeTurns` still keys off raw liveness: a chat parked on a question
+      // genuinely HAS a turn open, it is just not advancing.
       const running = streaming || activeRun.status === 'running';
       return [
         {
@@ -1738,7 +2128,11 @@ export function Chats({
           agent: activeRun.agentKind,
           // A 1:1 chat has no node, so no plugin directory to carry.
           pluginDir: null,
-          status: running ? 'running' : activeRun.status,
+          // The SAME badge rule the header uses. This used to be a second one,
+          // built from `streaming` and the row alone, so it could never report
+          // `needs-input` — a chat parked on a question read "needs more info"
+          // in the header and "running" in this panel at the same instant.
+          status: activeRunStatus,
           activeTurns: running ? 1 : 0,
           // LIVE first: the delta plane reports the window as of the turn's
           // latest request, while `activity` can only report the last
@@ -1758,7 +2152,7 @@ export function Chats({
               id: 'main',
               kind: 'main',
               label: 'Conversation',
-              status: running ? 'running' : activeRun.status,
+              status: activeRunStatus,
               sessionId: null,
             },
           ],
@@ -1818,7 +2212,7 @@ export function Chats({
     // without it the meter could only move when a durable item landed, which is
     // the "context never grows" complaint this panel exists to answer. There is
     // no react-hooks eslint plugin in this repo to catch the omission.
-  }, [activeRun, activity, streaming, wfNodes, liveText]);
+  }, [activeRun, activeRunStatus, activity, streaming, wfNodes, liveText]);
 
   /**
    * Where this thread can be picked up by hand: the CLI invocation that reopens
@@ -2037,7 +2431,9 @@ export function Chats({
                     active={run.id === activeRunId}
                     label={runLabel(run, workflowNames)}
                     isWorkflow={run.workflowId != null}
-                    status={run.status}
+                    status={
+                      run.id === activeRunId ? activeRunStatus : run.status
+                    }
                     lastMessage={run.lastMessage}
                     lastActivityAt={run.updatedAt}
                     activity={activities.get(run.id) ?? null}
@@ -2266,7 +2662,7 @@ export function Chats({
                   label={runLabel(activeRun, workflowNames)}
                   isWorkflow={activeRun.workflowId != null}
                   agentKind={activeRun.agentKind}
-                  status={activeRun.status}
+                  status={activeRunStatus}
                   lastActivityAt={activeRun.updatedAt}
                   turnStartedAt={turnStartedAt}
                   sidePanelOpen={agentsPanelOpen}
@@ -2318,37 +2714,29 @@ export function Chats({
                     );
                   }
                   const item = entry.item;
-                  const requestId = payloadString(item.payload, 'id');
+                  // EVERY open request's card lives above the composer, so
+                  // every one of them leaves a marker here. Keyed on openness
+                  // rather than on the pinned id: keying on the pin gave the
+                  // SECOND open question a fully live card in the scroller,
+                  // which is the failure the pin exists to end. Leaving the
+                  // live card here too would put two sets of buttons over one
+                  // one-shot verdict channel; leaving nothing would silently
+                  // drop a row out of the conversation's order.
+                  if (openRequestId(item) !== null) {
+                    return (
+                      <MessageBubble key={item.id} variant="note">
+                        {pinnedRequest?.id === item.id
+                          ? '❓ waiting on your answer — the card is pinned below'
+                          : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                      </MessageBubble>
+                    );
+                  }
                   const askerName =
                     (item.nodeId
                       ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
                       : activeRun?.agentKind) ?? 'agent';
                   const card = (
-                    <div className="w-full">
-                      <ApprovalCard
-                        toolName={
-                          payloadString(item.payload, 'toolName') ?? 'tool'
-                        }
-                        input={
-                          (item.payload as { input?: unknown } | null)?.input ??
-                          null
-                        }
-                        verdict={
-                          requestId ? (verdicts.get(requestId) ?? null) : null
-                        }
-                        expired={
-                          requestId !== null &&
-                          (unanswerableIds.has(requestId) ||
-                            // A DIFFERENT plane, deliberately kept: the live
-                            // verdict_ack round-trip, which is what corrects a
-                            // card the daemon never got to annotate.
-                            deadRequestKeys.has(`${item.runId}:${requestId}`))
-                        }
-                        onRespond={(allow, answer) =>
-                          respondApproval(item, allow, answer)
-                        }
-                      />
-                    </div>
+                    <div className="w-full">{approvalCardFor(item)}</div>
                   );
                   // A solo agent's card needs no identity frame either.
                   return soloAgent ? (
@@ -2365,6 +2753,54 @@ export function Chats({
                 })}
                 <div ref={transcriptEndRef} />
               </div>
+
+              {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
+                  still belongs to the scrolled content, so it can be scrolled
+                  past and it overlaps the messages it floats above. Here the
+                  card is a sibling of the transcript and the composer, which
+                  makes "always visible while a question is open" a layout
+                  fact rather than a scroll-position accident.
+
+                  It sits ABOVE the composer because that is where the answer
+                  gets typed — the question and the reply belong on the same
+                  edge of the screen. */}
+              {pinnedRequest ? (
+                <div
+                  data-slot="pinned-request"
+                  // Named and given a role that can CARRY a name: without one
+                  // this was a bare div, so the three signals that the agent is
+                  // blocked were all silent and a screen-reader user typing
+                  // into the composer got no cue that the turn had stopped on
+                  // them. Deliberately NOT `aria-live`: the card inside is a
+                  // tablist full of interactive controls, and announcing the
+                  // whole region on every keystroke inside it would be worse
+                  // than saying nothing.
+                  role="region"
+                  aria-label="Question waiting on your answer"
+                  className="shrink-0 border-t border-border bg-card/60 px-4 py-3">
+                  {openRequests.length > 1 ? (
+                    <p className="m-0 mb-1.5 text-xs text-muted-foreground">
+                      {openRequests.length} questions waiting — answering this
+                      one opens the next
+                    </p>
+                  ) : null}
+                  {/* Every open request is rendered, and all but the newest are
+                      `hidden`. Rendering only the pinned one would unmount the
+                      card being typed into the moment a newer question arrived,
+                      resetting its picks, its text and every staged attachment
+                      — with no way for the user to get any of it back. `hidden`
+                      also keeps the concealed cards out of the tab order and
+                      the accessibility tree, which `display:none` via a class
+                      would not guarantee against a utility being overridden. */}
+                  {openRequests.map((request) => (
+                    <div
+                      key={request.id}
+                      hidden={request.id !== pinnedRequest.id}>
+                      {approvalCardFor(request)}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
               {transcriptError ? (
                 <ErrorBanner
@@ -2393,54 +2829,13 @@ export function Chats({
               ) : null}
 
               <div className="flex flex-col gap-2 border-t border-border p-3">
-                {queued.length > 0 ? (
-                  <div
-                    className="flex flex-col gap-1"
-                    aria-label="Queued messages">
-                    {queued.map((message, index) => (
-                      <div
-                        // Index keys are safe here: rows are removed by index and
-                        // duplicate texts are legitimate queue entries.
-                        key={`${index}-${message.text}`}
-                        className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-                        <Clock aria-hidden="true" className="size-3 shrink-0" />
-                        <span
-                          className="min-w-0 flex-1 truncate"
-                          title={message.text}>
-                          {message.text ||
-                            (message.images.length === 1
-                              ? '1 image'
-                              : `${message.images.length} images`)}
-                        </span>
-                        {message.text && message.images.length > 0 ? (
-                          <span className="shrink-0">
-                            {message.images.length === 1
-                              ? '+1 image'
-                              : `+${message.images.length} images`}
-                          </span>
-                        ) : null}
-                        <span className="shrink-0">sends next</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-5 shrink-0"
-                          aria-label={`Remove queued message ${index + 1}`}
-                          title="Remove from queue"
-                          onClick={() =>
-                            setQueues((prev) => ({
-                              ...prev,
-                              [activeRunId]: (prev[activeRunId] ?? []).filter(
-                                (_, i) => i !== index,
-                              ),
-                            }))
-                          }>
-                          <X className="size-3 shrink-0" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+                <QueuedStrip
+                  messages={queued}
+                  steerUnavailableReason={steerUnavailableReason}
+                  onEdit={editQueued}
+                  onRemove={removeQueued}
+                  onSteer={(id) => void steerQueued(id)}
+                />
 
                 {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
@@ -2455,28 +2850,25 @@ export function Chats({
                     />
                   ) : null}
                   <ComposerTopRow>
-                    {/* Informational run-identity chips — static Chips carrying
-                      no chevron, never disabled Buttons: disabled kills hover
-                      (so the cwd title tooltip could never fire) and 50%
-                      opacity drops the text below AA contrast.
+                    {/* Only a workflow's trigger is left above the text, so for
+                      a single-agent thread this row collapses entirely
+                      (`empty:hidden`) and the card sits directly under the
+                      transcript.
 
-                      The agent (and, for a workflow, its name) is NOT among
-                      them: it is fixed for the run's whole life, so it belongs
-                      to the header's identity line, not to a row of controls
-                      that change things. */}
-                    {activeRun?.cwd ? (
-                      <Chip title={activeRun.cwd} className="max-w-52">
-                        <FolderOpen />
-                        <span className="truncate">
-                          {folderName(activeRun.cwd)}
-                        </span>
-                      </Chip>
-                    ) : null}
-                    {/* Read-only: the branch is live repo state, but a run's
-                      turns are all against the tree it started on, so switching
-                      it under an open transcript would silently re-point the
-                      work. The new-run composer above is where it is chosen. */}
-                    <BranchSelect info={runGit.info} readOnly />
+                      The three chips that used to live here moved INTO the
+                      card, because in an open thread none of them is what the
+                      row was built for. The row states what is still to be
+                      DECIDED about the run; in a thread the folder is already
+                      decided and unchangeable, so it reads better as a caption
+                      beside the actions, and the approval posture is a live
+                      per-turn control that belongs beside model and effort. The
+                      branch chip is gone outright: it was read-only anyway, and
+                      naming live repo state under a transcript whose turns all
+                      run against the tree the run STARTED on only invited a
+                      switch the control could not perform.
+
+                      The agent is not here either — fixed for the run's whole
+                      life, so it belongs to the header's identity line. */}
                     {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
                       <Chip>
                         <Zap />
@@ -2484,29 +2876,6 @@ export function Chats({
                           {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
                         </span>
                       </Chip>
-                    ) : null}
-                    {activeRun &&
-                    activeRun.workflowId === null &&
-                    activeRun.agentKind ? (
-                      /* The permission posture belongs with what the run
-                        IS, not with how this turn thinks — and it is
-                        editable at any time, mid-turn included: the daemon
-                        hands the change to the turn already running. */
-                      <ApprovalModeSelect
-                        supportedModes={
-                          capabilities
-                            ? (approvalModesByAgent.get(activeRun.agentKind) ??
-                              [])
-                            : null
-                        }
-                        value={activeRun.approval}
-                        planSupported={
-                          capabilities?.claudeModes.plan === 'pass'
-                        }
-                        onChange={(approval) =>
-                          void changeRunSettings({ approval })
-                        }
-                      />
                     ) : null}
                   </ComposerTopRow>
                   <ComposerCard>
@@ -2553,17 +2922,26 @@ export function Chats({
                                   type="button"
                                   size="icon"
                                   className="size-8 rounded-full"
-                                  // It SENDS. The message goes into the turn
-                                  // already running whenever the agent's CLI can
-                                  // take one mid-turn, and only falls back to the
-                                  // queue when it cannot — so a label promising
-                                  // "later" was wrong for the common case, and
-                                  // the queue strip above the composer is what
-                                  // says when the fallback happened.
-                                  aria-label="Send"
-                                  title="Send — into the running turn if the agent can take it, otherwise when the turn ends"
+                                  // It QUEUES while a turn is running, and the
+                                  // label says so. It used to say "Send" and
+                                  // mean it — the message went into the turn in
+                                  // flight — which is the behaviour the strip
+                                  // replaced: there was no moment at which the
+                                  // user could still edit or withdraw it.
+                                  // Mid-turn delivery is now the strip's own
+                                  // "send now", one click away.
+                                  aria-label="Queue"
+                                  title="Queue — goes out when the turn ends, or send it now from the queue above"
                                   onClick={() => void sendFollowUp()}>
-                                  <ArrowUp className="size-4 shrink-0" />
+                                  {/* NOT the ArrowUp that Send uses. The one
+                                      thing the user has to understand before
+                                      clicking is that this does not reach the
+                                      agent, and an identical glyph left that to
+                                      the hover title. Clock is what the strip
+                                      below already marks a waiting message
+                                      with, so the button and its result read as
+                                      the same thing. */}
+                                  <Clock className="size-4 shrink-0" />
                                 </Button>
                               ) : null}
                               <Button
@@ -2595,6 +2973,29 @@ export function Chats({
                               <ArrowUp className="size-4 shrink-0" />
                             </Button>
                           )}
+                          {/* Where the run happens, to the RIGHT of Send.
+
+                          It is not an action, and it is deliberately not in the
+                          chip row either: a run's cwd is fixed at creation, so
+                          it can never be picked from here. Sitting last on the
+                          actions line it reads as a caption on the button that
+                          dispatches the work — "this goes to geniro-app" —
+                          rather than as a dead picker among live ones.
+
+                          `shrink` overrides `Chip`'s own `shrink-0`: this is
+                          the one item on a non-shrinking line whose label is
+                          user data, so it must be the thing that truncates
+                          before Send is pushed off. */}
+                          {activeRun?.cwd ? (
+                            <Chip
+                              title={activeRun.cwd}
+                              className="max-w-40 min-w-0 shrink">
+                              <FolderOpen />
+                              <span className="truncate">
+                                {folderName(activeRun.cwd)}
+                              </span>
+                            </Chip>
+                          ) : null}
                         </>
                       }>
                       {activeRun &&
@@ -2626,6 +3027,30 @@ export function Chats({
                             nextTurnOnly={streaming}
                             onChange={(effort) =>
                               void changeRunSettings({ effort })
+                            }
+                          />
+                          {/* Between effort and the context readout, not up in
+                          the identity row: the permission posture is editable
+                          at any time — mid-turn included, since the daemon
+                          hands the change to the turn already running — which
+                          makes it a live control of how this turn behaves, the
+                          same category as model and effort. Unlike those two it
+                          carries no `nextTurnOnly`, precisely because it does
+                          NOT wait for the next turn. */}
+                          <ApprovalModeSelect
+                            supportedModes={
+                              capabilities
+                                ? (approvalModesByAgent.get(
+                                    activeRun.agentKind,
+                                  ) ?? [])
+                                : null
+                            }
+                            value={activeRun.approval}
+                            planSupported={
+                              capabilities?.claudeModes.plan === 'pass'
+                            }
+                            onChange={(approval) =>
+                              void changeRunSettings({ approval })
                             }
                           />
                           {/* The context readout, DIRECTLY after the effort

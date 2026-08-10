@@ -11,11 +11,56 @@ import type {
   AgentMcpServerStatus,
   AgentUsage,
 } from '../../adapter.types';
-import { CLAUDE_RUN_FAILED_MESSAGE } from '../claude.const';
+import {
+  CLAUDE_COMPACT_BOUNDARY_SUBTYPE,
+  CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
+  CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
+  CLAUDE_RUN_FAILED_MESSAGE,
+} from '../claude.const';
 import {
   readClaudeAssistantContext,
   readClaudeUsage,
 } from './claude-usage.utils';
+
+/**
+ * Whether a tool result is the CLI reporting that its permission channel died,
+ * rather than the tool itself failing.
+ *
+ * Defensive about the SHAPE as well as the text: `content` is a string on some
+ * results and an array of blocks on others, and the marker has been observed in
+ * both. Anything with no text leaf carries no prose, so it does not match.
+ *
+ * Deliberately NOT a search of the serialized payload. Both markers must appear
+ * in ONE text leaf: the CLI writes them as a single sentence, so a match spread
+ * across two unrelated blocks — or found inside an image block's base64 — would
+ * be a false positive, and serializing that base64 to look for prose it cannot
+ * contain was the cost this replaced.
+ */
+export function isPermissionChannelFailure(content: unknown): boolean {
+  if (typeof content === 'string') {
+    return hasFailureMarkers(content);
+  }
+  // Only a TEXT leaf can carry the CLI's sentence. Serializing the whole
+  // payload to find two short markers cost a full `JSON.stringify` per
+  // tool_result on the per-event path — and the worst case is not a large
+  // `Read` but an IMAGE result, whose base64 was stringified in its entirety to
+  // search it for prose it cannot contain.
+  if (Array.isArray(content)) {
+    return content.some((block) => {
+      const text = asString(asRecord(block)?.text);
+      return text !== null && hasFailureMarkers(text);
+    });
+  }
+  const text = asString(asRecord(content)?.text);
+  return text !== null && hasFailureMarkers(text);
+}
+
+/** Both halves, in ONE string — the CLI writes them in a single sentence. */
+function hasFailureMarkers(text: string): boolean {
+  return CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS.every((marker) =>
+    text.includes(marker),
+  );
+}
 
 /**
  * Whether a `result` line reports NOTHING — no stop reason, no final text, and
@@ -146,6 +191,22 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
       if (asString(root.subtype) === 'thinking_tokens') {
         return mapClaudeThinkingTokens(root);
       }
+      if (asString(root.subtype) === CLAUDE_COMPACT_BOUNDARY_SUBTYPE) {
+        // Shape taken from the 2.1.226 binary's own schema:
+        // `compact_metadata: { trigger: 'manual'|'auto', pre_tokens: int,
+        // post_tokens?: int }`. Read defensively regardless — the metadata is
+        // optional on the wire, and a boundary carrying no numbers is still
+        // worth reporting, because the EVENT is what explains the meter.
+        const meta = asRecord(root.compact_metadata);
+        return [
+          {
+            type: 'context_compacted',
+            trigger: meta ? asString(meta.trigger) : null,
+            preTokens: meta ? asNumber(meta.pre_tokens) : null,
+            postTokens: meta ? asNumber(meta.post_tokens) : null,
+          },
+        ];
+      }
       if (asString(root.subtype) === 'init') {
         const events: AgentEvent[] = [];
         const sessionId = asString(root.session_id);
@@ -250,6 +311,17 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           result: b.content ?? null,
           isError: asBoolean(b.is_error),
         });
+        if (isPermissionChannelFailure(b.content)) {
+          // Say it OUT LOUD. This failure arrives as ordinary tool-result text
+          // inside a collapsed tool row, so a run can accumulate dozens of them
+          // with nothing on screen to say the permission channel died — 239 of
+          // them sat unremarked in the author's own database, and finding them
+          // took a SQL query. A notice lands it as a `system` item instead.
+          events.push({
+            type: 'notice',
+            message: CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
+          });
+        }
       }
       return events;
     }

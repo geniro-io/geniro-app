@@ -263,6 +263,10 @@ export function useAgentMcp(
             {
               servers: [],
               unavailableReason: transportReason(err),
+              // Null, not a sentence invented here: the note is the DAEMON's
+              // statement about a CLI, and this listing exists precisely
+              // because the daemon never answered.
+              interactiveOnlyNote: null,
               // Settled, not still being read: the request never reached an
               // answer, so asking again on a timer would retry forever.
               pending: false,

@@ -224,6 +224,108 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  /**
+   * The permission channel dying under the CLI. It arrives as ordinary tool
+   * RESULT TEXT, which is why nothing reacted to it and why 239 occurrences sat
+   * unremarked in one database until a SQL query went looking.
+   */
+  const permissionFailure = (content: unknown): unknown =>
+    mapClaudeMessage({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 't9', content, is_error: true },
+        ],
+      },
+    });
+
+  it('raises a notice when a tool result is the permission channel failing', () => {
+    const events = permissionFailure(
+      'Tool permission request failed: AbortError: Stream closed',
+    );
+
+    // The raw result still reaches the transcript untouched — the notice is an
+    // ADDITION, so nothing the agent saw is rewritten.
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'tool_result', id: 't9', isError: true }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
+  it('matches the CLI wording whose middle varies, and finds it inside block content', () => {
+    // `Error: Stream closed` appears beside `AbortError: Stream closed` in the
+    // CLI's own issue tracker, so only the two stable halves are matched — and
+    // `content` is an array of blocks on some results, a bare string on others.
+    expect(
+      permissionFailure([
+        { type: 'text', text: 'Tool permission request failed: Stream closed' },
+      ]),
+    ).toEqual([
+      expect.objectContaining({ type: 'tool_result' }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
+  it('does NOT fire on a tool that merely mentions one half', () => {
+    // A grep hit or a test name containing "Stream closed" is not the channel
+    // dying; requiring BOTH markers is what keeps this from crying wolf over
+    // the user's own source.
+    for (const content of [
+      'Stream closed by the peer',
+      'Tool permission request failed for an unrelated reason',
+      null,
+      42,
+    ]) {
+      expect(permissionFailure(content)).toEqual([
+        expect.objectContaining({ type: 'tool_result' }),
+      ]);
+    }
+  });
+
+  it('requires both markers in ONE text leaf, not merely somewhere in the payload', () => {
+    // The detector reads text leaves; it does NOT serialize the payload. Two
+    // unrelated blocks each carrying one half are not the CLI's sentence, and
+    // the old `JSON.stringify(content)` search called them one. Restore it and
+    // this fires.
+    expect(
+      permissionFailure([
+        { type: 'text', text: 'Tool permission request failed' },
+        { type: 'text', text: 'Stream closed' },
+      ]),
+    ).toEqual([expect.objectContaining({ type: 'tool_result' })]);
+  });
+
+  it('does not read prose out of an image block, which is what the scan was narrowed for', () => {
+    // The worst case of the whole-payload stringify: a base64 image result
+    // serialized in full so two short markers could be searched for in bytes
+    // that cannot carry prose. Matching here would also be a false positive —
+    // an image is not the permission channel reporting anything.
+    expect(
+      permissionFailure([
+        {
+          type: 'image',
+          source: {
+            data: 'Tool permission request failed: AbortError: Stream closed',
+          },
+        },
+      ]),
+    ).toEqual([expect.objectContaining({ type: 'tool_result' })]);
+  });
+
+  it('still finds the sentence when the result is an object carrying a text field', () => {
+    // The third shape the narrowing kept — asserted so a later "simplify to
+    // strings and arrays" cannot drop it silently.
+    expect(
+      permissionFailure({
+        text: 'Tool permission request failed: AbortError: Stream closed',
+      }),
+    ).toEqual([
+      expect.objectContaining({ type: 'tool_result' }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage({
@@ -482,6 +584,73 @@ describe('mapClaudeStreamEvent', () => {
       mapClaudeStreamEvent({ type: 'stream_event', event: 'nope' }),
     ).toEqual([]);
     expect(mapClaudeStreamEvent(textDelta(''))).toEqual([]);
+  });
+});
+
+describe('mapClaudeMessage — context compaction', () => {
+  it('reads the boundary the CLI emits after compacting', () => {
+    // The metadata shape is the CLI's own schema (2.1.226):
+    // `{ trigger: 'manual'|'auto', pre_tokens, post_tokens? }`.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: 's1',
+        compact_metadata: {
+          trigger: 'auto',
+          pre_tokens: 180_000,
+          post_tokens: 32_000,
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        trigger: 'auto',
+        preTokens: 180_000,
+        postTokens: 32_000,
+      },
+    ]);
+  });
+
+  it('still reports the compaction when the metadata is absent or partial', () => {
+    // The EVENT is the point — it is what explains the context meter dropping.
+    // A boundary carrying no numbers must not be swallowed for lack of them.
+    expect(
+      mapClaudeMessage({ type: 'system', subtype: 'compact_boundary' }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        trigger: null,
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'manual' },
+      }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        trigger: 'manual',
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+  });
+
+  it('leaves the other system subtypes alone', () => {
+    // The compaction arm is keyed on its own subtype, so `init` must still map
+    // to the session/commands/model events it always did.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'init',
+        session_id: 's1',
+      }),
+    ).toEqual([{ type: 'session', sessionId: 's1' }]);
   });
 });
 

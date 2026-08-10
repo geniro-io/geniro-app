@@ -62,6 +62,47 @@ function render(props: Parameters<typeof McpSection>[0]): HTMLDivElement {
   return container;
 }
 
+describe('McpSection — what the CLI loads only for itself', () => {
+  const NOTE =
+    'claude also loads claude-in-chrome and computer-use in its own interactive session.';
+
+  it('shows the daemon’s note under the rows, verbatim', () => {
+    // The panel is COMPLETE for the turns geniro runs, but the user compares
+    // it against their terminal's `/mcp`, which lists more. Without this line
+    // the only available reading is that rows went missing.
+    const el = render({
+      listing: {
+        ...listing({ name: 'srv' }),
+        interactiveOnlyNote: NOTE,
+      },
+      loading: false,
+    });
+
+    expect(el.textContent).toContain(NOTE);
+  });
+
+  it('shows it on an EMPTY folder too, where the question is loudest', () => {
+    const el = render({
+      listing: { ...listing(), interactiveOnlyNote: NOTE },
+      loading: false,
+    });
+
+    expect(el.textContent).toContain('No servers');
+    expect(el.textContent).toContain(NOTE);
+  });
+
+  it('renders nothing extra for a CLI that declares no such gap', () => {
+    // cursor-agent's `interactiveOnlyNote` is null, and a paragraph of empty
+    // space under its rows would be the tell that the section invented one.
+    const el = render({
+      listing: { ...listing({ name: 'srv' }), interactiveOnlyNote: null },
+      loading: false,
+    });
+
+    expect(el.textContent).not.toContain('interactive session');
+  });
+});
+
 describe('McpSection', () => {
   it('offers a switch on a surface that has a write path', () => {
     const el = render({

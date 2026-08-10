@@ -505,9 +505,12 @@ describe('ApprovalCard', () => {
         onRespond={staged}
       />,
     );
-    click(buttonNamed(el, 'Blue'));
+    // TYPE, then pick. That order is required now that a pick auto-advances to
+    // the next unanswered tab: clicking first would carry the caret to the
+    // OTHER question, and the qualifier would qualify the wrong answer. The
+    // join under test is unchanged — only the order that reaches it.
     typeInto(el.querySelector('input')!, 'but a lighter shade');
-    click(tabsOf(el)[1]!);
+    click(buttonNamed(el, 'Blue'));
     click(buttonNamed(el, 'Large'));
     click(buttonNamed(el, 'Submit answers'));
     expect(staged).toHaveBeenCalledWith(
@@ -647,6 +650,148 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenCalledWith(true, 'Red');
   });
 
+  it('a pick moves to the next unanswered question by itself', () => {
+    // The reported bug was "Submit is dead". It was not: Submit correctly waits
+    // for every tab, but nothing told the user the other tabs existed, so a
+    // card with its first question answered looked stuck. Advancing on the pick
+    // is what makes the remaining work visible.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Which color should the header be?');
+
+    click(buttonNamed(el, 'Blue'));
+
+    // The PANEL moved, not merely the tab's styling — only one question is on
+    // screen at a time, so the question text is the observable.
+    expect(el.textContent).toContain('Which font size?');
+    expect(el.textContent).not.toContain('Which color should the header be?');
+    expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('carries KEYBOARD FOCUS to the tab it advanced to', () => {
+    // The advance moves the panel either way, so the test above passes whether
+    // focus follows or not. It does not follow by itself: option buttons are
+    // keyed `${li}-${label}`, so switching tabs unmounts the very button that
+    // was just activated and focus falls to `document.body` — on EVERY
+    // question, leaving a keyboard user to tab in from the top of the document
+    // each time. `focusTab` moves both; `setActiveTab` moves only the panel,
+    // and reverting to it fails here and nowhere else.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    click(buttonNamed(el, 'Blue'));
+
+    expect(document.activeElement).toBe(tabsOf(el)[1]);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('does not advance when the click CLEARED the pick', () => {
+    // Clicking the chosen label again un-picks it, leaving the tab empty.
+    // Advancing there would carry the user away from a question they just
+    // emptied — and straight past the thing Submit is still waiting for.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    click(buttonNamed(el, 'Blue'));
+    click(tabsOf(el)[0]!);
+    click(buttonNamed(el, 'Blue'));
+
+    expect(el.textContent).toContain('Which color should the header be?');
+    expect(el.textContent).toContain('still empty: Color');
+  });
+
+  it('does not advance a multi-select — one click is not the whole answer', () => {
+    // Jumping away after the first of several intended picks would take the
+    // remaining options off screen mid-answer.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            {
+              question: 'Which colors?',
+              header: 'Colors',
+              options: [{ label: 'Red' }, { label: 'Blue' }],
+              multiSelect: true,
+            },
+            {
+              question: 'Which font size?',
+              header: 'Size',
+              options: [{ label: 'Small' }, { label: 'Large' }],
+              multiSelect: false,
+            },
+          ],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    click(buttonNamed(el, 'Red'));
+    expect(el.textContent).toContain('Which colors?');
+    expect(el.textContent).not.toContain('Which font size?');
+  });
+
+  it('offers Next question for a TYPED answer, which cannot advance itself', () => {
+    // A pick has a click to hang the advance on; typing has none — Enter is
+    // reserved for submitting a lone question. Without this control the only
+    // way on from a typed answer is to notice the tab strip.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    typeInto(el.querySelector('input')!, 'something teal');
+    click(buttonNamed(el, 'Next question'));
+
+    expect(el.textContent).toContain('Which font size?');
+    expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('withdraws Next question once every tab is answered', () => {
+    // It points at unfinished work. With nothing left it would either no-op or
+    // bounce the user backwards, and Submit is the only remaining action.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(buttonNamed(el, 'Next question')).toBeTruthy();
+    click(buttonNamed(el, 'Blue'));
+    click(buttonNamed(el, 'Large'));
+
+    expect(
+      [...el.querySelectorAll('button')].some(
+        (b) => b.textContent === 'Next question',
+      ),
+    ).toBe(false);
+    expect(buttonNamed(el, 'Submit answers').hasAttribute('disabled')).toBe(
+      false,
+    );
+  });
+
   it('an oversized or unfinished answer SAYS why Submit is disabled', () => {
     const el = render(
       <ApprovalCard
@@ -675,11 +820,13 @@ describe('ApprovalCard', () => {
       typeInto(input, fill.repeat(input.maxLength));
       return input.maxLength;
     };
-    const first = fillToBudget('x');
-    click(tabsOf(el)[1]!);
-    const second = fillToBudget('y');
+    // The click above auto-advanced onto Size, so that is the tab measured
+    // first — the one carrying NO pick. Then back to Color, which holds "Blue".
+    const sizeBudget = fillToBudget('y');
+    click(tabsOf(el)[0]!);
+    const colorBudget = fillToBudget('x');
     // The pick is charged: the tab holding "Blue" gets strictly less room.
-    expect(first).toBeLessThan(second);
+    expect(colorBudget).toBeLessThan(sizeBudget);
     expect(el.textContent).not.toContain('is the most the agent can receive');
     expect(buttonNamed(el, 'Submit answers').hasAttribute('disabled')).toBe(
       false,
@@ -803,5 +950,199 @@ describe('ApprovalCard', () => {
     )!;
     expect(declinedLine.className).toContain('text-destructive');
     expect(declinedLine.className).not.toContain('text-muted-foreground');
+  });
+});
+
+describe('ApprovalCard — a screenshot pasted into the answer', () => {
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const PNG_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
+
+  const oneQuestion = {
+    questions: [
+      { question: 'Which of these looks right?', options: [{ label: 'A' }] },
+    ],
+  };
+
+  /** Paste an image onto the answer field and wait until it is staged. */
+  async function pasteImage(el: HTMLElement): Promise<void> {
+    const field = el.querySelector('input')!;
+    const event = new Event('paste', { bubbles: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [new File([PNG_BYTES], 'shot.png', { type: 'image/png' })],
+      },
+    });
+    await act(async () => {
+      field.dispatchEvent(event);
+    });
+    // FileReader fires `load` on its own schedule, so wait on the observable
+    // rather than a fixed tick.
+    for (let attempt = 0; ; attempt++) {
+      if (el.querySelector('[data-slot="staged-attachment"]')) {
+        return;
+      }
+      if (attempt >= 100) {
+        throw new Error('the pasted image never staged');
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  it('hands the bytes back SEPARATELY, and says so in the answer', async () => {
+    // The whole point of the third argument: the answer reaches the model as a
+    // plain string inside the tool input (`updatedInput.answers` for a lone
+    // question, `updatedInput.response` for several), so the image cannot ride
+    // inside it. It goes out as its own message — and the answer has to say so, or
+    // the model acts on the words and meets the screenshot afterwards with no
+    // idea it was part of the reply.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    await pasteImage(el);
+    typeInto(el.querySelector('input')!, 'this one');
+    act(() => {
+      buttonNamed(el, 'Answer').click();
+    });
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    const [allow, answer, images] = onRespond.mock.calls[0]!;
+    expect(allow).toBe(true);
+    expect(answer).toContain('this one');
+    expect(answer).toContain('1 image attached');
+    expect(images).toEqual([{ mediaType: 'image/png', data: PNG_BASE64 }]);
+  });
+
+  it('answering a lone question by CLICKING an option still sends the picture', async () => {
+    // For a single non-multiSelect question the option click IS the submit, and
+    // it used to pass no images at all — so `respondApproval`'s
+    // `if (!images?.length) return;` dropped the staged screenshot and the card
+    // settled with no way to resend. This is the one path that lost it, and it
+    // is the same card state that `canSubmit` calls answerable.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    await pasteImage(el);
+    act(() => {
+      buttonNamed(el, 'A').click();
+    });
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    const [allow, answer, images] = onRespond.mock.calls[0]!;
+    expect(allow).toBe(true);
+    expect(answer).toContain('A');
+    expect(answer).toContain('1 image attached');
+    expect(images).toEqual([{ mediaType: 'image/png', data: PNG_BASE64 }]);
+  });
+
+  it('reserves the image note out of the typing budget', async () => {
+    // The note ("1 image attached — sent as the next message") is appended to
+    // the answer on BOTH submit paths, and the answer-on-click path has no
+    // Submit button to disable — so if the note were not charged here, a
+    // full-length typed answer plus a paste would put the verdict past the wire
+    // limit and the daemon would drop it with nothing said on the card.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const before = el.querySelector<HTMLInputElement>('input')!.maxLength;
+
+    await pasteImage(el);
+
+    const after = el.querySelector<HTMLInputElement>('input')!.maxLength;
+    expect(after).toBeLessThan(before);
+    // Exactly the note's length, not merely "smaller" — a vaguer assertion
+    // would pass on any unrelated shrinkage.
+    expect(before - after).toBe(
+      '\n(1 image attached — sent as the next message)'.length,
+    );
+  });
+
+  it('a picture does NOT unlock Submit on a multi-question card', async () => {
+    // One image cannot say which tab it belongs to, so it clears the empty-tab
+    // gate for a LONE question only. Drop the `questions.length === 1` half of
+    // that condition and this card submits with both tabs still empty — the
+    // agent receives an answer to neither.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            { question: 'Which colour?', options: [{ label: 'Red' }] },
+            { question: 'Which size?', options: [{ label: 'Small' }] },
+          ],
+        }}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    // A multi-question card stages its picks, so its button is "Submit answers".
+    expect(buttonNamed(el, 'Submit answers').disabled).toBe(true);
+
+    await pasteImage(el);
+
+    expect(buttonNamed(el, 'Submit answers').disabled).toBe(true);
+  });
+
+  it('a picture alone ANSWERS a lone question', async () => {
+    // "Which of these looks right?" is answered by the picture. Requiring a
+    // typed word alongside it would leave the user with a staged screenshot
+    // and a disabled button, which is the shape of the original complaint.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    expect(buttonNamed(el, 'Answer').disabled).toBe(true);
+
+    await pasteImage(el);
+
+    expect(buttonNamed(el, 'Answer').disabled).toBe(false);
+  });
+
+  it('sends NO third argument when nothing was pasted', async () => {
+    // The arity is load-bearing: `respondApproval` starts a whole extra
+    // message delivery on a non-empty third argument, and an empty array
+    // passed here would post a message carrying nothing at all.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    typeInto(el.querySelector('input')!, 'no picture here');
+    act(() => {
+      buttonNamed(el, 'Answer').click();
+    });
+
+    expect(onRespond).toHaveBeenCalledWith(true, 'no picture here');
   });
 });

@@ -1031,12 +1031,15 @@ describe('ClaudeAdapter — the AskUserQuestion channel', () => {
     });
   });
 
-  it('folds an answer into the tool input as AskUserQuestion `response`', () => {
-    // The probe-verified free-text channel: the answer must ride INSIDE the
-    // tool input claude gets back, with the questions left intact.
+  it('folds a lone question’s answer into AskUserQuestion `answers`', () => {
+    // The answer must ride INSIDE the tool input claude gets back, with the
+    // questions left intact — and on `answers`, keyed by the question's own
+    // text. That is the channel the CLI renders as
+    // `Your questions have been answered: "…"="Blue"`; `response` is the other
+    // one and means the user replied INSTEAD of answering (probed on 2.1.226).
     expect(new ClaudeAdapter().withAnswer(QUESTION_INPUT, 'Blue')).toEqual({
       ...QUESTION_INPUT,
-      response: 'Blue',
+      answers: { [QUESTION_INPUT.questions[0]!.question]: 'Blue' },
     });
   });
 });

@@ -125,7 +125,10 @@ describe('claude question projections', () => {
     expect(labels).toEqual(['ok', 'x'.repeat(MAX_ANSWER_LENGTH)]);
   });
 
-  it('withResponse folds the answer into the tool input as `response`', () => {
+  it('withResponse keeps SEVERAL questions on `response`', () => {
+    // One answer string cannot be split back into two answers without guessing
+    // at a boundary inside the user's own words, so the blob channel is the
+    // honest one until the verdict carries per-question structure.
     expect(withResponse(INPUT, 'Blue')).toEqual({
       ...INPUT,
       response: 'Blue',
@@ -133,5 +136,41 @@ describe('claude question projections', () => {
     // Non-object inputs still produce a schema-shaped answer carrier.
     expect(withResponse(null, 'x')).toEqual({ response: 'x' });
     expect(withResponse('junk', 'x')).toEqual({ response: 'x' });
+  });
+
+  it('withResponse puts a LONE question on the CLI’s `answers` channel', () => {
+    // Probe-verified on 2.1.226: `answers` makes the CLI tell the model
+    // `Your questions have been answered: "Which color?"="Blue"`, keyed per
+    // question, while `response` yields `The user responded: Blue` and
+    // documents itself as a reply given INSTEAD of answering the questions.
+    const lone = { questions: [INPUT.questions[0]] };
+
+    expect(withResponse(lone, 'Blue')).toEqual({
+      ...lone,
+      answers: { 'Which color?': 'Blue' },
+    });
+  });
+
+  it('a lone question keyed by its own TEXT, never by position or header', () => {
+    // The key is what the CLI matches the answer back to its question with —
+    // its `header` ("Color") would silently answer nothing.
+    const answered = withResponse(
+      { questions: [INPUT.questions[0]] },
+      'Blue',
+    ) as { answers: Record<string, string>; response?: string };
+
+    expect(Object.keys(answered.answers)).toEqual(['Which color?']);
+    // And the blob channel stays OUT of it: setting both would have the CLI
+    // discard the per-question list it was just given.
+    expect(answered.response).toBeUndefined();
+  });
+
+  it('a malformed lone-question payload still carries the answer somewhere', () => {
+    // `readQuestions` drops an entry with no question text, so this parses to
+    // ZERO questions — the answer must not vanish with them.
+    expect(withResponse({ questions: [{ options: [] }] }, 'x')).toEqual({
+      questions: [{ options: [] }],
+      response: 'x',
+    });
   });
 });

@@ -22,6 +22,13 @@ export function mapEventToItem(
       return null; // seeds the live plane's window lookup, not a transcript item
     case 'unhandled_control':
       return null; // logged and dropped by AgentAdapter.start — a diagnostic, not a row
+    case 'context_compacted':
+      // Deliberately NOT a `system` row. Compaction is the CLI's own
+      // housekeeping, and a permanent line about it wedged between the user's
+      // messages is noise in the conversation they actually came for. It rides
+      // the ephemeral activity channel instead, where it explains the context
+      // meter's drop at the moment that drop happens and then goes away.
+      return null;
     case 'thinking_progress':
     case 'context_progress':
     case 'text_delta':

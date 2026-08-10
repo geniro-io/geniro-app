@@ -138,10 +138,12 @@ describe('ContextMeter', () => {
     expect(container.textContent).not.toContain('/');
   });
 
-  it('runs green, then yellow, then red — AT the 70% and 90% marks', () => {
+  it('runs green, then yellow, then red — AT the 60% and 90% marks', () => {
     // A traffic light, so the boundaries themselves are the promise: green
-    // below 70, yellow from 70 to under 90, red from 90. Sampling only 50/75/95
-    // would pass with either threshold shifted by several points.
+    // below 60, yellow from 60 to under 90, red from 90. Sampling only 50/75/95
+    // would pass with either threshold shifted by several points — and 70 is
+    // sampled explicitly because it was the previous warn mark, so a revert
+    // fails here rather than passing on a lucky sample.
     const tone = (percent: number): string => {
       render(
         <ContextMeter
@@ -151,7 +153,8 @@ describe('ContextMeter', () => {
       );
       return ring()?.getAttribute('class') ?? '';
     };
-    expect(tone(69)).toContain('text-success');
+    expect(tone(59)).toContain('text-success');
+    expect(tone(60)).toContain('text-warning');
     expect(tone(70)).toContain('text-warning');
     expect(tone(89)).toContain('text-warning');
     expect(tone(90)).toContain('text-destructive');

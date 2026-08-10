@@ -848,6 +848,22 @@ export class ChatService {
               );
               return;
             }
+            if (event.type === 'context_compacted') {
+              // Says it HAPPENED, never that it is happening: the CLI reports
+              // only its post-compaction boundary (see
+              // `CLAUDE_COMPACT_BOUNDARY_SUBTYPE`). Announced rather than
+              // persisted because the thing it explains is momentary — the
+              // context meter dropping by most of the window between one
+              // request and the next, which with nothing said reads as the
+              // meter being broken. The next tool call replaces this phrase.
+              this.announceActivity(
+                runId,
+                event.trigger === 'manual'
+                  ? 'compacted the conversation'
+                  : 'compacted the conversation to free up context',
+              );
+              return;
+            }
             // Anything durable ends a silent reasoning stretch — the tool call
             // the model went quiet to prepare is the commonest one, and it
             // carries no text delta to close it (see `endThinking`). Before the

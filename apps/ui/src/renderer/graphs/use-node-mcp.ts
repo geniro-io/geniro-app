@@ -185,6 +185,10 @@ export function useNodeMcp(
                 listing: {
                   servers: [],
                   unavailableReason: message,
+                  // Null for the same reason as the chat hook's copy: the note
+                  // is the daemon's statement about a CLI, and this listing
+                  // stands in for an answer that never arrived.
+                  interactiveOnlyNote: null,
                   // Settled: the request failed rather than being deferred, so
                   // there is no running read to come back for.
                   pending: false,

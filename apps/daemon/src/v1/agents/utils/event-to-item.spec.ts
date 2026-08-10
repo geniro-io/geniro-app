@@ -31,6 +31,21 @@ describe('mapEventToItem', () => {
     ).toBeNull();
   });
 
+  it('drops a compaction boundary — housekeeping, not a line in the conversation', () => {
+    // Asserted because the default is the opposite: `notice` DOES become a
+    // `system` row, so mapping compaction that way is the obvious mistake, and
+    // it would wedge a permanent "compacted" line between the user's messages.
+    // The event is announced as momentary activity instead.
+    expect(
+      mapEventToItem({
+        type: 'context_compacted',
+        trigger: 'auto',
+        preTokens: 180_000,
+        postTokens: 32_000,
+      }),
+    ).toBeNull();
+  });
+
   it('maps text to an assistant message row', () => {
     expect(mapEventToItem({ type: 'text', text: 'hello there' })).toEqual({
       kind: 'message',

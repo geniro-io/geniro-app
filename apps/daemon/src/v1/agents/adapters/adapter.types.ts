@@ -208,6 +208,34 @@ export type AgentEvent =
     }
   | {
       /**
+       * The CLI compacted the conversation — it summarised the history and
+       * carried on with a much smaller context.
+       *
+       * REPORTS THE PAST, NOT THE PRESENT. The CLI serialises only its
+       * post-compaction boundary; the events driving its own
+       * "Compacting conversation…" spinner stay internal (see
+       * `CLAUDE_COMPACT_BOUNDARY_SUBTYPE` for the binary evidence). So this
+       * says "it happened", never "it is happening", and no consumer may
+       * render it as an in-progress state.
+       *
+       * Worth reporting anyway because the alternative is a mystery: the
+       * context meter drops by most of the window between one request and the
+       * next, and with nothing to explain it that reads as a bug in the meter.
+       *
+       * EPHEMERAL — never a transcript row. A `system` item saying "compacted"
+       * is housekeeping the user did not ask for, in the middle of the
+       * conversation they did.
+       */
+      type: 'context_compacted';
+      /** `auto` (the window filled) or `manual` (`/compact`); null if unstated. */
+      trigger: string | null;
+      /** Context size before the compaction, when the CLI reports it. */
+      preTokens: number | null;
+      /** Context size after it, when the CLI reports it. */
+      postTokens: number | null;
+    }
+  | {
+      /**
        * The CLI sent a control message on the stdin dialogue that this adapter
        * does not model, carrying the subtype it was.
        *
@@ -1058,6 +1086,20 @@ export interface AdapterConfig {
      */
     readonly toggleUnavailableReason: string | null;
     /**
+     * What this CLI loads in its OWN interactive session that a headless turn
+     * never gets — the sentence the panel shows under the rows — or null when
+     * there is no such difference.
+     *
+     * This exists because a LISTING cannot say it. The panel is complete for
+     * the turns geniro actually runs, and the user compares it against their
+     * terminal's `/mcp`, which shows more; with nothing said, the only
+     * available conclusion is that geniro lost some rows. Stating the gap is
+     * the whole fix — the missing servers must NOT be listed, because they are
+     * genuinely not loaded and a row for one would promise tools the agent
+     * does not have.
+     */
+    readonly interactiveOnlyNote: string | null;
+    /**
      * Why a row the user turned down in their OWN config carries no switch.
      *
      * The one remaining reason a switchable CLI still shows a locked row: the
@@ -1106,6 +1148,32 @@ export interface AdapterConfig {
      * stops a node's `pluginDir` being validated, refused, or spawned for an
      * agent that would ignore it — geniro becoming the silent one is exactly
      * the failure the field exists to prevent.
+     */
+    readonly unavailableReason: string | null;
+  };
+
+  // ── A message into a turn that is already running ───────────────────────
+  /**
+   * Whether this CLI can be handed a user message MID-TURN — the fact behind
+   * `buildFollowUpPayload`, lifted into config so it can be reported.
+   *
+   * The method alone could never answer this for the renderer: it is
+   * `protected`, per-turn, and only tells you what happened AFTER a message was
+   * already written. The composer needs to know BEFORE it offers the control,
+   * because the queue's "send now" is exactly this capability and an agent
+   * without it must not be offered a button that silently parks the message.
+   *
+   * MUST agree with `buildFollowUpPayload`: null here promises the override
+   * exists. The two are pinned together in `agent-adapter.spec.ts` — a config
+   * claiming a channel the adapter never implements would have the composer
+   * promise immediate delivery and the daemon answer RUN_BUSY.
+   */
+  readonly followUp: {
+    /**
+     * Why this CLI cannot take a message into a running turn, or `null` when it
+     * can. A SENTENCE, like the two reasons above, because the renderer shows
+     * it on the disabled control — "not available" with no cause is the silent
+     * refusal these fields exist to replace.
      */
     readonly unavailableReason: string | null;
   };

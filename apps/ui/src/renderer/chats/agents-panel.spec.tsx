@@ -210,6 +210,30 @@ describe('AgentsPanel', () => {
     expect(reviewer.textContent).not.toContain('ctx');
   });
 
+  it('shows a parked agent as “needs more info”, not the raw status key', () => {
+    // Two halves of the same defect. The panel printed `{agent.status}`
+    // verbatim, so this row read `needs-input` — a slug, which is exactly why
+    // `label` was added to RUN_STATUS_META. And the panel was fed by a SECOND
+    // status rule that took no `awaitingAnswer` and so could never produce this
+    // state at all: the header said "needs more info" while the panel beside it
+    // said "running", about the same chat at the same instant.
+    const parked: AgentDisplay = { ...agents[1]!, status: 'needs-input' };
+    const el = render(
+      <AgentsPanel
+        interactiveTerminalAgents={INTERACTIVE}
+        agents={[parked]}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(el.textContent).toContain('needs more info');
+    expect(el.textContent).not.toContain('needs-input');
+    // And it must not read as another shade of busy — the one state that will
+    // not advance without the user carries no spinner.
+    expect(el.querySelector('svg.animate-spin')).toBeNull();
+  });
+
   it('expanding an agent lists its threads; per-thread terminals need claude + a session', () => {
     const onOpenThread = vi.fn();
     const el = render(
@@ -382,6 +406,7 @@ describe('AgentsPanel — MCP servers', () => {
   const claudeListing: AgentMcpListing = {
     unavailableReason: null,
     pending: false,
+    interactiveOnlyNote: null,
     servers: [
       {
         name: 'sentry',
@@ -662,6 +687,7 @@ describe('AgentsPanel — MCP servers', () => {
                 unavailableReason:
                   'could not read MCP servers — cursor-agent did not answer',
                 pending: false,
+                interactiveOnlyNote: null,
               },
             ],
           ])
@@ -693,7 +719,12 @@ describe('AgentsPanel — MCP servers', () => {
           new Map<string, AgentMcpListing>([
             [
               scope('claude'),
-              { servers: [], unavailableReason: null, pending: false },
+              {
+                servers: [],
+                unavailableReason: null,
+                pending: false,
+                interactiveOnlyNote: null,
+              },
             ],
           ])
         }
@@ -808,6 +839,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     return {
       unavailableReason: null,
       pending: false,
+      interactiveOnlyNote: null,
       servers: [
         {
           name,
@@ -892,6 +924,7 @@ describe('AgentsPanel — MCP toggle', () => {
     return {
       unavailableReason: null,
       pending: false,
+      interactiveOnlyNote: null,
       servers: [
         {
           target: 'node x.js',

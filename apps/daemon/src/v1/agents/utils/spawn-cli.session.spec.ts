@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent } from '../adapters/adapter.types';
-import { runCliSession, runHeadlessCli } from './spawn-cli';
+import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -31,7 +31,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
 
 function openSession(
   child?: Parameters<typeof fakeSpawn>[0],
-  logger?: { warn(message: string): void },
+  logger?: SessionLogger,
 ) {
   const { spawn, child: c, captured } = fakeSpawn(child);
   const session = runCliSession({
@@ -469,5 +469,299 @@ describe('runHeadlessCli keeps the one-turn contract', () => {
 
     expect(child.stdin.written).toBe('PROMPT\n');
     expect(child.stdin.ended).toBe(true);
+  });
+});
+
+/**
+ * The D1 state: the process outlives the turn geniro was tracking and keeps
+ * working. Measured across the author's own `geniro.db` — 1589 of 4505 tool
+ * results arrived with no turn in flight, carrying 165 of the 181
+ * `Tool permission request failed: ... Stream closed` failures (10.4% against
+ * 0.5% inside an open turn).
+ */
+describe('an event arriving between turns', () => {
+  /** `{ask:<id>}` becomes a permission request; `{done:true}` ends the turn. */
+  const askOrDone = (obj: unknown): AgentEvent[] => {
+    const row = obj as { done?: boolean; ask?: string };
+    if (row.done === true) {
+      return [COMPLETE];
+    }
+    if (typeof row.ask === 'string') {
+      return [
+        { type: 'approval_request', id: row.ask, toolName: 'Edit', input: {} },
+      ];
+    }
+    return [];
+  };
+
+  /** As `askOrDone`, but the request is the CLI's question tool. */
+  const questionOrDone = (obj: unknown): AgentEvent[] => {
+    const row = obj as { done?: boolean; ask?: string };
+    if (row.done === true) {
+      return [COMPLETE];
+    }
+    if (typeof row.ask === 'string') {
+      return [
+        {
+          type: 'approval_request',
+          id: row.ask,
+          toolName: 'AskUserQuestion',
+          input: {},
+        },
+      ];
+    }
+    return [];
+  };
+
+  // `questionToolName` is declared on every session here even though this
+  // mapper emits a PERMISSION tool: that is what makes the refusal tests below
+  // prove a discrimination rather than the absence of one. Without it they
+  // would pass just as well if the question branch swallowed everything.
+  function sessionAskingAfterSettle(
+    logger: SessionLogger,
+    mapper: (obj: unknown) => AgentEvent[] = askOrDone,
+  ) {
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper,
+      spawn,
+      logger,
+      questionToolName: 'AskUserQuestion',
+    });
+    return { session, child };
+  }
+
+  it('leaves an orphaned QUESTION unanswered instead of denying it in the user’s name', async () => {
+    // The refusal beside this encodes `allow: false`, which reaches claude as
+    // `{behavior:'deny', message:'Denied by the user in Geniro'}`. An
+    // AskUserQuestion rides the SAME `approval_request` channel, so refusing it
+    // answers the user's question for them, over their name, and they never see
+    // it was asked. Parked it merely stalls — which is the honest state, and
+    // what it did before the refusal existed.
+    //
+    // Keyed on the tool NAME the adapter declares, never on a payload flag: a
+    // future interactive tool must not be able to slip past a human gate
+    // through version drift.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    line(child, { ask: 'q-1' });
+
+    // Nothing at all on stdin — not a denial, not anything.
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe('');
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'left unanswered',
+    );
+    expect(session.alive).toBe(true);
+  });
+
+  it('REFUSES an orphaned approval_request instead of dropping it', async () => {
+    // Dropping is not neutral: the CLI is blocked on a verdict that, with no
+    // turn, nothing will ever send. Denying is the only answer correct in every
+    // approval mode — it cannot grant a permission nobody is there to approve,
+    // and it unblocks the CLI. The observable is the verdict ON STDIN.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger);
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    // The process is still alive and now asks about work no turn owns.
+    line(child, { ask: 'req-1' });
+
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe(
+      'VERDICT req-1 false\n',
+    );
+    expect(session.alive).toBe(true);
+  });
+
+  it('tells the NEXT turn about the parked question, once', async () => {
+    // A turn owns `onEvent`, so at the moment the question arrived there was
+    // nothing to show it to and it lived only in the daemon log. Parking does
+    // not unblock the CLI the way the refusal did, so the NEXT turn is the one
+    // that inherits a blocked process and falls silent — which makes it exactly
+    // where the sentence explaining the silence belongs.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await first?.done;
+
+    line(child, { ask: 'q-1' });
+
+    const events: AgentEvent[] = [];
+    const second = session.startTurn({
+      onEvent: (event) => events.push(event),
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'notice',
+        message: expect.stringContaining('between turns'),
+      }),
+    ]);
+
+    // Drained, not copied — a turn after this one must not repeat it.
+    line(child, { done: true });
+    await second?.done;
+    const later: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => later.push(event) });
+    expect(later).toEqual([]);
+  });
+
+  it('names the tool and the request id, so the line can be joined to a transcript row', () => {
+    // The message this replaces said only `dropped a 'approval_request' event
+    // arriving between turns` — no tool, no id, no way to correlate it with
+    // anything. That gap is why the 239 real occurrences had to be found by SQL.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger);
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    void turn?.done;
+    logger.warn.mockClear();
+
+    line(child, { ask: 'req-7' });
+
+    const message = logger.warn.mock.calls.map(String).join('\n');
+    expect(message).toContain('Edit');
+    expect(message).toContain('req-7');
+    expect(message).toContain('refused');
+  });
+
+  it('says so when it CANNOT refuse — the CLI is then genuinely parked', () => {
+    // A turn whose CLI has no approval protocol leaves no encoder behind, so
+    // there is nothing to answer with. That is worth a different sentence: the
+    // silent version of this is a wedged agent with no trace of why.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger);
+    const turn = session.startTurn({ onEvent: () => {} }); // no encoder
+    line(child, { done: true });
+    void turn?.done;
+    logger.warn.mockClear();
+
+    line(child, { ask: 'req-9' });
+
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'could NOT be refused',
+    );
+    expect(child.stdin.written).toBe('');
+  });
+
+  it('still merely DROPS a non-approval event — one turn must not inherit another turn output', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: (obj) => {
+        const row = obj as { done?: boolean; text?: string };
+        if (row.done === true) {
+          return [COMPLETE];
+        }
+        return row.text === undefined
+          ? []
+          : [{ type: 'text_delta', text: row.text }];
+      },
+      spawn,
+      logger,
+    });
+    const turn = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    void turn?.done;
+    logger.warn.mockClear();
+
+    line(child, { text: 'stray' });
+
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      "dropped a 'text_delta' event",
+    );
+    expect(child.stdin.written).toBe('');
+  });
+});
+
+describe('the account the transport keeps of itself', () => {
+  it('records a DELIVERED verdict, not only the failures', async () => {
+    // Recording only failures is what made the D1 ratio unobtainable from logs:
+    // "how often is a verdict actually delivered" has no answer unless the
+    // delivered ones are written down too.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: (obj) => {
+        const row = obj as { done?: boolean; ask?: string };
+        if (row.done === true) {
+          return [COMPLETE];
+        }
+        return typeof row.ask === 'string'
+          ? [
+              {
+                type: 'approval_request',
+                id: row.ask,
+                toolName: 'Bash',
+                input: {},
+              },
+            ]
+          : [];
+      },
+      spawn,
+      logger,
+    });
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { ask: 'req-2' });
+
+    expect(turn?.respondApproval('req-2', true, {})).toBe(true);
+
+    const debugged = logger.debug.mock.calls.map(String).join('\n');
+    expect(debugged).toContain('req-2');
+    expect(debugged).toContain('allowed');
+    expect(debugged).toContain('written to stdin');
+    // …and the round-trip is timed against when the request was RAISED.
+    expect(debugged).toMatch(/\d+ms after it was raised/);
+    line(child, { done: true });
+    await turn?.done;
+  });
+
+  it('names WHY a turn settled, which no record carried before', async () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = openSession(undefined, logger);
+    const turn = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await turn?.done;
+
+    const debugged = logger.debug.mock.calls.map(String).join('\n');
+    expect(debugged).toContain('turn opened');
+    expect(debugged).toContain("turn settled (terminal event 'turn_complete')");
   });
 });

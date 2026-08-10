@@ -4524,3 +4524,300 @@ describe('Chats — the MCP read waits to be asked, on every chat', () => {
     expect(agentsApi.listAgentMcpServers).not.toHaveBeenCalled();
   });
 });
+
+describe('Chats — the open thread lays its composer out differently', () => {
+  /**
+   * Document-order index of an element, so a test can state "A comes before B"
+   * about controls that live in different rows of the composer. Reading the
+   * ORDER is the only way to pin this: every one of these controls renders
+   * either way, so an existence check passes with the layout reverted.
+   */
+  function order(
+    container: HTMLElement,
+    el: Element | null | undefined,
+  ): number {
+    const all = [...container.querySelectorAll('*')];
+    const index = el ? all.indexOf(el) : -1;
+    expect(index, 'element not found in the composer').toBeGreaterThanOrEqual(
+      0,
+    );
+    return index;
+  }
+
+  const approvalTrigger = (
+    container: HTMLElement,
+  ): HTMLButtonElement | undefined =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((t) => t.getAttribute('aria-label') === 'Tool-approval mode');
+
+  const contextRing = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector<HTMLElement>('button[aria-label^="Context "]');
+
+  const folderChip = (container: HTMLElement): HTMLElement | undefined =>
+    [...container.querySelectorAll<HTMLElement>('[data-slot="chip"]')].find(
+      (el) => el.getAttribute('title') === '/proj',
+    );
+
+  it('runs effort → auto-approve → context, so approval sits with the per-turn controls', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // The ring renders only once a turn has reported a window, and it is the
+    // right-hand anchor of the order being pinned.
+    await act(async () => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: 'working',
+        thinkingTokens: null,
+        ...LIVE_DELTA_REST,
+        contextTokens: 120_000,
+        contextWindowTokens: 200_000,
+      });
+    });
+
+    const effort = effortTrigger(container);
+    const approval = approvalTrigger(container);
+    const ring = contextRing(container);
+    expect(effort, 'effort chip').toBeDefined();
+    expect(approval, 'approval chip').toBeDefined();
+    expect(ring, 'context ring').not.toBeNull();
+
+    // The approval chip used to sit in the identity row ABOVE the textarea,
+    // which put it before model and effort in document order. Asserting it now
+    // falls BETWEEN effort and the ring is what fails if it moves back up.
+    expect(order(container, effort)).toBeLessThan(order(container, approval));
+    expect(order(container, approval)).toBeLessThan(order(container, ring));
+  });
+
+  it('puts the folder chip after Send, not in the row above the textarea', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const send = composerButton(container, 'Send');
+    const folder = folderChip(container);
+    expect(folder, 'folder chip').toBeDefined();
+    expect(send, 'send button').not.toBeNull();
+    // Order, not presence: the chip existed in the old layout too — it just sat
+    // above the textarea, i.e. BEFORE Send. This is the assertion that flips.
+    expect(order(container, send)).toBeLessThan(order(container, folder));
+    // Still carries its full-path tooltip after the move.
+    expect(folder?.getAttribute('title')).toBe('/proj');
+  });
+
+  it('shows no branch control once a thread is open, even in a real repo', async () => {
+    // The thread's branch chip was read-only — a run's turns all execute
+    // against the tree it started on — so it stated live repo state it could
+    // never act on. The new-run composer is where a branch is chosen.
+    //
+    // The fixture MUST opt into a repo: `getGitInfo` defaults to
+    // `isRepo: false`, and `BranchSelect` renders null for a non-repo, so the
+    // assertion below would hold with the chip fully restored — a false pin.
+    // And the read-only branch chip is a `Chip` carrying an "On branch …"
+    // title, NOT the `aria-label="Git branch"` the interactive Select uses, so
+    // that is what has to be looked for.
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: false,
+    });
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const branchChips = [
+      ...container.querySelectorAll<HTMLElement>('[data-slot="chip"]'),
+    ].filter((el) => el.getAttribute('title')?.startsWith('On branch'));
+    expect(branchChips).toEqual([]);
+    expect(container.textContent).not.toContain('main');
+  });
+});
+
+describe('Chats — what the status badge says the run is doing', () => {
+  /** The header's status word (the run label's sibling, not a sidebar row). */
+  function headerStatus(container: HTMLElement): string {
+    const header = container.querySelector('h2')!.parentElement!;
+    return header.textContent ?? '';
+  }
+
+  it('reads "needs more info" while a card is waiting on the user', async () => {
+    // The daemon's row still says `running` — the turn IS open, parked on the
+    // card — so every signal the header used to read says "busy". A spinner
+    // there points at the agent when the thing being waited on is the person
+    // looking at the screen.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(headerStatus(container)).toContain('needs more info');
+    expect(headerStatus(container)).not.toContain('running');
+  });
+
+  it('goes back to running once the card is answered', async () => {
+    // The other half: `needs-input` must be derived from a LIVE unanswered
+    // card, not latched. A verdict for the same request id retires it.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+      {
+        id: 'v1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 2,
+        kind: 'approval_verdict',
+        role: null,
+        payload: { id: 'req-1', allow: true },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(headerStatus(container)).not.toContain('needs more info');
+    expect(headerStatus(container)).toContain('running');
+  });
+
+  it('never shows completed while the live plane is still streaming', async () => {
+    // A snapshot refetch landing after a fresher event re-asserts a stale
+    // `completed` — the reported flicker. Simulated here by the client-wide
+    // run_status broadcast arriving mid-turn, which is the same write.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(headerStatus(container)).toContain('running');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
+    });
+
+    // The row now holds `completed`; the badge must not repeat it, because no
+    // terminal item has arrived and the turn is still in flight.
+    expect(headerStatus(container)).toContain('running');
+    expect(headerStatus(container)).not.toContain('completed');
+  });
+});
+
+describe('Chats — the open question is pinned, not scrolled away', () => {
+  const pinned = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-slot="pinned-request"]');
+
+  const transcript = (container: HTMLElement): HTMLElement =>
+    container.querySelector<HTMLElement>('[data-slot="pinned-request"]')!
+      .previousElementSibling as HTMLElement;
+
+  it('lifts the open card out of the transcript and leaves a marker in its slot', async () => {
+    // Two live copies of one card would put two sets of buttons over a
+    // one-shot verdict channel; no copy at all would drop a row out of the
+    // conversation's order. Exactly one live card, and a marker where it sat.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(pinned(container)).not.toBeNull();
+    expect(pinned(container)!.textContent).toContain('Approve');
+    // Exactly one Approve on screen — the transcript slot holds the marker.
+    expect(
+      [...container.querySelectorAll('button')].filter(
+        (b) => b.textContent === 'Approve',
+      ),
+    ).toHaveLength(1);
+    expect(transcript(container).textContent).toContain(
+      'the card is pinned below',
+    );
+  });
+
+  it('unpins as soon as the request is answered', async () => {
+    // The pin follows OPEN-ness, not existence: a settled card is transcript
+    // history and must go back to its place in the flow.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+      {
+        id: 'v1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 2,
+        kind: 'approval_verdict',
+        role: null,
+        payload: { id: 'req-1', allow: true },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(pinned(container)).toBeNull();
+    expect(container.textContent).not.toContain('the card is pinned below');
+    // ...and the settled row is back in the transcript.
+    expect(container.textContent).toContain('✓ approved');
+  });
+
+  it('pins the NEWEST open request when several are outstanding', async () => {
+    // With more than one open, the turn is blocked on the latest — pinning the
+    // oldest would park the user on a question that is no longer the holdup.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-old'),
+      {
+        ...approval('r1', 2, 'req-new'),
+        payload: {
+          id: 'req-new',
+          toolName: 'Bash',
+          input: { command: 'ls /newest' },
+        },
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(pinned(container)!.textContent).toContain('ls /newest');
+    expect(pinned(container)!.textContent).not.toContain('/tmp/a');
+  });
+
+  it('survives leaving the chat and coming back', async () => {
+    // The reported "the block disappears when I switch chats". The pin is
+    // derived from the persisted items, so re-entering the run must restore
+    // it with no new state to rehydrate.
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Other chat' },
+    ]);
+    api.listRunItems.mockImplementation(
+      ({ runId }: { runId: string }): Promise<ChatItem[]> =>
+        Promise.resolve(
+          runId === 'r1'
+            ? [msg(0, 'user', 'hi'), approval('r1', 1, 'req-1')]
+            : [],
+        ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat');
+    expect(pinned(container)).not.toBeNull();
+
+    await clickRun(container, 'Other chat');
+    expect(pinned(container)).toBeNull();
+
+    await clickRun(container, 'My chat');
+    expect(pinned(container)).not.toBeNull();
+  });
+});

@@ -8,7 +8,13 @@ import { cn } from '../components/ui/utils';
  * each its own chrome once and for all — the transcript never re-picks bubble
  * styling by hand. `data-role` is the stable hook the Chats tests query.
  */
-const bubbleVariants = cva('flex flex-col gap-1 rounded-xl text-sm', {
+// `min-w-0` is load-bearing, not tidiness: the bubble is a flex ITEM of the
+// transcript column, so its default `min-width: auto` is its content's
+// min-content width — and CSS resolves min-width ABOVE max-width. One
+// unbreakable token (a pasted URL) therefore pushed the bubble past its own
+// `max-w-[76%]` and out of the column. The children's own `min-w-0` cannot fix
+// it; the item that refuses to shrink is this one.
+const bubbleVariants = cva('flex min-w-0 flex-col gap-1 rounded-xl text-sm', {
   variants: {
     variant: {
       // The user/assistant pair mirrors geniro web's ChatBubble classes

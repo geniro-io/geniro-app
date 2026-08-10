@@ -79,8 +79,10 @@ import {
   liveTextKey,
 } from './live-text';
 import { AttachmentLoaderContext } from './message-attachments';
+import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
 import { formatClockTime } from './relative-time';
+import { displayRunStatus } from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
@@ -1404,11 +1406,10 @@ export function Chats({
    * re-derived, so a card that shows as answered can never still count as
    * waiting here.
    */
-  const awaitingAnswer = useMemo(() => {
-    const keys = new Set<string>();
-    for (const item of items) {
+  const openRequestId = useCallback(
+    (item: ChatItem): string | null => {
       if (item.kind !== 'approval_request') {
-        continue;
+        return null;
       }
       const id = payloadString(item.payload, 'id');
       if (
@@ -1417,12 +1418,76 @@ export function Chats({
         unanswerableIds.has(id) ||
         deadRequestKeys.has(`${item.runId}:${id}`)
       ) {
-        continue;
+        return null;
       }
-      keys.add(liveTextKey(item.nodeId));
+      return id;
+    },
+    [verdicts, unanswerableIds, deadRequestKeys],
+  );
+  const awaitingAnswer = useMemo(() => {
+    const keys = new Set<string>();
+    for (const item of items) {
+      if (openRequestId(item) !== null) {
+        keys.add(liveTextKey(item.nodeId));
+      }
     }
     return keys;
-  }, [items, verdicts, unanswerableIds, deadRequestKeys]);
+  }, [items, openRequestId]);
+  /**
+   * The one open card, lifted OUT of the transcript and pinned above the
+   * composer.
+   *
+   * A card rendered in transcript order scrolls away like any other row, so a
+   * long turn leaves the agent parked on a question the user cannot see —
+   * "it is waiting for an answer but the block is hanging somewhere above".
+   * Worse, nothing on screen then explains why the run has gone quiet.
+   *
+   * The LAST open one, not the first: with several open at once the newest is
+   * the one the turn is actually blocked on. Only one is pinned, and it is
+   * rendered in exactly one place — the transcript leaves a marker in its slot
+   * instead of a second live copy, because two sets of buttons over one
+   * one-shot verdict channel is a race the card cannot win.
+   *
+   * Derived from the persisted items, so it survives a chat switch and a
+   * reload the same way the transcript does.
+   */
+  const pinnedRequest = useMemo(() => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index]!;
+      if (openRequestId(item) !== null) {
+        return item;
+      }
+    }
+    return null;
+  }, [items, openRequestId]);
+  /**
+   * ONE card builder for both placements — the pinned slot and the settled
+   * transcript row. The two differ only in WHERE they hang, and a second copy
+   * of this JSX is how the pinned card would come to accept an answer the
+   * transcript row could not show.
+   */
+  const approvalCardFor = useCallback(
+    (item: ChatItem): React.JSX.Element => {
+      const requestId = payloadString(item.payload, 'id');
+      return (
+        <ApprovalCard
+          toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
+          input={(item.payload as { input?: unknown } | null)?.input ?? null}
+          verdict={requestId ? (verdicts.get(requestId) ?? null) : null}
+          expired={
+            requestId !== null &&
+            (unanswerableIds.has(requestId) ||
+              // A DIFFERENT plane, deliberately kept: the live verdict_ack
+              // round-trip, which is what corrects a card the daemon never got
+              // to annotate.
+              deadRequestKeys.has(`${item.runId}:${requestId}`))
+          }
+          onRespond={(allow, answer) => respondApproval(item, allow, answer)}
+        />
+      );
+    },
+    [verdicts, unanswerableIds, deadRequestKeys, respondApproval],
+  );
 
   /**
    * When the turn currently in flight started — the header's running clock.
@@ -1495,18 +1560,19 @@ export function Chats({
   // Same scoping as the models above — whichever CLI the visible composer is
   // about, or none at all for a workflow target.
   const agentEfforts = useAgentEfforts(agentsApi, modelKind);
-  // Two independent git reads, because the two composers watch two different
-  // folders: the landing composer follows the folder picked for the NEXT run,
-  // the transcript composer the cwd its run was created with.
+  // ONE git read: the landing composer's, following the folder picked for the
+  // NEXT run — the only place a branch is chosen. The transcript composer used
+  // to run a second read for a read-only branch chip beside its own cwd; that
+  // chip is gone, and keeping the read alive would mean an IPC call per run
+  // whose only surviving effect was an error strip about a control nobody sees.
   const git = useGitInfo(folder);
-  const runGit = useGitInfo(activeRun?.cwd ?? null);
   // What each composer's error strip shows. The screen-level `error` wins, then
   // the shared attachment reader, then that composer's own git read — and the
   // strip is rendered from exactly this value, so a lone attachment failure
   // cannot be computed into the text of a strip whose visibility never
   // considered it (it was, and stayed invisible).
   const composerError = error ?? attachments.error ?? git.error;
-  const transcriptError = error ?? attachments.error ?? runGit.error;
+  const transcriptError = error ?? attachments.error;
   /**
    * Close the strip. Every source is cleared, not just the one on top: they are
    * layered, so clearing only `error` would swap one stale failure for an older
@@ -1516,7 +1582,6 @@ export function Chats({
     setError(null);
     attachments.clearError();
     git.clearError();
-    runGit.clearError();
   };
   const skillQuery = slashQuery(input);
   const skillMatches = useMemo(
@@ -1693,6 +1758,26 @@ export function Chats({
     }
     return keys;
   }, [activeRun, activity, awaitingAnswer, streaming]);
+  /**
+   * The badge for the run currently on screen.
+   *
+   * Only the ACTIVE run gets this treatment, and that is a limit of what is
+   * knowable rather than an oversight: `streaming` and `awaitingAnswer` are both
+   * derived from the open transcript's items, and the renderer holds no items
+   * for a chat it is not looking at. A background row keeps the daemon's own
+   * status, which the client-wide `run_status` broadcast already keeps honest.
+   */
+  const activeRunStatus = useMemo(
+    () =>
+      activeRun
+        ? displayRunStatus({
+            status: activeRun.status,
+            streaming,
+            awaitingAnswer: awaitingAnswer.size > 0,
+          })
+        : 'idle',
+    [activeRun, streaming, awaitingAnswer],
+  );
   /**
    * The DURABLE fold, memoized on the items alone.
    *
@@ -2037,7 +2122,9 @@ export function Chats({
                     active={run.id === activeRunId}
                     label={runLabel(run, workflowNames)}
                     isWorkflow={run.workflowId != null}
-                    status={run.status}
+                    status={
+                      run.id === activeRunId ? activeRunStatus : run.status
+                    }
                     lastMessage={run.lastMessage}
                     lastActivityAt={run.updatedAt}
                     activity={activities.get(run.id) ?? null}
@@ -2266,7 +2353,7 @@ export function Chats({
                   label={runLabel(activeRun, workflowNames)}
                   isWorkflow={activeRun.workflowId != null}
                   agentKind={activeRun.agentKind}
-                  status={activeRun.status}
+                  status={activeRunStatus}
                   lastActivityAt={activeRun.updatedAt}
                   turnStartedAt={turnStartedAt}
                   sidePanelOpen={agentsPanelOpen}
@@ -2318,37 +2405,23 @@ export function Chats({
                     );
                   }
                   const item = entry.item;
-                  const requestId = payloadString(item.payload, 'id');
+                  // The pinned card is THIS row, moved. Leaving the live card
+                  // here too would put two sets of buttons over one one-shot
+                  // verdict channel; leaving nothing would silently drop a row
+                  // out of the conversation's order. A marker keeps the place.
+                  if (pinnedRequest?.id === item.id) {
+                    return (
+                      <MessageBubble key={item.id} variant="note">
+                        ❓ waiting on your answer — the card is pinned below
+                      </MessageBubble>
+                    );
+                  }
                   const askerName =
                     (item.nodeId
                       ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
                       : activeRun?.agentKind) ?? 'agent';
                   const card = (
-                    <div className="w-full">
-                      <ApprovalCard
-                        toolName={
-                          payloadString(item.payload, 'toolName') ?? 'tool'
-                        }
-                        input={
-                          (item.payload as { input?: unknown } | null)?.input ??
-                          null
-                        }
-                        verdict={
-                          requestId ? (verdicts.get(requestId) ?? null) : null
-                        }
-                        expired={
-                          requestId !== null &&
-                          (unanswerableIds.has(requestId) ||
-                            // A DIFFERENT plane, deliberately kept: the live
-                            // verdict_ack round-trip, which is what corrects a
-                            // card the daemon never got to annotate.
-                            deadRequestKeys.has(`${item.runId}:${requestId}`))
-                        }
-                        onRespond={(allow, answer) =>
-                          respondApproval(item, allow, answer)
-                        }
-                      />
-                    </div>
+                    <div className="w-full">{approvalCardFor(item)}</div>
                   );
                   // A solo agent's card needs no identity frame either.
                   return soloAgent ? (
@@ -2365,6 +2438,24 @@ export function Chats({
                 })}
                 <div ref={transcriptEndRef} />
               </div>
+
+              {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
+                  still belongs to the scrolled content, so it can be scrolled
+                  past and it overlaps the messages it floats above. Here the
+                  card is a sibling of the transcript and the composer, which
+                  makes "always visible while a question is open" a layout
+                  fact rather than a scroll-position accident.
+
+                  It sits ABOVE the composer because that is where the answer
+                  gets typed — the question and the reply belong on the same
+                  edge of the screen. */}
+              {pinnedRequest ? (
+                <div
+                  data-slot="pinned-request"
+                  className="shrink-0 border-t border-border bg-card/60 px-4 py-3">
+                  {approvalCardFor(pinnedRequest)}
+                </div>
+              ) : null}
 
               {transcriptError ? (
                 <ErrorBanner
@@ -2455,28 +2546,25 @@ export function Chats({
                     />
                   ) : null}
                   <ComposerTopRow>
-                    {/* Informational run-identity chips — static Chips carrying
-                      no chevron, never disabled Buttons: disabled kills hover
-                      (so the cwd title tooltip could never fire) and 50%
-                      opacity drops the text below AA contrast.
+                    {/* Only a workflow's trigger is left above the text, so for
+                      a single-agent thread this row collapses entirely
+                      (`empty:hidden`) and the card sits directly under the
+                      transcript.
 
-                      The agent (and, for a workflow, its name) is NOT among
-                      them: it is fixed for the run's whole life, so it belongs
-                      to the header's identity line, not to a row of controls
-                      that change things. */}
-                    {activeRun?.cwd ? (
-                      <Chip title={activeRun.cwd} className="max-w-52">
-                        <FolderOpen />
-                        <span className="truncate">
-                          {folderName(activeRun.cwd)}
-                        </span>
-                      </Chip>
-                    ) : null}
-                    {/* Read-only: the branch is live repo state, but a run's
-                      turns are all against the tree it started on, so switching
-                      it under an open transcript would silently re-point the
-                      work. The new-run composer above is where it is chosen. */}
-                    <BranchSelect info={runGit.info} readOnly />
+                      The three chips that used to live here moved INTO the
+                      card, because in an open thread none of them is what the
+                      row was built for. The row states what is still to be
+                      DECIDED about the run; in a thread the folder is already
+                      decided and unchangeable, so it reads better as a caption
+                      beside the actions, and the approval posture is a live
+                      per-turn control that belongs beside model and effort. The
+                      branch chip is gone outright: it was read-only anyway, and
+                      naming live repo state under a transcript whose turns all
+                      run against the tree the run STARTED on only invited a
+                      switch the control could not perform.
+
+                      The agent is not here either — fixed for the run's whole
+                      life, so it belongs to the header's identity line. */}
                     {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
                       <Chip>
                         <Zap />
@@ -2484,29 +2572,6 @@ export function Chats({
                           {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
                         </span>
                       </Chip>
-                    ) : null}
-                    {activeRun &&
-                    activeRun.workflowId === null &&
-                    activeRun.agentKind ? (
-                      /* The permission posture belongs with what the run
-                        IS, not with how this turn thinks — and it is
-                        editable at any time, mid-turn included: the daemon
-                        hands the change to the turn already running. */
-                      <ApprovalModeSelect
-                        supportedModes={
-                          capabilities
-                            ? (approvalModesByAgent.get(activeRun.agentKind) ??
-                              [])
-                            : null
-                        }
-                        value={activeRun.approval}
-                        planSupported={
-                          capabilities?.claudeModes.plan === 'pass'
-                        }
-                        onChange={(approval) =>
-                          void changeRunSettings({ approval })
-                        }
-                      />
                     ) : null}
                   </ComposerTopRow>
                   <ComposerCard>
@@ -2595,6 +2660,29 @@ export function Chats({
                               <ArrowUp className="size-4 shrink-0" />
                             </Button>
                           )}
+                          {/* Where the run happens, to the RIGHT of Send.
+
+                          It is not an action, and it is deliberately not in the
+                          chip row either: a run's cwd is fixed at creation, so
+                          it can never be picked from here. Sitting last on the
+                          actions line it reads as a caption on the button that
+                          dispatches the work — "this goes to geniro-app" —
+                          rather than as a dead picker among live ones.
+
+                          `shrink` overrides `Chip`'s own `shrink-0`: this is
+                          the one item on a non-shrinking line whose label is
+                          user data, so it must be the thing that truncates
+                          before Send is pushed off. */}
+                          {activeRun?.cwd ? (
+                            <Chip
+                              title={activeRun.cwd}
+                              className="max-w-40 min-w-0 shrink">
+                              <FolderOpen />
+                              <span className="truncate">
+                                {folderName(activeRun.cwd)}
+                              </span>
+                            </Chip>
+                          ) : null}
                         </>
                       }>
                       {activeRun &&
@@ -2626,6 +2714,30 @@ export function Chats({
                             nextTurnOnly={streaming}
                             onChange={(effort) =>
                               void changeRunSettings({ effort })
+                            }
+                          />
+                          {/* Between effort and the context readout, not up in
+                          the identity row: the permission posture is editable
+                          at any time — mid-turn included, since the daemon
+                          hands the change to the turn already running — which
+                          makes it a live control of how this turn behaves, the
+                          same category as model and effort. Unlike those two it
+                          carries no `nextTurnOnly`, precisely because it does
+                          NOT wait for the next turn. */}
+                          <ApprovalModeSelect
+                            supportedModes={
+                              capabilities
+                                ? (approvalModesByAgent.get(
+                                    activeRun.agentKind,
+                                  ) ?? [])
+                                : null
+                            }
+                            value={activeRun.approval}
+                            planSupported={
+                              capabilities?.claudeModes.plan === 'pass'
+                            }
+                            onChange={(approval) =>
+                              void changeRunSettings({ approval })
                             }
                           />
                           {/* The context readout, DIRECTLY after the effort

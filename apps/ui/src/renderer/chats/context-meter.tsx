@@ -11,7 +11,7 @@ import { formatTokens, formatUsd } from './agent-activity';
  * room is left, and `text-primary` (the app's caramel) reads as decoration
  * beside every other primary-toned control rather than as "you are fine".
  */
-const WARN_AT = 0.7;
+const WARN_AT = 0.6;
 const ALARM_AT = 0.9;
 
 /**

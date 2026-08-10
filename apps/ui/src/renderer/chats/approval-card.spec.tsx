@@ -505,9 +505,12 @@ describe('ApprovalCard', () => {
         onRespond={staged}
       />,
     );
-    click(buttonNamed(el, 'Blue'));
+    // TYPE, then pick. That order is required now that a pick auto-advances to
+    // the next unanswered tab: clicking first would carry the caret to the
+    // OTHER question, and the qualifier would qualify the wrong answer. The
+    // join under test is unchanged — only the order that reaches it.
     typeInto(el.querySelector('input')!, 'but a lighter shade');
-    click(tabsOf(el)[1]!);
+    click(buttonNamed(el, 'Blue'));
     click(buttonNamed(el, 'Large'));
     click(buttonNamed(el, 'Submit answers'));
     expect(staged).toHaveBeenCalledWith(
@@ -647,6 +650,125 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenCalledWith(true, 'Red');
   });
 
+  it('a pick moves to the next unanswered question by itself', () => {
+    // The reported bug was "Submit is dead". It was not: Submit correctly waits
+    // for every tab, but nothing told the user the other tabs existed, so a
+    // card with its first question answered looked stuck. Advancing on the pick
+    // is what makes the remaining work visible.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Which color should the header be?');
+
+    click(buttonNamed(el, 'Blue'));
+
+    // The PANEL moved, not merely the tab's styling — only one question is on
+    // screen at a time, so the question text is the observable.
+    expect(el.textContent).toContain('Which font size?');
+    expect(el.textContent).not.toContain('Which color should the header be?');
+    expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('does not advance when the click CLEARED the pick', () => {
+    // Clicking the chosen label again un-picks it, leaving the tab empty.
+    // Advancing there would carry the user away from a question they just
+    // emptied — and straight past the thing Submit is still waiting for.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    click(buttonNamed(el, 'Blue'));
+    click(tabsOf(el)[0]!);
+    click(buttonNamed(el, 'Blue'));
+
+    expect(el.textContent).toContain('Which color should the header be?');
+    expect(el.textContent).toContain('still empty: Color');
+  });
+
+  it('does not advance a multi-select — one click is not the whole answer', () => {
+    // Jumping away after the first of several intended picks would take the
+    // remaining options off screen mid-answer.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            {
+              question: 'Which colors?',
+              header: 'Colors',
+              options: [{ label: 'Red' }, { label: 'Blue' }],
+              multiSelect: true,
+            },
+            {
+              question: 'Which font size?',
+              header: 'Size',
+              options: [{ label: 'Small' }, { label: 'Large' }],
+              multiSelect: false,
+            },
+          ],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    click(buttonNamed(el, 'Red'));
+    expect(el.textContent).toContain('Which colors?');
+    expect(el.textContent).not.toContain('Which font size?');
+  });
+
+  it('offers Next question for a TYPED answer, which cannot advance itself', () => {
+    // A pick has a click to hang the advance on; typing has none — Enter is
+    // reserved for submitting a lone question. Without this control the only
+    // way on from a typed answer is to notice the tab strip.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    typeInto(el.querySelector('input')!, 'something teal');
+    click(buttonNamed(el, 'Next question'));
+
+    expect(el.textContent).toContain('Which font size?');
+    expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('withdraws Next question once every tab is answered', () => {
+    // It points at unfinished work. With nothing left it would either no-op or
+    // bounce the user backwards, and Submit is the only remaining action.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(buttonNamed(el, 'Next question')).toBeTruthy();
+    click(buttonNamed(el, 'Blue'));
+    click(buttonNamed(el, 'Large'));
+
+    expect(
+      [...el.querySelectorAll('button')].some(
+        (b) => b.textContent === 'Next question',
+      ),
+    ).toBe(false);
+    expect(buttonNamed(el, 'Submit answers').hasAttribute('disabled')).toBe(
+      false,
+    );
+  });
+
   it('an oversized or unfinished answer SAYS why Submit is disabled', () => {
     const el = render(
       <ApprovalCard
@@ -675,11 +797,13 @@ describe('ApprovalCard', () => {
       typeInto(input, fill.repeat(input.maxLength));
       return input.maxLength;
     };
-    const first = fillToBudget('x');
-    click(tabsOf(el)[1]!);
-    const second = fillToBudget('y');
+    // The click above auto-advanced onto Size, so that is the tab measured
+    // first — the one carrying NO pick. Then back to Color, which holds "Blue".
+    const sizeBudget = fillToBudget('y');
+    click(tabsOf(el)[0]!);
+    const colorBudget = fillToBudget('x');
     // The pick is charged: the tab holding "Blue" gets strictly less room.
-    expect(first).toBeLessThan(second);
+    expect(colorBudget).toBeLessThan(sizeBudget);
     expect(el.textContent).not.toContain('is the most the agent can receive');
     expect(buttonNamed(el, 'Submit answers').hasAttribute('disabled')).toBe(
       false,

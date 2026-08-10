@@ -296,6 +296,24 @@ function QuestionCard({
       : questions.length > 1
         ? `Answer every tab to submit — still empty: ${unanswered.join(', ')}.`
         : 'Pick an option or type an answer to submit.';
+  /**
+   * The next tab still holding nothing, searching forward from `from` and
+   * wrapping. Null when every other tab is already answered.
+   *
+   * `step < questions.length` stops one short of a full lap, so `from` itself
+   * is never a candidate — landing back on the tab just answered would read as
+   * the control doing nothing.
+   */
+  const nextUnansweredFrom = (from: number): number | null => {
+    for (let step = 1; step < questions.length; step++) {
+      const candidate = (from + step) % questions.length;
+      if (answerAt(candidate).length === 0) {
+        return candidate;
+      }
+    }
+    return null;
+  };
+  const nextTab = nextUnansweredFrom(activeIndex);
   const pickOption = (index: number, label: string): void => {
     if (!staged) {
       // The click IS the whole answer here — but it is not the whole answer
@@ -305,6 +323,7 @@ function QuestionCard({
       respond(true, joinParts([label, (texts[index] ?? '').trim()]));
       return;
     }
+    const wasChosen = (picked[index] ?? [])[0] === label;
     setPicked((previous) => {
       const current = previous[index] ?? [];
       if (!questions[index]!.multiSelect) {
@@ -319,6 +338,22 @@ function QuestionCard({
           : [...current, label],
       };
     });
+    // Move to the next unfilled tab once this one is settled.
+    //
+    // Only for a SINGLE-pick question: a multi-select is not finished after
+    // one click, and jumping away would take the remaining options off screen
+    // mid-answer. And not when the click CLEARED the pick — that leaves the
+    // tab empty, so advancing would abandon a tab the user just emptied.
+    //
+    // This is the actual defect behind "Submit is disabled": the button
+    // correctly waits for every tab, but nothing told the user other tabs
+    // existed, so a card whose first tab was answered looked stuck.
+    if (!questions[index]!.multiSelect && !wasChosen) {
+      const next = nextUnansweredFrom(index);
+      if (next !== null) {
+        setActiveTab(next);
+      }
+    }
   };
   const focusTab = (index: number): void => {
     const next = (index + questions.length) % questions.length;
@@ -492,6 +527,19 @@ function QuestionCard({
               onClick={() => respond(true, submission)}>
               {staged ? 'Submit answers' : 'Answer'}
             </Button>
+            {/* The typed-answer counterpart to the pick's auto-advance.
+                Typing cannot advance on its own — there is no keystroke that
+                means "done with this one" while Enter is reserved — so without
+                this the only way on is to notice the tab strip and click it. */}
+            {showTabs && nextTab !== null ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={responded}
+                onClick={() => focusTab(nextTab)}>
+                Next question
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"

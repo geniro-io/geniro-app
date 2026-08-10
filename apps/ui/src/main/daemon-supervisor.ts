@@ -1,4 +1,8 @@
-import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import {
+  type ChildProcess,
+  execFileSync,
+  spawn as nodeSpawn,
+} from 'node:child_process';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -167,6 +171,74 @@ export async function defaultCheckIdentity(
   }
 }
 
+/**
+ * How far a probed start time may sit from the recorded one and still count as
+ * the same process. Mirrors the daemon's `PROCESS_IDENTITY_TOLERANCE_MS`:
+ * `ps -o lstart` has one-second resolution, so this is rounding slack, not a
+ * guess, and it is the only thing between a recycled pid and a SIGTERM aimed at
+ * whatever now holds it.
+ */
+const PROCESS_IDENTITY_TOLERANCE_MS = 2_000;
+
+/** Statuses a run is still doing something in. */
+const LIVE_RUN_STATUSES = new Set(['pending', 'running']);
+
+function hasLiveRun(body: unknown): boolean {
+  return (
+    Array.isArray(body) &&
+    body.some(
+      (run) =>
+        typeof run === 'object' &&
+        run !== null &&
+        LIVE_RUN_STATUSES.has(String((run as { status?: unknown }).status)),
+    )
+  );
+}
+
+/**
+ * Whether the daemon has a chat turn or a workflow run in flight.
+ *
+ * Both surfaces, because either one can hold live agent children and a
+ * replacement kills them all. A non-ok response throws so the caller's
+ * fail-toward-busy guard sees it, rather than reading an error body as "idle".
+ */
+export async function defaultCheckBusy(handle: DaemonHandle): Promise<boolean> {
+  const read = async (path: string): Promise<unknown> => {
+    const res = await fetch(`http://${handle.host}:${handle.port}${path}`, {
+      headers: { authorization: `Bearer ${handle.token}` },
+      signal: AbortSignal.timeout(HEALTH_FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(`${path} answered ${res.status}`);
+    }
+    return res.json();
+  };
+  const [chats, workflowRuns] = await Promise.all([
+    read('/v1/chats'),
+    read('/v1/workflows/runs'),
+  ]);
+  return hasLiveRun(chats) || hasLiveRun(workflowRuns);
+}
+
+/** The kernel's start time for `pid` in epoch ms, or null if unreadable. */
+export function defaultReadStartTime(pid: number): number | null {
+  if (!isPlausiblePid(pid)) {
+    return null;
+  }
+  try {
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parsed = Date.parse(out.trim());
+    return Number.isNaN(parsed) ? null : parsed;
+  } catch {
+    // Non-zero exit means the pid is gone, or `ps` refused. Either way this is
+    // "cannot confirm", which the caller must not read as confirmation.
+    return null;
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -187,6 +259,8 @@ export interface DaemonSupervisorOptions {
   isAlive?: (pid: number) => boolean;
   checkHealth?: (host: string, port: number) => Promise<boolean>;
   checkIdentity?: (handle: DaemonHandle) => Promise<boolean>;
+  checkBusy?: (handle: DaemonHandle) => Promise<boolean>;
+  readStartTime?: (pid: number) => number | null;
   killPid?: (pid: number, signal: NodeJS.Signals) => void;
   resolveEntry?: () => string;
   bundledVersion?: (entry: string) => string | null;
@@ -220,6 +294,8 @@ export class DaemonSupervisor {
     port: number,
   ) => Promise<boolean>;
   private readonly checkIdentity: (handle: DaemonHandle) => Promise<boolean>;
+  private readonly checkBusy: (handle: DaemonHandle) => Promise<boolean>;
+  private readonly readStartTime: (pid: number) => number | null;
   private readonly killPid: (pid: number, signal: NodeJS.Signals) => void;
   private readonly resolveEntry: () => string;
   private readonly bundledVersion: (entry: string) => string | null;
@@ -233,6 +309,8 @@ export class DaemonSupervisor {
     this.isAlive = options.isAlive ?? defaultIsAlive;
     this.checkHealth = options.checkHealth ?? defaultCheckHealth;
     this.checkIdentity = options.checkIdentity ?? defaultCheckIdentity;
+    this.checkBusy = options.checkBusy ?? defaultCheckBusy;
+    this.readStartTime = options.readStartTime ?? defaultReadStartTime;
     this.killPid =
       options.killPid ?? ((pid, signal) => process.kill(pid, signal));
     this.resolveEntry = options.resolveEntry ?? resolveDaemonEntry;
@@ -294,6 +372,57 @@ export class DaemonSupervisor {
     );
   }
 
+  /**
+   * Whether a daemon this process does not own is in the middle of something.
+   *
+   * Replacing one tears down every agent child it registered, so an in-flight
+   * turn dies without notice — in ANOTHER window, which is what makes it
+   * unattributable to the user. That was tolerable while replacement happened
+   * once per release; a rebuild now triggers it, and two windows plus a
+   * `pnpm dev` is an ordinary afternoon.
+   *
+   * Errs toward BUSY. A daemon we cannot interrogate is one we must not kill:
+   * adopting a stale daemon is recoverable by quitting and relaunching, while
+   * a turn killed mid-flight is not recoverable at all.
+   */
+  private async isBusy(handle: DaemonHandle): Promise<boolean> {
+    try {
+      return (await this.checkBusy(handle)) !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Whether `pid` is still the process the pidfile describes.
+   *
+   * The daemon records its own start time, and this compares the kernel's. A
+   * bare `kill(pid, 0)` cannot tell a recycled pid from the original — macOS
+   * wraps them — and the next statement SIGTERMs it, so an unconfirmed identity
+   * here means signalling a stranger: the user's own editor, their own
+   * interactive `claude`.
+   *
+   * TWIN of the daemon's `utils/process-identity.ts`, which solves exactly this
+   * for the child journal and the instance lock. The two apps share no code, so
+   * the tolerance and the `ps` field must move together.
+   *
+   * Unconfirmable reads as NOT the same process, so the caller declines to
+   * signal — the same direction that module takes, and for the same reason.
+   */
+  private confirmIdentity(existing: DaemonInfo): boolean {
+    if (existing.pidStartedAtMs === null) {
+      return true;
+    }
+    const actual = this.readStartTime(existing.pid);
+    if (actual === null) {
+      return false;
+    }
+    return (
+      Math.abs(actual - existing.pidStartedAtMs) <=
+      PROCESS_IDENTITY_TOLERANCE_MS
+    );
+  }
+
   start(): Promise<DaemonHandle> {
     if (this.stopping) {
       return Promise.reject(new Error('daemon supervisor is stopping'));
@@ -323,7 +452,17 @@ export class DaemonSupervisor {
       ) {
         const bundled = this.bundledVersion(entry);
         const versionMatches = bundled === null || existing.version === bundled;
-        if (versionMatches && this.mayAdopt(existing, entry)) {
+        // Two gates stand between "this daemon is not the build I want" and
+        // signalling it, and BOTH exist because replacement stopped being rare:
+        // it used to fire only on a version bump, i.e. once per release, and now
+        // fires on any rebuild. Each answers a question the staleness check
+        // cannot: is anyone still using it, and is this pid even still it.
+        const replaceable =
+          !versionMatches || !this.mayAdopt(existing, entry)
+            ? !(await this.isBusy(existingHandle)) &&
+              this.confirmIdentity(existing)
+            : false;
+        if (!replaceable) {
           // Reuse a daemon another UI instance already started.
           this.owned = false;
           this.currentPid = existing.pid;

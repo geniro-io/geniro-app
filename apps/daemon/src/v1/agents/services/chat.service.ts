@@ -773,12 +773,27 @@ export class ChatService {
             }
             if (event.type === 'text_delta') {
               // EPHEMERAL: no seq, no row, no replay — just the live tail.
+              //
+              // MAIN THREAD ONLY. There is exactly ONE tail per run, so two
+              // sub-agents writing at once interleave into it character by
+              // character and the result is nobody's words. Skipping them loses
+              // nothing durable: the completed `text` event still becomes a row,
+              // marked as that sub-agent's. Only the live PREVIEW is reserved
+              // for the agent the user is addressing. Per-thread tails would
+              // need a renderer surface to show them in — a feature, not this.
+              if (event.parentToolUseId !== undefined) {
+                return;
+              }
               this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
               return;
             }
             if (event.type === 'thinking_progress') {
               // EPHEMERAL, like a text delta: the only honest signal during a
               // silent reasoning stretch, since the text itself is redacted.
+              // Main thread only, for the same reason — one counter per run.
+              if (event.parentToolUseId !== undefined) {
+                return;
+              }
               this.partials.thinking(
                 runId,
                 SINGLE_AGENT_NODE,

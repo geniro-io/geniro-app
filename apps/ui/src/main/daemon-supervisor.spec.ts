@@ -64,6 +64,7 @@ function info(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
     // which is what every test in this file is about. A NULL stamp would not do
     // that: it means "older than the staleness check" and is replaced.
     entry: { path: '/bundle/daemon/dist/main.js', mtimeMs: 1, size: 2 },
+    pidStartedAtMs: null,
     startedAt: '2026-07-04T00:00:00Z',
     ...overrides,
   };
@@ -85,6 +86,8 @@ function harness(opts: {
   healthy?:
     boolean | ((current: DaemonInfo | null) => boolean | Promise<boolean>);
   identified?: boolean;
+  /** Whether the running daemon reports work in flight. Idle unless a test says. */
+  busy?: boolean;
   bundled?: string | null;
   killPid?: (pid: number, signal: NodeJS.Signals) => void;
   onKill?: (pid: number, signal: NodeJS.Signals) => void;
@@ -114,6 +117,7 @@ function harness(opts: {
         ? opts.healthy(pidfile)
         : (opts.healthy ?? true),
     checkIdentity: async () => opts.identified ?? true,
+    checkBusy: async () => opts.busy ?? false,
     killPid:
       opts.killPid ??
       ((pid, signal) => {
@@ -692,6 +696,7 @@ describe('DaemonSupervisor — a rebuilt daemon must not be adopted', () => {
     spawned: { count: number },
     /** Overrides the resolved entry, for the "cannot stat my own" case. */
     resolved?: string,
+    busy = false,
   ): DaemonSupervisor {
     const killed = new Set<number>();
     let pidfile = initial;
@@ -713,6 +718,7 @@ describe('DaemonSupervisor — a rebuilt daemon must not be adopted', () => {
       isAlive: (pid) => !killed.has(pid),
       checkHealth: async () => true,
       checkIdentity: async () => true,
+      checkBusy: async () => busy,
       killPid: (pid, signal) => {
         kills.push({ pid, signal });
         if (signal === 'SIGKILL') {
@@ -843,5 +849,150 @@ describe('DaemonSupervisor — a rebuilt daemon must not be adopted', () => {
 
     expect(spawned.count).toBe(0);
     expect(kills).toEqual([]);
+  });
+});
+
+describe('DaemonSupervisor — guards on replacing a daemon we do not own', () => {
+  let dir: string;
+  let entry: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-guard-'));
+    entry = join(dir, 'main.js');
+    writeFileSync(entry, '// build one');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function stale(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
+    // Same path, a stamp that no longer matches the file: a rebuild.
+    return info({
+      pid: 3333,
+      entry: { path: entry, mtimeMs: 1, size: 1 },
+      ...overrides,
+    });
+  }
+
+  interface Sink {
+    kills: { pid: number; signal: NodeJS.Signals }[];
+    spawned: { count: number };
+  }
+  const newSink = (): Sink => ({ kills: [], spawned: { count: 0 } });
+
+  function supervisor(
+    pidfile: DaemonInfo,
+    sink: Sink,
+    seams: {
+      busy?: boolean | (() => Promise<boolean>);
+      startTime?: number | null;
+    } = {},
+  ): DaemonSupervisor {
+    const { busy = false } = seams;
+    const killed = new Set<number>();
+    let current = pidfile;
+    return new DaemonSupervisor({
+      spawn: ((): FakeChild => {
+        sink.spawned.count += 1;
+        const child = new FakeChild();
+        // The replacement writes its own pidfile, stamped with the entry as it
+        // stands now — otherwise the supervisor keeps reading the stale record.
+        const stats = statSync(entry);
+        current = info({
+          pid: child.pid,
+          entry: { path: entry, mtimeMs: stats.mtimeMs, size: stats.size },
+          pidStartedAtMs: 5_000,
+        });
+        return child;
+      }) as unknown as DaemonSupervisorOptions['spawn'],
+      readDaemonInfo: () => current,
+      isAlive: (pid) => !killed.has(pid),
+      checkHealth: async () => true,
+      checkIdentity: async () => true,
+      checkBusy: typeof busy === 'function' ? busy : async () => busy,
+      readStartTime: () =>
+        seams.startTime === undefined ? 5_000 : seams.startTime,
+      killPid: (pid, signal) => {
+        sink.kills.push({ pid, signal });
+        if (signal === 'SIGKILL') {
+          killed.add(pid);
+        }
+      },
+      resolveEntry: () => entry,
+      bundledVersion: () => '0.1.0',
+      removePidfile: () => undefined,
+      pollIntervalMs: 1,
+      shutdownGraceMs: 5,
+    });
+  }
+
+  it('does NOT replace a stale daemon that is mid-turn', async () => {
+    // Replacement tears down every agent child the daemon registered, and that
+    // turn belongs to ANOTHER window — the user would see work die with nothing
+    // saying why. Adopting a stale daemon is recoverable; this is not.
+    const sink = newSink();
+    await supervisor(stale({ pidStartedAtMs: 5_000 }), sink, {
+      busy: true,
+    }).start();
+
+    expect(sink.spawned.count).toBe(0);
+    expect(sink.kills).toEqual([]);
+  });
+
+  it('treats a daemon it cannot interrogate as busy', async () => {
+    // Fail-safe direction: an unreachable status read must not read as idle.
+    const sink = newSink();
+    await supervisor(stale({ pidStartedAtMs: 5_000 }), sink, {
+      busy: () => Promise.reject(new Error('connection reset')),
+    }).start();
+
+    expect(sink.spawned.count).toBe(0);
+    expect(sink.kills).toEqual([]);
+  });
+
+  it('does NOT signal a pid whose start time disagrees with the record', async () => {
+    // A recycled pid. `kill(pid, 0)` says alive and the port answers, but the
+    // process behind that number is now someone else's — the user's own editor,
+    // their own interactive CLI.
+    const sink = newSink();
+    await supervisor(stale({ pidStartedAtMs: 5_000 }), sink, {
+      startTime: 900_000,
+    }).start();
+
+    expect(sink.kills).toEqual([]);
+  });
+
+  it('does NOT signal a pid whose start time cannot be read', async () => {
+    const sink = newSink();
+    await supervisor(stale({ pidStartedAtMs: 5_000 }), sink, {
+      startTime: null,
+    }).start();
+
+    expect(sink.kills).toEqual([]);
+  });
+
+  it('replaces an idle, confirmed, stale daemon', async () => {
+    // The control: with both guards satisfied the replacement still happens,
+    // so neither guard has quietly disabled the feature.
+    const sink = newSink();
+    await supervisor(stale({ pidStartedAtMs: 5_000 }), sink, {
+      startTime: 6_000,
+    }).start();
+
+    expect(sink.spawned.count).toBe(1);
+    expect(sink.kills.map((k) => k.pid)).toContain(3333);
+  });
+
+  it('still replaces a daemon that recorded no start time', async () => {
+    // A daemon older than the field. It cannot be confirmed, but it also cannot
+    // be a recycled pid FOR this record — there is no record. Refusing here
+    // would make the staleness check unreachable for exactly those daemons.
+    const sink = newSink();
+    await supervisor(stale({ pidStartedAtMs: null }), sink, {
+      startTime: null,
+    }).start();
+
+    expect(sink.spawned.count).toBe(1);
   });
 });

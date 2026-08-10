@@ -61,6 +61,17 @@ export interface DaemonInfo {
    * different path and is left alone.
    */
   entry: DaemonEntryStamp;
+  /**
+   * When this PROCESS started, in epoch ms — not when it became healthy.
+   *
+   * `startedAt` below is the readiness moment, which trails process start by a
+   * whole boot (lock, schema sync, listen). A supervisor deciding whether to
+   * SIGTERM `pid` needs the kernel's own answer to compare against: pids are
+   * recycled, so a bare liveness check cannot tell the daemon from whatever
+   * inherited its number. Read from `process.uptime()`, which is exact and free
+   * — the alternative is asking `ps` about ourselves.
+   */
+  pidStartedAtMs: number;
   /** ISO-8601 timestamp the daemon became healthy. */
   startedAt: string;
 }

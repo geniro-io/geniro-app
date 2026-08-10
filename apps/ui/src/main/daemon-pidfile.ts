@@ -30,6 +30,15 @@ export interface DaemonInfo {
    * stale and replaces, unlike the other unidentifiable cases it adopts.
    */
   entry: DaemonEntryStamp | null;
+  /**
+   * When the daemon PROCESS started, epoch ms; null when it did not say.
+   *
+   * Compared against the kernel's own answer before signalling the pid — a
+   * recycled pid is otherwise indistinguishable from the daemon. Null means the
+   * daemon predates the field, and the supervisor treats that as "cannot check"
+   * rather than as a reason to refuse: the version and entry gates still apply.
+   */
+  pidStartedAtMs: number | null;
   startedAt: string;
 }
 
@@ -125,6 +134,11 @@ export function parseDaemonInfo(raw: unknown): DaemonInfo | null {
       // unidentifiable as a build, which the supervisor handles by declining
       // to adopt it rather than by ignoring it.
       entry: parseEntryStamp(v.entry),
+      pidStartedAtMs:
+        typeof v.pidStartedAtMs === 'number' &&
+        Number.isFinite(v.pidStartedAtMs)
+          ? v.pidStartedAtMs
+          : null,
       startedAt: v.startedAt,
     };
   }

@@ -112,6 +112,7 @@ function valid(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
     token: 'token',
     version: '1.0.0',
     entry: null,
+    pidStartedAtMs: null,
     startedAt: '2026-07-10T00:00:00Z',
     ...overrides,
   };

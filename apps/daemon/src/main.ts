@@ -119,6 +119,7 @@ bootstrapper.addExtension(
           // the supervisor will stamp when deciding whether this daemon is its
           // own current build.
           entry: stampEntry(process.argv[1] ?? '', statSync),
+          pidStartedAtMs: Math.round(Date.now() - process.uptime() * 1000),
           startedAt: new Date(startedAt).toISOString(),
         };
         writePidfile(environment.pidfilePath, info);

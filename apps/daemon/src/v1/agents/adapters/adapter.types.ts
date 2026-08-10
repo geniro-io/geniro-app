@@ -208,6 +208,34 @@ export type AgentEvent =
     }
   | {
       /**
+       * The CLI compacted the conversation — it summarised the history and
+       * carried on with a much smaller context.
+       *
+       * REPORTS THE PAST, NOT THE PRESENT. The CLI serialises only its
+       * post-compaction boundary; the events driving its own
+       * "Compacting conversation…" spinner stay internal (see
+       * `CLAUDE_COMPACT_BOUNDARY_SUBTYPE` for the binary evidence). So this
+       * says "it happened", never "it is happening", and no consumer may
+       * render it as an in-progress state.
+       *
+       * Worth reporting anyway because the alternative is a mystery: the
+       * context meter drops by most of the window between one request and the
+       * next, and with nothing to explain it that reads as a bug in the meter.
+       *
+       * EPHEMERAL — never a transcript row. A `system` item saying "compacted"
+       * is housekeeping the user did not ask for, in the middle of the
+       * conversation they did.
+       */
+      type: 'context_compacted';
+      /** `auto` (the window filled) or `manual` (`/compact`); null if unstated. */
+      trigger: string | null;
+      /** Context size before the compaction, when the CLI reports it. */
+      preTokens: number | null;
+      /** Context size after it, when the CLI reports it. */
+      postTokens: number | null;
+    }
+  | {
+      /**
        * The CLI sent a control message on the stdin dialogue that this adapter
        * does not model, carrying the subtype it was.
        *

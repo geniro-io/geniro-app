@@ -11,7 +11,10 @@ import type {
   AgentMcpServerStatus,
   AgentUsage,
 } from '../../adapter.types';
-import { CLAUDE_RUN_FAILED_MESSAGE } from '../claude.const';
+import {
+  CLAUDE_COMPACT_BOUNDARY_SUBTYPE,
+  CLAUDE_RUN_FAILED_MESSAGE,
+} from '../claude.const';
 import {
   readClaudeAssistantContext,
   readClaudeUsage,
@@ -145,6 +148,22 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
     case 'system': {
       if (asString(root.subtype) === 'thinking_tokens') {
         return mapClaudeThinkingTokens(root);
+      }
+      if (asString(root.subtype) === CLAUDE_COMPACT_BOUNDARY_SUBTYPE) {
+        // Shape taken from the 2.1.226 binary's own schema:
+        // `compact_metadata: { trigger: 'manual'|'auto', pre_tokens: int,
+        // post_tokens?: int }`. Read defensively regardless — the metadata is
+        // optional on the wire, and a boundary carrying no numbers is still
+        // worth reporting, because the EVENT is what explains the meter.
+        const meta = asRecord(root.compact_metadata);
+        return [
+          {
+            type: 'context_compacted',
+            trigger: meta ? asString(meta.trigger) : null,
+            preTokens: meta ? asNumber(meta.pre_tokens) : null,
+            postTokens: meta ? asNumber(meta.post_tokens) : null,
+          },
+        ];
       }
       if (asString(root.subtype) === 'init') {
         const events: AgentEvent[] = [];

@@ -391,6 +391,26 @@ export const CLAUDE_MCP_EMPTY_MARKER = 'No MCP servers configured';
 export const CLAUDE_MCP_LIST_UNREADABLE_MESSAGE =
   'could not read MCP servers — the claude output format may have changed';
 
+// ── Context compaction ────────────────────────────────────────────────────
+
+/**
+ * The `system` subtype announcing that the CLI compacted the conversation.
+ *
+ * POST-HOC BY CONSTRUCTION — this is the one fact to keep in mind when reading
+ * anything built on it. Binary evidence on 2.1.226: the CLI's own TUI drives
+ * its "Compacting conversation…" spinner from internal `compact_start` /
+ * `compact_progress` / `compact_end` events, and NONE of those is serialized
+ * to the stream — only this boundary is, and it carries `session_id` the way
+ * every other emitted system line does. It marks the start of the new,
+ * compacted segment, so by the time we see it the work is finished and the
+ * turn is about to continue.
+ *
+ * So a live "compacting…" state is NOT obtainable from the headless stream. Do
+ * not add one on a timer or on a silence heuristic: the honest signal is that
+ * it HAPPENED, which is what explains the context meter suddenly dropping.
+ */
+export const CLAUDE_COMPACT_BOUNDARY_SUBTYPE = 'compact_boundary';
+
 // ── Messages ──────────────────────────────────────────────────────────────
 
 /** Fallback for an error `result` line that carries no text of its own. */

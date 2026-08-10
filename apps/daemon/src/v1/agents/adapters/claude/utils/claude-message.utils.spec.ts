@@ -485,6 +485,73 @@ describe('mapClaudeStreamEvent', () => {
   });
 });
 
+describe('mapClaudeMessage — context compaction', () => {
+  it('reads the boundary the CLI emits after compacting', () => {
+    // The metadata shape is the CLI's own schema (2.1.226):
+    // `{ trigger: 'manual'|'auto', pre_tokens, post_tokens? }`.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: 's1',
+        compact_metadata: {
+          trigger: 'auto',
+          pre_tokens: 180_000,
+          post_tokens: 32_000,
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        trigger: 'auto',
+        preTokens: 180_000,
+        postTokens: 32_000,
+      },
+    ]);
+  });
+
+  it('still reports the compaction when the metadata is absent or partial', () => {
+    // The EVENT is the point — it is what explains the context meter dropping.
+    // A boundary carrying no numbers must not be swallowed for lack of them.
+    expect(
+      mapClaudeMessage({ type: 'system', subtype: 'compact_boundary' }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        trigger: null,
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'manual' },
+      }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        trigger: 'manual',
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+  });
+
+  it('leaves the other system subtypes alone', () => {
+    // The compaction arm is keyed on its own subtype, so `init` must still map
+    // to the session/commands/model events it always did.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'init',
+        session_id: 's1',
+      }),
+    ).toEqual([{ type: 'session', sessionId: 's1' }]);
+  });
+});
+
 describe('mapClaudeThinkingTokens', () => {
   it('reads the running reasoning total off the telemetry line', () => {
     // Captured verbatim from a live turn.

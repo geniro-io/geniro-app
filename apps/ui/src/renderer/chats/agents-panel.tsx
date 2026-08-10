@@ -467,8 +467,11 @@ export function AgentsPanel({
                     is itself a button. */}
                 <div className="flex items-center gap-1 px-2.5 pt-0.5 pb-1.5 text-xs">
                   <RunStatusIcon status={agent.status} />
+                  {/* `.label`, not the raw key — which is why `label` was added.
+                      `needs-input` is a slug, and this was the call site still
+                      printing it verbatim. */}
                   <span className={RUN_STATUS_META[agent.status].className}>
-                    {agent.status}
+                    {RUN_STATUS_META[agent.status].label}
                   </span>
                   {agent.threads.length > 0 && soleThread === null ? (
                     <span className="truncate text-muted-foreground">

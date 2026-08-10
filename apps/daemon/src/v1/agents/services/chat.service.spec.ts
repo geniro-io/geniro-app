@@ -2441,6 +2441,54 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
   });
 
+  it('announces that the conversation was compacted, and words it by trigger', async () => {
+    // C1's ONLY user-visible half. The two shipped specs pin the parse and the
+    // not-a-transcript-row drop; delete this announcement entirely and both
+    // stay green, so the one thing the user actually sees was unpinned.
+    //
+    // It exists to explain a momentary event: the context meter dropping by
+    // most of the window between one request and the next, which with nothing
+    // said reads as the meter being broken.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      trigger: 'auto',
+      preTokens: 180_000,
+      postTokens: 20_000,
+    });
+    await drain();
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: 'running',
+      activity: 'compacted the conversation to free up context',
+    });
+
+    // A compaction the USER asked for is not explained as housekeeping — they
+    // know why it happened, so the reason is dropped rather than restated.
+    claude.emit({
+      type: 'context_compacted',
+      trigger: 'manual',
+      preTokens: 180_000,
+      postTokens: 20_000,
+    });
+    await drain();
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: 'running',
+      activity: 'compacted the conversation',
+    });
+
+    claude.finish();
+    await drain();
+  });
+
   it('says a run is WAITING on the user, which "running" alone cannot', async () => {
     const { service, claude, statuses } = setup({
       claudeModes: {

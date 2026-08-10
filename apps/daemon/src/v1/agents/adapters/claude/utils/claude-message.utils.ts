@@ -32,11 +32,26 @@ import {
  * markers, so it simply does not match.
  */
 export function isPermissionChannelFailure(content: unknown): boolean {
-  if (content === null || content === undefined) {
-    return false;
+  if (typeof content === 'string') {
+    return hasFailureMarkers(content);
   }
-  const text =
-    typeof content === 'string' ? content : (JSON.stringify(content) ?? '');
+  // Only a TEXT leaf can carry the CLI's sentence. Serializing the whole
+  // payload to find two short markers cost a full `JSON.stringify` per
+  // tool_result on the per-event path — and the worst case is not a large
+  // `Read` but an IMAGE result, whose base64 was stringified in its entirety to
+  // search it for prose it cannot contain.
+  if (Array.isArray(content)) {
+    return content.some((block) => {
+      const text = asString(asRecord(block)?.text);
+      return text !== null && hasFailureMarkers(text);
+    });
+  }
+  const text = asString(asRecord(content)?.text);
+  return text !== null && hasFailureMarkers(text);
+}
+
+/** Both halves, in ONE string — the CLI writes them in a single sentence. */
+function hasFailureMarkers(text: string): boolean {
   return CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS.every((marker) =>
     text.includes(marker),
   );

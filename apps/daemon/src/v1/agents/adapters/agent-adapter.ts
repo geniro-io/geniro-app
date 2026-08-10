@@ -1070,6 +1070,7 @@ export abstract class AgentAdapter {
         mapper: (obj) => driver.onMessage(obj),
         spawn: this.options.spawn,
         logger: this.options.logger,
+        questionToolName: this.getConfig().questionToolName,
       });
     } catch (err) {
       // A synchronous throw between prepareTurn and a live session (a bad

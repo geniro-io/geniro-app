@@ -494,19 +494,78 @@ describe('an event arriving between turns', () => {
     return [];
   };
 
-  function sessionAskingAfterSettle(logger: SessionLogger) {
+  /** As `askOrDone`, but the request is the CLI's question tool. */
+  const questionOrDone = (obj: unknown): AgentEvent[] => {
+    const row = obj as { done?: boolean; ask?: string };
+    if (row.done === true) {
+      return [COMPLETE];
+    }
+    if (typeof row.ask === 'string') {
+      return [
+        {
+          type: 'approval_request',
+          id: row.ask,
+          toolName: 'AskUserQuestion',
+          input: {},
+        },
+      ];
+    }
+    return [];
+  };
+
+  // `questionToolName` is declared on every session here even though this
+  // mapper emits a PERMISSION tool: that is what makes the refusal tests below
+  // prove a discrimination rather than the absence of one. Without it they
+  // would pass just as well if the question branch swallowed everything.
+  function sessionAskingAfterSettle(
+    logger: SessionLogger,
+    mapper: (obj: unknown) => AgentEvent[] = askOrDone,
+  ) {
     const { spawn, child } = fakeSpawn();
     const session = runCliSession({
       command: 'claude',
       args: [],
       cwd: '/proj',
       stdinLifetime: 'session',
-      mapper: askOrDone,
+      mapper,
       spawn,
       logger,
+      questionToolName: 'AskUserQuestion',
     });
     return { session, child };
   }
+
+  it('leaves an orphaned QUESTION unanswered instead of denying it in the user’s name', async () => {
+    // The refusal beside this encodes `allow: false`, which reaches claude as
+    // `{behavior:'deny', message:'Denied by the user in Geniro'}`. An
+    // AskUserQuestion rides the SAME `approval_request` channel, so refusing it
+    // answers the user's question for them, over their name, and they never see
+    // it was asked. Parked it merely stalls — which is the honest state, and
+    // what it did before the refusal existed.
+    //
+    // Keyed on the tool NAME the adapter declares, never on a payload flag: a
+    // future interactive tool must not be able to slip past a human gate
+    // through version drift.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    line(child, { ask: 'q-1' });
+
+    // Nothing at all on stdin — not a denial, not anything.
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe('');
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'left unanswered',
+    );
+    expect(session.alive).toBe(true);
+  });
 
   it('REFUSES an orphaned approval_request instead of dropping it', async () => {
     // Dropping is not neutral: the CLI is blocked on a verdict that, with no

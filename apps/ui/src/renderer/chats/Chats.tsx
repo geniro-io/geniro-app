@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  Clock,
   FolderOpen,
   Plus,
   Square,
@@ -110,11 +111,22 @@ import { useGitInfo } from './use-git-info';
 /**
  * A follow-up typed while the agent was still working. It carries its images
  * alongside its text so nothing is lost between queueing and sending.
+ *
+ * The `id` is what every other site addresses the message BY. Object identity
+ * cannot do it: editing mints a new object, so an identity filter written
+ * against the pre-edit object silently matches nothing and the message is sent
+ * a second time. An index cannot do it either: the drain shifts the array while
+ * a send is in flight, so an index captured at render time addresses a
+ * different message by the time the user clicks.
  */
 interface QueuedMessage {
+  id: string;
   text: string;
   images: SendMessageDtoImagesInner[];
 }
+
+/** Client-side only — this id never reaches the daemon. */
+const randomId = (): string => crypto.randomUUID();
 
 /** Is this stored/foreign string one of the daemon's approval modes? */
 const isChatApprovalMode = (value: unknown): value is ChatApprovalMode =>
@@ -257,6 +269,18 @@ export function Chats({
   // history fetch while the cached run.status is still 'running' and the history
   // snapshot predates that terminal item.
   const sawTerminalRef = useRef(false);
+  /**
+   * The same thing, but LIVE items only.
+   *
+   * `sawTerminalRef` answers "has any turn ended since this run was activated",
+   * which a fail-fast run needs (its terminal item is in the replayed history).
+   * It cannot answer the question the activation below actually has — "did a
+   * turn end while I was fetching" — because every chat past its first turn
+   * replays a `turn_complete` and would set it. That made re-opening a working
+   * multi-turn chat show Send instead of Stop, which is the opposite of what
+   * that code promises.
+   */
+  const sawLiveTerminalRef = useRef(false);
 
   /**
    * What each running run is DOING right now, keyed by run id — "running
@@ -279,11 +303,13 @@ export function Chats({
   useEffect(() => {
     queuesRef.current = queues;
   }, [queues]);
+  // Minted HERE rather than at the three call sites, so no caller can enqueue a
+  // message without one.
   const enqueueMessage = useCallback(
-    (runId: string, message: QueuedMessage): void => {
+    (runId: string, message: Omit<QueuedMessage, 'id'>): void => {
       setQueues((prev) => ({
         ...prev,
-        [runId]: [...(prev[runId] ?? []), message],
+        [runId]: [...(prev[runId] ?? []), { ...message, id: randomId() }],
       }));
     },
     [],
@@ -314,7 +340,14 @@ export function Chats({
     };
   }, []);
 
-  const addItem = useCallback((item: ChatItem): void => {
+  /**
+   * `live` says this item arrived on the wire as it happened, rather than out
+   * of a history replay. It defaults to true so the live subscription needs no
+   * ceremony; every replay site passes false EXPLICITLY — and must pass it
+   * through an arrow, never as a bare `forEach(addItem)`, which would hand the
+   * array index in as the flag.
+   */
+  const addItem = useCallback((item: ChatItem, live = true): void => {
     if (item.runId !== activeRunIdRef.current) {
       return;
     }
@@ -370,6 +403,9 @@ export function Chats({
     // while sibling branches are still running.
     if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
       sawTerminalRef.current = true;
+      if (live) {
+        sawLiveTerminalRef.current = true;
+      }
       setStreaming(false);
       // Mirror the daemon's settle write into the sidebar list — without this
       // a finished run keeps its stale 'running' badge until an app restart.
@@ -396,7 +432,15 @@ export function Chats({
       );
       // The turn ended — fire the next queued message into this chat (the
       // early return above guarantees item.runId IS the active run).
-      if ((queuesRef.current[item.runId]?.length ?? 0) > 0) {
+      //
+      // LIVE items only. A replayed transcript carries every past turn's
+      // terminal item, so re-opening a chat that is still working used to
+      // drain the queue straight into the turn in flight — and claude accepts
+      // a mid-turn follow-up, so it genuinely went. That is the exact
+      // behaviour the queue exists to prevent, and Steer is the only sanctioned
+      // way to reach a running turn. A replay's own drain decision is made once
+      // by the caller, from the run's settled status.
+      if (live && (queuesRef.current[item.runId]?.length ?? 0) > 0) {
         drainQueueRef.current(item.runId);
       }
     }
@@ -672,6 +716,7 @@ export function Chats({
       activeRunIdRef.current = runId;
       lastSeqRef.current = -1;
       sawTerminalRef.current = false;
+      sawLiveTerminalRef.current = false;
       pendingScrollRef.current = true;
       setActiveRunId(runId);
       setItems([]);
@@ -689,19 +734,37 @@ export function Chats({
         if (activeRunIdRef.current !== runId) {
           return;
         }
-        history.forEach(addItem);
+        history.forEach((item) => addItem(item, false));
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
         // RUN_BUSY. Derive it from the run's status + whether the replayed
         // transcript already ended on a terminal item.
         const run = runsRef.current.find((r) => r.id === runId);
         const last = history.at(-1);
+        const endedOnTerminal =
+          !!last && TERMINAL_KINDS.has(last.kind) && last.nodeId === null;
         if (
           run?.status === 'running' &&
-          !sawTerminalRef.current &&
-          (!last || !(TERMINAL_KINDS.has(last.kind) && last.nodeId === null))
+          !sawLiveTerminalRef.current &&
+          !endedOnTerminal
         ) {
           setStreaming(true);
+        } else if (
+          // Idle NOW — which is not the same as "this transcript contains a
+          // terminal item". A chat past its first turn always contains several;
+          // what says the turn is over is that nothing follows the last one, or
+          // that the run itself has settled. A transcript ending on a live
+          // assistant row means a turn is in flight, and the queue waits.
+          (endedOnTerminal || run?.status !== 'running') &&
+          (queuesRef.current[runId]?.length ?? 0) > 0
+        ) {
+          // The ONE drain decision a replay is allowed to make, and it is taken
+          // from the daemon's own run status rather than from any transcript
+          // row: the turn this chat was on finished while the user was looking
+          // at another one, so the queue is owed its send. While the run is
+          // still `running` nothing is sent — Steer is the only way into a live
+          // turn.
+          drainQueueRef.current(runId);
         }
       } catch (err) {
         if (activeRunIdRef.current === runId) {
@@ -741,7 +804,10 @@ export function Chats({
     // failed only AFTER a run had been created, as "exited with code 1".
     void window.geniro.detectClis().then(setCliDetections);
     refreshRuns();
-    const unsubscribeItem = client.onItem(addItem);
+    // Wrapped, not passed bare: this is the one site that means LIVE, and an
+    // arrow pins the arity so a future emitter argument cannot land on the
+    // `live` flag.
+    const unsubscribeItem = client.onItem((item) => addItem(item, true));
     const unsubscribeLiveText = client.onLiveText((event) => {
       // Throwaway by design — only ever shown for the run on screen, and
       // dropped wholesale on a run switch or a disconnect.
@@ -771,7 +837,13 @@ export function Chats({
       }
       void chatApi
         .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
-        .then((items) => items.forEach(addItem))
+        // A replay, not live: these streamed while we were offline, so a
+        // terminal item among them says a turn ENDED at some point, not that
+        // the run is idle now — it may already be several turns on. Draining
+        // on that would be the reopen bug by another door. The queue goes out
+        // on the next live terminal item, or on the next activation, both of
+        // which read the run's current status.
+        .then((items) => items.forEach((item) => addItem(item, false)))
         // Same stale-run guard as activateRun's catch: if the user switched
         // runs while this delta-fetch was in flight, A's error must not paint
         // over B (addItem is already run-scoped by item.runId; setError is not).
@@ -1244,7 +1316,9 @@ export function Chats({
       const dropHead = (): void =>
         setQueues((prev) => ({
           ...prev,
-          [runId]: (prev[runId] ?? []).filter((queued) => queued !== next),
+          [runId]: (prev[runId] ?? []).filter(
+            (queued) => queued.id !== next.id,
+          ),
         }));
       try {
         for (let attempt = 0; ; attempt += 1) {
@@ -1257,9 +1331,14 @@ export function Chats({
           // The head keeps its live Remove control for the whole in-flight
           // window — which the RUN_BUSY backoff can stretch to seconds — so
           // honour a removal that landed while we were waiting. Sending anyway
-          // would deliver a message the UI already told the user was cancelled,
-          // and `dropHead`'s identity filter would then quietly no-op.
-          if (!(queuesRef.current[runId] ?? []).includes(next)) {
+          // would deliver a message the UI already told the user was cancelled.
+          // By id, not by object: an EDIT during this window replaces the
+          // object, and an identity check would read that as a removal.
+          if (
+            !(queuesRef.current[runId] ?? []).some(
+              (queued) => queued.id === next.id,
+            )
+          ) {
             return;
           }
           try {
@@ -1374,27 +1453,27 @@ export function Chats({
   /** Rewrite a queued message before it goes out. Text only — an attachment
    *  cannot be re-pasted into a one-line field, and losing one silently is
    *  worse than making the user remove the entry and retype it. */
-  const editQueued = useCallback((index: number, text: string): void => {
+  const editQueued = useCallback((id: string, text: string): void => {
     const runId = activeRunIdRef.current;
     if (!runId) {
       return;
     }
     setQueues((prev) => ({
       ...prev,
-      [runId]: (prev[runId] ?? []).map((message, i) =>
-        i === index ? { ...message, text } : message,
+      [runId]: (prev[runId] ?? []).map((message) =>
+        message.id === id ? { ...message, text } : message,
       ),
     }));
   }, []);
 
-  const removeQueued = useCallback((index: number): void => {
+  const removeQueued = useCallback((id: string): void => {
     const runId = activeRunIdRef.current;
     if (!runId) {
       return;
     }
     setQueues((prev) => ({
       ...prev,
-      [runId]: (prev[runId] ?? []).filter((_, i) => i !== index),
+      [runId]: (prev[runId] ?? []).filter((message) => message.id !== id),
     }));
   }, []);
 
@@ -1410,23 +1489,27 @@ export function Chats({
    * a problem the user has no action for.
    */
   const steerQueued = useCallback(
-    async (index: number): Promise<void> => {
+    async (id: string): Promise<void> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
         return;
       }
-      const message = (queuesRef.current[runId] ?? [])[index];
+      const message = (queuesRef.current[runId] ?? []).find(
+        (queued) => queued.id === id,
+      );
       if (!message) {
         return;
       }
       try {
         await startTurn(runId, message.text, message.images);
-        // Dropped by IDENTITY, never by index: the automatic drain can shift
-        // the queue while this POST is in flight, and an index filter would
-        // then remove somebody else's message.
+        // Dropped by ID, never by index and never by object: the automatic
+        // drain can shift the queue while this POST is in flight, so an index
+        // would remove somebody else's message — and an EDIT during the same
+        // window replaces the object, so an identity filter would match
+        // nothing and leave this message to go out a second time.
         setQueues((prev) => ({
           ...prev,
-          [runId]: (prev[runId] ?? []).filter((queued) => queued !== message),
+          [runId]: (prev[runId] ?? []).filter((queued) => queued.id !== id),
         }));
       } catch (err) {
         if (isRunBusyError(err)) {
@@ -1569,24 +1652,30 @@ export function Chats({
    * "it is waiting for an answer but the block is hanging somewhere above".
    * Worse, nothing on screen then explains why the run has gone quiet.
    *
-   * The LAST open one, not the first: with several open at once the newest is
-   * the one the turn is actually blocked on. Only one is pinned, and it is
-   * rendered in exactly one place — the transcript leaves a marker in its slot
-   * instead of a second live copy, because two sets of buttons over one
-   * one-shot verdict channel is a race the card cannot win.
+   * EVERY open request is lifted out, not just the pinned one. A workflow run
+   * can have two nodes asking at once, and leaving the others in transcript
+   * order gave the older one a fully live card that scrolled away — the exact
+   * failure the pin was built to end, reintroduced for every question but the
+   * newest. The transcript leaves a marker in each slot instead of a second
+   * live copy, because two sets of buttons over one one-shot verdict channel is
+   * a race the card cannot win.
    *
    * Derived from the persisted items, so it survives a chat switch and a
    * reload the same way the transcript does.
    */
-  const pinnedRequest = useMemo(() => {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index]!;
-      if (openRequestId(item) !== null) {
-        return item;
-      }
-    }
-    return null;
-  }, [items, openRequestId]);
+  const openRequests = useMemo(
+    () => items.filter((item) => openRequestId(item) !== null),
+    [items, openRequestId],
+  );
+  /**
+   * The one shown: the NEWEST, which is what the turn is actually blocked on.
+   *
+   * The others stay MOUNTED and hidden rather than being unrendered, which is
+   * what keeps a half-typed answer alive when a newer question takes the pin.
+   * Unmounting resets the card's picks, its typed text and every staged
+   * attachment — and the user has no way to get any of it back.
+   */
+  const pinnedRequest = openRequests.at(-1) ?? null;
   /**
    * ONE card builder for both placements — the pinned slot and the settled
    * transcript row. The two differ only in WHERE they hang, and a second copy
@@ -1965,6 +2054,8 @@ export function Chats({
       // A 1:1 chat has exactly one agent; its working state is the run's,
       // and its one thread IS the conversation.
       const chatActivity = activity.get(CHAT_AGENT_KEY);
+      // `activeTurns` still keys off raw liveness: a chat parked on a question
+      // genuinely HAS a turn open, it is just not advancing.
       const running = streaming || activeRun.status === 'running';
       return [
         {
@@ -1973,7 +2064,11 @@ export function Chats({
           agent: activeRun.agentKind,
           // A 1:1 chat has no node, so no plugin directory to carry.
           pluginDir: null,
-          status: running ? 'running' : activeRun.status,
+          // The SAME badge rule the header uses. This used to be a second one,
+          // built from `streaming` and the row alone, so it could never report
+          // `needs-input` — a chat parked on a question read "needs more info"
+          // in the header and "running" in this panel at the same instant.
+          status: activeRunStatus,
           activeTurns: running ? 1 : 0,
           // LIVE first: the delta plane reports the window as of the turn's
           // latest request, while `activity` can only report the last
@@ -1993,7 +2088,7 @@ export function Chats({
               id: 'main',
               kind: 'main',
               label: 'Conversation',
-              status: running ? 'running' : activeRun.status,
+              status: activeRunStatus,
               sessionId: null,
             },
           ],
@@ -2053,7 +2148,7 @@ export function Chats({
     // without it the meter could only move when a durable item landed, which is
     // the "context never grows" complaint this panel exists to answer. There is
     // no react-hooks eslint plugin in this repo to catch the omission.
-  }, [activeRun, activity, streaming, wfNodes, liveText]);
+  }, [activeRun, activeRunStatus, activity, streaming, wfNodes, liveText]);
 
   /**
    * Where this thread can be picked up by hand: the CLI invocation that reopens
@@ -2555,14 +2650,20 @@ export function Chats({
                     );
                   }
                   const item = entry.item;
-                  // The pinned card is THIS row, moved. Leaving the live card
-                  // here too would put two sets of buttons over one one-shot
-                  // verdict channel; leaving nothing would silently drop a row
-                  // out of the conversation's order. A marker keeps the place.
-                  if (pinnedRequest?.id === item.id) {
+                  // EVERY open request's card lives above the composer, so
+                  // every one of them leaves a marker here. Keyed on openness
+                  // rather than on the pinned id: keying on the pin gave the
+                  // SECOND open question a fully live card in the scroller,
+                  // which is the failure the pin exists to end. Leaving the
+                  // live card here too would put two sets of buttons over one
+                  // one-shot verdict channel; leaving nothing would silently
+                  // drop a row out of the conversation's order.
+                  if (openRequestId(item) !== null) {
                     return (
                       <MessageBubble key={item.id} variant="note">
-                        ❓ waiting on your answer — the card is pinned below
+                        {pinnedRequest?.id === item.id
+                          ? '❓ waiting on your answer — the card is pinned below'
+                          : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
                       </MessageBubble>
                     );
                   }
@@ -2602,8 +2703,38 @@ export function Chats({
               {pinnedRequest ? (
                 <div
                   data-slot="pinned-request"
+                  // Named and given a role that can CARRY a name: without one
+                  // this was a bare div, so the three signals that the agent is
+                  // blocked were all silent and a screen-reader user typing
+                  // into the composer got no cue that the turn had stopped on
+                  // them. Deliberately NOT `aria-live`: the card inside is a
+                  // tablist full of interactive controls, and announcing the
+                  // whole region on every keystroke inside it would be worse
+                  // than saying nothing.
+                  role="region"
+                  aria-label="Question waiting on your answer"
                   className="shrink-0 border-t border-border bg-card/60 px-4 py-3">
-                  {approvalCardFor(pinnedRequest)}
+                  {openRequests.length > 1 ? (
+                    <p className="m-0 mb-1.5 text-xs text-muted-foreground">
+                      {openRequests.length} questions waiting — answering this
+                      one opens the next
+                    </p>
+                  ) : null}
+                  {/* Every open request is rendered, and all but the newest are
+                      `hidden`. Rendering only the pinned one would unmount the
+                      card being typed into the moment a newer question arrived,
+                      resetting its picks, its text and every staged attachment
+                      — with no way for the user to get any of it back. `hidden`
+                      also keeps the concealed cards out of the tab order and
+                      the accessibility tree, which `display:none` via a class
+                      would not guarantee against a utility being overridden. */}
+                  {openRequests.map((request) => (
+                    <div
+                      key={request.id}
+                      hidden={request.id !== pinnedRequest.id}>
+                      {approvalCardFor(request)}
+                    </div>
+                  ))}
                 </div>
               ) : null}
 
@@ -2639,7 +2770,7 @@ export function Chats({
                   steerUnavailableReason={steerUnavailableReason}
                   onEdit={editQueued}
                   onRemove={removeQueued}
-                  onSteer={(index) => void steerQueued(index)}
+                  onSteer={(id) => void steerQueued(id)}
                 />
 
                 {/* The SAME composer card as the new-run screen, with the run's
@@ -2738,7 +2869,15 @@ export function Chats({
                                   aria-label="Queue"
                                   title="Queue — goes out when the turn ends, or send it now from the queue above"
                                   onClick={() => void sendFollowUp()}>
-                                  <ArrowUp className="size-4 shrink-0" />
+                                  {/* NOT the ArrowUp that Send uses. The one
+                                      thing the user has to understand before
+                                      clicking is that this does not reach the
+                                      agent, and an identical glyph left that to
+                                      the hover title. Clock is what the strip
+                                      below already marks a waiting message
+                                      with, so the button and its result read as
+                                      the same thing. */}
+                                  <Clock className="size-4 shrink-0" />
                                 </Button>
                               ) : null}
                               <Button

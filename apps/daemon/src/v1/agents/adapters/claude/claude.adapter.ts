@@ -317,8 +317,11 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * The answer rides back as AskUserQuestion's `response` field — the
-   * probe-verified free-text channel claude surfaces to the model.
+   * The answer rides back on ONE of AskUserQuestion's two channels, chosen by
+   * how many questions the card carried: `answers` (a map keyed by question
+   * text) for a lone question, `response` (one free-text reply, which REPLACES
+   * the structured list) for several. `withResponse` owns that choice and the
+   * probe behind it.
    */
   override withAnswer(input: unknown, answer: string): unknown {
     return withResponse(input, answer);

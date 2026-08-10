@@ -3395,18 +3395,28 @@ describe('Chats queued messages', () => {
     await clickButton(container, 'Queue');
 
     await clickButton(container, 'Edit queued message 1');
-    const field = container.querySelector<HTMLInputElement>(
-      'input[aria-label="Edit queued message 1"]',
+    // A textarea, not an input: the value is a composer prompt, and
+    // `<input type=text>` sanitizes newlines out of it. The rewrite below
+    // carries one, and the delivered body is asserted with it intact — flatten
+    // the field back to an <input> and this fails.
+    const field = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Edit queued message 1"]',
     )!;
     await act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
+        HTMLTextAreaElement.prototype,
         'value',
       )!.set!;
-      setValue.call(field, 'the second thought');
+      setValue.call(field, 'the second\nthought');
       field.dispatchEvent(new Event('input', { bubbles: true }));
+      // ⌘/Ctrl+Enter commits, because a bare Enter is how the user types the
+      // newline above.
       field.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          metaKey: true,
+          bubbles: true,
+        }),
       );
     });
 
@@ -3416,7 +3426,7 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { text: 'the second thought' },
+      sendMessageDto: { text: 'the second\nthought' },
     });
   });
 
@@ -3446,6 +3456,196 @@ describe('Chats queued messages', () => {
     ).toBeNull();
   });
 
+  /** Rewrite the queued row at `position` (1-based) and commit it. */
+  const rewriteQueued = async (
+    container: HTMLElement,
+    position: number,
+    text: string,
+  ): Promise<void> => {
+    await clickButton(container, `Edit queued message ${position}`);
+    const field = container.querySelector<HTMLTextAreaElement>(
+      `textarea[aria-label="Edit queued message ${position}"]`,
+    )!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(field, text);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          metaKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+  };
+
+  it('editing a queued message while its send is in flight does NOT send it twice', async () => {
+    // The race the stable id exists for. `dropHead` used to filter by object
+    // IDENTITY while an edit minted a NEW object, so the removal quietly
+    // matched nothing, the message stayed queued, and the next terminal item
+    // sent it a second time. Revert the id keying to `queued !== next` and the
+    // final assertion below fails with two deliveries.
+    let release!: (value: unknown) => void;
+    api.sendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'first draft');
+    await clickButton(container, 'Queue');
+
+    // The turn ends: the drain picks up the head and its POST hangs.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    // The user rewrites it while that POST is still in the air — the row keeps
+    // its live Edit control for the whole window, so this is reachable.
+    await rewriteQueued(container, 1, 'second draft');
+
+    await act(async () => {
+      release(msg(10, 'user', 'first draft'));
+    });
+
+    // Removed despite being a different object, so nothing is left to resend.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+    await act(async () => {
+      emitItem(terminal(6));
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('“send now” drops the message it actually sent when the drain shifts the queue under it', async () => {
+    // Two queued messages. Steering the SECOND while the automatic drain is
+    // removing the first means its position changes mid-flight: an index-keyed
+    // removal would take out the wrong row, and an identity-keyed one breaks
+    // the moment that row is edited. Both are why this keys on the id.
+    let release!: (value: unknown) => void;
+    api.sendChatMessage
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValue(msg(11, 'user', 'alpha'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'alpha');
+    await clickButton(container, 'Queue');
+    await type(container, 'beta');
+    await clickButton(container, 'Queue');
+
+    // Steer the second row; its POST hangs.
+    await clickButton(container, 'Send queued message 2 now');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    // Meanwhile the turn ends and the drain sends + removes the head, so
+    // "beta" is now row 1 rather than row 2.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    await act(async () => {
+      release(msg(10, 'user', 'beta'));
+    });
+
+    // Both went out exactly once and the queue is empty — no survivor, and no
+    // innocent third party removed in beta's place.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('reopening a STILL-RUNNING chat does not drain the queue into the turn in flight', async () => {
+    // Any chat past its first turn replays a `turn_complete`. The drain used to
+    // fire from inside `addItem`, which cannot tell that row from a live one,
+    // so simply coming back to a working chat delivered the held message — and
+    // claude accepts a mid-turn follow-up, so it really went. Steer is the only
+    // sanctioned way into a running turn.
+    //
+    // The transcript ends on an assistant row, which is what says a turn is
+    // still in flight; the earlier `terminal(2)` is the trap.
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'first question'),
+      terminal(2),
+      msg(3, 'user', 'second question'),
+      msg(4, 'assistant', 'still working on it'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'held');
+    await clickButton(container, 'Queue');
+
+    // Leave and come back — activation replays the whole transcript again.
+    await act(async () => {
+      container
+        .querySelector('[aria-label="New chat"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await clickRun(container, 'My chat');
+
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('held');
+  });
+
+  it('a “send now” refused as RUN_BUSY keeps the message queued and shows NO banner', async () => {
+    // The daemon disagreeing with the capability report at this instant is not
+    // a failure the user can act on: the message is still queued and still
+    // going out when the turn ends. A red banner would name a problem with no
+    // remedy attached.
+    api.sendChatMessage.mockRejectedValueOnce(busy());
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'urgent');
+    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('urgent');
+    expect(container.textContent).not.toContain('RUN_BUSY');
+  });
+
+  it('a “send now” that fails for a REAL reason says so, and keeps the message', async () => {
+    // The opposite of the RUN_BUSY case above: this one the user does need to
+    // know about, and the message must survive so it can be retried.
+    api.sendChatMessage.mockRejectedValueOnce(new Error('daemon unreachable'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'urgent');
+    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(container.textContent).toContain('daemon unreachable');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('urgent');
+  });
+
   it('withholds “send now” from a CLI with no mid-turn channel, and says why', async () => {
     // Read off the daemon's capability report, never from the agent's name:
     // this run is a cursor chat, whose ACP transport takes one prompt per
@@ -3462,7 +3662,14 @@ describe('Chats queued messages', () => {
     const steer = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Send queued message 1 now"]',
     )!;
-    expect(steer.disabled).toBe(true);
+    // `aria-disabled`, and deliberately NOT `disabled`. The shared Button sets
+    // `disabled:pointer-events-none`, so a truly disabled control never fires
+    // the hover that renders `title` — the one place this sentence is written —
+    // and drops out of the tab order, putting it past a keyboard user too.
+    // Asserting `disabled === false` is the half that fails if someone
+    // "simplifies" this back.
+    expect(steer.getAttribute('aria-disabled')).toBe('true');
+    expect(steer.disabled).toBe(false);
     expect(steer.title).toContain('one prompt per turn');
 
     await clickButton(container, 'Send queued message 1 now');
@@ -4915,8 +5122,70 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(pinned(container)!.textContent).toContain('ls /newest');
-    expect(pinned(container)!.textContent).not.toContain('/tmp/a');
+    // Every open request's card lives in the pinned region; all but the newest
+    // are `hidden`. So the assertion is about VISIBILITY, not presence — the
+    // older card stays mounted on purpose, which is what keeps a half-typed
+    // answer alive when a newer question takes the pin. `textContent` includes
+    // hidden nodes, so asserting on it here would pass either way.
+    const cards = [...pinned(container)!.querySelectorAll(':scope > div')];
+    const visible = cards.filter((card) => !card.hasAttribute('hidden'));
+    expect(visible).toHaveLength(1);
+    expect(visible[0]!.textContent).toContain('ls /newest');
+
+    const concealed = cards.filter((card) => card.hasAttribute('hidden'));
+    expect(concealed).toHaveLength(1);
+    expect(concealed[0]!.textContent).toContain('/tmp/a');
+  });
+
+  it('keeps a half-typed answer when a newer question takes the pin', async () => {
+    // The draft loss. The pinned card and its transcript slot are different
+    // PARENTS, so rendering only the pinned request unmounted the card being
+    // typed into the instant a second question arrived — picks, text and every
+    // staged attachment gone, with no way to get any of it back.
+    // A QUESTION, not a permission request: only a question card carries the
+    // free-text field a draft can live in.
+    const asked: ChatItem = {
+      ...approval('r1', 1, 'req-old'),
+      payload: {
+        id: 'req-old',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Which looks right?', options: [] }] },
+      },
+    };
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), asked]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const field = pinned(container)!.querySelector<HTMLInputElement>('input')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(field, 'half an answer');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // A second node asks while that answer is being typed.
+    await act(async () => {
+      emitItem({
+        ...approval('r1', 2, 'req-new'),
+        payload: {
+          id: 'req-new',
+          toolName: 'Bash',
+          input: { command: 'ls /newest' },
+        },
+      });
+    });
+
+    const concealed = [
+      ...pinned(container)!.querySelectorAll(':scope > div[hidden]'),
+    ];
+    expect(concealed).toHaveLength(1);
+    expect(concealed[0]!.querySelector<HTMLInputElement>('input')!.value).toBe(
+      'half an answer',
+    );
   });
 
   it('survives leaving the chat and coming back', async () => {

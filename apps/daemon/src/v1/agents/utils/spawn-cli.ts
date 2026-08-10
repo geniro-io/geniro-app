@@ -7,6 +7,7 @@ import type {
   FollowUpMessage,
   TurnIo,
 } from '../adapters/adapter.types';
+import { isUserQuestion } from './approval-answer';
 import { buildChildEnv } from './child-env';
 import { trackDetachedChild } from './child-journal';
 import { createGroupTerminator } from './kill-tree';
@@ -138,6 +139,17 @@ export interface CliSessionOptions {
   mapper: (obj: unknown) => AgentEvent[];
   spawn?: SpawnFn;
   logger?: SessionLogger;
+  /**
+   * The tool name this CLI asks the USER an open-ended question with, or null
+   * when it has none. Supplied by the adapter from its own config — this module
+   * never learns any CLI's names.
+   *
+   * It exists so the between-turns refusal can tell a permission check from a
+   * question. Refusing a permission check is honest: no turn can carry the
+   * verdict. Refusing a QUESTION answers it "no" on the user's behalf, in their
+   * name, and they never see it was asked.
+   */
+  questionToolName?: string | null;
 }
 
 /**
@@ -361,6 +373,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (current === turn) {
       current = null;
     }
+    // The map only ever times a WITHIN-turn round trip, so nothing in it can
+    // still be answered once the turn is over. `respondApproval` and the
+    // between-turns handler each delete their own entry, but a request settled
+    // off both paths — `ApprovalRegistry.sweepNode`'s `unanswerable`, a
+    // deny-on-persist-throw, a cancel with a card still open — left one behind,
+    // and a run-scoped session holds this closure for every turn of the chat.
+    approvalSeenAt.clear();
     // `killTimer` is deliberately NOT cleared here. It belongs to the PROCESS,
     // not the turn: a cancel that settled the turn in protocol (or a
     // `close()` taken while a turn was running) still needs its SIGTERM to
@@ -422,6 +441,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (event.type !== 'approval_request') {
       opts.logger?.warn(
         `${opts.command}: dropped a '${event.type}' event arriving between turns`,
+      );
+      return;
+    }
+    if (isUserQuestion(opts.questionToolName ?? null, event.toolName)) {
+      // A QUESTION is left standing. The refusal below encodes `allow: false`,
+      // which reaches the CLI as a denial attributed to the user — so an
+      // agent that asked something between turns was told "no" by a person who
+      // never saw the question. Parked, it stalls instead, which is what it did
+      // before the refusal existed and is the honest state: nobody has answered.
+      approvalSeenAt.delete(event.id);
+      opts.logger?.warn(
+        `${opts.command}: question '${event.toolName}' (id ${event.id}) arrived between turns — ` +
+          'left unanswered, since refusing it would answer for the user',
       );
       return;
     }

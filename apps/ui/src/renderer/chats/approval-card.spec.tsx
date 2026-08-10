@@ -968,9 +968,10 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
   }
 
   it('hands the bytes back SEPARATELY, and says so in the answer', async () => {
-    // The whole point of the third argument: the answer reaches the model as
-    // `updatedInput.response`, a plain string, so the image cannot ride inside
-    // it. It goes out as its own message — and the answer has to say so, or
+    // The whole point of the third argument: the answer reaches the model as a
+    // plain string inside the tool input (`updatedInput.answers` for a lone
+    // question, `updatedInput.response` for several), so the image cannot ride
+    // inside it. It goes out as its own message — and the answer has to say so, or
     // the model acts on the words and meets the screenshot afterwards with no
     // idea it was part of the reply.
     const onRespond = vi.fn();
@@ -995,6 +996,62 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     expect(answer).toContain('this one');
     expect(answer).toContain('1 image attached');
     expect(images).toEqual([{ mediaType: 'image/png', data: PNG_BASE64 }]);
+  });
+
+  it('answering a lone question by CLICKING an option still sends the picture', async () => {
+    // For a single non-multiSelect question the option click IS the submit, and
+    // it used to pass no images at all — so `respondApproval`'s
+    // `if (!images?.length) return;` dropped the staged screenshot and the card
+    // settled with no way to resend. This is the one path that lost it, and it
+    // is the same card state that `canSubmit` calls answerable.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    await pasteImage(el);
+    act(() => {
+      buttonNamed(el, 'A').click();
+    });
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    const [allow, answer, images] = onRespond.mock.calls[0]!;
+    expect(allow).toBe(true);
+    expect(answer).toContain('A');
+    expect(answer).toContain('1 image attached');
+    expect(images).toEqual([{ mediaType: 'image/png', data: PNG_BASE64 }]);
+  });
+
+  it('a picture does NOT unlock Submit on a multi-question card', async () => {
+    // One image cannot say which tab it belongs to, so it clears the empty-tab
+    // gate for a LONE question only. Drop the `questions.length === 1` half of
+    // that condition and this card submits with both tabs still empty — the
+    // agent receives an answer to neither.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            { question: 'Which colour?', options: [{ label: 'Red' }] },
+            { question: 'Which size?', options: [{ label: 'Small' }] },
+          ],
+        }}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    // A multi-question card stages its picks, so its button is "Submit answers".
+    expect(buttonNamed(el, 'Submit answers').disabled).toBe(true);
+
+    await pasteImage(el);
+
+    expect(buttonNamed(el, 'Submit answers').disabled).toBe(true);
   });
 
   it('a picture alone ANSWERS a lone question', async () => {

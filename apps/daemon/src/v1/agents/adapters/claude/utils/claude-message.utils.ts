@@ -28,8 +28,13 @@ import {
  *
  * Defensive about the SHAPE as well as the text: `content` is a string on some
  * results and an array of blocks on others, and the marker has been observed in
- * both. Anything else stringifies to something that cannot contain both
- * markers, so it simply does not match.
+ * both. Anything with no text leaf carries no prose, so it does not match.
+ *
+ * Deliberately NOT a search of the serialized payload. Both markers must appear
+ * in ONE text leaf: the CLI writes them as a single sentence, so a match spread
+ * across two unrelated blocks — or found inside an image block's base64 — would
+ * be a false positive, and serializing that base64 to look for prose it cannot
+ * contain was the cost this replaced.
  */
 export function isPermissionChannelFailure(content: unknown): boolean {
   if (typeof content === 'string') {

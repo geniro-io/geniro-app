@@ -89,7 +89,9 @@ describe('QueuedStrip', () => {
         onSteer={noop}
       />,
     );
-    expect(el.textContent).toBe('');
+    // `firstChild`, not `textContent`: an empty `<div role="group">` also has
+    // empty text, so a text assertion passes with the early return deleted.
+    expect(el.firstChild).toBeNull();
   });
 
   it('an empty edit CANCELS instead of blanking the message', () => {

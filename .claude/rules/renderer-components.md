@@ -43,7 +43,11 @@ globs:
    rename field — owns the row's clicks and focus),
    `expandable-textarea` (a `Textarea` whose corner ⤢ opens the field in
    `markdown-editor-dialog` — use it for any prompt-length field instead of a
-   bare `Textarea`), `markdown-editor-dialog`
+   bare `Textarea`, EXCEPT one whose lifetime the surrounding component owns:
+   the ⤢ modal cannot be dismissed from outside, and the control exposes no
+   `ref` / `onKeyDown` / `onBlur` to commit through. `chats/queued-strip.tsx` is
+   the standing example — the row it edits can be sent out from under the editor
+   by the drain, so the strip has to close the field itself), `markdown-editor-dialog`
 4. **Feature screen** in its own directory: `chats/` (+ its row component
    `message-bubble.tsx`), `onboarding/`, `settings/`, `graphs/`; app shell (`App.tsx`, `main.tsx`) and daemon
    clients at the renderer root — the REST clients and every daemon wire type

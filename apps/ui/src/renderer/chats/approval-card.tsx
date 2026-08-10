@@ -260,8 +260,8 @@ function QuestionCard({
    * answer, acts on it, and only meets the screenshot afterwards with no idea
    * it was meant as part of the reply.
    *
-   * Shared by BOTH submit paths. It used to be inlined on the Submit path only,
-   * which is how the answer-on-click path came to drop the image entirely.
+   * Shared by BOTH submit paths, so neither can describe the delivery
+   * differently from the other.
    */
   const imageNote =
     imageCount === 0
@@ -324,14 +324,14 @@ function QuestionCard({
         (widest, label) => Math.max(widest, label.length),
         0,
       ) + 2;
-  // Floored at 0, not 1: an option label wide enough to consume the whole
-  // budget must leave NO room to type, or the click path — the one submit
-  // path with no gate in front of it — sends label + text past the wire
-  // limit and the daemon drops it with no on-card explanation.
-  // The image note is charged here too, because on the answer-on-click path it
-  // now travels with the answer and that path has no Submit button to disable —
-  // an unreserved note would put the verdict past the wire limit and the daemon
-  // drops it with no on-card explanation.
+  // Everything that will ride along with the typed text is reserved out of it
+  // first — the widest label a click could add, and the image note — because
+  // the answer-on-click path is the one submit path with no button to disable.
+  // Anything left unreserved there puts the verdict past the wire limit, and
+  // the daemon drops it with no on-card explanation.
+  //
+  // Floored at 0, not 1: a label wide enough to consume the whole budget must
+  // leave NO room to type.
   const typedBudget = Math.max(
     0,
     perTabBudget - pendingPickCost - imageNote.length,

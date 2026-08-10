@@ -1708,8 +1708,8 @@ export function Chats({
     return keys;
   }, [items, openRequestId]);
   /**
-   * The one open card, lifted OUT of the transcript and pinned above the
-   * composer.
+   * EVERY open request, oldest first — lifted OUT of the transcript so none of
+   * them can scroll away.
    *
    * A card rendered in transcript order scrolls away like any other row, so a
    * long turn leaves the agent parked on a question the user cannot see —

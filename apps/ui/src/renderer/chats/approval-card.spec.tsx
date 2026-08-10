@@ -674,6 +674,29 @@ describe('ApprovalCard', () => {
     expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
   });
 
+  it('carries KEYBOARD FOCUS to the tab it advanced to', () => {
+    // The advance moves the panel either way, so the test above passes whether
+    // focus follows or not. It does not follow by itself: option buttons are
+    // keyed `${li}-${label}`, so switching tabs unmounts the very button that
+    // was just activated and focus falls to `document.body` — on EVERY
+    // question, leaving a keyboard user to tab in from the top of the document
+    // each time. `focusTab` moves both; `setActiveTab` moves only the panel,
+    // and reverting to it fails here and nowhere else.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={MULTI_QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    click(buttonNamed(el, 'Blue'));
+
+    expect(document.activeElement).toBe(tabsOf(el)[1]);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it('does not advance when the click CLEARED the pick', () => {
     // Clicking the chosen label again un-picks it, leaving the tab empty.
     // Advancing there would carry the user away from a question they just
@@ -1025,6 +1048,33 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     expect(answer).toContain('A');
     expect(answer).toContain('1 image attached');
     expect(images).toEqual([{ mediaType: 'image/png', data: PNG_BASE64 }]);
+  });
+
+  it('reserves the image note out of the typing budget', async () => {
+    // The note ("1 image attached — sent as the next message") is appended to
+    // the answer on BOTH submit paths, and the answer-on-click path has no
+    // Submit button to disable — so if the note were not charged here, a
+    // full-length typed answer plus a paste would put the verdict past the wire
+    // limit and the daemon would drop it with nothing said on the card.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const before = el.querySelector<HTMLInputElement>('input')!.maxLength;
+
+    await pasteImage(el);
+
+    const after = el.querySelector<HTMLInputElement>('input')!.maxLength;
+    expect(after).toBeLessThan(before);
+    // Exactly the note's length, not merely "smaller" — a vaguer assertion
+    // would pass on any unrelated shrinkage.
+    expect(before - after).toBe(
+      '\n(1 image attached — sent as the next message)'.length,
+    );
   });
 
   it('a picture does NOT unlock Submit on a multi-question card', async () => {

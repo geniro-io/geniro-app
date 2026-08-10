@@ -283,6 +283,49 @@ describe('mapClaudeMessage', () => {
     }
   });
 
+  it('requires both markers in ONE text leaf, not merely somewhere in the payload', () => {
+    // The detector reads text leaves; it does NOT serialize the payload. Two
+    // unrelated blocks each carrying one half are not the CLI's sentence, and
+    // the old `JSON.stringify(content)` search called them one. Restore it and
+    // this fires.
+    expect(
+      permissionFailure([
+        { type: 'text', text: 'Tool permission request failed' },
+        { type: 'text', text: 'Stream closed' },
+      ]),
+    ).toEqual([expect.objectContaining({ type: 'tool_result' })]);
+  });
+
+  it('does not read prose out of an image block, which is what the scan was narrowed for', () => {
+    // The worst case of the whole-payload stringify: a base64 image result
+    // serialized in full so two short markers could be searched for in bytes
+    // that cannot carry prose. Matching here would also be a false positive —
+    // an image is not the permission channel reporting anything.
+    expect(
+      permissionFailure([
+        {
+          type: 'image',
+          source: {
+            data: 'Tool permission request failed: AbortError: Stream closed',
+          },
+        },
+      ]),
+    ).toEqual([expect.objectContaining({ type: 'tool_result' })]);
+  });
+
+  it('still finds the sentence when the result is an object carrying a text field', () => {
+    // The third shape the narrowing kept — asserted so a later "simplify to
+    // strings and arrays" cannot drop it silently.
+    expect(
+      permissionFailure({
+        text: 'Tool permission request failed: AbortError: Stream closed',
+      }),
+    ).toEqual([
+      expect.objectContaining({ type: 'tool_result' }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage({

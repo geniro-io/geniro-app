@@ -43,6 +43,17 @@ export class FakeReadable extends EventEmitter {
 export class FakeWritable extends EventEmitter {
   written = '';
   ended = false;
+  /**
+   * The platform's own flag, modelled because production reads it: a node
+   * writable reports false once ended or destroyed, and writing past that
+   * point is reported ASYNCHRONOUSLY rather than thrown. A double that stayed
+   * writable forever could not tell a delivered write from a dropped one, so
+   * the honest-return guard in `sessionWrite` would be untestable.
+   *
+   * This is the stream contract, not behaviour of the code under test — the
+   * double still decides nothing.
+   */
+  writable = true;
 
   write(chunk: string): boolean {
     this.written += chunk;
@@ -51,7 +62,14 @@ export class FakeWritable extends EventEmitter {
 
   end(): this {
     this.ended = true;
+    this.writable = false;
     return this;
+  }
+
+  /** A pipe that breaks under us — EPIPE on a child that stopped reading. */
+  breakPipe(message = 'write EPIPE'): void {
+    this.writable = false;
+    this.emit('error', new Error(message));
   }
 }
 

@@ -49,7 +49,12 @@ export interface VerdictAck {
  */
 export interface RunStatusEvent {
   runId: string;
-  status: RunStatus;
+  /**
+   * The run's new status, or null when the event only says what the run is
+   * DOING and asserts nothing about whether it is still going. See the
+   * daemon-side field for why the activity announce cannot claim one.
+   */
+  status: RunStatus | null;
   /** What the run is doing right now, or null when it is not doing anything. */
   activity: string | null;
 }
@@ -67,12 +72,17 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
   }
-  if (!RUN_STATUS_VALUES.has(status as RunStatus)) {
+  // A MISSING or null status is an activity-only announce and is read as such.
+  // An unrecognised one is still rejected outright: that is version skew, and
+  // treating it as "no status" would silently downgrade a real status change
+  // into an activity update rather than degrading to no update at all.
+  const known = status === null || status === undefined;
+  if (!known && !RUN_STATUS_VALUES.has(status as RunStatus)) {
     return null;
   }
   return {
     runId,
-    status: status as RunStatus,
+    status: known ? null : (status as RunStatus),
     activity: typeof activity === 'string' && activity ? activity : null,
   };
 }

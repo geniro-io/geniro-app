@@ -143,4 +143,67 @@ describe('standalone transcript rows', () => {
     expect(container.querySelector('[data-slot="sender-row"]')).not.toBeNull();
     expect(container.textContent).toContain('You');
   });
+
+  it.each([true, false])(
+    'says a delegate’s words are a sub-agent’s (soloAgent=%s)',
+    (solo) => {
+      // Reproduced in the real UI before this existed: five near-identical
+      // reviewer openers rendered as flat main-thread prose, indistinguishable
+      // from the agent the user is talking to. `TranscriptItem`'s own
+      // `sub-agent` caption cannot cover it — `TurnBlock` draws message rows
+      // itself and never reaches that path, and every assistant message is
+      // inside a block.
+      const entries = buildTurnBlocks(
+        groupTranscript([
+          item('message', { text: 'Spawning reviewers.' }, null, 'assistant'),
+          item(
+            'message',
+            {
+              text: "I'll start by loading criteria.",
+              parentToolUseId: 'toolu_1',
+            },
+            null,
+            'assistant',
+          ),
+        ]),
+      );
+      act(() => {
+        root.render(
+          <>
+            {entries.map((entry, index) => (
+              <TranscriptEntryView
+                key={index}
+                entry={entry}
+                nodes={NODES}
+                chatAgentName="claude"
+                soloAgent={solo}
+              />
+            ))}
+          </>,
+        );
+      });
+
+      const blocks = [
+        ...container.querySelectorAll('[data-role="turn-block"]'),
+      ];
+      const main = blocks.find((b) =>
+        b.textContent?.includes('Spawning reviewers.'),
+      )!;
+      const delegate = blocks.find((b) =>
+        b.textContent?.includes('loading criteria'),
+      )!;
+
+      // Two blocks, not one — a delegate's words are not the agent's own.
+      expect(main).not.toBe(delegate);
+      expect(delegate.getAttribute('data-subagent')).toBe('toolu_1');
+      expect(
+        delegate.querySelector('[data-role="subagent-label"]'),
+      ).not.toBeNull();
+      expect(delegate.textContent).toContain('sub-agent');
+
+      // …and the main thread is NOT labelled, or the marker would mean nothing.
+      expect(main.getAttribute('data-subagent')).toBeNull();
+      expect(main.querySelector('[data-role="subagent-label"]')).toBeNull();
+    },
+  );
 });

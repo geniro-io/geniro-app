@@ -97,6 +97,92 @@ describe('a run-scoped session outlives its turns', () => {
     expect(child.kills).toBe(0);
   });
 
+  it('stops serving a session whose stdin broke BETWEEN turns', async () => {
+    // The gap a kept process opened: its pipe can break with no turn in
+    // flight, and every exit from the stdin error handler was a bare `return`
+    // — nothing marked, nothing recorded. The session then reported itself
+    // idle AND alive forever, so the registry kept handing it out and each
+    // later turn wrote into a pipe nobody was reading.
+    const warnings: string[] = [];
+    const { session, child } = openSession(undefined, {
+      warn: (message: string) => warnings.push(message),
+      info: () => {},
+      error: () => {},
+    } as unknown as SessionLogger);
+
+    const first = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await first?.done;
+    expect(session.idle).toBe(true);
+
+    child.stdin.breakPipe();
+
+    expect(session.idle).toBe(false);
+    expect(session.startTurn({ onEvent: () => {} })).toBeNull();
+    // It left THE REASON behind, not merely a note that something happened.
+    // Asserting the generic word passed on `handleOrphanEvent`'s own "dropped
+    // a 'error' event" line while the EPIPE text was being discarded — a pin
+    // that certified the opposite of what it claimed.
+    expect(warnings.join('\n')).toContain('stdin error');
+    expect(warnings.join('\n')).toContain('EPIPE');
+  });
+
+  it('announces the END of a session whose stdin broke between turns, so its owner can drop it', async () => {
+    // Marking the session unusable is only half of it. `AgentSessionRegistry`
+    // forgets an entry through ONE channel — `CliSession.closed` — and it
+    // treats a non-idle entry as BUSY: the idle timer skips it, `evictIfFull`
+    // skips it while still counting it against MAX_LIVE_SESSIONS, and
+    // `!alive` (its only other escape hatch) is false because the process is
+    // still running. So a pipe that breaks between turns leaves a session that
+    // can never serve another turn holding a slot for the daemon's lifetime,
+    // and a genuinely healthy idle session is evicted in its place — the exact
+    // inversion `forgetWhenClosed` was written to prevent.
+    //
+    // The handler already does the right thing when a turn is in flight
+    // (`endProcess()`); the between-turns branch is the asymmetry.
+    const { session, child } = openSession();
+
+    const first = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await first?.done;
+
+    let announced = false;
+    void session.closed.then(() => {
+      announced = true;
+    });
+
+    child.stdin.breakPipe();
+    // A macrotask, so every pending microtask (the `closed` continuation
+    // above) has already run — no timing to be lucky about.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(announced).toBe(true);
+    expect(session.alive).toBe(false);
+  });
+
+  it('reports a write into a broken stdin as NOT delivered', async () => {
+    // `sendUserMessage`'s answer decides whether the chat commits the user's
+    // message to the transcript, so a true it cannot honour loses the message
+    // silently. Writing past an ended pipe does not throw, so the old
+    // try/catch answered true for a write that never landed.
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: () => {},
+      buildFollowUpPayload: (message) => `${message.text}\n`,
+    });
+
+    expect(handle?.sendUserMessage({ text: 'lands', images: undefined })).toBe(
+      true,
+    );
+
+    child.stdin.writable = false;
+
+    expect(handle?.sendUserMessage({ text: 'lost', images: undefined })).toBe(
+      false,
+    );
+    expect(child.stdin.written).not.toContain('lost');
+  });
+
   it('settles a session turn on its terminal EVENT, not on the process dying', async () => {
     // A session turn whose `done` waited for the process would never resolve —
     // the process is meant to outlive it. Pinned by resolving `done` while the

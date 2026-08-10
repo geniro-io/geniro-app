@@ -1,8 +1,20 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { formatTokens } from './agent-activity';
 import { MessageBubble } from './message-bubble';
+
+/**
+ * What the active run is doing right now — the daemon's own `run_status`
+ * activity, the same sentence the sidebar badge carries.
+ *
+ * A context rather than a prop, for the reason `AttachmentLoaderContext` is
+ * one: the shells between `Chats` and this row are memoized on referentially
+ * stable props, and threading a string that changes mid-turn through every one
+ * of them would defeat that memoization. Null outside a provider, and null
+ * while the daemon has not said — the row then names the state alone.
+ */
+export const RunActivityContext = createContext<string | null>(null);
 
 /**
  * The two synthetic transcript rows that describe what an agent is doing RIGHT
@@ -93,12 +105,24 @@ export function ThinkingRow({
  * looking. The clock runs from MOUNT rather than from a published timestamp:
  * "how long this has been quiet" is exactly the question it answers, and it
  * needs no state threaded through the fold to answer it.
+ *
+ * It NAMES what the agent is doing whenever the daemon has said. "Working…"
+ * and an elapsed clock describe a state without describing the work, which is
+ * the complaint this answers: an abstract label leaves the user unable to tell
+ * a long compaction from a hung tool. The clock stays either way — it is the
+ * half of the row the daemon cannot supply.
  */
 export function WorkingRow(): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
+  const activity = useContext(RunActivityContext);
   useSecondsTick();
+  const elapsed = formatElapsed(Date.now() - mountedAt);
   return (
-    <LiveRow label={`Working… ${formatElapsed(Date.now() - mountedAt)}`} />
+    <LiveRow
+      label={
+        activity === null ? `Working… ${elapsed}` : `${activity} · ${elapsed}`
+      }
+    />
   );
 }
 

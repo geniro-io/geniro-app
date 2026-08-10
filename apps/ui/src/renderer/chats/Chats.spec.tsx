@@ -785,6 +785,70 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     expect(container.textContent).not.toContain('waiting for your answer');
   });
 
+  it('stops naming the work when the run STOPS, even carrying an activity', async () => {
+    // A null activity was the only thing that ever cleared the label, so a
+    // terminal status arriving alongside a non-null one left the run named
+    // after a tool that had already finished — the stuck "· running Read".
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: 'running Read',
+      });
+    });
+    expect(container.textContent).toContain('running Read');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: 'running Read',
+      });
+    });
+    expect(container.textContent).not.toContain('running Read');
+  });
+
+  it('an activity announce does NOT put a finished run back to running', async () => {
+    // The reported "it keeps spinning in progress after it finished". The
+    // activity announce fires from inside the turn's event stream on every
+    // tool call and never reads the run, so while it asserted `running` a
+    // single straggler arriving after the terminal write flipped the badge
+    // back — and nothing announced again to correct it.
+    // Asserted on a run the user is NOT looking at: the focused run's badge is
+    // driven by the live `streaming` flag, so it would mask the thing under
+    // test. Same reason the sibling badge tests use `r2`.
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'running' },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const secondRow = (): HTMLElement =>
+      [...container.querySelectorAll('li')].find((el) =>
+        el.textContent?.includes('Second chat'),
+      )!;
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(secondRow().textContent).toContain('completed');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, activity: 'running Read' });
+    });
+
+    // The badge stands, and the straggler's activity is not shown against a
+    // run that is over.
+    expect(secondRow().textContent).toContain('completed');
+    expect(secondRow().textContent).not.toContain('running Read');
+  });
+
   it('ignores a status broadcast for a run it does not know', async () => {
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
@@ -1515,6 +1579,43 @@ describe('Chats — what the transcript says the agent is doing', () => {
     await clickRun(container, 'My chat');
 
     expect(container.textContent).toContain('Working…');
+  });
+
+  it('names what the agent is doing on the working row, not just “Working…”', async () => {
+    // The transcript half of the same complaint the badge answers: "just
+    // thinking is completely abstract — always write what it is doing".
+    // `WorkingRow` reads this from `RunActivityContext`, so the wiring that
+    // feeds it (Chats' provider around the transcript) is what this pins —
+    // remove the provider and the row silently reverts to "Working…" while
+    // the component's own spec still passes.
+    api.listRunItems.mockResolvedValue([
+      approval('r1', 0, 'req-open'),
+      {
+        id: 'r1-verdict-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'approval_verdict' as const,
+        role: null,
+        payload: { id: 'req-open', allow: true },
+        createdAt: 'now',
+      },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.textContent).toContain('Working…');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: 'running Read',
+      });
+    });
+
+    expect(container.textContent).toContain('running Read');
+    expect(container.textContent).not.toContain('Working…');
   });
 });
 
@@ -3671,6 +3772,120 @@ describe('Chats queued messages', () => {
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('urgent');
     expect(container.textContent).not.toContain('RUN_BUSY');
+  });
+
+  it('an older “send now” refusal does not unlock a row whose own send is still in flight', async () => {
+    // Two rows steered in a row: the SECOND press is the current one, and the
+    // first row's POST is still out. When that stale POST comes back refused,
+    // the outcome it records must not replace the live row's — the second
+    // row's inert Send control is the only thing standing between the user and
+    // a second copy of a message already on its way to the agent.
+    let refuseFirst!: (err: unknown) => void;
+    let settleSecond!: (value: unknown) => void;
+    api.sendChatMessage
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            refuseFirst = reject;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settleSecond = resolve;
+          }),
+      )
+      // Anything past those two is the duplicate this test exists to catch.
+      .mockResolvedValue(msg(12, 'user', 'beta'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'alpha');
+    await clickButton(container, 'Queue');
+    await type(container, 'beta');
+    await clickButton(container, 'Queue');
+
+    await clickButton(container, 'Send queued message 1 now');
+    await clickButton(container, 'Send queued message 2 now');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+
+    // The FIRST row's POST resolves last, and is refused.
+    await act(async () => {
+      refuseFirst(busy());
+      await Promise.resolve();
+    });
+
+    // A second press on the row whose POST is still out delivers it twice.
+    await clickButton(container, 'Send queued message 2 now');
+    const sentTexts = api.sendChatMessage.mock.calls.map(
+      (call: unknown[]) =>
+        (call[0] as { sendMessageDto: { text: string } }).sendMessageDto.text,
+    );
+    expect(sentTexts.filter((text) => text === 'beta')).toHaveLength(1);
+    // …because the control that should have refused it went live again.
+    const second = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send queued message 2 now"]',
+    )!;
+    expect(second.getAttribute('aria-disabled')).toBe('true');
+
+    await act(async () => {
+      settleSecond(msg(11, 'user', 'beta'));
+    });
+  });
+
+  it('a “send now” the drain was already serving recovers when that drain fails', async () => {
+    // Pressing Send-now on the row the automatic drain is already sending is
+    // deliberately suppressed — it is on its way, and a second POST would
+    // deliver it twice. What the row is told, though, outlives the send: when
+    // that drain FAILS the message is back at the head with nothing in flight,
+    // so a row still claiming to be sending is false, and a Send control still
+    // inert on that claim leaves the user no way to retry at all.
+    let failDrain!: (err: unknown) => void;
+    api.sendChatMessage
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            failDrain = reject;
+          }),
+      )
+      .mockResolvedValue(msg(11, 'user', 'alpha'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'alpha');
+    await clickButton(container, 'Queue');
+
+    // The turn settles, so the drain picks the head up; its POST hangs.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    // The user presses Send-now on that same row — suppressed, by design.
+    await clickButton(container, 'Send queued message 1 now');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    // …and then the drain's send fails outright. Nothing is going out now.
+    await act(async () => {
+      failDrain(new Error('daemon unreachable'));
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('daemon unreachable');
+    const queue = container.querySelector('[aria-label="Queued messages"]')!;
+    expect(queue.textContent).toContain('alpha');
+
+    // Send-now has to work again — this is the user's only way to push the
+    // message into the running turn, and nothing else will retry it.
+    await clickButton(container, 'Send queued message 1 now');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    // …and the row must stop claiming it is on its way.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent ??
+        '',
+    ).not.toContain('sending…');
   });
 
   it('a “send now” that fails for a REAL reason says so, and keeps the message', async () => {

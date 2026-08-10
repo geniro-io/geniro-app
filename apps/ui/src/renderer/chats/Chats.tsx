@@ -71,6 +71,7 @@ import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ContextMeter } from './context-meter';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
+import { RunActivityContext } from './live-row';
 import {
   applyLiveText,
   CHAT_LIVE_KEY,
@@ -336,6 +337,27 @@ export function Chats({
   useEffect(() => {
     queuesRef.current = queues;
   }, [queues]);
+  /**
+   * What became of the Send-now the user last pressed — rendered on the row by
+   * {@link QueuedStrip}. One outstanding at a time: the answer belongs to the
+   * press, and a second press supersedes the first.
+   *
+   * Held for the ACTIVE run only, which is the only queue the strip renders.
+   * `activateRun` clears it, so an outcome from one chat can never surface
+   * against a row the user is looking at in another.
+   */
+  const [steerStatus, setSteerStatus] = useState<{
+    id: string;
+    state: 'sending' | 'held';
+  } | null>(null);
+  /**
+   * Retire this row's outcome — but only if a later press has not already
+   * replaced it. A steer's POST outlives the press, so a slow one resolving
+   * after the user moved to another row would otherwise wipe that row's state.
+   */
+  const clearSteerStatus = useCallback((id: string): void => {
+    setSteerStatus((current) => (current?.id === id ? null : current));
+  }, []);
   // Minted HERE rather than at the three call sites, so no caller can enqueue a
   // message without one.
   const enqueueMessage = useCallback(
@@ -750,6 +772,8 @@ export function Chats({
       if (previous && previous !== runId) {
         client.leaveRun(previous);
       }
+      // The steer outcome belongs to the run the user pressed it in.
+      setSteerStatus(null);
       activeRunIdRef.current = runId;
       lastSeqRef.current = -1;
       sawTerminalRef.current = false;
@@ -903,14 +927,27 @@ export function Chats({
     // focused run's room, so before this a background run's settle was
     // invisible until the next refetch.
     const unsubscribeRunStatus = client.onRunStatus((event) => {
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === event.runId ? { ...run, status: event.status } : run,
-        ),
-      );
+      const status = event.status;
+      // An activity-only announce carries no status and must not touch the
+      // badge. It fires on every tool call without reading the run, so while
+      // it asserted `running` one straggler after a cancel flipped the row
+      // back to running and nothing announced again to correct it.
+      if (status !== null) {
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === event.runId ? { ...run, status } : run,
+          ),
+        );
+      }
       setActivities((prev) => {
         const next = new Map(prev);
-        if (event.activity === null) {
+        // A run that is no longer RUNNING has no current activity, whatever
+        // the announce carried. A null activity was the only thing that ever
+        // cleared this map, so a terminal status arriving alongside a non-null
+        // one left the entry behind — and the badge went on naming a tool that
+        // finished, for as long as the row lived.
+        const stopped = status !== null && status !== 'running';
+        if (event.activity === null || stopped) {
           next.delete(event.runId);
         } else {
           next.set(event.runId, event.activity);
@@ -1401,12 +1438,24 @@ export function Chats({
             return;
           } catch (err) {
             const delay = QUEUED_BUSY_RETRIES_MS[attempt];
-            if (!String(err).includes('RUN_BUSY') || delay === undefined) {
+            // The named question, not a substring scan of the message: a 409
+            // is what makes this the daemon's "a turn is in flight" answer,
+            // and `RUN_BUSY` can appear in the text of failures that are not.
+            if (!isRunBusyError(err)) {
               // A real failure (no turn started, so no terminal item will
               // fire another drain) — the message is still at the queue head
               // for the user to edit or remove, because we never took it out.
-              setError(String(err));
+              setError(daemonErrorDetail(err) ?? String(err));
               setStreaming(false);
+              return;
+            }
+            if (delay === undefined) {
+              // Still busy after the last backoff, which is NOT a failure: a
+              // turn is by definition still running, the message is still at
+              // the head, and that turn's terminal item fires this drain
+              // again. This branch used to fall in with the real failure above
+              // and raise the daemon's raw 409 envelope as a red banner —
+              // naming, in wire JSON, a problem that resolves itself.
               return;
             }
             await new Promise((resolve) => setTimeout(resolve, delay));
@@ -1420,9 +1469,15 @@ export function Chats({
         }
       } finally {
         drainingRef.current.delete(runId);
+        // A Send-now press on the head this drain already owned was answered
+        // with `sending` and no POST of its own, so this drain is the only
+        // thing that knows how it ended. Without this the row keeps saying
+        // `sending…` with an inert control after the drain fails or gives up
+        // — a worse dead end than the silent press the state was added to fix.
+        clearSteerStatus(next.id);
       }
     },
-    [startTurn],
+    [startTurn, clearSteerStatus],
   );
   useEffect(() => {
     drainQueueRef.current = (runId) => void drainQueue(runId);
@@ -1541,6 +1596,12 @@ export function Chats({
    * flew, or the CLI declined the write), and the message is still queued and
    * still going out when the turn ends. Showing a red banner for it would name
    * a problem the user has no action for.
+   *
+   * It is still an OUTCOME, though, and every exit here used to be a bare
+   * `return` — so the press produced no change whatsoever and the control read
+   * as broken ("I press Send and nothing happens"). Each path now leaves a
+   * state on the row instead: `sending` while the POST is out, `held` when the
+   * daemon refused it. Neither is an error banner.
    */
   const steerQueued = useCallback(
     async (id: string): Promise<void> => {
@@ -1562,8 +1623,12 @@ export function Chats({
       // one. Only the HEAD is at risk; steering any other row while a drain
       // runs is exactly what the control is for.
       if (drainingRef.current.has(runId) && queue[0]?.id === id) {
+        // Suppressed because it is ALREADY going out, which is what the row
+        // should say — reporting nothing here is what made the press look dead.
+        setSteerStatus({ id, state: 'sending' });
         return;
       }
+      setSteerStatus({ id, state: 'sending' });
       try {
         await startTurn(runId, message.text, message.images);
         // Dropped by ID, never by index and never by object: the automatic
@@ -1575,14 +1640,29 @@ export function Chats({
           ...prev,
           [runId]: (prev[runId] ?? []).filter((queued) => queued.id !== id),
         }));
+        clearSteerStatus(id);
       } catch (err) {
         if (isRunBusyError(err)) {
+          // Guarded exactly like `clearSteerStatus`, and for the same reason:
+          // this POST outlives the press. An older steer's refusal landing
+          // after the user pressed a DIFFERENT row would otherwise replace
+          // that row's `sending` — which is the only thing holding its Send
+          // control inert — and a second press would deliver it twice.
+          setSteerStatus((current) =>
+            current === null || current.id === id
+              ? { id, state: 'held' }
+              : current,
+          );
           return;
         }
-        setError(String(err));
+        clearSteerStatus(id);
+        // `String(err)` printed the whole
+        // `daemon POST /v1/chats/<id>/messages failed (409): {"code":…}`
+        // envelope as a red banner. The daemon writes a real sentence; show it.
+        setError(daemonErrorDetail(err) ?? String(err));
       }
     },
-    [startTurn],
+    [startTurn, clearSteerStatus],
   );
 
   const cancel = useCallback(async (): Promise<void> => {
@@ -2099,6 +2179,13 @@ export function Chats({
     () => withLiveText(durableEntries, liveText, workingAgents),
     [durableEntries, liveText, workingAgents],
   );
+  /**
+   * What THIS run is doing, for the live rows — the same sentence the sidebar
+   * badge carries, so the transcript and the badge cannot say different things
+   * about one run.
+   */
+  const activeActivity =
+    activeRunId === null ? null : (activities.get(activeRunId) ?? null);
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
   // several agents share a flow. Keyed on the RUN (a workflow run always keeps
@@ -2696,61 +2783,63 @@ export function Chats({
                   and a `scrollIntoView` on the widest descendant both leave
                   `scrollLeft` at 0. */}
               <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
-                {transcriptEntries.map((entry) => {
-                  if (
-                    entry.type !== 'item' ||
-                    entry.item.kind !== 'approval_request'
-                  ) {
-                    const key =
-                      entry.type === 'item' ? entry.item.id : entry.id;
-                    return (
-                      <TranscriptEntryView
-                        key={key}
-                        entry={entry}
-                        nodes={nodeMeta}
-                        chatAgentName={activeRun?.agentKind ?? null}
-                        soloAgent={soloAgent}
-                      />
+                <RunActivityContext.Provider value={activeActivity}>
+                  {transcriptEntries.map((entry) => {
+                    if (
+                      entry.type !== 'item' ||
+                      entry.item.kind !== 'approval_request'
+                    ) {
+                      const key =
+                        entry.type === 'item' ? entry.item.id : entry.id;
+                      return (
+                        <TranscriptEntryView
+                          key={key}
+                          entry={entry}
+                          nodes={nodeMeta}
+                          chatAgentName={activeRun?.agentKind ?? null}
+                          soloAgent={soloAgent}
+                        />
+                      );
+                    }
+                    const item = entry.item;
+                    // EVERY open request's card lives above the composer, so
+                    // every one of them leaves a marker here. Keyed on openness
+                    // rather than on the pinned id: keying on the pin gave the
+                    // SECOND open question a fully live card in the scroller,
+                    // which is the failure the pin exists to end. Leaving the
+                    // live card here too would put two sets of buttons over one
+                    // one-shot verdict channel; leaving nothing would silently
+                    // drop a row out of the conversation's order.
+                    if (openRequestId(item) !== null) {
+                      return (
+                        <MessageBubble key={item.id} variant="note">
+                          {pinnedRequest?.id === item.id
+                            ? '❓ waiting on your answer — the card is pinned below'
+                            : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                        </MessageBubble>
+                      );
+                    }
+                    const askerName =
+                      (item.nodeId
+                        ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
+                        : activeRun?.agentKind) ?? 'agent';
+                    const card = (
+                      <div className="w-full">{approvalCardFor(item)}</div>
                     );
-                  }
-                  const item = entry.item;
-                  // EVERY open request's card lives above the composer, so
-                  // every one of them leaves a marker here. Keyed on openness
-                  // rather than on the pinned id: keying on the pin gave the
-                  // SECOND open question a fully live card in the scroller,
-                  // which is the failure the pin exists to end. Leaving the
-                  // live card here too would put two sets of buttons over one
-                  // one-shot verdict channel; leaving nothing would silently
-                  // drop a row out of the conversation's order.
-                  if (openRequestId(item) !== null) {
-                    return (
-                      <MessageBubble key={item.id} variant="note">
-                        {pinnedRequest?.id === item.id
-                          ? '❓ waiting on your answer — the card is pinned below'
-                          : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                      </MessageBubble>
+                    // A solo agent's card needs no identity frame either.
+                    return soloAgent ? (
+                      <div key={item.id}>{card}</div>
+                    ) : (
+                      <SenderRow
+                        key={item.id}
+                        name={askerName}
+                        colorKey={item.nodeId ?? undefined}
+                        time={formatClockTime(item.createdAt)}>
+                        {card}
+                      </SenderRow>
                     );
-                  }
-                  const askerName =
-                    (item.nodeId
-                      ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
-                      : activeRun?.agentKind) ?? 'agent';
-                  const card = (
-                    <div className="w-full">{approvalCardFor(item)}</div>
-                  );
-                  // A solo agent's card needs no identity frame either.
-                  return soloAgent ? (
-                    <div key={item.id}>{card}</div>
-                  ) : (
-                    <SenderRow
-                      key={item.id}
-                      name={askerName}
-                      colorKey={item.nodeId ?? undefined}
-                      time={formatClockTime(item.createdAt)}>
-                      {card}
-                    </SenderRow>
-                  );
-                })}
+                  })}
+                </RunActivityContext.Provider>
                 <div ref={transcriptEndRef} />
               </div>
 
@@ -2832,6 +2921,7 @@ export function Chats({
                 <QueuedStrip
                   messages={queued}
                   steerUnavailableReason={steerUnavailableReason}
+                  steerStatus={steerStatus}
                   onEdit={editQueued}
                   onRemove={removeQueued}
                   onSteer={(id) => void steerQueued(id)}

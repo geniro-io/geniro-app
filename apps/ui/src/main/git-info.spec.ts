@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { readGitInfo, switchBranch } from './git-info';
 
@@ -14,6 +14,23 @@ import { readGitInfo, switchBranch } from './git-info';
  * about it. That is exactly how `git checkout -- <name>` looked correct while
  * meaning "restore this path".
  */
+
+/**
+ * A budget sized for what these tests actually do, replacing vitest's 5s
+ * default — which is a default, not a decision anyone made about this file.
+ *
+ * Every case here spawns EIGHT git subprocesses against a real temp repo
+ * (`init`, two `config`s, `add`, `commit`, then `readGitInfo`'s own reads),
+ * all of it real process + filesystem work. Fast on an idle machine, and on a
+ * shared CI runner executing 88 spec files in parallel it crossed 5s and
+ * failed on wall-clock alone — never on an assertion.
+ *
+ * This is not a retry around nondeterminism: the outcome is deterministic and
+ * the assertions are untouched. Mocking `execFile` to make it fast is the
+ * change that WOULD weaken it, for the reason the block above gives.
+ */
+vi.setConfig({ testTimeout: 30_000 });
+
 let dir = '';
 
 const run = (args: string[], cwd = dir): string =>

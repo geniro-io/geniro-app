@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   formatElapsed,
   liveRowKind,
+  RunActivityContext,
   ThinkingRow,
   WorkingRow,
 } from './live-row';
@@ -126,6 +127,34 @@ describe('WorkingRow', () => {
 
     advance(7_000);
     expect(container.textContent).toContain('7s');
+  });
+
+  it('names what the agent is doing when the daemon has said', () => {
+    // "Working…" describes a state without describing the work, which is the
+    // complaint: it cannot tell a long compaction from a hung tool.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <RunActivityContext.Provider value="running Bash">
+        <WorkingRow />
+      </RunActivityContext.Provider>,
+    );
+
+    expect(container.textContent).toContain('running Bash');
+    // The clock is the half the daemon cannot supply, so it stays.
+    expect(container.textContent).toContain('0s');
+    // …and the abstract label it replaces is gone, not merely appended to.
+    expect(container.textContent).not.toContain('Working…');
+  });
+
+  it('falls back to the bare state when the daemon has said nothing', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <RunActivityContext.Provider value={null}>
+        <WorkingRow />
+      </RunActivityContext.Provider>,
+    );
+
+    expect(container.textContent).toContain('Working…');
   });
 });
 

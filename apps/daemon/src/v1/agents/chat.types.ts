@@ -417,7 +417,19 @@ export interface RunItemEvent {
  */
 export interface RunStatusEvent {
   runId: string;
-  status: RunStatus;
+  /**
+   * The run's new status, or null when this event only says what the run is
+   * DOING and asserts nothing about whether it is still going.
+   *
+   * The distinction is load-bearing. The activity announce fires from inside a
+   * turn's event stream — on every tool call — and it never reads the run's
+   * status, so while it published a hardcoded `'running'` the client wrote that
+   * back onto the row: one straggler event arriving after a cancel or a
+   * terminal write flipped the run to "running", and nothing announced again to
+   * correct it. A status this event never read is not one it may assert, so it
+   * sends null and the client leaves the badge alone.
+   */
+  status: RunStatus | null;
   activity: string | null;
 }
 

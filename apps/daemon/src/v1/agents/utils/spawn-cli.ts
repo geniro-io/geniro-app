@@ -720,7 +720,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       return false;
     }
     const stream = child.stdin;
-    if (!stream) {
+    // `writable` is the question, and the try/catch below cannot stand in for
+    // it: writing past an ended or destroyed pipe does NOT throw — node
+    // reports it asynchronously and the call returns — so the catch never
+    // fires and a write that never landed was answered `true`. The caller
+    // ACTS on this answer: `sendUserMessage` returning true has the chat
+    // commit a user message the CLI never received.
+    //
+    // The write's own return value is deliberately not consulted: a false
+    // there is backpressure, meaning buffered-not-yet-flushed, which is a
+    // delivered write and not a failed one.
+    if (!stream || !stream.writable) {
       return false;
     }
     try {
@@ -752,17 +762,50 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (processGone) {
         return;
       }
+      // An errored stdin can never be written again, so the session must stop
+      // reporting itself usable — `idle` and `startTurn` both read this flag.
+      //
+      // This is the case a SESSION lifetime introduced and the guard below was
+      // never widened for: the process outlives the turn, so its pipe can break
+      // BETWEEN turns, with no `current` to carry the event. Every exit here
+      // was then a bare `return` — nothing recorded, nothing marked — so the
+      // registry went on handing out a session whose pipe was broken, later
+      // writes were answered `true` into a pipe nobody was reading, and the
+      // run went quiet with no trace anywhere. For a `turn` or `payload`
+      // lifetime this changes nothing: `endStdin` has already set the flag by
+      // the time either could reach this line.
+      stdinEnded = true;
+      const failure: AgentEvent = {
+        type: 'error',
+        message: `${opts.command} stdin error: ${err.message}`,
+      };
+      if (!current) {
+        // No turn at all — the between-turns break a SESSION lifetime makes
+        // possible. Logged DIRECTLY rather than emitted: with no turn to carry
+        // it, `emit` routes to `handleOrphanEvent`, which records the event
+        // TYPE and discards the message, so the reason would still be nowhere.
+        opts.logger?.warn(failure.message);
+        // …and retire the session. Marking it unusable is only half: `closed`
+        // is the ONE channel its owner forgets it through, and an entry that is
+        // `alive` but not `idle` is skipped by both the idle timer and the
+        // eviction sweep while still counting against the session ceiling — so
+        // it would hold a slot for the daemon's lifetime and get a HEALTHY
+        // session evicted in its place. The group is signalled too: a process
+        // whose stdin we have given up on is one nobody can talk to again.
+        killGroup();
+        endProcess();
+        return;
+      }
       // After the terminal event the turn is already decided — a late EPIPE
       // (e.g. closing a kept-open stdin as the child exits) must not settle
       // early, or `close` would skip the final buffer flush and `done` would
-      // resolve before stdout drains.
-      if (!current || current.terminalEmitted) {
+      // resolve before stdout drains. The process is on its way out on its
+      // own here, so this one only records.
+      if (current.terminalEmitted) {
+        opts.logger?.warn(failure.message);
         return;
       }
-      emit({
-        type: 'error',
-        message: `${opts.command} stdin error: ${err.message}`,
-      });
+      emit(failure);
       endProcess();
     });
   }

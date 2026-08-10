@@ -237,14 +237,21 @@ export class ChatService {
   }
 
   /**
-   * Announce what a still-running run is DOING, without touching its status.
+   * Announce what a run is DOING, without touching its status.
    *
    * "running" alone cannot tell an agent that is working from one parked on a
    * question nobody has answered — which is the whole of the reported
    * complaint about the badge.
+   *
+   * `status: null` is what makes "without touching its status" true. This
+   * fires from inside a turn's event stream, on every tool call, and never
+   * reads the run — so the `'running'` it used to send was a guess, and the
+   * client wrote that guess onto the row. One straggler event arriving after a
+   * cancel or a terminal write therefore flipped the badge back to running and
+   * left it there, with nothing announcing again to correct it.
    */
   private announceActivity(runId: string, activity: string | null): void {
-    this.bus.publishRunStatus({ runId, status: 'running', activity });
+    this.bus.publishRunStatus({ runId, status: null, activity });
   }
 
   async createChat(input: {

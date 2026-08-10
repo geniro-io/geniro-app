@@ -418,3 +418,26 @@ export const CLAUDE_RUN_FAILED_MESSAGE = 'claude run failed';
 
 /** What the CLI is told when the user denies a permission request. */
 export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';
+
+/**
+ * How the CLI reports that its own permission channel died under it.
+ *
+ * The failing tool comes back with `Tool permission request failed:
+ * AbortError: Stream closed` as its RESULT TEXT — an ordinary tool result, not
+ * an error line — which is why nothing in the daemon reacted to it and why 239
+ * of them accumulated unremarked in one database.
+ *
+ * BOTH halves must be present, and only the stable halves are named: the
+ * middle varies (the CLI's own issue tracker carries `Error: Stream closed`
+ * beside `AbortError: Stream closed`), while the prefix and the closed stream
+ * do not. Matching claude's own wording rather than anything stream-shaped is
+ * why this is a marker in claude's constants and not a regex somewhere generic.
+ */
+export const CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS: readonly string[] = [
+  'Tool permission request failed',
+  'Stream closed',
+];
+
+/** The `system` item a user sees when the channel above has dropped. */
+export const CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE =
+  'claude could not reach its permission channel for that tool call, so the CLI refused it — this was not your decision, and the turn continues.';

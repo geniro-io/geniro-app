@@ -11,6 +11,7 @@ import { createGroupTerminator } from '../utils/kill-tree';
 import {
   type CliSession,
   runCliSession,
+  type SessionLogger,
   type SpawnFn,
 } from '../utils/spawn-cli';
 import type {
@@ -64,12 +65,13 @@ export interface AgentAdapterOptions {
    * Sink for the base class's diagnostics — skipped unparseable lines,
    * unmodelled control subtypes, a failed turn-resource disposer. Defaults to
    * silent, so production wiring MUST pass a real one (`agents.module.ts`).
-   * A plain `{ warn }` double is the whole contract: every base-class
-   * diagnostic is a warning.
+   *
+   * Every base-class diagnostic is a WARNING, so a plain `{ warn }` double
+   * still satisfies this. `SessionLogger`'s optional `debug` is what the turn
+   * transport writes its per-tool-call account to (the approval round-trip,
+   * the turn boundaries) — a Nest `Logger` carries it, a test double need not.
    */
-  logger?: {
-    warn(message: string): void;
-  };
+  logger?: SessionLogger;
   /** Replacement execFile for the utility commands in tests; defaults to node's. */
   execFileFn?: typeof execFile;
   /**

@@ -137,7 +137,23 @@ export interface CliSessionOptions {
   /** Maps each parsed stream-json object to zero or more normalized events. */
   mapper: (obj: unknown) => AgentEvent[];
   spawn?: SpawnFn;
-  logger?: { warn(message: string): void };
+  logger?: SessionLogger;
+}
+
+/**
+ * Sink for this module's account of itself.
+ *
+ * `warn` is the historical contract (a skipped line, a lost event). `debug` is
+ * the D1 addition and is deliberately a SEPARATE level: the approval
+ * round-trip and the turn boundaries are per-tool-call chatter, worth having
+ * only when reconstructing an incident, and at warning level they would bury
+ * the lines that mean something is genuinely wrong.
+ *
+ * Optional, because every pre-existing caller passes a bare `{ warn }`.
+ */
+export interface SessionLogger {
+  warn(message: string): void;
+  debug?(message: string): void;
 }
 
 /**
@@ -226,6 +242,8 @@ const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
 
 /** The mutable state of the one turn currently in flight. */
 interface TurnState {
+  /** When this turn opened — the denominator of the settle line. */
+  startedAt: number;
   settled: boolean;
   /**
    * Emit at most ONE terminal event per turn, whichever arrives first: a
@@ -281,6 +299,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   const settlesOnTerminalEvent = opts.stdinLifetime === 'session';
 
   let current: TurnState | null = null;
+  /**
+   * The wire encoder for an approval verdict, kept at SESSION scope.
+   *
+   * It is the adapter's pure `(id, allow, input) => line` — the CLI's wire
+   * format, identical for every turn of one process — so holding the most
+   * recent turn's copy carries no turn state with it. It exists so a permission
+   * request arriving with NO turn in flight can still be answered; see
+   * {@link handleOrphanEvent}.
+   */
+  let approvalEncoder: CliTurnOptions['buildApprovalResponse'];
+  /**
+   * When each outstanding approval request was seen, for the round-trip line.
+   *
+   * The D1 investigation had to reconstruct "was this request ever answered,
+   * and how fast" from transcript rows, because nothing recorded the SUCCESSFUL
+   * side of the exchange — only the failures were visible, which is precisely
+   * the ratio that turned out to be the diagnosis.
+   */
+  const approvalSeenAt = new Map<string, number>();
   let processGone = false;
   /**
    * The child's `exit` has fired — set SYNCHRONOUSLY, ahead of the settle.
@@ -301,11 +338,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     resolveClosed = resolve;
   });
 
-  const settleTurn = (turn: TurnState): void => {
+  const settleTurn = (turn: TurnState, reason: string): void => {
     if (turn.settled) {
       return;
     }
     turn.settled = true;
+    // The turn boundary, with WHY. The D1 investigation had to infer "was a
+    // turn open when this tool call happened" from transcript rows, and the
+    // reason — a `result` line, the silence deadline, the process ending —
+    // was not recoverable at all.
+    opts.logger?.debug?.(
+      `${opts.command}: turn settled (${reason}) after ${Date.now() - turn.startedAt}ms`,
+    );
     if (turn.interruptTimer) {
       clearTimeout(turn.interruptTimer);
       turn.interruptTimer = null;
@@ -355,16 +399,58 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   /**
-   * Deliver an event to the turn it belongs to. Between turns there is nobody
-   * to tell — a stray line then is dropped with a warning rather than held for
-   * the next turn, which would attribute one turn's output to another.
+   * An event arrived with NO turn in flight — the process outlived the turn
+   * geniro was tracking and kept working.
+   *
+   * Measured, not hypothetical: across the author's own `geniro.db`, 1589 of
+   * 4505 tool results arrived in this state, and they carried 165 of the 181
+   * `Tool permission request failed: AbortError: Stream closed` failures
+   * (10.4% here against 0.5% inside an open turn).
+   *
+   * Most events genuinely have nobody to tell, and holding them for the next
+   * turn would attribute one turn's output to another — so they stay dropped.
+   * An `approval_request` is the exception, because dropping it is not
+   * neutral: the CLI is BLOCKED on a reply that, with no turn, nothing will
+   * ever send. So it is REFUSED. Denying is the only answer that is correct in
+   * every approval mode — it cannot grant a permission nobody is there to
+   * approve, and it unblocks the CLI instead of leaving it parked on a verdict
+   * that cannot arrive. It is also the move this codebase already makes when a
+   * card cannot reach the user: see `ChatService`'s deny when persisting the
+   * approval item throws, and `ApprovalRegistry.sweepNode`'s `unanswerable`.
    */
-  const emit = (event: AgentEvent): void => {
-    const turn = current;
-    if (!turn) {
+  function handleOrphanEvent(event: AgentEvent): void {
+    if (event.type !== 'approval_request') {
       opts.logger?.warn(
         `${opts.command}: dropped a '${event.type}' event arriving between turns`,
       );
+      return;
+    }
+    const line = approvalEncoder?.(event.id, false, undefined);
+    const refused = line !== undefined && sessionWrite(line);
+    approvalSeenAt.delete(event.id);
+    // WARN, not debug: the CLI asked permission for work no turn owns, which
+    // is the state the D1 numbers point at. Every field a later reader needs
+    // to join this to a transcript row is on the line — tool and request id
+    // were both missing from the message this replaces.
+    opts.logger?.warn(
+      `${opts.command}: approval_request for '${event.toolName}' (id ${event.id}) arrived between turns — ` +
+        (refused
+          ? 'refused, since no turn can carry a verdict'
+          : 'and could NOT be refused (no approval encoder or stdin is gone) — the CLI is parked'),
+    );
+  }
+
+  /**
+   * Deliver an event to the turn it belongs to; see {@link handleOrphanEvent}
+   * for what happens when there is no turn to deliver it to.
+   */
+  const emit = (event: AgentEvent): void => {
+    if (event.type === 'approval_request') {
+      approvalSeenAt.set(event.id, Date.now());
+    }
+    const turn = current;
+    if (!turn) {
+      handleOrphanEvent(event);
       return;
     }
     const normalized: AgentEvent =
@@ -385,7 +471,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       turn.options.onEvent(normalized);
       if (settlesOnTerminalEvent) {
-        settleTurn(turn);
+        settleTurn(turn, `terminal event '${normalized.type}'`);
       }
       return;
     }
@@ -464,7 +550,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       resolveClosed();
     }
     if (current) {
-      settleTurn(current);
+      settleTurn(current, 'the process ended');
     }
   };
 
@@ -638,6 +724,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       resolveDone = resolve;
     });
     const turn: TurnState = {
+      startedAt: Date.now(),
       settled: false,
       terminalEmitted: false,
       cancelRequested: false,
@@ -647,6 +734,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       silenceTimer: null,
     };
     current = turn;
+    // Kept at session scope so a request arriving AFTER this turn settles can
+    // still be refused rather than dropped — see `handleOrphanEvent`.
+    approvalEncoder = turnOptions.buildApprovalResponse;
+    opts.logger?.debug?.(`${opts.command}: turn opened`);
     // Armed from the start, not from the first event: a turn whose CLI never
     // answers at all is exactly the case with nothing to rearm it.
     armSilenceDeadline(turn);
@@ -693,10 +784,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
 
     return {
       done,
-      respondApproval: (id, allow, updatedInput) =>
-        turnWrite(() =>
+      respondApproval: (id, allow, updatedInput) => {
+        const delivered = turnWrite(() =>
           turnOptions.buildApprovalResponse?.(id, allow, updatedInput),
-        ),
+        );
+        const seenAt = approvalSeenAt.get(id);
+        approvalSeenAt.delete(id);
+        // Both outcomes, deliberately. Recording only the failures is what made
+        // the D1 numbers unobtainable from logs: "how often is a verdict
+        // delivered" has no answer unless the delivered ones are written down
+        // too.
+        opts.logger?.debug?.(
+          `${opts.command}: approval ${id} ${allow ? 'allowed' : 'denied'} — ` +
+            `${delivered ? 'written to stdin' : 'NOT written (turn already settled)'}` +
+            (seenAt === undefined
+              ? ''
+              : ` ${Date.now() - seenAt}ms after it was raised`),
+        );
+        return delivered;
+      },
       sendUserMessage: (message) =>
         // Guarded like the verdict above, and for the same reason: a write that
         // lands after the turn settled would be reported as delivered while the
@@ -819,7 +925,7 @@ export interface RunCliOptions {
   onStdinReady?: CliTurnOptions['onStdinReady'];
   onEvent: (event: AgentEvent) => void;
   spawn?: SpawnFn;
-  logger?: { warn(message: string): void };
+  logger?: SessionLogger;
 }
 
 /**

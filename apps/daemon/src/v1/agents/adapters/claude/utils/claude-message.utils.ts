@@ -13,12 +13,34 @@ import type {
 } from '../../adapter.types';
 import {
   CLAUDE_COMPACT_BOUNDARY_SUBTYPE,
+  CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
+  CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_RUN_FAILED_MESSAGE,
 } from '../claude.const';
 import {
   readClaudeAssistantContext,
   readClaudeUsage,
 } from './claude-usage.utils';
+
+/**
+ * Whether a tool result is the CLI reporting that its permission channel died,
+ * rather than the tool itself failing.
+ *
+ * Defensive about the SHAPE as well as the text: `content` is a string on some
+ * results and an array of blocks on others, and the marker has been observed in
+ * both. Anything else stringifies to something that cannot contain both
+ * markers, so it simply does not match.
+ */
+export function isPermissionChannelFailure(content: unknown): boolean {
+  if (content === null || content === undefined) {
+    return false;
+  }
+  const text =
+    typeof content === 'string' ? content : (JSON.stringify(content) ?? '');
+  return CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS.every((marker) =>
+    text.includes(marker),
+  );
+}
 
 /**
  * Whether a `result` line reports NOTHING — no stop reason, no final text, and
@@ -269,6 +291,17 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
           result: b.content ?? null,
           isError: asBoolean(b.is_error),
         });
+        if (isPermissionChannelFailure(b.content)) {
+          // Say it OUT LOUD. This failure arrives as ordinary tool-result text
+          // inside a collapsed tool row, so a run can accumulate dozens of them
+          // with nothing on screen to say the permission channel died — 239 of
+          // them sat unremarked in the author's own database, and finding them
+          // took a SQL query. A notice lands it as a `system` item instead.
+          events.push({
+            type: 'notice',
+            message: CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
+          });
+        }
       }
       return events;
     }

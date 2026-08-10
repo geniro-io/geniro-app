@@ -224,6 +224,65 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  /**
+   * The permission channel dying under the CLI. It arrives as ordinary tool
+   * RESULT TEXT, which is why nothing reacted to it and why 239 occurrences sat
+   * unremarked in one database until a SQL query went looking.
+   */
+  const permissionFailure = (content: unknown): unknown =>
+    mapClaudeMessage({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 't9', content, is_error: true },
+        ],
+      },
+    });
+
+  it('raises a notice when a tool result is the permission channel failing', () => {
+    const events = permissionFailure(
+      'Tool permission request failed: AbortError: Stream closed',
+    );
+
+    // The raw result still reaches the transcript untouched — the notice is an
+    // ADDITION, so nothing the agent saw is rewritten.
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'tool_result', id: 't9', isError: true }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
+  it('matches the CLI wording whose middle varies, and finds it inside block content', () => {
+    // `Error: Stream closed` appears beside `AbortError: Stream closed` in the
+    // CLI's own issue tracker, so only the two stable halves are matched — and
+    // `content` is an array of blocks on some results, a bare string on others.
+    expect(
+      permissionFailure([
+        { type: 'text', text: 'Tool permission request failed: Stream closed' },
+      ]),
+    ).toEqual([
+      expect.objectContaining({ type: 'tool_result' }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
+  it('does NOT fire on a tool that merely mentions one half', () => {
+    // A grep hit or a test name containing "Stream closed" is not the channel
+    // dying; requiring BOTH markers is what keeps this from crying wolf over
+    // the user's own source.
+    for (const content of [
+      'Stream closed by the peer',
+      'Tool permission request failed for an unrelated reason',
+      null,
+      42,
+    ]) {
+      expect(permissionFailure(content)).toEqual([
+        expect.objectContaining({ type: 'tool_result' }),
+      ]);
+    }
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage({

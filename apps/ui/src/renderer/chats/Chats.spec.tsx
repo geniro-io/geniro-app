@@ -3527,6 +3527,51 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('a RETRY after an edit sends the edited text, not the snapshot it started with', async () => {
+    // The other half of the same race — and the half the id keying CREATED.
+    // The first attempt is already in the air and unavoidably carries the old
+    // text; a retry is not. The drain captured the head once and re-checked
+    // only its id, so an edit landing in the RUN_BUSY backoff passed the guard
+    // and the retry re-sent the text the user had replaced, after which
+    // `dropHead` removed the edited entry by that same id.
+    //
+    // Before the id keying the identity guard ABORTED here instead, so this
+    // failure mode did not exist — which is why it has to be pinned on the
+    // delivered BODY. The sibling test above asserts only a call COUNT, and
+    // that passes with this defect present.
+    vi.useFakeTimers();
+    try {
+      api.sendChatMessage
+        .mockRejectedValueOnce(busy())
+        .mockResolvedValue(msg(10, 'user', 'second draft'));
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      await type(container, 'first draft');
+      await clickButton(container, 'Queue');
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+
+      // Rewritten while the drain sits in its backoff, before the retry fires.
+      await rewriteQueued(container, 1, 'second draft');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(api.sendChatMessage).toHaveBeenLastCalledWith({
+        runId: 'r1',
+        sendMessageDto: { text: 'second draft' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('“send now” drops the message it actually sent when the drain shifts the queue under it', async () => {
     // Two queued messages. Steering the SECOND while the automatic drain is
     // removing the first means its position changes mid-flight: an index-keyed

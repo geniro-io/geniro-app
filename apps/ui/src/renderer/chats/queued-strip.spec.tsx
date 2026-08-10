@@ -133,6 +133,14 @@ describe('QueuedStrip', () => {
 
     rerender(<QueuedStrip messages={[second]} {...props} />);
     expect(editor(1)).toBeNull();
+
+    // THIS is the assertion that discriminates. While the row is absent no row
+    // matches `editingId` at all, so the check above passes with the cleanup
+    // effect deleted — it was a false pin. Bringing the row back is what
+    // exposes a stale `editingId`: without the effect it is still 'a', and the
+    // restored row re-opens its editor over a draft the user abandoned.
+    rerender(<QueuedStrip messages={[first, second]} {...props} />);
+    expect(editor(1)).toBeNull();
   });
 
   it('keeps the editor open when a DIFFERENT row leaves the queue', () => {
@@ -202,6 +210,35 @@ describe('QueuedStrip', () => {
     click(byLabel('Edit queued message 2'));
     typeAndCommit(editor(2)!, 'rewritten');
     expect(onEdit).toHaveBeenCalledWith('id-b', 'rewritten');
+  });
+
+  it('a bare Enter inserts a newline instead of committing', () => {
+    // The reason the field became a Textarea at all. Note that every OTHER
+    // commit in this suite dispatches Enter WITH metaKey, and a reverted guard
+    // (`if (event.key === 'Enter')`) still matches those — so all of them stay
+    // green while a plain Enter commits again and the newline the user was
+    // typing is swallowed. Only this test discriminates.
+    const onEdit = vi.fn();
+    render(
+      <QueuedStrip
+        messages={[message('a', 'one line')]}
+        steerUnavailableReason={null}
+        onEdit={onEdit}
+        onRemove={noop}
+        onSteer={noop}
+      />,
+    );
+
+    click(byLabel('Edit queued message 1'));
+    const field = editor(1)!;
+    act(() => {
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(editor(1)).not.toBeNull();
   });
 
   it('keeps a multi-line rewrite intact', () => {

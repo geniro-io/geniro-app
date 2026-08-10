@@ -128,6 +128,39 @@ interface QueuedMessage {
 /** Client-side only — this id never reaches the daemon. */
 const randomId = (): string => crypto.randomUUID();
 
+/**
+ * May a REPLAYED transcript release this run's queue?
+ *
+ * The one rule, in one place. A replay carries every past turn's terminal item,
+ * so no individual row may fire the drain — but a replay is also the only
+ * signal that a turn ended while this client was not listening (another chat
+ * was open, or the socket was down), and a queue owed its send must not wait
+ * forever for a live event that already happened.
+ *
+ * `endedOnTerminal` may only AUTHORIZE, and the daemon's own status may only
+ * authorize — but an UNKNOWN run authorizes nothing. `run?.status !== 'running'`
+ * alone reads `undefined` as idle, which would send into a run this client
+ * knows nothing about; erring toward not sending costs a delay the next
+ * activation clears, while erring the other way delivers into a live turn.
+ *
+ * The status row alone cannot decide it either: three writers touch it and it
+ * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
+ * That is why a terminal tail authorizes even while the row still says running.
+ */
+function queueMayDrainAfterReplay(
+  run: ChatRun | undefined,
+  lastItem: ChatItem | undefined,
+): boolean {
+  if (run === undefined) {
+    return false;
+  }
+  const endedOnTerminal =
+    lastItem !== undefined &&
+    TERMINAL_KINDS.has(lastItem.kind) &&
+    lastItem.nodeId === null;
+  return endedOnTerminal || run.status !== 'running';
+}
+
 /** Is this stored/foreign string one of the daemon's approval modes? */
 const isChatApprovalMode = (value: unknown): value is ChatApprovalMode =>
   typeof value === 'string' &&
@@ -342,12 +375,16 @@ export function Chats({
 
   /**
    * `live` says this item arrived on the wire as it happened, rather than out
-   * of a history replay. It defaults to true so the live subscription needs no
-   * ceremony; every replay site passes false EXPLICITLY — and must pass it
-   * through an arrow, never as a bare `forEach(addItem)`, which would hand the
-   * array index in as the flag.
+   * of a history replay.
+   *
+   * REQUIRED, with no default — and that is the guard, not the prose. A default
+   * made the dangerous call the natural one: `forEach(addItem)` passes the
+   * ARRAY INDEX as the flag, falsy for the first item and truthy for every one
+   * after, which is exactly the replayed-drain bug this parameter exists to
+   * prevent. Requiring it moves the rule from a comment a reader may skip to an
+   * error the compiler raises.
    */
-  const addItem = useCallback((item: ChatItem, live = true): void => {
+  const addItem = useCallback((item: ChatItem, live: boolean): void => {
     if (item.runId !== activeRunIdRef.current) {
       return;
     }
@@ -750,12 +787,7 @@ export function Chats({
         ) {
           setStreaming(true);
         } else if (
-          // Idle NOW — which is not the same as "this transcript contains a
-          // terminal item". A chat past its first turn always contains several;
-          // what says the turn is over is that nothing follows the last one, or
-          // that the run itself has settled. A transcript ending on a live
-          // assistant row means a turn is in flight, and the queue waits.
-          (endedOnTerminal || run?.status !== 'running') &&
+          queueMayDrainAfterReplay(run, last) &&
           (queuesRef.current[runId]?.length ?? 0) > 0
         ) {
           // The ONE drain decision a replay is allowed to make, and it is taken
@@ -837,13 +869,26 @@ export function Chats({
       }
       void chatApi
         .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
-        // A replay, not live: these streamed while we were offline, so a
-        // terminal item among them says a turn ENDED at some point, not that
-        // the run is idle now — it may already be several turns on. Draining
-        // on that would be the reopen bug by another door. The queue goes out
-        // on the next live terminal item, or on the next activation, both of
-        // which read the run's current status.
-        .then((items) => items.forEach((item) => addItem(item, false)))
+        // A replay, not live: no individual row here may fire the drain, or a
+        // transcript several turns long would send into the turn in flight.
+        //
+        // But this delta is ALSO the only place a turn that ended while the
+        // socket was down is ever seen, so the same single decision the
+        // activation replay takes has to be taken here too. An earlier version
+        // of this comment claimed the queue would go out "on the next live
+        // terminal item, or on the next activation" — neither fires when the
+        // turn already ended offline, so the queue simply stopped forever, and
+        // on cursor there is not even a Steer control to release it by hand.
+        .then((items) => {
+          items.forEach((item) => addItem(item, false));
+          const run = runsRef.current.find((r) => r.id === active);
+          if (
+            queueMayDrainAfterReplay(run, items.at(-1)) &&
+            (queuesRef.current[active]?.length ?? 0) > 0
+          ) {
+            drainQueueRef.current(active);
+          }
+        })
         // Same stale-run guard as activateRun's catch: if the user switched
         // runs while this delta-fetch was in flight, A's error must not paint
         // over B (addItem is already run-scoped by item.runId; setError is not).
@@ -1248,7 +1293,7 @@ export function Chats({
         sendMessageDto: { text, ...(images.length ? { images } : {}) },
       });
       attachments.clear();
-      addItem(userItem);
+      addItem(userItem, true);
     } catch (err) {
       setError(String(err));
       setStreaming(false);
@@ -1290,7 +1335,7 @@ export function Chats({
         runId,
         sendMessageDto: { text, ...(images?.length ? { images } : {}) },
       });
-      addItem(userItem);
+      addItem(userItem, true);
     },
     [chatApi, addItem],
   );
@@ -1334,15 +1379,24 @@ export function Chats({
           // would deliver a message the UI already told the user was cancelled.
           // By id, not by object: an EDIT during this window replaces the
           // object, and an identity check would read that as a removal.
-          if (
-            !(queuesRef.current[runId] ?? []).some(
-              (queued) => queued.id === next.id,
-            )
-          ) {
+          // Re-READ the entry; never just check that it is still there. The
+          // backoff below can hold this loop for seconds, the head keeps its
+          // live Edit control throughout, and an edit KEEPS the id — so a
+          // presence check passes while `next` still holds the text the user
+          // replaced. Delivering that is worse than the double-send the id
+          // keying was introduced to stop: before it, the identity guard
+          // ABORTED here and the edit survived in the queue.
+          //
+          // A missing entry is the removal case the presence check covered, so
+          // this replaces that guard rather than adding a second one.
+          const current = (queuesRef.current[runId] ?? []).find(
+            (queued) => queued.id === next.id,
+          );
+          if (current === undefined) {
             return;
           }
           try {
-            await startTurn(runId, next.text, next.images);
+            await startTurn(runId, current.text, current.images);
             dropHead();
             return;
           } catch (err) {
@@ -1494,10 +1548,20 @@ export function Chats({
       if (!runId) {
         return;
       }
-      const message = (queuesRef.current[runId] ?? []).find(
-        (queued) => queued.id === id,
-      );
+      const queue = queuesRef.current[runId] ?? [];
+      const message = queue.find((queued) => queued.id === id);
       if (!message) {
+        return;
+      }
+      // The automatic drain may already be sending this exact message: the head
+      // STAYS in the queue for the whole in-flight window (which the RUN_BUSY
+      // backoff can stretch to seconds), so its Steer control is live the whole
+      // time. Without this the click POSTs a second copy of a message that is
+      // already on its way, and the agent receives it twice — the same defect
+      // the id keying fixed on the drain's own path, reached from the sibling
+      // one. Only the HEAD is at risk; steering any other row while a drain
+      // runs is exactly what the control is for.
+      if (drainingRef.current.has(runId) && queue[0]?.id === id) {
         return;
       }
       try {

@@ -2171,7 +2171,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     ],
   };
 
-  it('parks a call-initiated question in the broker and delivers the answer as updatedInput.response — never a renderer card', async () => {
+  it('parks a call-initiated question in the broker and delivers the answer as updatedInput.answers — never a renderer card', async () => {
     const { service, claude, approvals, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'qa',
@@ -2229,7 +2229,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     expect(answered.status).toBe('ok');
     expect(callee.respondApproval).toHaveBeenCalledWith('q-1', true, {
       ...QUESTION_INPUT,
-      response: 'Blue',
+      answers: { 'Which color?': 'Blue' },
     });
 
     completeTurn(callee, 'blue it is');
@@ -2298,7 +2298,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
   });
 
-  it("a DAG caller's own question becomes an answerable card: the verdict answer rides updatedInput.response", async () => {
+  it("a DAG caller's own question becomes an answerable card: the verdict answer rides updatedInput.answers", async () => {
     const { service, claude, approvals, itemDao } = setup();
     const run = await service.startRun({
       slug: 'qa-escalate',
@@ -2322,7 +2322,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     expect(applied).toBe(true);
     expect(caller.respondApproval).toHaveBeenCalledWith('q-esc', true, {
       ...QUESTION_INPUT,
-      response: 'Blue',
+      answers: { 'Which color?': 'Blue' },
     });
     await drain();
     const verdictItem = itemDao.items.find(

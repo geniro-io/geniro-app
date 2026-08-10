@@ -1778,7 +1778,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       true,
       {
         ...QUESTION_INPUT,
-        response: 'Blue',
+        answers: { 'Which color?': 'Blue' },
       },
     );
     await drain();

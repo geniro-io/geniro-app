@@ -57,11 +57,20 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
       );
     });
     this.bus.allStatuses().subscribe((event) => {
+      // A null status is an activity announce, not a status change. Writing it
+      // as `run null` would be worse than useless in the one log a user pastes
+      // into a bug report, and stamping a `status` field the event never
+      // carried would have the log assert exactly what the null exists to deny.
       this.record(
         'transcript',
         'info',
-        `run ${event.status}${event.activity ? ` — ${event.activity}` : ''}`,
-        { runId: event.runId, status: event.status },
+        event.status === null
+          ? `run activity: ${event.activity ?? 'none'}`
+          : `run ${event.status}${event.activity ? ` — ${event.activity}` : ''}`,
+        {
+          runId: event.runId,
+          ...(event.status === null ? {} : { status: event.status }),
+        },
       );
     });
     this.bus.allDeleted().subscribe((runId) => {

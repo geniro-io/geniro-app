@@ -410,7 +410,7 @@ function setup(
   mcpHarvest: McpHarvestStore;
   storeGet: ReturnType<typeof vi.fn>;
   /** Every run-status announcement the real bus carried, in order. */
-  statusEvents: { runId: string; status: string }[];
+  statusEvents: { runId: string; status: string | null }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
 } {
@@ -468,7 +468,10 @@ function setup(
   // A real bus, tapped: run-status announcements are a wire-visible effect of
   // every status write, so the spec observes the real stream rather than a stub.
   const bus = new AgentEventBus();
-  const statusEvents: { runId: string; status: string }[] = [];
+  // `status` is nullable on the wire — an activity announce carries none. The
+  // executor only ever writes real statuses, so a null appearing here would
+  // itself be the defect worth seeing.
+  const statusEvents: { runId: string; status: string | null }[] = [];
   bus.allStatuses().subscribe((event) => {
     statusEvents.push({ runId: event.runId, status: event.status });
   });

@@ -617,6 +617,76 @@ describe('buildTurnBlocks', () => {
   });
 });
 
+describe('buildTurnBlocks — sub-agent work', () => {
+  const SUB_A = 'toolu_agent_a';
+  const SUB_B = 'toolu_agent_b';
+
+  const subSays = (text: string, parent: string): ChatItem =>
+    item('message', { text, parentToolUseId: parent }, 'orch', 'assistant');
+
+  it("does NOT fold a sub-agent's message into the main agent's block, though they share a nodeId", () => {
+    // THE BUG: a delegate's opener ("I'll start by loading criteria…") read
+    // as duplicated main-thread prose because the fold keyed on nodeId alone
+    // — reverting the subagentId half of the key collapses this back to one
+    // block and fails the assertion below.
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'from the main agent' }, 'orch', 'assistant'),
+        subSays("I'll start by loading criteria…", SUB_A),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual(['turn-block', 'turn-block']);
+    const [main, sub] = entries as [TurnBlockEntry, TurnBlockEntry];
+    expect(main.nodeId).toBe('orch');
+    expect(sub.nodeId).toBe('orch');
+    expect(main.entries).toHaveLength(1);
+    expect(sub.entries).toHaveLength(1);
+  });
+
+  it('keeps two items from the SAME sub-agent in one block', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        subSays('working on it', SUB_A),
+        subSays('still working', SUB_A),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual(['turn-block']);
+    expect((entries[0] as TurnBlockEntry).entries).toHaveLength(2);
+  });
+
+  it('splits two DIFFERENT sub-agents into separate blocks, even interleaved', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        subSays('from A', SUB_A),
+        subSays('from B', SUB_B),
+        subSays('more from A', SUB_A),
+      ]),
+    );
+
+    // Interleaving forces three blocks: A cannot rejoin its earlier block
+    // once B's row sits between them — the fold is strictly sequential.
+    expect(entries.map((e) => e.type)).toEqual([
+      'turn-block',
+      'turn-block',
+      'turn-block',
+    ]);
+  });
+
+  it('still folds two consecutive MAIN-agent items into one block — no regression', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'first' }, 'orch', 'assistant'),
+        item('message', { text: 'second' }, 'orch', 'assistant'),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual(['turn-block']);
+    expect((entries[0] as TurnBlockEntry).entries).toHaveLength(2);
+  });
+});
+
 describe('withLiveText', () => {
   const live = (over: Partial<LiveState> = {}): LiveState => ({
     text: '',

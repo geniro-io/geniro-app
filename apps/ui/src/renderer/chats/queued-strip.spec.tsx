@@ -84,6 +84,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={noop}
         onRemove={noop}
         onSteer={noop}
@@ -103,6 +104,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[message('a', 'keep me', [{}])]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
         onSteer={noop}
@@ -124,6 +126,7 @@ describe('QueuedStrip', () => {
     const second = message('b', 'still waiting');
     const props = {
       steerUnavailableReason: null,
+      steerStatus: null,
       onEdit: noop,
       onRemove: noop,
       onSteer: noop,
@@ -154,6 +157,7 @@ describe('QueuedStrip', () => {
     const second = message('b', 'unrelated');
     const props = {
       steerUnavailableReason: null,
+      steerStatus: null,
       onEdit: noop,
       onRemove: noop,
       onSteer: noop,
@@ -178,6 +182,7 @@ describe('QueuedStrip', () => {
           message('c', 'third'),
         ]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={noop}
         onRemove={noop}
         onSteer={noop}
@@ -197,6 +202,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[message('id-a', 'first'), message('id-b', 'second')]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={onEdit}
         onRemove={onRemove}
         onSteer={onSteer}
@@ -225,6 +231,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[message('a', 'one line')]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
         onSteer={noop}
@@ -251,6 +258,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[message('a', 'one line')]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
         onSteer={noop}
@@ -273,6 +281,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[message('a', 'urgent')]}
         steerUnavailableReason="cursor-agent takes one prompt per turn"
+        steerStatus={null}
         onEdit={noop}
         onRemove={noop}
         onSteer={onSteer}
@@ -288,6 +297,98 @@ describe('QueuedStrip', () => {
     expect(onSteer).not.toHaveBeenCalled();
   });
 
+  it('says the message is on its way while its Send-now is in flight', () => {
+    // The press used to change nothing at all until the POST resolved, which
+    // is how the control came to be reported as doing nothing.
+    const el = render(
+      <QueuedStrip
+        messages={[message('a', 'urgent')]}
+        steerUnavailableReason={null}
+        steerStatus={{ id: 'a', state: 'sending' }}
+        onEdit={noop}
+        onRemove={noop}
+        onSteer={noop}
+      />,
+    );
+    expect(el.textContent).toContain('sending…');
+  });
+
+  it('says the message is still queued when the run would not take it', () => {
+    // A RUN_BUSY is deliberately NOT an error banner — the message goes out
+    // when the turn ends. It is still an outcome, and the row is where it goes.
+    const el = render(
+      <QueuedStrip
+        messages={[message('a', 'urgent')]}
+        steerUnavailableReason={null}
+        steerStatus={{ id: 'a', state: 'held' }}
+        onEdit={noop}
+        onRemove={noop}
+        onSteer={noop}
+      />,
+    );
+    expect(el.textContent).toContain('still queued');
+    expect(
+      el.querySelector('[title*="goes out when this turn ends"]'),
+    ).not.toBeNull();
+  });
+
+  it('reports the outcome on the steered row alone', () => {
+    const el = render(
+      <QueuedStrip
+        messages={[message('a', 'first'), message('b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={{ id: 'b', state: 'held' }}
+        onEdit={noop}
+        onRemove={noop}
+        onSteer={noop}
+      />,
+    );
+    const rows = el.querySelectorAll('[role="group"] > div');
+    expect(rows[0]!.textContent).toContain('sends next');
+    expect(rows[0]!.textContent).not.toContain('still queued');
+    expect(rows[1]!.textContent).toContain('still queued');
+  });
+
+  it('refuses a second Send-now while the first is still in flight', () => {
+    // Two POSTs of one queued message deliver it to the agent twice — the
+    // defect the id keying fixed on the drain's path, reachable from here.
+    const onSteer = vi.fn();
+    render(
+      <QueuedStrip
+        messages={[message('a', 'urgent')]}
+        steerUnavailableReason={null}
+        steerStatus={{ id: 'a', state: 'sending' }}
+        onEdit={noop}
+        onRemove={noop}
+        onSteer={onSteer}
+      />,
+    );
+
+    const steer = byLabel('Send queued message 1 now')!;
+    expect(steer.getAttribute('aria-disabled')).toBe('true');
+    click(steer);
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  it('still offers Send-now on a row whose outcome is held', () => {
+    // `held` is not a dead end: the user may press again, and a turn that has
+    // since settled will take it.
+    const onSteer = vi.fn();
+    render(
+      <QueuedStrip
+        messages={[message('a', 'urgent')]}
+        steerUnavailableReason={null}
+        steerStatus={{ id: 'a', state: 'held' }}
+        onEdit={noop}
+        onRemove={noop}
+        onSteer={onSteer}
+      />,
+    );
+
+    click(byLabel('Send queued message 1 now'));
+    expect(onSteer).toHaveBeenCalledWith('a');
+  });
+
   it('names the queue for assistive tech with a role that can carry the name', () => {
     // ARIA ignores an accessible name on a generic element, so the label the
     // strip already set was reaching nobody.
@@ -295,6 +396,7 @@ describe('QueuedStrip', () => {
       <QueuedStrip
         messages={[message('a', 'waiting')]}
         steerUnavailableReason={null}
+        steerStatus={null}
         onEdit={noop}
         onRemove={noop}
         onSteer={noop}

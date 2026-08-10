@@ -355,6 +355,30 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
   });
 });
 
+describe('TranscriptItem — message rows, delegated work', () => {
+  it('says on screen that a message row is a sub-agent’s', () => {
+    // The user-visible half of the sub-agent attribution fix. The fold that
+    // keeps a sub-agent's rows out of the main agent's block is pinned in
+    // transcript-groups.spec.ts; this is the marker the prior review found
+    // missing — without it a delegate's words carry no sign of where they
+    // came from even once the fold stops merging them.
+    render(
+      <TranscriptItem
+        item={item('message', {
+          text: 'working on it',
+          parentToolUseId: 'toolu_agent_a',
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('sub-agent');
+  });
+
+  it('says nothing extra about the agent’s own message', () => {
+    render(<TranscriptItem item={item('message', { text: 'hi there' })} />);
+    expect(container.textContent).not.toContain('sub-agent');
+  });
+});
+
 describe('approval_verdict row — suppressed only when its card is on screen', () => {
   /** The verdict row as the transcript renders it, under a given id set. */
   function renderVerdict(

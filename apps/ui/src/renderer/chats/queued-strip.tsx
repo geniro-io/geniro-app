@@ -45,6 +45,7 @@ export interface QueuedStripMessage {
 export function QueuedStrip({
   messages,
   steerUnavailableReason,
+  steerStatus,
   onEdit,
   onRemove,
   onSteer,
@@ -55,6 +56,16 @@ export function QueuedStrip({
    * can. Straight off the daemon's capability report.
    */
   steerUnavailableReason: string | null;
+  /**
+   * What became of the Send-now the user last pressed, or null when none is
+   * outstanding. Both states exist because the press was otherwise SILENT: the
+   * POST takes a moment (`sending`), and the daemon may refuse it outright
+   * (`held`) — a refusal the caller deliberately does not raise as an error,
+   * since the message stays queued and goes out when the turn ends. Without
+   * this the control looked broken in both windows, which is exactly how it
+   * was reported.
+   */
+  steerStatus: { id: string; state: 'sending' | 'held' } | null;
   /** Commit new text for the entry with this id. */
   onEdit: (id: string, text: string) => void;
   onRemove: (id: string) => void;
@@ -113,6 +124,7 @@ export function QueuedStrip({
           message.text ||
           (imageCount === 1 ? '1 image' : `${imageCount} images`);
         const position = index + 1;
+        const steer = steerStatus?.id === message.id ? steerStatus.state : null;
         return (
           <div
             key={message.id}
@@ -165,9 +177,22 @@ export function QueuedStrip({
                     {imageCount === 1 ? '+1 image' : `+${imageCount} images`}
                   </span>
                 ) : null}
-                {/* Only the HEAD goes out next. The old strip told every row it
-                    was next, which on a three-deep queue was true of one. */}
-                {index === 0 ? (
+                {/* The outcome of a Send-now outranks the standing "sends
+                    next": the user just acted on THIS row and is owed the
+                    answer, where the position note is only ever ambient.
+                    Only the HEAD goes out next — the old strip told every row
+                    it was next, which on a three-deep queue was true of one. */}
+                {steer !== null ? (
+                  <span
+                    className="shrink-0"
+                    title={
+                      steer === 'held'
+                        ? 'The run would not take it mid-turn — it goes out when this turn ends'
+                        : undefined
+                    }>
+                    {steer === 'sending' ? 'sending…' : 'still queued'}
+                  </span>
+                ) : index === 0 ? (
                   <span className="shrink-0">sends next</span>
                 ) : null}
                 <Button
@@ -182,13 +207,16 @@ export function QueuedStrip({
                   // place the daemon's reason is written. It would also drop
                   // out of the tab order, putting that sentence beyond a
                   // keyboard user entirely.
-                  aria-disabled={steerBlocked}
+                  // Also inert while its own POST is in flight: the control
+                  // stays hoverable (see above), and a second press would send
+                  // the same message twice.
+                  aria-disabled={steerBlocked || steer === 'sending'}
                   title={
                     steerUnavailableReason ??
                     'Send now — into the turn already running'
                   }
                   onClick={() => {
-                    if (steerBlocked) {
+                    if (steerBlocked || steer === 'sending') {
                       return;
                     }
                     onSteer(message.id);

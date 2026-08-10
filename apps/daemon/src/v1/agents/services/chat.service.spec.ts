@@ -2434,7 +2434,8 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
     expect(statuses).toContainEqual({
       runId: run.id,
-      status: 'running',
+      // The activity announce asserts NO status — it never read the run.
+      status: null,
       activity: 'running Bash',
     });
     claude.finish();
@@ -2466,7 +2467,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
     expect(statuses).toContainEqual({
       runId: run.id,
-      status: 'running',
+      status: null,
       activity: 'compacted the conversation to free up context',
     });
 
@@ -2481,7 +2482,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
     expect(statuses).toContainEqual({
       runId: run.id,
-      status: 'running',
+      status: null,
       activity: 'compacted the conversation',
     });
 
@@ -2516,7 +2517,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
     expect(statuses).toContainEqual({
       runId: run.id,
-      status: 'running',
+      status: null,
       activity: 'waiting for approval',
     });
     claude.finish();

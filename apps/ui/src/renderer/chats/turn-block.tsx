@@ -1,6 +1,7 @@
 import { memo } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
+import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
@@ -42,6 +43,23 @@ export const TurnBlock = memo(function TurnBlock({
     (block.nodeId === null
       ? (chatAgentName ?? null)
       : (nodes?.get(block.nodeId)?.name ?? block.nodeId)) ?? 'agent';
+  /**
+   * A delegate's work, said out loud on the BLOCK.
+   *
+   * It has to be here rather than on the rows: `renderInner` draws a message
+   * itself, so `TranscriptItem`'s own `sub-agent` caption is never reached for
+   * anything inside a block — and every assistant message is inside one. The
+   * whole block is one thread (the fold splits on exactly this), so one label
+   * says it once instead of repeating on every row.
+   */
+  const subagentLabel =
+    block.subagentId === null ? null : (
+      <span
+        data-role="subagent-label"
+        className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase opacity-70">
+        sub-agent
+      </span>
+    );
   const renderInner = (entry: TranscriptEntry): React.ReactNode => {
     if (entry.type === 'tools') {
       return <ToolGroup key={entry.id} group={entry} />;
@@ -95,16 +113,28 @@ export const TurnBlock = memo(function TurnBlock({
       <div
         data-role="turn-block"
         data-solo="true"
-        className="flex w-full flex-col gap-2.5 text-sm leading-relaxed">
+        data-subagent={block.subagentId ?? undefined}
+        className={cn(
+          'flex w-full flex-col gap-2.5 text-sm leading-relaxed',
+          // Set in from the main thread it was delegated from — the label
+          // names it, the rule makes the run of rows read as one aside at a
+          // glance rather than as the conversation continuing.
+          block.subagentId !== null && 'border-l-2 border-border pl-3',
+        )}>
+        {subagentLabel}
         {block.entries.map(renderInner)}
       </div>
     );
   }
   return (
-    <div data-role="turn-block" className="flex w-full gap-3">
+    <div
+      data-role="turn-block"
+      data-subagent={block.subagentId ?? undefined}
+      className="flex w-full gap-3">
       <InitialsAvatar name={name} colorKey={block.nodeId ?? name} />
       <div className="flex min-w-0 flex-1 flex-col items-start">
         <div className="flex w-full flex-col gap-2.5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-relaxed">
+          {subagentLabel}
           {block.entries.map(renderInner)}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">

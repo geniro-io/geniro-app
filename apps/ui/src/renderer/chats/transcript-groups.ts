@@ -99,6 +99,17 @@ export interface TurnBlockEntry {
   createdAt: string;
   /** Owner node; null = the 1:1 chat's agent. */
   nodeId: string | null;
+  /**
+   * The sub-agent whose work this block is, or null for the main thread.
+   *
+   * The fold already SPLITS on this, so it is carried rather than re-derived.
+   * Without it the two kinds of block render identically, and a delegate's run
+   * of near-identical openers reads as the main agent's own words — which is
+   * how the defect was reported. The per-row caption in `TranscriptItem`
+   * cannot cover this: `TurnBlock` renders message rows itself and never
+   * reaches it.
+   */
+  subagentId: string | null;
   entries: TranscriptEntry[];
 }
 
@@ -108,27 +119,43 @@ export type TranscriptEntry =
 /** Sentinel: entry has no agent owner and breaks a turn block. */
 const NO_OWNER = Symbol('no-owner');
 
+/**
+ * The node AND originating thread an entry belongs to — the same pairing
+ * {@link groupKey} folds tool groups by. `nodeId` alone is not enough: a
+ * sub-agent's rows carry the MAIN agent's nodeId, so keying on it alone
+ * folded a delegate's words into the main agent's block under its own
+ * SenderRow.
+ */
+interface EntryOwner {
+  nodeId: string | null;
+  subagentId: string | null;
+}
+
+function sameOwner(a: EntryOwner, b: EntryOwner): boolean {
+  return a.nodeId === b.nodeId && a.subagentId === b.subagentId;
+}
+
 /** The agent a top-level entry belongs to (NO_OWNER breaks the block). */
-function ownerOf(entry: TranscriptEntry): string | null | typeof NO_OWNER {
+function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
   if (entry.type === 'tools') {
-    return entry.nodeId;
+    return { nodeId: entry.nodeId, subagentId: entry.parentToolUseId };
   }
   if (entry.type === 'call-block') {
-    return entry.callerNodeId;
+    return { nodeId: entry.callerNodeId, subagentId: null };
   }
   if (entry.type === 'turn-block') {
-    return entry.nodeId;
+    return { nodeId: entry.nodeId, subagentId: null };
   }
   const item = entry.item;
   if (item.kind === 'message' && item.role !== 'user') {
-    return item.nodeId;
+    return { nodeId: item.nodeId, subagentId: subagentIdOf(item) };
   }
   if (
     item.kind === 'reasoning' ||
     item.kind === 'error' ||
     item.kind === 'system'
   ) {
-    return item.nodeId;
+    return { nodeId: item.nodeId, subagentId: subagentIdOf(item) };
   }
   return NO_OWNER;
 }
@@ -157,14 +184,16 @@ export function buildTurnBlocks(
 ): TranscriptEntry[] {
   const out: TranscriptEntry[] = [];
   let open: TurnBlockEntry | null = null;
+  let openOwner: EntryOwner | null = null;
   for (const entry of entries) {
     const owner = ownerOf(entry);
     if (owner === NO_OWNER) {
       open = null;
+      openOwner = null;
       out.push(entry);
       continue;
     }
-    if (open && open.nodeId === owner) {
+    if (open && openOwner && sameOwner(openOwner, owner)) {
       open.entries.push(entry);
       continue;
     }
@@ -172,9 +201,11 @@ export function buildTurnBlocks(
       type: 'turn-block',
       id: entryId(entry),
       createdAt: entryCreatedAt(entry),
-      nodeId: owner,
+      nodeId: owner.nodeId,
+      subagentId: owner.subagentId,
       entries: [entry],
     };
+    openOwner = owner;
     out.push(open);
   }
   return out;
@@ -772,8 +803,18 @@ function liveEntry(
  */
 function attach(out: TranscriptEntry[], entry: ItemEntry): void {
   const nodeId = entry.item.nodeId;
+  // Matched on the thread as well as the node, exactly as `ownerOf` does. A
+  // live row is the MAIN thread's — the daemon drops a sub-agent's deltas from
+  // the live tail — so on nodeId alone it would be appended to a delegate's
+  // block whenever one happened to be last, and rendered under that block's
+  // `sub-agent` label as the delegate's own words.
+  const subagentId = subagentIdOf(entry.item);
   const last = out[out.length - 1];
-  if (last?.type === 'turn-block' && last.nodeId === nodeId) {
+  if (
+    last?.type === 'turn-block' &&
+    last.nodeId === nodeId &&
+    last.subagentId === subagentId
+  ) {
     out[out.length - 1] = { ...last, entries: [...last.entries, entry] };
     return;
   }
@@ -782,6 +823,7 @@ function attach(out: TranscriptEntry[], entry: ItemEntry): void {
     id: entry.item.id,
     createdAt: entry.item.createdAt,
     nodeId,
+    subagentId,
     entries: [entry],
   });
 }

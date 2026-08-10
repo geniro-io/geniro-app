@@ -1461,13 +1461,37 @@ export function Chats({
   }, [chatApi, workflowApi]);
 
   const respondApproval = useCallback(
-    (item: ChatItem, allow: boolean, answer?: string): void => {
+    (
+      item: ChatItem,
+      allow: boolean,
+      answer?: string,
+      images?: SendMessageDtoImagesInner[],
+    ): void => {
       const requestId = payloadString(item.payload, 'id');
       if (requestId) {
         client.sendVerdict(item.runId, requestId, allow, answer);
       }
+      if (!images?.length) {
+        return;
+      }
+      // The verdict FIRST, then the picture. The answer reaches the model as
+      // `updatedInput.response` — a string field of the CLI's own tool input,
+      // with nowhere for bytes to go — so the image travels the one channel
+      // that carries real image blocks: a user message into the turn that the
+      // verdict just unblocked. The answer text already says one is coming.
+      //
+      // A RUN_BUSY here is not a failure: the turn settled as this flew, and
+      // the queue then delivers the image the moment the next turn can take
+      // it, exactly as it would for anything typed in the composer.
+      void startTurn(item.runId, '', images).catch((err: unknown) => {
+        if (isRunBusyError(err)) {
+          enqueueMessage(item.runId, { text: '', images });
+          return;
+        }
+        setError(String(err));
+      });
     },
-    [client],
+    [client, startTurn, enqueueMessage],
   );
 
   // Requests the daemon reported as already settled — invalid answers remain
@@ -1585,7 +1609,9 @@ export function Chats({
               // to annotate.
               deadRequestKeys.has(`${item.runId}:${requestId}`))
           }
-          onRespond={(allow, answer) => respondApproval(item, allow, answer)}
+          onRespond={(allow, answer, images) =>
+            respondApproval(item, allow, answer, images)
+          }
         />
       );
     },

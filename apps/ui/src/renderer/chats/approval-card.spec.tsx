@@ -929,3 +929,113 @@ describe('ApprovalCard', () => {
     expect(declinedLine.className).not.toContain('text-muted-foreground');
   });
 });
+
+describe('ApprovalCard — a screenshot pasted into the answer', () => {
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const PNG_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
+
+  const oneQuestion = {
+    questions: [
+      { question: 'Which of these looks right?', options: [{ label: 'A' }] },
+    ],
+  };
+
+  /** Paste an image onto the answer field and wait until it is staged. */
+  async function pasteImage(el: HTMLElement): Promise<void> {
+    const field = el.querySelector('input')!;
+    const event = new Event('paste', { bubbles: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [new File([PNG_BYTES], 'shot.png', { type: 'image/png' })],
+      },
+    });
+    await act(async () => {
+      field.dispatchEvent(event);
+    });
+    // FileReader fires `load` on its own schedule, so wait on the observable
+    // rather than a fixed tick.
+    for (let attempt = 0; ; attempt++) {
+      if (el.querySelector('[data-slot="staged-attachment"]')) {
+        return;
+      }
+      if (attempt >= 100) {
+        throw new Error('the pasted image never staged');
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  it('hands the bytes back SEPARATELY, and says so in the answer', async () => {
+    // The whole point of the third argument: the answer reaches the model as
+    // `updatedInput.response`, a plain string, so the image cannot ride inside
+    // it. It goes out as its own message — and the answer has to say so, or
+    // the model acts on the words and meets the screenshot afterwards with no
+    // idea it was part of the reply.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    await pasteImage(el);
+    typeInto(el.querySelector('input')!, 'this one');
+    act(() => {
+      buttonNamed(el, 'Answer').click();
+    });
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    const [allow, answer, images] = onRespond.mock.calls[0]!;
+    expect(allow).toBe(true);
+    expect(answer).toContain('this one');
+    expect(answer).toContain('1 image attached');
+    expect(images).toEqual([{ mediaType: 'image/png', data: PNG_BASE64 }]);
+  });
+
+  it('a picture alone ANSWERS a lone question', async () => {
+    // "Which of these looks right?" is answered by the picture. Requiring a
+    // typed word alongside it would leave the user with a staged screenshot
+    // and a disabled button, which is the shape of the original complaint.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    expect(buttonNamed(el, 'Answer').disabled).toBe(true);
+
+    await pasteImage(el);
+
+    expect(buttonNamed(el, 'Answer').disabled).toBe(false);
+  });
+
+  it('sends NO third argument when nothing was pasted', async () => {
+    // The arity is load-bearing: `respondApproval` starts a whole extra
+    // message delivery on a non-empty third argument, and an empty array
+    // passed here would post a message carrying nothing at all.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={oneQuestion}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    typeInto(el.querySelector('input')!, 'no picture here');
+    act(() => {
+      buttonNamed(el, 'Answer').click();
+    });
+
+    expect(onRespond).toHaveBeenCalledWith(true, 'no picture here');
+  });
+});

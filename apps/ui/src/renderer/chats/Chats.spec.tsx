@@ -4948,3 +4948,106 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     expect(pinned(container)).not.toBeNull();
   });
 });
+
+describe('Chats — a screenshot pasted into a question answer', () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const PNG_B64 = Buffer.from(PNG).toString('base64');
+
+  const question = (requestId: string): ChatItem => ({
+    id: `r1-q-${requestId}`,
+    runId: 'r1',
+    nodeId: null,
+    seq: 1,
+    kind: 'approval_request',
+    role: null,
+    payload: {
+      id: requestId,
+      toolName: 'AskUserQuestion',
+      input: {
+        questions: [{ question: 'Which looks right?', options: [] }],
+      },
+    },
+    createdAt: 'now',
+  });
+
+  it('sends the verdict AND delivers the image as its own message', async () => {
+    // The delivery is the whole feature, and it cannot ride the verdict: the
+    // answer reaches the model as `updatedInput.response`, a plain string. So
+    // the bytes must leave through the message route — the same one that
+    // carries real image blocks into a running turn.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', ''));
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), question('q-1')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const field = container.querySelector<HTMLInputElement>(
+      '[data-slot="pinned-request"] input',
+    )!;
+    const paste = new Event('paste', { bubbles: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: { files: [new File([PNG], 'shot.png', { type: 'image/png' })] },
+    });
+    await act(async () => {
+      field.dispatchEvent(paste);
+    });
+    for (let attempt = 0; ; attempt++) {
+      if (container.querySelector('[data-slot="staged-attachment"]')) {
+        break;
+      }
+      if (attempt >= 100) {
+        throw new Error('the pasted image never staged');
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Answer')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The verdict carries the words…
+    expect(client.sendVerdict).toHaveBeenCalledTimes(1);
+    const verdictAnswer = vi.mocked(client.sendVerdict).mock.calls[0]![3];
+    expect(verdictAnswer).toContain('1 image attached');
+    // …and the bytes go out on their own.
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: {
+        text: '',
+        images: [{ mediaType: 'image/png', data: PNG_B64 }],
+      },
+    });
+  });
+
+  it('posts NOTHING extra when the answer carries no image', async () => {
+    // The guard that keeps every ordinary answer a single round-trip.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), question('q-2')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const field = container.querySelector<HTMLInputElement>(
+      '[data-slot="pinned-request"] input',
+    )!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(field, 'the left one');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Answer')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(client.sendVerdict).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+  });
+});

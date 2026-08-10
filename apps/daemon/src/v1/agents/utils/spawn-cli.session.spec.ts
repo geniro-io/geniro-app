@@ -592,6 +592,43 @@ describe('an event arriving between turns', () => {
     expect(session.alive).toBe(true);
   });
 
+  it('tells the NEXT turn about the parked question, once', async () => {
+    // A turn owns `onEvent`, so at the moment the question arrived there was
+    // nothing to show it to and it lived only in the daemon log. Parking does
+    // not unblock the CLI the way the refusal did, so the NEXT turn is the one
+    // that inherits a blocked process and falls silent — which makes it exactly
+    // where the sentence explaining the silence belongs.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await first?.done;
+
+    line(child, { ask: 'q-1' });
+
+    const events: AgentEvent[] = [];
+    const second = session.startTurn({
+      onEvent: (event) => events.push(event),
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'notice',
+        message: expect.stringContaining('between turns'),
+      }),
+    ]);
+
+    // Drained, not copied — a turn after this one must not repeat it.
+    line(child, { done: true });
+    await second?.done;
+    const later: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => later.push(event) });
+    expect(later).toEqual([]);
+  });
+
   it('names the tool and the request id, so the line can be joined to a transcript row', () => {
     // The message this replaces said only `dropped a 'approval_request' event
     // arriving between turns` — no tool, no id, no way to correlate it with

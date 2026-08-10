@@ -322,6 +322,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   let approvalEncoder: CliTurnOptions['buildApprovalResponse'];
   /**
+   * Notices raised with NO turn to carry them, held for the next one.
+   *
+   * A turn owns `onEvent`, so an event arriving between turns has nowhere to go
+   * — which is why an orphaned question was previously visible only as a daemon
+   * log line. Buffering is not a delay dressed up: the CLI is left blocked on
+   * that request, so the very next turn is the one that will produce nothing,
+   * and this is the sentence that explains why. Delivering it there puts the
+   * explanation exactly where the user meets the symptom.
+   */
+  const pendingNotices: string[] = [];
+  /**
    * When each outstanding approval request was seen, for the round-trip line.
    *
    * The D1 investigation had to reconstruct "was this request ever answered,
@@ -454,6 +465,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       opts.logger?.warn(
         `${opts.command}: question '${event.toolName}' (id ${event.id}) arrived between turns — ` +
           'left unanswered, since refusing it would answer for the user',
+      );
+      // Said OUT LOUD, not just logged. The refusal this replaced at least
+      // unblocked the CLI; parking does not, and the process is kept between
+      // turns, so the next turn inherits a CLI still waiting on this request
+      // and falls silent until the deadline. Without a transcript row the user
+      // sees a chat that simply stopped answering, with nothing naming the
+      // question that stopped it.
+      pendingNotices.push(
+        `${opts.command} asked a question between turns, so nothing was there to show it to you. ` +
+          'It was left unanswered rather than refused on your behalf — but the CLI is still ' +
+          'waiting on it, so this chat may not answer until it is restarted.',
       );
       return;
     }
@@ -769,6 +791,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // Kept at session scope so a request arriving AFTER this turn settles can
     // still be refused rather than dropped — see `handleOrphanEvent`.
     approvalEncoder = turnOptions.buildApprovalResponse;
+    // Anything that happened while no turn was open is told to THIS one, before
+    // its own output — it is the context for what this turn is about to do (or
+    // fail to do). Drained, not copied: each is said once.
+    while (pendingNotices.length > 0) {
+      turnOptions.onEvent({ type: 'notice', message: pendingNotices.shift()! });
+    }
     opts.logger?.debug?.(`${opts.command}: turn opened`);
     // Armed from the start, not from the first event: a turn whose CLI never
     // answers at all is exactly the case with nothing to rearm it.

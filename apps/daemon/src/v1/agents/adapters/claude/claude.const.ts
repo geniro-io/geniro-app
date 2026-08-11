@@ -368,6 +368,45 @@ export const CLAUDE_MCP_NEEDS_AUTH_MARKER = 'Needs authentication';
  */
 export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
 
+/**
+ * Argv that signs the CLI ITSELF in — the account, not one of its MCP servers.
+ *
+ * `claude auth login` ("Sign in to your Anthropic account"), read from the
+ * binary's own `claude auth --help` on 2.1.227. Distinct from
+ * {@link CLAUDE_MCP_LOGIN_ARGS} above and reached by a different failure: a
+ * turn that ended in "OAuth session expired and could not be refreshed" needs
+ * THIS one, and `mcp login` would send the user to a command that cannot fix
+ * what they hit.
+ *
+ * Named for the same reason as its MCP sibling: `getConfig()` spells it and the
+ * adapter's spec asserts on it.
+ */
+export const CLAUDE_AUTH_LOGIN_ARGS: readonly string[] = ['auth', 'login'];
+
+/**
+ * Wording that marks a turn as having failed on the ACCOUNT, not on the work.
+ *
+ * Observed verbatim in a failed run's own error row:
+ *
+ * ```
+ * Failed to authenticate: OAuth session expired and could not be refreshed
+ * ```
+ *
+ * The matching half of that sentence only. An earlier revision also carried the
+ * bare prefix `'Failed to authenticate'`, which reads as the more robust choice
+ * and is the opposite: the CLI uses that same prefix for an MCP SERVER it could
+ * not authenticate, and the row would then offer `claude auth login` for a
+ * failure only `claude mcp login <server>` can fix — the precise misdirection
+ * {@link AdapterConfig.auth} warns about, since a wrong cure is worse than none.
+ *
+ * A list rather than one string because the account can fail in more than one
+ * way (a revoked token, a missing key), but each entry must be specific to the
+ * ACCOUNT. Add one only from a real failed turn, never from the CLI's `--help`.
+ */
+export const CLAUDE_AUTH_EXPIRED_MARKERS: readonly string[] = [
+  'OAuth session expired',
+];
+
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */
 export const CLAUDE_MCP_DETAIL_SEPARATOR = '—';
 

@@ -25,6 +25,7 @@ import type {
 import { CLI_KINDS } from '../../shared/contracts';
 import type {
   AgentSkillDto as AgentSkill,
+  HandoffTargetDto,
   ItemDto as ChatItem,
   RunDto as ChatRun,
   SendMessageDtoImagesInner,
@@ -65,6 +66,7 @@ import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
+import { CliLoginContext } from './cli-login-context';
 import { ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
@@ -2320,29 +2322,29 @@ export function Chats({
   );
 
   /**
-   * Hand ONE thread of one agent to the user: open that agent's own CLI on the
-   * thread's conversation, in the user's terminal.
+   * The whole handoff contract, once: ask the daemon for an invocation, and
+   * either open it in the user's terminal or say why there isn't one.
    *
-   * The daemon resolves the invocation, the Electron main process opens it —
-   * nothing is mirrored, so nothing can fall behind. A CLI that cannot reopen
-   * its own sessions says so, and that reason is what the user sees.
+   * Three callers now resolve different things — a thread's conversation, an
+   * MCP server's sign-in, a CLI's own sign-in — and every one of them shares
+   * this shape. Hand-copied, a later fix (surfacing a rejected
+   * `openInTerminal`, or offering `target.display` to paste) would have to be
+   * made three times with nothing catching a miss.
+   *
+   * A refusal is the ANSWER, not a failure — cursor-agent genuinely cannot
+   * reopen one of its conversations — so the daemon's own sentence is what the
+   * user reads, and `fallback` covers only the case where it sent none.
    */
-  const openThreadTerminal = useCallback(
-    async (agent: AgentDisplay, thread: AgentThread) => {
-      const runId = activeRunIdRef.current;
-      if (!runId) {
-        return;
-      }
+  const openResolvedTarget = useCallback(
+    async (
+      resolve: () => Promise<HandoffTargetDto>,
+      fallback: string,
+    ): Promise<void> => {
       try {
         setError(null);
-        const target = await resolveHandoff(agent, thread);
+        const target = await resolve();
         if (target.kind !== 'command' || !target.command || !target.cwd) {
-          // A refusal is the ANSWER, not a failure: cursor-agent genuinely
-          // cannot reopen one of its conversations, and the daemon says why.
-          setError(
-            target.unavailableReason ??
-              'this conversation cannot be opened in a terminal',
-          );
+          setError(target.unavailableReason ?? fallback);
           return;
         }
         await window.geniro.openInTerminal({
@@ -2354,7 +2356,27 @@ export function Chats({
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [resolveHandoff],
+    [],
+  );
+
+  /**
+   * Hand ONE thread of one agent to the user: open that agent's own CLI on the
+   * thread's conversation, in the user's terminal.
+   *
+   * The daemon resolves the invocation, the Electron main process opens it —
+   * nothing is mirrored, so nothing can fall behind.
+   */
+  const openThreadTerminal = useCallback(
+    async (agent: AgentDisplay, thread: AgentThread) => {
+      if (!activeRunIdRef.current) {
+        return;
+      }
+      await openResolvedTarget(
+        () => resolveHandoff(agent, thread),
+        'this conversation cannot be opened in a terminal',
+      );
+    },
+    [resolveHandoff, openResolvedTarget],
   );
 
   /**
@@ -2392,33 +2414,48 @@ export function Chats({
         );
         return;
       }
-      try {
-        setError(null);
-        const target = await handoffApi.resolveMcpLogin({
-          agent: kind,
-          cwd,
-          server,
-        });
-        if (target.kind !== 'command' || !target.command || !target.cwd) {
-          // A refusal is the ANSWER — this CLI has no sign-in command — and the
-          // daemon's own sentence is what the user reads.
-          setError(
-            target.unavailableReason ??
-              `${server} cannot be signed in to from here`,
-          );
-          return;
-        }
-        await window.geniro.openInTerminal({
-          command: target.command,
-          args: target.args,
-          cwd: target.cwd,
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      await openResolvedTarget(
+        () => handoffApi.resolveMcpLogin({ agent: kind, cwd, server }),
+        `${server} cannot be signed in to from here`,
+      );
     },
     [handoffApi, activeRun?.cwd],
   );
+
+  /**
+   * Sign one CLI itself back in, in the user's own terminal.
+   *
+   * The account, not one of its MCP servers — {@link signInToMcpServer} above
+   * fixes a server the CLI could not authenticate, this fixes the CLI's own
+   * lapsed session, and the wrong one sends the user to a command that cannot
+   * fix what they hit.
+   *
+   * No folder is passed: an account is machine-wide, and the row that offers
+   * this may belong to a run with no working directory at all. The `cwd` the
+   * daemon answers with is therefore the home directory it falls back to — a
+   * sign-in does not care where it runs, and the IPC contract takes a validated
+   * absolute path either way.
+   */
+  const signInToCli = useCallback(
+    async (kind: CliKind) => {
+      await openResolvedTarget(
+        () => handoffApi.resolveCliLogin({ agent: kind }),
+        `${kind} cannot be signed in from here`,
+      );
+    },
+    [handoffApi, openResolvedTarget],
+  );
+
+  /**
+   * The transcript's own sign-in, bound to the CLI the ACTIVE run is talking
+   * to. Null when there is no run, or when the run names no agent — an error
+   * row then renders without an action rather than with one that cannot know
+   * which CLI to open.
+   */
+  const signInToActiveCli = useMemo(() => {
+    const kind = activeRun?.agentKind;
+    return kind ? () => void signInToCli(kind) : null;
+  }, [activeRun?.agentKind, signInToCli]);
 
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
   /**
@@ -2477,287 +2514,292 @@ export function Chats({
   // panel's own resizable width drives it).
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
-      <AttachmentLoaderContext.Provider value={loadAttachment}>
-        <div
-          className={cn(
-            'grid h-full',
-            showAgentsPanel
-              ? 'grid-cols-[260px_minmax(0,1fr)_auto]'
-              : 'grid-cols-[260px_minmax(0,1fr)]',
-          )}>
-          <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
-            <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
-              <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                Chats
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                aria-label="New chat"
-                title="New chat"
-                onClick={newChat}>
-                <Plus className="shrink-0" />
-              </Button>
-            </div>
-            <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
-              {!runsLoaded && runs.length === 0 ? (
-                <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                  Loading chats…
-                </li>
-              ) : runs.length === 0 ? (
-                <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                  No chats yet
-                </li>
-              ) : (
-                runs.map((run) => (
-                  <ChatListItem
-                    key={run.id}
-                    runId={run.id}
-                    active={run.id === activeRunId}
-                    label={runLabel(run, workflowNames)}
-                    isWorkflow={run.workflowId != null}
-                    status={
-                      run.id === activeRunId ? activeRunStatus : run.status
-                    }
-                    lastMessage={run.lastMessage}
-                    lastActivityAt={run.updatedAt}
-                    activity={activities.get(run.id) ?? null}
-                    onActivate={handleActivateRun}
-                    onRename={handleRenameRun}
-                    onDelete={handleDeleteRun}
-                  />
-                ))
-              )}
-            </ul>
-          </aside>
+      <CliLoginContext.Provider value={signInToActiveCli}>
+        <AttachmentLoaderContext.Provider value={loadAttachment}>
+          <div
+            className={cn(
+              'grid h-full',
+              showAgentsPanel
+                ? 'grid-cols-[260px_minmax(0,1fr)_auto]'
+                : 'grid-cols-[260px_minmax(0,1fr)]',
+            )}>
+            <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
+              <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
+                <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Chats
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  aria-label="New chat"
+                  title="New chat"
+                  onClick={newChat}>
+                  <Plus className="shrink-0" />
+                </Button>
+              </div>
+              <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
+                {!runsLoaded && runs.length === 0 ? (
+                  <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                    Loading chats…
+                  </li>
+                ) : runs.length === 0 ? (
+                  <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                    No chats yet
+                  </li>
+                ) : (
+                  runs.map((run) => (
+                    <ChatListItem
+                      key={run.id}
+                      runId={run.id}
+                      active={run.id === activeRunId}
+                      label={runLabel(run, workflowNames)}
+                      isWorkflow={run.workflowId != null}
+                      status={
+                        run.id === activeRunId ? activeRunStatus : run.status
+                      }
+                      lastMessage={run.lastMessage}
+                      lastActivityAt={run.updatedAt}
+                      activity={activities.get(run.id) ?? null}
+                      onActivate={handleActivateRun}
+                      onRename={handleRenameRun}
+                      onDelete={handleDeleteRun}
+                    />
+                  ))
+                )}
+              </ul>
+            </aside>
 
-          {activeRunId === null ? (
-            // The new-run composer — the landing view, one Cursor-style card: the
-            // task text on top and, inside the same card, the graph/agent it
-            // targets, the folder it runs in, and the trigger the run starts from
-            // (a run only starts by firing one), with a round send control.
-            <section className="flex min-h-0 flex-col items-center justify-center overflow-y-auto p-6">
-              <div className="flex w-full max-w-2xl flex-col gap-5">
-                <h2 className="text-center text-xl font-semibold tracking-tight">
-                  What are we building?
-                </h2>
-                <div className="relative">
-                  {skillMenuOpen ? (
-                    <SkillMenu
-                      skills={skillMatches}
-                      highlightIndex={highlightedIndex}
-                      onSelect={pickSkill}
-                      onHighlight={setSkillHighlight}
-                    />
-                  ) : null}
-                  <ComposerTopRow>
-                    <Select
-                      variant="ghost"
-                      value={target}
-                      aria-label="Agent or workflow for new runs"
-                      searchPlaceholder="Search agents, workflows…"
-                      groups={[
-                        {
-                          label: 'Agents',
-                          // An agent the machine cannot run is SHOWN and
-                          // refused, not hidden: a row that quietly vanishes
-                          // leaves the user hunting for it, while a disabled
-                          // one with its reason beside it explains itself.
-                          // The current target is never refused — a run
-                          // already on it would otherwise have a picker that
-                          // cannot display its own value.
-                          items: CLI_KINDS.map((kind) => {
-                            const detected = cliDetections?.find(
-                              (d) => d.kind === kind,
-                            );
-                            const missing =
-                              detected !== undefined &&
-                              !detected.found &&
-                              kind !== target;
-                            return {
-                              value: kind,
-                              label: kind,
-                              ...(missing
-                                ? { disabled: true, hint: 'not installed' }
-                                : {}),
-                            };
-                          }),
-                        },
-                        ...(workflows.length > 0
-                          ? [
-                              {
-                                label: 'Workflows',
-                                items: workflows.map((wf) => ({
-                                  value: `wf:${wf.slug}`,
-                                  label: wf.name,
-                                  icon: <WorkflowIcon />,
-                                })),
-                              },
-                            ]
-                          : []),
-                      ]}
-                      onValueChange={changeTarget}
-                    />
-                    <FolderSelect
-                      folder={folder}
-                      recentFolders={recentFolders}
-                      onChoose={chooseFolder}
-                      onBrowse={() => void pickFolder()}
-                    />
-                    <BranchSelect
-                      info={git.info}
-                      switching={git.switching}
-                      onSwitch={(branch) => void git.switchTo(branch)}
-                    />
-                    {workflowSlug && triggers.length > 0 ? (
+            {activeRunId === null ? (
+              // The new-run composer — the landing view, one Cursor-style card: the
+              // task text on top and, inside the same card, the graph/agent it
+              // targets, the folder it runs in, and the trigger the run starts from
+              // (a run only starts by firing one), with a round send control.
+              <section className="flex min-h-0 flex-col items-center justify-center overflow-y-auto p-6">
+                <div className="flex w-full max-w-2xl flex-col gap-5">
+                  <h2 className="text-center text-xl font-semibold tracking-tight">
+                    What are we building?
+                  </h2>
+                  <div className="relative">
+                    {skillMenuOpen ? (
+                      <SkillMenu
+                        skills={skillMatches}
+                        highlightIndex={highlightedIndex}
+                        onSelect={pickSkill}
+                        onHighlight={setSkillHighlight}
+                      />
+                    ) : null}
+                    <ComposerTopRow>
                       <Select
                         variant="ghost"
-                        value={triggerId}
-                        aria-label="Trigger the run starts from"
+                        value={target}
+                        aria-label="Agent or workflow for new runs"
+                        searchPlaceholder="Search agents, workflows…"
                         groups={[
                           {
-                            items: triggers.map((entry) => ({
-                              value: entry.id,
-                              label: `${entry.name} · ${entry.trigger} trigger`,
-                              icon: <Zap />,
-                            })),
+                            label: 'Agents',
+                            // An agent the machine cannot run is SHOWN and
+                            // refused, not hidden: a row that quietly vanishes
+                            // leaves the user hunting for it, while a disabled
+                            // one with its reason beside it explains itself.
+                            // The current target is never refused — a run
+                            // already on it would otherwise have a picker that
+                            // cannot display its own value.
+                            items: CLI_KINDS.map((kind) => {
+                              const detected = cliDetections?.find(
+                                (d) => d.kind === kind,
+                              );
+                              const missing =
+                                detected !== undefined &&
+                                !detected.found &&
+                                kind !== target;
+                              return {
+                                value: kind,
+                                label: kind,
+                                ...(missing
+                                  ? { disabled: true, hint: 'not installed' }
+                                  : {}),
+                              };
+                            }),
                           },
+                          ...(workflows.length > 0
+                            ? [
+                                {
+                                  label: 'Workflows',
+                                  items: workflows.map((wf) => ({
+                                    value: `wf:${wf.slug}`,
+                                    label: wf.name,
+                                    icon: <WorkflowIcon />,
+                                  })),
+                                },
+                              ]
+                            : []),
                         ]}
-                        onValueChange={setTriggerId}
+                        onValueChange={changeTarget}
                       />
-                    ) : null}
-                    {!workflowSlug ? (
-                      // Approval mode of the next chat — graph runs keep their
-                      // per-node modes from the workflow YAML instead.
-                      <ApprovalModeSelect
-                        supportedModes={composerApprovalModes}
-                        // A mode this CLI does not honour shows as the "cli
-                        // default" placeholder rather than a lie — the user
-                        // may have picked it while another agent was selected.
-                        value={
-                          composerApprovalModes?.includes(approvalMode)
-                            ? approvalMode
-                            : null
-                        }
-                        planSupported={
-                          capabilities?.claudeModes.plan === 'pass'
-                        }
-                        onChange={changeApprovalMode}
+                      <FolderSelect
+                        folder={folder}
+                        recentFolders={recentFolders}
+                        onChoose={chooseFolder}
+                        onBrowse={() => void pickFolder()}
                       />
-                    ) : null}
-                  </ComposerTopRow>
-                  <ComposerCard>
-                    <AttachmentStrip
-                      attachments={attachments.attachments}
-                      onRemove={attachments.remove}
-                    />
-                    <Textarea
-                      value={input}
-                      rows={4}
-                      aria-label="Task for the new run"
-                      className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                      placeholder={
-                        workflowSlug
-                          ? 'Describe the task for the workflow team…'
-                          : 'Message the agent…'
-                      }
-                      onChange={(event) => setInput(event.target.value)}
-                      onPaste={(event) => {
-                        // Only swallow the paste when it actually carried images —
-                        // a normal text paste must keep its default behaviour.
-                        if (attachments.addFromClipboard(event.clipboardData)) {
-                          event.preventDefault();
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (handleSkillMenuKeys(event)) {
-                          return;
-                        }
-                        if (isComposerSendKey(event)) {
-                          event.preventDefault();
-                          void send();
-                        }
-                      }}
-                    />
-                    <ComposerBottomRow
-                      actions={
-                        <Button
-                          type="button"
-                          size="icon"
-                          className="size-8 shrink-0 rounded-full"
-                          disabled={!hasContent || streaming}
-                          aria-label={workflowSlug ? 'Start run' : 'Send'}
-                          title={workflowSlug ? 'Start run' : 'Send'}
-                          onClick={() => void send()}>
-                          {workflowSlug ? (
-                            <Zap className="size-4 shrink-0" />
-                          ) : (
-                            <ArrowUp className="size-4 shrink-0" />
-                          )}
-                        </Button>
-                      }>
-                      {!workflowSlug ? (
-                        // Only a single-agent run picks a model here — a
-                        // workflow's nodes each name their own in its YAML.
-                        <ModelSelect
-                          agentKind={agentKind}
-                          models={agentModels}
-                          value={models[agentKind] ?? null}
-                          onChange={(model) => changeModel(agentKind, model)}
+                      <BranchSelect
+                        info={git.info}
+                        switching={git.switching}
+                        onSwitch={(branch) => void git.switchTo(branch)}
+                      />
+                      {workflowSlug && triggers.length > 0 ? (
+                        <Select
+                          variant="ghost"
+                          value={triggerId}
+                          aria-label="Trigger the run starts from"
+                          groups={[
+                            {
+                              items: triggers.map((entry) => ({
+                                value: entry.id,
+                                label: `${entry.name} · ${entry.trigger} trigger`,
+                                icon: <Zap />,
+                              })),
+                            },
+                          ]}
+                          onValueChange={setTriggerId}
                         />
                       ) : null}
                       {!workflowSlug ? (
-                        // Absent, not disabled, for a CLI with no effort
-                        // control — the component decides that from an empty
-                        // list, so nothing here branches on the agent kind.
-                        <EffortSelect
-                          efforts={agentEfforts}
-                          value={efforts[agentKind] ?? null}
-                          onChange={(effort) => changeEffort(agentKind, effort)}
+                        // Approval mode of the next chat — graph runs keep their
+                        // per-node modes from the workflow YAML instead.
+                        <ApprovalModeSelect
+                          supportedModes={composerApprovalModes}
+                          // A mode this CLI does not honour shows as the "cli
+                          // default" placeholder rather than a lie — the user
+                          // may have picked it while another agent was selected.
+                          value={
+                            composerApprovalModes?.includes(approvalMode)
+                              ? approvalMode
+                              : null
+                          }
+                          planSupported={
+                            capabilities?.claudeModes.plan === 'pass'
+                          }
+                          onChange={changeApprovalMode}
                         />
                       ) : null}
-                    </ComposerBottomRow>
-                  </ComposerCard>
-                </div>
-                {/* The suggestion-chip row that sat here is gone. Both halves of it
+                    </ComposerTopRow>
+                    <ComposerCard>
+                      <AttachmentStrip
+                        attachments={attachments.attachments}
+                        onRemove={attachments.remove}
+                      />
+                      <Textarea
+                        value={input}
+                        rows={4}
+                        aria-label="Task for the new run"
+                        className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                        placeholder={
+                          workflowSlug
+                            ? 'Describe the task for the workflow team…'
+                            : 'Message the agent…'
+                        }
+                        onChange={(event) => setInput(event.target.value)}
+                        onPaste={(event) => {
+                          // Only swallow the paste when it actually carried images —
+                          // a normal text paste must keep its default behaviour.
+                          if (
+                            attachments.addFromClipboard(event.clipboardData)
+                          ) {
+                            event.preventDefault();
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (handleSkillMenuKeys(event)) {
+                            return;
+                          }
+                          if (isComposerSendKey(event)) {
+                            event.preventDefault();
+                            void send();
+                          }
+                        }}
+                      />
+                      <ComposerBottomRow
+                        actions={
+                          <Button
+                            type="button"
+                            size="icon"
+                            className="size-8 shrink-0 rounded-full"
+                            disabled={!hasContent || streaming}
+                            aria-label={workflowSlug ? 'Start run' : 'Send'}
+                            title={workflowSlug ? 'Start run' : 'Send'}
+                            onClick={() => void send()}>
+                            {workflowSlug ? (
+                              <Zap className="size-4 shrink-0" />
+                            ) : (
+                              <ArrowUp className="size-4 shrink-0" />
+                            )}
+                          </Button>
+                        }>
+                        {!workflowSlug ? (
+                          // Only a single-agent run picks a model here — a
+                          // workflow's nodes each name their own in its YAML.
+                          <ModelSelect
+                            agentKind={agentKind}
+                            models={agentModels}
+                            value={models[agentKind] ?? null}
+                            onChange={(model) => changeModel(agentKind, model)}
+                          />
+                        ) : null}
+                        {!workflowSlug ? (
+                          // Absent, not disabled, for a CLI with no effort
+                          // control — the component decides that from an empty
+                          // list, so nothing here branches on the agent kind.
+                          <EffortSelect
+                            efforts={agentEfforts}
+                            value={efforts[agentKind] ?? null}
+                            onChange={(effort) =>
+                              changeEffort(agentKind, effort)
+                            }
+                          />
+                        ) : null}
+                      </ComposerBottomRow>
+                    </ComposerCard>
+                  </div>
+                  {/* The suggestion-chip row that sat here is gone. Both halves of it
                 are now rows in the composer's own menus — folders in the folder
                 chip, workflows in the target chip, each searchable — so the
                 chips only restated, below the card, choices the card already
                 offered, and were capped at three besides. */}
-                {workflowSlug && triggers.length > 1 ? (
-                  <p className="text-center text-xs text-muted-foreground">
-                    This graph has {triggers.length} triggers — v1 fires them
-                    all on start.
-                  </p>
-                ) : null}
-                {/* A refused branch switch reports here — the guard says WHY
+                  {workflowSlug && triggers.length > 1 ? (
+                    <p className="text-center text-xs text-muted-foreground">
+                      This graph has {triggers.length} triggers — v1 fires them
+                      all on start.
+                    </p>
+                  ) : null}
+                  {/* A refused branch switch reports here — the guard says WHY
                 ("uncommitted changes…"), which is the whole point of it. */}
-                {composerError ? (
-                  <ErrorBanner
-                    message={composerError}
-                    onDismiss={dismissError}
+                  {composerError ? (
+                    <ErrorBanner
+                      message={composerError}
+                      onDismiss={dismissError}
+                    />
+                  ) : null}
+                </div>
+              </section>
+            ) : (
+              <section className="flex min-h-0 flex-col">
+                {activeRun ? (
+                  <ChatHeader
+                    label={runLabel(activeRun, workflowNames)}
+                    isWorkflow={activeRun.workflowId != null}
+                    agentKind={activeRun.agentKind}
+                    status={activeRunStatus}
+                    lastActivityAt={activeRun.updatedAt}
+                    turnStartedAt={turnStartedAt}
+                    sidePanelOpen={agentsPanelOpen}
+                    onToggleSidePanel={toggleAgentsPanel}
                   />
                 ) : null}
-              </div>
-            </section>
-          ) : (
-            <section className="flex min-h-0 flex-col">
-              {activeRun ? (
-                <ChatHeader
-                  label={runLabel(activeRun, workflowNames)}
-                  isWorkflow={activeRun.workflowId != null}
-                  agentKind={activeRun.agentKind}
-                  status={activeRunStatus}
-                  lastActivityAt={activeRun.updatedAt}
-                  turnStartedAt={turnStartedAt}
-                  sidePanelOpen={agentsPanelOpen}
-                  onToggleSidePanel={toggleAgentsPanel}
-                />
-              ) : null}
 
-              {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
+                {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
                   CSS resolves a `visible` axis to `auto` whenever the other
                   axis scrolls, so this box was a horizontal scroller by
                   omission — measured at 1100px wide: scrollWidth 759 against
@@ -2782,68 +2824,68 @@ export function Chats({
                   browser that it is inert: at 900px a horizontal wheel gesture
                   and a `scrollIntoView` on the widest descendant both leave
                   `scrollLeft` at 0. */}
-              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
-                <RunActivityContext.Provider value={activeActivity}>
-                  {transcriptEntries.map((entry) => {
-                    if (
-                      entry.type !== 'item' ||
-                      entry.item.kind !== 'approval_request'
-                    ) {
-                      const key =
-                        entry.type === 'item' ? entry.item.id : entry.id;
-                      return (
-                        <TranscriptEntryView
-                          key={key}
-                          entry={entry}
-                          nodes={nodeMeta}
-                          chatAgentName={activeRun?.agentKind ?? null}
-                          soloAgent={soloAgent}
-                        />
+                <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
+                  <RunActivityContext.Provider value={activeActivity}>
+                    {transcriptEntries.map((entry) => {
+                      if (
+                        entry.type !== 'item' ||
+                        entry.item.kind !== 'approval_request'
+                      ) {
+                        const key =
+                          entry.type === 'item' ? entry.item.id : entry.id;
+                        return (
+                          <TranscriptEntryView
+                            key={key}
+                            entry={entry}
+                            nodes={nodeMeta}
+                            chatAgentName={activeRun?.agentKind ?? null}
+                            soloAgent={soloAgent}
+                          />
+                        );
+                      }
+                      const item = entry.item;
+                      // EVERY open request's card lives above the composer, so
+                      // every one of them leaves a marker here. Keyed on openness
+                      // rather than on the pinned id: keying on the pin gave the
+                      // SECOND open question a fully live card in the scroller,
+                      // which is the failure the pin exists to end. Leaving the
+                      // live card here too would put two sets of buttons over one
+                      // one-shot verdict channel; leaving nothing would silently
+                      // drop a row out of the conversation's order.
+                      if (openRequestId(item) !== null) {
+                        return (
+                          <MessageBubble key={item.id} variant="note">
+                            {pinnedRequest?.id === item.id
+                              ? '❓ waiting on your answer — the card is pinned below'
+                              : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                          </MessageBubble>
+                        );
+                      }
+                      const askerName =
+                        (item.nodeId
+                          ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
+                          : activeRun?.agentKind) ?? 'agent';
+                      const card = (
+                        <div className="w-full">{approvalCardFor(item)}</div>
                       );
-                    }
-                    const item = entry.item;
-                    // EVERY open request's card lives above the composer, so
-                    // every one of them leaves a marker here. Keyed on openness
-                    // rather than on the pinned id: keying on the pin gave the
-                    // SECOND open question a fully live card in the scroller,
-                    // which is the failure the pin exists to end. Leaving the
-                    // live card here too would put two sets of buttons over one
-                    // one-shot verdict channel; leaving nothing would silently
-                    // drop a row out of the conversation's order.
-                    if (openRequestId(item) !== null) {
-                      return (
-                        <MessageBubble key={item.id} variant="note">
-                          {pinnedRequest?.id === item.id
-                            ? '❓ waiting on your answer — the card is pinned below'
-                            : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                        </MessageBubble>
+                      // A solo agent's card needs no identity frame either.
+                      return soloAgent ? (
+                        <div key={item.id}>{card}</div>
+                      ) : (
+                        <SenderRow
+                          key={item.id}
+                          name={askerName}
+                          colorKey={item.nodeId ?? undefined}
+                          time={formatClockTime(item.createdAt)}>
+                          {card}
+                        </SenderRow>
                       );
-                    }
-                    const askerName =
-                      (item.nodeId
-                        ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
-                        : activeRun?.agentKind) ?? 'agent';
-                    const card = (
-                      <div className="w-full">{approvalCardFor(item)}</div>
-                    );
-                    // A solo agent's card needs no identity frame either.
-                    return soloAgent ? (
-                      <div key={item.id}>{card}</div>
-                    ) : (
-                      <SenderRow
-                        key={item.id}
-                        name={askerName}
-                        colorKey={item.nodeId ?? undefined}
-                        time={formatClockTime(item.createdAt)}>
-                        {card}
-                      </SenderRow>
-                    );
-                  })}
-                </RunActivityContext.Provider>
-                <div ref={transcriptEndRef} />
-              </div>
+                    })}
+                  </RunActivityContext.Provider>
+                  <div ref={transcriptEndRef} />
+                </div>
 
-              {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
+                {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled
                   past and it overlaps the messages it floats above. Here the
                   card is a sibling of the transcript and the composer, which
@@ -2853,27 +2895,27 @@ export function Chats({
                   It sits ABOVE the composer because that is where the answer
                   gets typed — the question and the reply belong on the same
                   edge of the screen. */}
-              {pinnedRequest ? (
-                <div
-                  data-slot="pinned-request"
-                  // Named and given a role that can CARRY a name: without one
-                  // this was a bare div, so the three signals that the agent is
-                  // blocked were all silent and a screen-reader user typing
-                  // into the composer got no cue that the turn had stopped on
-                  // them. Deliberately NOT `aria-live`: the card inside is a
-                  // tablist full of interactive controls, and announcing the
-                  // whole region on every keystroke inside it would be worse
-                  // than saying nothing.
-                  role="region"
-                  aria-label="Question waiting on your answer"
-                  className="shrink-0 border-t border-border bg-card/60 px-4 py-3">
-                  {openRequests.length > 1 ? (
-                    <p className="m-0 mb-1.5 text-xs text-muted-foreground">
-                      {openRequests.length} questions waiting — answering this
-                      one opens the next
-                    </p>
-                  ) : null}
-                  {/* Every open request is rendered, and all but the newest are
+                {pinnedRequest ? (
+                  <div
+                    data-slot="pinned-request"
+                    // Named and given a role that can CARRY a name: without one
+                    // this was a bare div, so the three signals that the agent is
+                    // blocked were all silent and a screen-reader user typing
+                    // into the composer got no cue that the turn had stopped on
+                    // them. Deliberately NOT `aria-live`: the card inside is a
+                    // tablist full of interactive controls, and announcing the
+                    // whole region on every keystroke inside it would be worse
+                    // than saying nothing.
+                    role="region"
+                    aria-label="Question waiting on your answer"
+                    className="shrink-0 border-t border-border bg-card/60 px-4 py-3">
+                    {openRequests.length > 1 ? (
+                      <p className="m-0 mb-1.5 text-xs text-muted-foreground">
+                        {openRequests.length} questions waiting — answering this
+                        one opens the next
+                      </p>
+                    ) : null}
+                    {/* Every open request is rendered, and all but the newest are
                       `hidden`. Rendering only the pinned one would unmount the
                       card being typed into the moment a newer question arrived,
                       resetting its picks, its text and every staged attachment
@@ -2881,66 +2923,66 @@ export function Chats({
                       also keeps the concealed cards out of the tab order and
                       the accessibility tree, which `display:none` via a class
                       would not guarantee against a utility being overridden. */}
-                  {openRequests.map((request) => (
-                    <div
-                      key={request.id}
-                      hidden={request.id !== pinnedRequest.id}>
-                      {approvalCardFor(request)}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+                    {openRequests.map((request) => (
+                      <div
+                        key={request.id}
+                        hidden={request.id !== pinnedRequest.id}>
+                        {approvalCardFor(request)}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
 
-              {transcriptError ? (
-                <ErrorBanner
-                  className="border-t border-border px-4 py-2"
-                  message={transcriptError}
-                  // The run outlived the workflow it ran: there is nothing to
-                  // retry and nothing to fix, so the only thing left to offer
-                  // is removing the run. It opens the same confirm every other
-                  // delete does — this is a shortcut to that action, not a
-                  // second, quieter way to destroy history.
-                  action={
-                    missingWorkflow && activeRun ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 shrink-0"
-                        onClick={() => handleDeleteRun(activeRun.id)}>
-                        <Trash2 className="size-3.5 shrink-0" />
-                        Delete this run
-                      </Button>
-                    ) : null
-                  }
-                  onDismiss={dismissError}
-                />
-              ) : null}
+                {transcriptError ? (
+                  <ErrorBanner
+                    className="border-t border-border px-4 py-2"
+                    message={transcriptError}
+                    // The run outlived the workflow it ran: there is nothing to
+                    // retry and nothing to fix, so the only thing left to offer
+                    // is removing the run. It opens the same confirm every other
+                    // delete does — this is a shortcut to that action, not a
+                    // second, quieter way to destroy history.
+                    action={
+                      missingWorkflow && activeRun ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 shrink-0"
+                          onClick={() => handleDeleteRun(activeRun.id)}>
+                          <Trash2 className="size-3.5 shrink-0" />
+                          Delete this run
+                        </Button>
+                      ) : null
+                    }
+                    onDismiss={dismissError}
+                  />
+                ) : null}
 
-              <div className="flex flex-col gap-2 border-t border-border p-3">
-                <QueuedStrip
-                  messages={queued}
-                  steerUnavailableReason={steerUnavailableReason}
-                  steerStatus={steerStatus}
-                  onEdit={editQueued}
-                  onRemove={removeQueued}
-                  onSteer={(id) => void steerQueued(id)}
-                />
+                <div className="flex flex-col gap-2 border-t border-border p-3">
+                  <QueuedStrip
+                    messages={queued}
+                    steerUnavailableReason={steerUnavailableReason}
+                    steerStatus={steerStatus}
+                    onEdit={editQueued}
+                    onRemove={removeQueued}
+                    onSteer={(id) => void steerQueued(id)}
+                  />
 
-                {/* The SAME composer card as the new-run screen, with the run's
+                  {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
                 chips — a run's identity can't change after creation. */}
-                <div className="relative">
-                  {skillMenuOpen ? (
-                    <SkillMenu
-                      skills={skillMatches}
-                      highlightIndex={highlightedIndex}
-                      onSelect={pickSkill}
-                      onHighlight={setSkillHighlight}
-                    />
-                  ) : null}
-                  <ComposerTopRow>
-                    {/* Only a workflow's trigger is left above the text, so for
+                  <div className="relative">
+                    {skillMenuOpen ? (
+                      <SkillMenu
+                        skills={skillMatches}
+                        highlightIndex={highlightedIndex}
+                        onSelect={pickSkill}
+                        onHighlight={setSkillHighlight}
+                      />
+                    ) : null}
+                    <ComposerTopRow>
+                      {/* Only a workflow's trigger is left above the text, so for
                       a single-agent thread this row collapses entirely
                       (`empty:hidden`) and the card sits directly under the
                       transcript.
@@ -2959,71 +3001,101 @@ export function Chats({
 
                       The agent is not here either — fixed for the run's whole
                       life, so it belongs to the header's identity line. */}
-                    {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
-                      <Chip>
-                        <Zap />
-                        <span className="max-w-52 truncate">
-                          {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                        </span>
-                      </Chip>
-                    ) : null}
-                  </ComposerTopRow>
-                  <ComposerCard>
-                    <AttachmentStrip
-                      attachments={attachments.attachments}
-                      onRemove={attachments.remove}
-                    />
-                    <Textarea
-                      value={input}
-                      rows={2}
-                      aria-label="Message the agent"
-                      disabled={activeRun?.workflowId != null}
-                      className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                      placeholder={
-                        activeRun?.workflowId
-                          ? 'Workflow runs take one task — press + to start another.'
-                          : streaming
-                            ? 'Agent is working — your message will queue…'
-                            : 'Message the agent…'
-                      }
-                      onChange={(event) => setInput(event.target.value)}
-                      onPaste={(event) => {
-                        if (attachments.addFromClipboard(event.clipboardData)) {
-                          event.preventDefault();
+                      {activeRun?.workflowId && wfNodes.triggers.length > 0 ? (
+                        <Chip>
+                          <Zap />
+                          <span className="max-w-52 truncate">
+                            {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                          </span>
+                        </Chip>
+                      ) : null}
+                    </ComposerTopRow>
+                    <ComposerCard>
+                      <AttachmentStrip
+                        attachments={attachments.attachments}
+                        onRemove={attachments.remove}
+                      />
+                      <Textarea
+                        value={input}
+                        rows={2}
+                        aria-label="Message the agent"
+                        disabled={activeRun?.workflowId != null}
+                        className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                        placeholder={
+                          activeRun?.workflowId
+                            ? 'Workflow runs take one task — press + to start another.'
+                            : streaming
+                              ? 'Agent is working — your message will queue…'
+                              : 'Message the agent…'
                         }
-                      }}
-                      onKeyDown={(event) => {
-                        if (handleSkillMenuKeys(event)) {
-                          return;
-                        }
-                        if (isComposerSendKey(event)) {
-                          event.preventDefault();
-                          void sendFollowUp();
-                        }
-                      }}
-                    />
-                    <ComposerBottomRow
-                      actions={
-                        <>
-                          {streaming ? (
-                            <>
-                              {hasContent && activeRun?.workflowId == null ? (
-                                <Button
-                                  type="button"
-                                  size="icon"
-                                  className="size-8 rounded-full"
-                                  // It QUEUES while a turn is running, and the
-                                  // label says so. It used to say "Send" and
-                                  // mean it — the message went into the turn in
-                                  // flight — which is the behaviour the strip
-                                  // replaced: there was no moment at which the
-                                  // user could still edit or withdraw it.
-                                  // Mid-turn delivery is now the strip's own
-                                  // "send now", one click away.
-                                  aria-label="Queue"
-                                  title="Queue — goes out when the turn ends, or send it now from the queue above"
-                                  onClick={() => void sendFollowUp()}>
-                                  {/* NOT the ArrowUp that Send uses. The one
+                        onChange={(event) => setInput(event.target.value)}
+                        onPaste={(event) => {
+                          if (
+                            attachments.addFromClipboard(event.clipboardData)
+                          ) {
+                            event.preventDefault();
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (handleSkillMenuKeys(event)) {
+                            return;
+                          }
+                          if (isComposerSendKey(event)) {
+                            event.preventDefault();
+                            void sendFollowUp();
+                          }
+                        }}
+                      />
+                      <ComposerBottomRow
+                        actions={
+                          <>
+                            {/* Where the run happens, to the LEFT of Send/Stop.
+
+                          It is not an action, and it is deliberately not in the
+                          chip row either: a run's cwd is fixed at creation, so
+                          it can never be picked from here. Leading the actions
+                          line it reads as a caption on the button that
+                          dispatches the work — "this goes to geniro-app" —
+                          rather than as a dead picker among live ones.
+
+                          It leads rather than trails because the line ends on
+                          the button, and mid-turn that button is Stop: a label
+                          sitting after the one control that destroys work reads
+                          as belonging to it.
+
+                          `shrink` overrides `Chip`'s own `shrink-0`: this is
+                          the one item on a non-shrinking line whose label is
+                          user data, so it must be the thing that truncates
+                          before Send is pushed off. */}
+                            {activeRun?.cwd ? (
+                              <Chip
+                                title={activeRun.cwd}
+                                className="max-w-40 min-w-0 shrink">
+                                <FolderOpen />
+                                <span className="truncate">
+                                  {folderName(activeRun.cwd)}
+                                </span>
+                              </Chip>
+                            ) : null}
+                            {streaming ? (
+                              <>
+                                {hasContent && activeRun?.workflowId == null ? (
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    className="size-8 rounded-full"
+                                    // It QUEUES while a turn is running, and the
+                                    // label says so. It used to say "Send" and
+                                    // mean it — the message went into the turn in
+                                    // flight — which is the behaviour the strip
+                                    // replaced: there was no moment at which the
+                                    // user could still edit or withdraw it.
+                                    // Mid-turn delivery is now the strip's own
+                                    // "send now", one click away.
+                                    aria-label="Queue"
+                                    title="Queue — goes out when the turn ends, or send it now from the queue above"
+                                    onClick={() => void sendFollowUp()}>
+                                    {/* NOT the ArrowUp that Send uses. The one
                                       thing the user has to understand before
                                       clicking is that this does not reach the
                                       agent, and an identical glyph left that to
@@ -3031,67 +3103,44 @@ export function Chats({
                                       below already marks a waiting message
                                       with, so the button and its result read as
                                       the same thing. */}
-                                  <Clock className="size-4 shrink-0" />
+                                    <Clock className="size-4 shrink-0" />
+                                  </Button>
+                                ) : null}
+                                <Button
+                                  type="button"
+                                  // Red, not outline: Stop ABORTS the turn the user
+                                  // is watching, and the one control in the composer
+                                  // that destroys work should not read the same as
+                                  // the pickers beside it.
+                                  variant="destructive"
+                                  size="icon"
+                                  className="size-8 rounded-full"
+                                  aria-label="Stop"
+                                  title="Stop the current turn"
+                                  onClick={() => void cancel()}>
+                                  <Square className="size-3.5 shrink-0" />
                                 </Button>
-                              ) : null}
+                              </>
+                            ) : (
                               <Button
                                 type="button"
-                                // Red, not outline: Stop ABORTS the turn the user
-                                // is watching, and the one control in the composer
-                                // that destroys work should not read the same as
-                                // the pickers beside it.
-                                variant="destructive"
                                 size="icon"
                                 className="size-8 rounded-full"
-                                aria-label="Stop"
-                                title="Stop the current turn"
-                                onClick={() => void cancel()}>
-                                <Square className="size-3.5 shrink-0" />
+                                aria-label="Send"
+                                title="Send"
+                                disabled={
+                                  !hasContent || activeRun?.workflowId != null
+                                }
+                                onClick={() => void sendFollowUp()}>
+                                <ArrowUp className="size-4 shrink-0" />
                               </Button>
-                            </>
-                          ) : (
-                            <Button
-                              type="button"
-                              size="icon"
-                              className="size-8 rounded-full"
-                              aria-label="Send"
-                              title="Send"
-                              disabled={
-                                !hasContent || activeRun?.workflowId != null
-                              }
-                              onClick={() => void sendFollowUp()}>
-                              <ArrowUp className="size-4 shrink-0" />
-                            </Button>
-                          )}
-                          {/* Where the run happens, to the RIGHT of Send.
-
-                          It is not an action, and it is deliberately not in the
-                          chip row either: a run's cwd is fixed at creation, so
-                          it can never be picked from here. Sitting last on the
-                          actions line it reads as a caption on the button that
-                          dispatches the work — "this goes to geniro-app" —
-                          rather than as a dead picker among live ones.
-
-                          `shrink` overrides `Chip`'s own `shrink-0`: this is
-                          the one item on a non-shrinking line whose label is
-                          user data, so it must be the thing that truncates
-                          before Send is pushed off. */}
-                          {activeRun?.cwd ? (
-                            <Chip
-                              title={activeRun.cwd}
-                              className="max-w-40 min-w-0 shrink">
-                              <FolderOpen />
-                              <span className="truncate">
-                                {folderName(activeRun.cwd)}
-                              </span>
-                            </Chip>
-                          ) : null}
-                        </>
-                      }>
-                      {activeRun &&
-                      activeRun.workflowId === null &&
-                      activeRun.agentKind ? (
-                        /* How THIS turn thinks — the two settings that sit
+                            )}
+                          </>
+                        }>
+                        {activeRun &&
+                        activeRun.workflowId === null &&
+                        activeRun.agentKind ? (
+                          /* How THIS turn thinks — the two settings that sit
                         below the text, beside the actions, rather than above
                         with the run's identity.
 
@@ -3101,25 +3150,25 @@ export function Chats({
                         turn streams, because a control that silently did
                         nothing for the thing you are watching would be worse
                         than one that announces the delay. */
-                        <>
-                          <ModelSelect
-                            agentKind={activeRun.agentKind}
-                            models={agentModels}
-                            value={activeRun.model}
-                            nextTurnOnly={streaming}
-                            onChange={(model) =>
-                              void changeRunSettings({ model })
-                            }
-                          />
-                          <EffortSelect
-                            efforts={agentEfforts}
-                            value={activeRun.effort}
-                            nextTurnOnly={streaming}
-                            onChange={(effort) =>
-                              void changeRunSettings({ effort })
-                            }
-                          />
-                          {/* Between effort and the context readout, not up in
+                          <>
+                            <ModelSelect
+                              agentKind={activeRun.agentKind}
+                              models={agentModels}
+                              value={activeRun.model}
+                              nextTurnOnly={streaming}
+                              onChange={(model) =>
+                                void changeRunSettings({ model })
+                              }
+                            />
+                            <EffortSelect
+                              efforts={agentEfforts}
+                              value={activeRun.effort}
+                              nextTurnOnly={streaming}
+                              onChange={(effort) =>
+                                void changeRunSettings({ effort })
+                              }
+                            />
+                            {/* Between effort and the context readout, not up in
                           the identity row: the permission posture is editable
                           at any time — mid-turn included, since the daemon
                           hands the change to the turn already running — which
@@ -3127,23 +3176,23 @@ export function Chats({
                           same category as model and effort. Unlike those two it
                           carries no `nextTurnOnly`, precisely because it does
                           NOT wait for the next turn. */}
-                          <ApprovalModeSelect
-                            supportedModes={
-                              capabilities
-                                ? (approvalModesByAgent.get(
-                                    activeRun.agentKind,
-                                  ) ?? [])
-                                : null
-                            }
-                            value={activeRun.approval}
-                            planSupported={
-                              capabilities?.claudeModes.plan === 'pass'
-                            }
-                            onChange={(approval) =>
-                              void changeRunSettings({ approval })
-                            }
-                          />
-                          {/* The context readout, DIRECTLY after the effort
+                            <ApprovalModeSelect
+                              supportedModes={
+                                capabilities
+                                  ? (approvalModesByAgent.get(
+                                      activeRun.agentKind,
+                                    ) ?? [])
+                                  : null
+                              }
+                              value={activeRun.approval}
+                              planSupported={
+                                capabilities?.claudeModes.plan === 'pass'
+                              }
+                              onChange={(approval) =>
+                                void changeRunSettings({ approval })
+                              }
+                            />
+                            {/* The context readout, DIRECTLY after the effort
                           chip rather than over beside Send.
 
                           It reads as one of this turn's settings, because that
@@ -3155,85 +3204,87 @@ export function Chats({
                           readout panel opened against the send button. Here it
                           also wraps with the chips instead of squeezing the
                           actions. */}
-                          <ContextMeter
-                            contextTokens={
-                              activeRun.workflowId
-                                ? null
-                                : (agents[0]?.contextTokens ?? null)
-                            }
-                            contextWindowTokens={
-                              activeRun.workflowId
-                                ? null
-                                : (agents[0]?.contextWindowTokens ?? null)
-                            }
-                            // Opens UPWARD. This row sits at the bottom of the
-                            // composer, inside the app shell's
-                            // `overflow-hidden` main — roughly 20px below a
-                            // panel that is 50-68px tall — so a downward
-                            // readout is clipped, and the ring shows no figures
-                            // of its own to fall back on.
-                            side="top"
-                          />
-                        </>
-                      ) : null}
-                    </ComposerBottomRow>
-                  </ComposerCard>
+                            <ContextMeter
+                              contextTokens={
+                                activeRun.workflowId
+                                  ? null
+                                  : (agents[0]?.contextTokens ?? null)
+                              }
+                              contextWindowTokens={
+                                activeRun.workflowId
+                                  ? null
+                                  : (agents[0]?.contextWindowTokens ?? null)
+                              }
+                              // Opens UPWARD. This row sits at the bottom of the
+                              // composer, inside the app shell's
+                              // `overflow-hidden` main — roughly 20px below a
+                              // panel that is 50-68px tall — so a downward
+                              // readout is clipped, and the ring shows no figures
+                              // of its own to fall back on.
+                              side="top"
+                            />
+                          </>
+                        ) : null}
+                      </ComposerBottomRow>
+                    </ComposerCard>
+                  </div>
                 </div>
-              </div>
-            </section>
-          )}
+              </section>
+            )}
 
-          {showAgentsPanel ? (
-            <AgentsPanel
-              // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
-              // agent id, and every single-agent chat's agent carries the same
-              // sentinel — so without this the list stayed open across a chat
-              // switch and the gate stayed raised, dialling the NEW folder's MCP
-              // servers unprompted. That is the very defect the disclosure exists
-              // to prevent, merely moved to the second chat.
-              key={activeRun?.id ?? 'no-run'}
-              agents={agents}
-              interactiveTerminalAgents={interactiveTerminalAgents}
-              mcpByScope={mcp.byScope}
-              mcpLoading={mcp.loading}
-              onRefreshMcp={mcp.refresh}
-              onSetMcpEnabled={mcp.setEnabled}
-              onSignInMcp={signInToMcpServer}
-              mcpToggleError={mcp.toggleError}
-              onDismissMcpToggleError={mcp.dismissToggleError}
-              onMcpOpenChange={(open) =>
-                setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
-              }
-              onOpenThread={(agent, thread) =>
-                void openThreadTerminal(agent, thread)
-              }
-              onClose={() => setAgentsPanelOpen(false)}
-            />
-          ) : null}
+            {showAgentsPanel ? (
+              <AgentsPanel
+                // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
+                // agent id, and every single-agent chat's agent carries the same
+                // sentinel — so without this the list stayed open across a chat
+                // switch and the gate stayed raised, dialling the NEW folder's MCP
+                // servers unprompted. That is the very defect the disclosure exists
+                // to prevent, merely moved to the second chat.
+                key={activeRun?.id ?? 'no-run'}
+                agents={agents}
+                interactiveTerminalAgents={interactiveTerminalAgents}
+                mcpByScope={mcp.byScope}
+                mcpLoading={mcp.loading}
+                onRefreshMcp={mcp.refresh}
+                onSetMcpEnabled={mcp.setEnabled}
+                onSignInMcp={signInToMcpServer}
+                onSignInCli={(kind) => void signInToCli(kind)}
+                mcpToggleError={mcp.toggleError}
+                onDismissMcpToggleError={mcp.dismissToggleError}
+                onMcpOpenChange={(open) =>
+                  setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
+                }
+                onOpenThread={(agent, thread) =>
+                  void openThreadTerminal(agent, thread)
+                }
+                onClose={() => setAgentsPanelOpen(false)}
+              />
+            ) : null}
 
-          <ConfirmDialog
-            open={deleting !== null}
-            busy={deleteBusy}
-            error={deleteError}
-            title={deleting?.workflowId ? 'Delete run' : 'Delete chat'}
-            confirmLabel="Delete"
-            busyLabel="Deleting…"
-            onCancel={() => setDeleting(null)}
-            onConfirm={() => void confirmDelete()}>
-            <>
-              Delete{' '}
-              <strong>
-                {deleting ? runLabel(deleting, workflowNames) : ''}
-              </strong>
-              ? Its transcript, attachments and any live terminal go with it.
-              This cannot be undone.
-              {deleting?.workflowId
-                ? ' The workflow itself stays in your library.'
-                : ''}
-            </>
-          </ConfirmDialog>
-        </div>
-      </AttachmentLoaderContext.Provider>
+            <ConfirmDialog
+              open={deleting !== null}
+              busy={deleteBusy}
+              error={deleteError}
+              title={deleting?.workflowId ? 'Delete run' : 'Delete chat'}
+              confirmLabel="Delete"
+              busyLabel="Deleting…"
+              onCancel={() => setDeleting(null)}
+              onConfirm={() => void confirmDelete()}>
+              <>
+                Delete{' '}
+                <strong>
+                  {deleting ? runLabel(deleting, workflowNames) : ''}
+                </strong>
+                ? Its transcript, attachments and any live terminal go with it.
+                This cannot be undone.
+                {deleting?.workflowId
+                  ? ' The workflow itself stays in your library.'
+                  : ''}
+              </>
+            </ConfirmDialog>
+          </div>
+        </AttachmentLoaderContext.Provider>
+      </CliLoginContext.Provider>
     </CardBackedRequestsContext.Provider>
   );
 }

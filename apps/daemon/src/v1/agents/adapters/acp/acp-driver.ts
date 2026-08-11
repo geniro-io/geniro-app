@@ -32,9 +32,15 @@ import {
   JSONRPC_METHOD_NOT_FOUND,
   type JsonRpcId,
 } from './acp-jsonrpc';
+import {
+  acpOffersModel,
+  readAcpCurrentModelId,
+  readAcpModels,
+} from './acp-models';
 
 /** What we sent, so the reply can be routed without a callback map. */
-type PendingKind = 'initialize' | 'session' | 'set_mode' | 'prompt';
+type PendingKind =
+  'initialize' | 'session' | 'set_mode' | 'set_model' | 'prompt';
 
 /** A permission verdict this turn can reach without asking the user. */
 export type AutoDecision = 'allow' | 'deny' | null;
@@ -59,13 +65,6 @@ export interface AcpDriverOptions {
    * by `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
    */
   composeSystemPrompt: (granted: boolean) => string;
-  /**
-   * Turn-level degrades the ADAPTER detected before the handshake began — a
-   * requested capability ACP has no way to express. Emitted with the rest of
-   * the startup events so they reach the transcript on the same path as the
-   * driver's own notices.
-   */
-  startupNotices?: string[];
   logger?: { warn(message: string): void; debug?(message: string): void };
 }
 
@@ -227,6 +226,8 @@ export class AcpTurnDriver implements TurnDriver {
   private grantedMcpServers: AcpMcpServerHttp[] = [];
   /** This turn resumed via `session/load`, whose reply reports no modes. */
   private resumed = false;
+  /** The model asked for, so a refusal can name it. */
+  private requestedModelId: string | null = null;
 
   constructor(private readonly options: AcpDriverOptions) {
     this.imageBlocks = buildAcpImageBlocks(options.input.images);
@@ -235,9 +236,6 @@ export class AcpTurnDriver implements TurnDriver {
   onStdinReady(io: TurnIo): void {
     this.io = io;
     const events: AgentEvent[] = [];
-    for (const message of this.options.startupNotices ?? []) {
-      events.push({ type: 'notice', message });
-    }
     this.request(
       ACP_AGENT_METHODS.initialize,
       {
@@ -355,6 +353,9 @@ export class AcpTurnDriver implements TurnDriver {
         // A mode the agent accepted needs no announcement; a mode it rejected
         // arrives as an error reply instead (see onErrorReply).
         return [];
+      case 'set_model':
+        // Same contract as `set_mode` above.
+        return [];
       case 'prompt':
         return this.onPromptComplete(result);
     }
@@ -368,6 +369,18 @@ export class AcpTurnDriver implements TurnDriver {
         {
           type: 'notice',
           message: `agent declined session mode '${this.requestedModeId ?? ''}': ${message}`,
+        },
+      ];
+    }
+    if (kind === 'set_model') {
+      // Same shape as a refused mode, and the same reason it cannot be silent:
+      // the turn goes on, on a model the user did not pick. Reachable even
+      // after the offers check, because the check reads what the agent listed
+      // and the agent is free to refuse anyway.
+      return [
+        {
+          type: 'notice',
+          message: `agent declined model '${this.requestedModelId ?? ''}': ${message} — this turn runs on the agent's current model`,
         },
       ];
     }
@@ -525,6 +538,8 @@ export class AcpTurnDriver implements TurnDriver {
       });
     }
 
+    this.applyModel(root, events);
+
     this.request(
       ACP_AGENT_METHODS.sessionPrompt,
       {
@@ -535,6 +550,65 @@ export class AcpTurnDriver implements TurnDriver {
       events,
     );
     return events;
+  }
+
+  /**
+   * Put the turn on the model it asked for, before the prompt goes out.
+   *
+   * Sent rather than awaited, exactly as `session/set_mode` above is: the
+   * frames leave on one ordered stdio stream, so the agent applies the model
+   * before it reads the prompt. Waiting for the reply would cost a round-trip
+   * on every turn to learn something the ordering already guarantees.
+   *
+   * A turn that names no model is left alone — the agent's own default is the
+   * right answer, and forcing the id it just reported as current would spend a
+   * frame to change nothing.
+   */
+  private applyModel(
+    sessionResult: Record<string, unknown> | null,
+    events: AgentEvent[],
+  ): void {
+    const wanted = this.options.input.model?.trim();
+    if (!wanted || this.sessionId === null) {
+      return;
+    }
+    if (readAcpCurrentModelId(sessionResult) === wanted) {
+      return;
+    }
+    // The offers check applies only when the agent actually ENUMERATED a
+    // vocabulary. It exists to save a round-trip to be refused, and that is
+    // worth doing only against a reply that says what is on offer — silence is
+    // not a refusal. `readAcpModels` states the contract this obeys: an empty
+    // result means "the agent said nothing", never "the agent has no models",
+    // and every caller must read it as unknown.
+    //
+    // Two replies are silent, and reading either as "not offered" would refuse
+    // LOCALLY: a `session/load` reply is not observed to carry the block at all
+    // — every turn after a chat's first resumes, since cursor cannot keep its
+    // process, so the model would go unapplied for the whole conversation with
+    // a degrade row per turn — and a `session/new` reply is free to omit it
+    // too, which would assert something the agent never said. Sending it and
+    // letting the agent answer is strictly better either way: `onErrorReply`
+    // already turns a genuine refusal into the same notice, earned rather than
+    // assumed. That subsumes the resumed case, so there is no branch on it.
+    const offered = readAcpModels(sessionResult);
+    if (offered.length > 0 && !acpOffersModel(sessionResult, wanted)) {
+      // Never silent, for the reason the mode degrade above is not: a node the
+      // user pointed at one model quietly running on another is a wrong turn
+      // that reports success.
+      events.push({
+        type: 'notice',
+        message: `agent does not offer the model '${wanted}' — this turn runs on the agent's current model instead`,
+      });
+      return;
+    }
+    this.requestedModelId = wanted;
+    this.request(
+      ACP_AGENT_METHODS.sessionSetModel,
+      { sessionId: this.sessionId, modelId: wanted },
+      'set_model',
+      events,
+    );
   }
 
   /**

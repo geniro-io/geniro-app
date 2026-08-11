@@ -20,6 +20,7 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentEffort,
+  AgentErrorRecovery,
   AgentEvent,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
@@ -306,6 +307,52 @@ export abstract class AgentAdapter {
     };
   }
 
+  /**
+   * Whether a failed turn's message names a cure the user can apply.
+   *
+   * Concrete over {@link AdapterConfig.auth}'s markers: what differs per CLI is
+   * the wording, not the mechanism. Case-insensitive because a CLI is free to
+   * re-case its own message between releases, and a marker that stopped
+   * matching would silently take the action off the row.
+   *
+   * A blank marker is ignored rather than matching every message: an empty
+   * substring is contained in every string, so one that reached this list would
+   * offer a sign-in for every failure the CLI ever reports.
+   */
+  errorRecovery(message: string): AgentErrorRecovery | null {
+    const haystack = message.toLowerCase();
+    const { expiredMarkers } = this.getConfig().auth;
+    return expiredMarkers.some(
+      (marker) => marker !== '' && haystack.includes(marker.toLowerCase()),
+    )
+      ? 'cli-login'
+      : null;
+  }
+
+  /**
+   * How the user signs in to THIS CLI, or that they cannot from here.
+   *
+   * The sibling of {@link mcpLoginTarget} one level up: that one authenticates
+   * a server the CLI loads, this one authenticates the CLI itself. A turn that
+   * failed with an expired session needs the second, and offering the first
+   * would send the user to a command that cannot fix what they just hit.
+   *
+   * `unsupported` is the only refusal — a sign-in takes no argument that could
+   * be missing, so there is no `no-session` counterpart to invent.
+   */
+  loginTarget(): HandoffResult {
+    const { loginArgs } = this.getConfig().auth;
+    if (loginArgs === null) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    return {
+      ok: true,
+      kind: 'command',
+      command: this.command,
+      args: [...loginArgs],
+    };
+  }
+
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */
@@ -490,13 +537,13 @@ export abstract class AgentAdapter {
     if (!probe) {
       return [];
     }
-    const cwd = join(
-      this.options.probeRootDir ?? tmpdir(),
-      `commands-${randomUUID()}`,
-    );
+    // INSIDE the try: creating the root can fail (an unusable `probeRootDir`),
+    // and that must degrade to the disk scan like every other probe failure
+    // rather than throw out of a listing.
+    let cwd = '';
     let captured: string[] = [];
     try {
-      mkdirSync(cwd, { recursive: true });
+      cwd = this.makeProbeRoot('commands');
       let resolveCaptured!: () => void;
       const commandsSeen = new Promise<void>((resolve) => {
         resolveCaptured = resolve;
@@ -546,16 +593,47 @@ export abstract class AgentAdapter {
       // leaves the caller with the disk scan.
       return [];
     } finally {
-      try {
-        rmSync(cwd, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup only: a straggler of the just-cancelled probe
-        // process group writing into `cwd` can make rmSync throw
-        // (EBUSY/ENOTEMPTY — `force` suppresses only ENOENT). That must never
-        // fail the read; the temp dir is reaped on the next probe/boot.
+      if (cwd !== '') {
+        this.removeProbeRoot(cwd);
       }
     }
     return captured;
+  }
+
+  /**
+   * A fresh empty directory to point a probe at.
+   *
+   * Every probe needs one for the same reason: `resolve-cwd.ts` records that an
+   * agent is scoped to the user's CHOSEN folder and "never defaults to the
+   * daemon's own cwd, the app repo". A probe has no chosen folder, so it gets a
+   * disposable one rather than borrowing whichever directory the daemon happens
+   * to be running in — which under `pnpm dev` is this repo, and would root a
+   * real agent session there.
+   *
+   * `probeRootDir` keeps it under the app's own userData when the daemon runs
+   * packaged, and falls back to the OS tmpdir for standalone and spec use.
+   */
+  protected makeProbeRoot(label: string): string {
+    const dir = join(
+      this.options.probeRootDir ?? tmpdir(),
+      `${label}-${randomUUID()}`,
+    );
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  /**
+   * Best-effort cleanup only: a straggler of a just-cancelled probe process
+   * group writing into the directory can make `rmSync` throw (EBUSY/ENOTEMPTY —
+   * `force` suppresses only ENOENT). That must never fail the read; the temp
+   * dir is reaped on the next probe/boot.
+   */
+  protected removeProbeRoot(dir: string): void {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // See the doc block above — deliberately swallowed.
+    }
   }
 
   /** Memoized: the binary is asked once per adapter instance, not once per turn. */
@@ -601,12 +679,23 @@ export abstract class AgentAdapter {
    *
    * `options.processGroup` picks WHICH of the two child shapes below runs —
    * see that option's doc block, which is the canonical statement of why.
+   *
+   * A CONVERSATIONAL command implies the group path rather than merely being
+   * documented to require it. `execFile` gets no writable stdin here, so
+   * `stdinWrites` there would drop every frame silently and `settleWhen` would
+   * never be consulted — the read would then wait out its whole deadline
+   * against a CLI that (for the one caller this exists for) never exits, and
+   * report the failure of a read that would have succeeded. Inferring the path
+   * from the options makes that combination unreachable instead of a rule a
+   * caller has to remember.
    */
   protected runCommand(
     args: string[],
     options: AgentCommandOptions = {},
   ): Promise<string | null> {
-    return options.processGroup === true
+    const conversational =
+      options.stdinWrites !== undefined || options.settleWhen !== undefined;
+    return options.processGroup === true || conversational
       ? this.runAsProcessGroup(args, options)
       : this.runViaExecFile(args, options);
   }
@@ -743,6 +832,24 @@ export abstract class AgentAdapter {
       // MCP servers (see the doc block above). A SIGKILL between the spawn and
       // the reap strands that whole group with nothing left to name it.
       trackDetachedChild(child, this.command);
+      if (options.stdinWrites !== undefined) {
+        // Attached BEFORE the first write. An `'error'` on a stream with no
+        // listener is an uncaught exception in node, and `child.on('error')`
+        // below does NOT cover it — that one is the ChildProcess's own error,
+        // while this is the stdin socket's. The reachable case is ordinary: a
+        // missing binary fails the spawn asynchronously, or the child exits
+        // before the buffered frames flush, and either raises EPIPE /
+        // ERR_STREAM_DESTROYED here. Without this, opening the model picker on
+        // a machine with no working CLI would take the daemon down instead of
+        // answering with an empty list.
+        child.stdin?.on('error', () => {
+          reapGroup();
+          settle(null);
+        });
+        for (const chunk of options.stdinWrites) {
+          child.stdin?.write(chunk);
+        }
+      }
       // Decoded as a STREAM: node's StringDecoder holds a partial multi-byte
       // sequence across reads, so a character split at a 64KB boundary is not
       // turned into two replacement characters.
@@ -755,6 +862,14 @@ export abstract class AgentAdapter {
           return;
         }
         stdout += chunk;
+        // Checked BEFORE the size cap: a conversational command's answer is
+        // already complete here, and this path exists because its child will
+        // never exit on its own to end the read.
+        if (options.settleWhen?.(stdout) === true) {
+          reapGroup();
+          settle(stdout);
+          return;
+        }
         if (stdout.length > UTILITY_COMMAND_MAX_BUFFER_CHARS) {
           // `execFile`'s own maxBuffer path kills the direct pid only; ours
           // reaps the group, or the grandchildren outlive the read that gave
@@ -1178,6 +1293,18 @@ export abstract class AgentAdapter {
               this.options.logger?.warn(
                 `${this.getConfig().kind}: unmodelled control_request subtype '${event.subtype}' — dropped`,
               );
+              return;
+            }
+            if (event.type === 'error' && event.recovery === undefined) {
+              // Stamped HERE because this is the one seam every error event of
+              // every adapter passes through — a mapper, a driver, a non-zero
+              // exit and a stderr tail all arrive as one. Classifying at each
+              // producer instead would leave whichever one was missed as the
+              // only failure with no way out of it.
+              onEvent({
+                ...event,
+                recovery: this.errorRecovery(event.message) ?? undefined,
+              });
               return;
             }
             onEvent(event);

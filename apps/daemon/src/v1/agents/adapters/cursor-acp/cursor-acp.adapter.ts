@@ -2,6 +2,11 @@ import { AgentKind } from '../../../runs/runs.types';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import type { AcpToolCall } from '../acp/acp.types';
 import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
+import {
+  acpModelProbeFrames,
+  acpModelProbeSettled,
+  readAcpModelProbe,
+} from '../acp/acp-models';
 import type {
   AdapterConfig,
   AgentCommandOptions,
@@ -13,12 +18,15 @@ import type {
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import {
+  CURSOR_ACP_ARGS,
+  CURSOR_ACP_CLIENT_NAME,
   CURSOR_MCP_EMPTY_MARKER,
   CURSOR_MCP_LIST_ARGS,
   CURSOR_MCP_LIST_FAILED_MESSAGE,
   CURSOR_MCP_LIST_TIMEOUT_MS,
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
   CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+  CURSOR_MODEL_PROBE_TIMEOUT_MS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 
@@ -109,9 +117,10 @@ export class CursorAcpAdapter extends AgentAdapter {
       /** Effort rides the model id for this CLI (`sonnet-4-thinking`). */
       efforts: [],
       /**
-       * Empty on purpose: ACP carries no per-session model selection, so a
-       * model chosen here would be discarded by the turn and reported as not
-       * applied. Offering choices would also auto-assign one to every new node.
+       * Empty because {@link CursorAcpAdapter.listModels} answers for real —
+       * `builtinModels` is the fallback for a CLI that cannot be asked, and
+       * this one can. A hardcoded list would also go stale against an account
+       * whose available models change without the binary changing.
        */
       builtinModels: [],
       skillRoots: {
@@ -188,6 +197,34 @@ export class CursorAcpAdapter extends AgentAdapter {
         loginArgs: ['mcp', 'login'],
         loginUnavailableReason: null,
       },
+      auth: {
+        /**
+         * `cursor-agent login` — "Authenticate with Cursor. Set NO_OPEN_BROWSER
+         * to disable browser opening", from the CLI's own `--help`
+         * (2026.08.04-aaa8809). Inline rather than named, per this adapter's
+         * rule: `getConfig()` is its only reader.
+         *
+         * The ACP server names the same flow from the other side: its
+         * `initialize` reply advertises
+         * `authMethods: [{ id: 'cursor_login', description: "… Run 'agent
+         * login' first if not logged in." }]`, so this is the command the agent
+         * itself points at.
+         */
+        loginArgs: ['login'],
+        loginUnavailableReason: null,
+        /**
+         * Empty, and not a gap: no auth-failure wording has been OBSERVED from
+         * this CLI. cursor-agent is not signed in on the machine this was built
+         * on, so what a lapsed session prints here is unknown, and a marker
+         * guessed from that either matches nothing or matches an unrelated
+         * failure and offers a cure for something else.
+         *
+         * The capability itself is real and declared above, so the agents panel
+         * still offers sign-in — that control needs no failure to be pressed.
+         * Fill this in from a real failed turn, not from the CLI's `--help`.
+         */
+        expiredMarkers: [],
+      },
       /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
       plugin: {
         /**
@@ -245,12 +282,75 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * ACP cannot select a model per session, so there is no list worth offering:
-   * every turn runs on whatever the CLI is configured for. Asking
-   * `cursor-agent models` would produce a picker whose value the turn discards.
+   * The models this account can run, read from an ACP handshake.
+   *
+   * An earlier revision returned `[]` and said ACP carries no per-session
+   * model. The binary disproves it (2026.08.04-aaa8809): `session/new` replies
+   * with a `models` block naming `currentModelId` and `availableModels`, and
+   * `session/set_model` answers `{}` — which {@link AcpTurnDriver} now sends
+   * before the prompt, so a chosen model is applied rather than discarded.
+   *
+   * Read from the HANDSHAKE and never from `cursor-agent models`, though the
+   * subcommand exists and would be one cheap `execFile`: the two print
+   * different id namespaces for the same model — `claude-opus-5-thinking-high`
+   * there against
+   * `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]` here —
+   * and `session/set_model` rejects the subcommand form outright with
+   * `-32602 Invalid model value`. A picker built from it would refuse every
+   * choice the user made.
+   *
+   * `processGroup` for the reason the MCP listing needs it: this spawns a real
+   * CLI that stays alive, so the read owns terminating it. It cannot be an
+   * `execFile` either way — the answer requires WRITING two frames first.
    */
-  override listModels(): Promise<AgentModel[]> {
-    return Promise.resolve([]);
+  override async listModels(
+    options: AgentCommandOptions = {},
+  ): Promise<AgentModel[]> {
+    // A DISPOSABLE folder, never the daemon's own cwd. A model vocabulary is an
+    // ACCOUNT fact — `ModelsService` caches it per CLI version with no cwd in
+    // the key — so no caller's folder belongs here; but `session/new` still
+    // roots a real agent session at whatever it is given, and `resolve-cwd.ts`
+    // records that an agent must never default to the daemon's own directory,
+    // which under `pnpm dev` is this repo.
+    // Created INSIDE the try for the reason `listReportedCommands` does it:
+    // an unusable probe root must degrade to "we could not ask", never throw
+    // out of a listing.
+    let cwd = '';
+    try {
+      cwd = this.makeProbeRoot('models');
+      const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
+        ...options,
+        cwd,
+        stdinWrites: acpModelProbeFrames({
+          cwd,
+          clientName: CURSOR_ACP_CLIENT_NAME,
+          clientVersion: this.clientVersion,
+        }),
+        settleWhen: acpModelProbeSettled,
+        timeoutMs: options.timeoutMs ?? CURSOR_MODEL_PROBE_TIMEOUT_MS,
+      });
+      return this.readModelProbe(stdout);
+    } catch {
+      return [];
+    } finally {
+      if (cwd !== '') {
+        this.removeProbeRoot(cwd);
+      }
+    }
+  }
+
+  private readModelProbe(stdout: string | null): AgentModel[] {
+    if (stdout === null) {
+      // A failed probe is an unknown vocabulary, not an empty one. Returning
+      // [] is what the picker renders as "default model only", which is the
+      // honest reading of "we could not ask".
+      return [];
+    }
+    return readAcpModelProbe(stdout).map((model) => ({
+      id: model.modelId,
+      label: model.name,
+      source: 'cli',
+    }));
   }
 
   /**
@@ -312,11 +412,21 @@ export class CursorAcpAdapter extends AgentAdapter {
     return resolveAgentBinary('cursor-agent');
   }
 
+  /**
+   * What this client tells the agent it is, in `clientInfo.version`.
+   *
+   * One accessor because two callers need it — the turn driver and the model
+   * probe — and a fallback spelled twice is the drift a name exists to prevent.
+   */
+  private get clientVersion(): string {
+    return this.cursorOptions.clientVersion ?? '0.0.0';
+  }
+
   protected buildArgs(_input: AgentTurnInput): string[] {
     // Every per-turn parameter that has an ACP home (cwd, MCP servers, the
-    // prompt, the resumed session, the mode) travels in the protocol instead
-    // of argv — which is also what keeps the call token off `ps`.
-    return ['acp'];
+    // prompt, the resumed session, the mode, the model) travels in the protocol
+    // instead of argv — which is also what keeps the call token off `ps`.
+    return [...CURSOR_ACP_ARGS];
   }
 
   /** ACP is a full-duplex dialogue: stdin stays open for the whole turn. */
@@ -391,29 +501,13 @@ export class CursorAcpAdapter extends AgentAdapter {
       input,
       composeSystemPrompt: (granted) =>
         this.composeSystemPrompt(input, granted),
-      clientName: 'geniro',
-      clientVersion: this.cursorOptions.clientVersion ?? '0.0.0',
+      clientName: CURSOR_ACP_CLIENT_NAME,
+      clientVersion: this.clientVersion,
       autoDecide: (toolCall) =>
         cursorAutoDecision(input.approvalMode, toolCall),
       preferredModeId:
         input.approvalMode === 'plan' ? CURSOR_PLAN_MODE_ID : null,
-      startupNotices: this.startupNotices(input),
       logger: this.cursorOptions.logger,
     });
-  }
-
-  /**
-   * Turn parameters ACP cannot carry — reported rather than dropped, because a
-   * node that silently ran on the wrong model is exactly the kind of degrade
-   * this codebase makes visible.
-   */
-  private startupNotices(input: AgentTurnInput): string[] {
-    const notices: string[] = [];
-    if (input.model) {
-      notices.push(
-        `model '${input.model}' was not applied: ACP carries no per-session model selection, so this turn runs on the agent's configured default`,
-      );
-    }
-    return notices;
   }
 }

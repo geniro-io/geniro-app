@@ -80,6 +80,20 @@ export interface AgentUsage {
 export type AgentEvent = AgentEventOrigin & AgentEventBody;
 
 /**
+ * What the USER can do about a failed turn, when the failure has a known cure.
+ *
+ * Stamped by the adapter layer, because recognising the failure is a fact about
+ * one CLI's wording; acted on by the renderer, which only ever reads the verdict
+ * and so never learns a CLI's name. `cli-login` is the only member today: an
+ * expired account session, cured by signing the CLI back in.
+ *
+ * Absent means "no known recovery" — the row renders as an ordinary error. That
+ * is the honest default: a wrong action offered on an unrelated failure sends
+ * the user to a command that cannot fix what they hit.
+ */
+export type AgentErrorRecovery = 'cli-login';
+
+/**
  * WHICH thread of one turn produced an event.
  *
  * A CLI that runs sub-agents emits their output on the SAME stream as the main
@@ -170,7 +184,7 @@ type AgentEventBody =
       finalText: string | null;
     }
   | { type: 'turn_cancelled' }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; recovery?: AgentErrorRecovery }
   | { type: 'session'; sessionId: string }
   | {
       /**
@@ -564,6 +578,37 @@ export interface AgentCommandOptions {
    * `spawnInfo.processGroup`, so a registration site cannot pair them wrongly.
    */
   processGroup?: boolean;
+  /**
+   * Written to the child's stdin verbatim, in order, immediately after the
+   * spawn — framing included, so a JSON-RPC caller passes `encodeRequest`
+   * output straight through rather than having this option guess at delimiters.
+   *
+   * For a utility command that must be TALKED to rather than merely read — an
+   * ACP handshake, whose answer only exists once two JSON-RPC frames have gone
+   * in. Setting it IMPLIES {@link AgentCommandOptions.processGroup}: `runCommand`
+   * routes to the group path whenever this or `settleWhen` is present, because
+   * that is the only path spawning a writable stdin pipe, and an `execFile`
+   * child would drop every frame silently.
+   *
+   * Written without awaiting a reply between them, because a JSON-RPC server
+   * reads one ordered stream — see {@link AgentCommandOptions.settleWhen} for
+   * what ends the read.
+   */
+  stdinWrites?: readonly string[];
+  /**
+   * Stop reading as soon as the accumulated stdout answers the question, and
+   * settle with it.
+   *
+   * Without it a conversational command never finishes: probed on cursor-agent
+   * 2026.08.04-aaa8809, `cursor-agent acp` does NOT exit when its stdin closes,
+   * so waiting for `close` spends the whole deadline and then reports the
+   * failure of a read that had succeeded in under a second.
+   *
+   * Absent means the existing behaviour, unchanged: read to `close` and settle
+   * on the exit status. Setting it implies `processGroup`, exactly as
+   * {@link AgentCommandOptions.stdinWrites} does and for the same reason.
+   */
+  settleWhen?: (stdout: string) => boolean;
 }
 
 /**
@@ -1161,6 +1206,49 @@ export interface AdapterConfig {
      * question.
      */
     readonly loginUnavailableReason: string | null;
+  };
+
+  // ── Signing the CLI itself in ───────────────────────────────────────────
+  /**
+   * How the user signs in to the CLI, as opposed to {@link AdapterConfig.mcp}'s
+   * `loginArgs`, which signs in to one MCP server the CLI loads.
+   *
+   * A separate block because the two fail independently: a CLI whose account
+   * session expired still lists its MCP servers' auth state fine, and the
+   * message the user needs is about the CLI, not about a server.
+   */
+  readonly auth: {
+    /**
+     * Argv that starts this CLI's own interactive sign-in — `['auth', 'login']`
+     * for claude 2.1.227, `['login']` for cursor-agent 2026.08.04-aaa8809, both
+     * read from the binaries' own `--help`. Null when the CLI has no such
+     * command, and then {@link loginUnavailableReason} says so.
+     *
+     * A VALUE, not a method: what differs per CLI is the words, not the
+     * mechanism, so `AgentAdapter.loginTarget` is concrete over this.
+     *
+     * The daemon RESOLVES this and never runs it, for the reason the MCP
+     * sibling above records at length: a sign-in is an interactive browser
+     * flow that wants a TTY, and a headless spawn of one either refuses
+     * outright or strands a callback nobody can complete. It goes to the
+     * user's own terminal through the handoff module.
+     */
+    readonly loginArgs: readonly string[] | null;
+    /** Why this CLI cannot be signed in to from here, or null when it can. */
+    readonly loginUnavailableReason: string | null;
+    /**
+     * Substrings that mark a failed turn as "your account session is no longer
+     * valid" — matched case-insensitively against the turn's error message, and
+     * the reason an error row can offer Sign in instead of only a stack trace.
+     *
+     * EVIDENCE-GATED, and empty is a legitimate answer: a marker invented from
+     * wording nobody observed either matches nothing (a dead feature) or
+     * matches too much, and offering sign-in for an unrelated failure sends the
+     * user to a command that cannot fix what they hit. A CLI whose auth-failure
+     * wording has not been seen declares `[]` and says so — the sign-in stays
+     * reachable from the agents panel, which needs no failure to be pressed.
+     */
+    readonly expiredMarkers: readonly string[];
   };
 
   // ── Plugin directory ────────────────────────────────────────────────────

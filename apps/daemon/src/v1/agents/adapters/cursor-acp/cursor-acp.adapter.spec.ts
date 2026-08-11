@@ -273,18 +273,80 @@ describe('CursorAcpAdapter turn shaping', () => {
     expect(prompt.prompt[0]?.text).toBe('You are a reviewer.\n\nship it');
   });
 
-  it('says so when a requested model cannot be carried', () => {
-    const { spawn } = fakeSpawn();
+  it('applies a requested model the agent offers, before prompting', () => {
+    // The turn used to announce up front that the model had been dropped —
+    // ACP does carry one (`session/set_model`, probe-verified on
+    // 2026.08.04-aaa8809), so the frame is sent and no such notice fires.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({ spawn }).start(
+      { ...BASE, model: 'claude-opus-5[thinking=true]' },
+      (event) => events.push(event),
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        id: 2,
+        result: {
+          sessionId: 's',
+          models: {
+            currentModelId: 'composer-2.5[fast=true]',
+            availableModels: [
+              { modelId: 'claude-opus-5[thinking=true]', name: 'Opus 5' },
+            ],
+          },
+        },
+      })}\n`,
+    );
+
+    const methods = framesOn(child).map((frame) => frame.method);
+    expect(
+      framesOn(child).find((frame) => frame.method === 'session/set_model')
+        ?.params,
+    ).toEqual({ sessionId: 's', modelId: 'claude-opus-5[thinking=true]' });
+    // Order is the whole mechanism: the frames share one ordered stream, so a
+    // set_model AFTER the prompt would apply to the next turn, not this one.
+    expect(methods.indexOf('session/set_model')).toBeLessThan(
+      methods.indexOf('session/prompt'),
+    );
+    expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+  });
+
+  it('says so when the agent does not offer the requested model', () => {
+    const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
     new CursorAcpAdapter({ spawn }).start(
       { ...BASE, model: 'gpt-5' },
       (event) => events.push(event),
     );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        id: 2,
+        result: {
+          sessionId: 's',
+          models: {
+            currentModelId: 'composer-2.5[fast=true]',
+            availableModels: [{ modelId: 'composer-2.5[fast=true]' }],
+          },
+        },
+      })}\n`,
+    );
+
     expect(events).toContainEqual({
       type: 'notice',
       message:
-        "model 'gpt-5' was not applied: ACP carries no per-session model selection, so this turn runs on the agent's configured default",
+        "agent does not offer the model 'gpt-5' — this turn runs on the agent's current model instead",
     });
+    // Not merely announced — the frame must not go out either, or the agent
+    // answers with an error the turn would then have to explain twice.
+    expect(framesOn(child).map((frame) => frame.method)).not.toContain(
+      'session/set_model',
+    );
   });
 
   it('stays silent when every turn parameter has an ACP home', () => {
@@ -539,6 +601,100 @@ describe('CursorAcpAdapter misuse', () => {
       prompt: [{ type: 'text', text: 'turn B' }],
     });
   });
+  describe('listModels', () => {
+    /**
+     * A double for the model handshake. Deliberately NEVER closes: probed on
+     * cursor-agent 2026.08.04-aaa8809, `cursor-agent acp` does not exit when
+     * its stdin closes, so a double that exits would settle the read through
+     * the `close` path and never exercise the early settle the real CLI needs.
+     */
+    function fakeAcpProbe(stdout: string): {
+      groupSpawnFn: typeof spawn;
+      captured: { args?: readonly string[]; stdin: () => string[] };
+    } {
+      let child = fakeGroupChild(4242);
+      const captured = {
+        args: undefined as readonly string[] | undefined,
+        stdin: () => child.stdinChunks,
+      };
+      const groupSpawnFn = ((_command: string, args: readonly string[]) => {
+        captured.args = args;
+        child = fakeGroupChild(4242);
+        queueMicrotask(() => child.writeStdout(stdout));
+        return child.child;
+      }) as unknown as typeof spawn;
+      return { groupSpawnFn, captured };
+    }
+
+    const SESSION_REPLY = `${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      result: {
+        sessionId: 's1',
+        models: {
+          currentModelId: 'composer-2.5[fast=true]',
+          availableModels: [
+            { modelId: 'composer-2.5[fast=true]', name: 'Composer 2.5' },
+            { modelId: 'claude-opus-5[thinking=true]', name: 'Opus 5' },
+          ],
+        },
+      },
+    })}\n`;
+
+    it('asks the ACP server, not the `models` subcommand', async () => {
+      // Load-bearing, not stylistic: the subcommand prints a DIFFERENT id
+      // namespace (`claude-opus-5-thinking-high`) and `session/set_model`
+      // answers those with `-32602 Invalid model value`, so a picker built
+      // from it would refuse every choice the user made.
+      const { groupSpawnFn, captured } = fakeAcpProbe(SESSION_REPLY);
+
+      await new CursorAcpAdapter({ groupSpawnFn }).listModels();
+
+      expect(captured.args).toEqual(['acp']);
+    });
+
+    it('writes the handshake frames the answer depends on', async () => {
+      const { groupSpawnFn, captured } = fakeAcpProbe(SESSION_REPLY);
+
+      await new CursorAcpAdapter({ groupSpawnFn }).listModels();
+
+      const methods = captured
+        .stdin()
+        .join('')
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => (JSON.parse(line) as { method: string }).method);
+      expect(methods).toEqual(['initialize', 'session/new']);
+    });
+
+    it('reports the models the handshake offered, marked as live', async () => {
+      const { groupSpawnFn } = fakeAcpProbe(SESSION_REPLY);
+
+      await expect(
+        new CursorAcpAdapter({ groupSpawnFn }).listModels(),
+      ).resolves.toEqual([
+        {
+          id: 'composer-2.5[fast=true]',
+          label: 'Composer 2.5',
+          source: 'cli',
+        },
+        { id: 'claude-opus-5[thinking=true]', label: 'Opus 5', source: 'cli' },
+      ]);
+    });
+
+    it('reports nothing when the CLI could not be run at all', async () => {
+      const groupSpawnFn = ((_command: string, _args: readonly string[]) => {
+        const child = fakeGroupChild(4242);
+        queueMicrotask(() => child.close(1));
+        return child.child;
+      }) as unknown as typeof spawn;
+
+      await expect(
+        new CursorAcpAdapter({ groupSpawnFn }).listModels(),
+      ).resolves.toEqual([]);
+    });
+  });
+
   describe('listMcpServers', () => {
     it('asks the CLI in the folder it was given, in its own process group', async () => {
       const { groupSpawnFn, captured } = fakeListing('probe: ready\n');

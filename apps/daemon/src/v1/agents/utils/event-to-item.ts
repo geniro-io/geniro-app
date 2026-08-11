@@ -126,7 +126,21 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     case 'turn_cancelled':
       return { kind: 'turn_cancelled', role: null, payload: {} };
     case 'error':
-      return { kind: 'error', role: null, payload: { message: event.message } };
+      return {
+        kind: 'error',
+        role: null,
+        // `recovery` rides the payload only when the adapter recognised a cure,
+        // so an ordinary failure's row stays byte-identical to what it was.
+        //
+        // TWIN PARSER: `apps/ui/src/renderer/chats/error-payload.ts` reads this
+        // key back. An item payload is `z.unknown()` on the wire BY DESIGN —
+        // every kind carries a different shape — so no generated type spans the
+        // two sides. Renaming the key here means renaming it there.
+        payload: {
+          message: event.message,
+          ...(event.recovery ? { recovery: event.recovery } : {}),
+        },
+      };
   }
 }
 

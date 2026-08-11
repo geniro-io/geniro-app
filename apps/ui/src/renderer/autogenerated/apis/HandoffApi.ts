@@ -19,6 +19,11 @@ import type {
   HandoffTargetDto,
 } from '../models/index';
 
+export interface HandoffApiResolveCliLoginRequest {
+    agent: AgentKind;
+    cwd?: string;
+}
+
 export interface HandoffApiResolveHandoffRequest {
     runId: string;
     nodeId?: string;
@@ -35,6 +40,58 @@ export interface HandoffApiResolveMcpLoginRequest {
  * 
  */
 export class HandoffApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async resolveCliLoginRaw(requestParameters: HandoffApiResolveCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HandoffTargetDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling resolveCliLogin().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['cwd'] != null) {
+            queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/handoff/login`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async resolveCliLogin(requestParameters: HandoffApiResolveCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
+        const response = await this.resolveCliLoginRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 

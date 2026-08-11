@@ -59,6 +59,7 @@ const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 const handoffApi = vi.hoisted(() => ({
   resolveHandoff: vi.fn(),
   resolveMcpLogin: vi.fn(),
+  resolveCliLogin: vi.fn(),
 }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
@@ -107,6 +108,24 @@ function msg(seq: number, role: 'user' | 'assistant', text: string): ChatItem {
     kind: 'message',
     role,
     payload: { text },
+    createdAt: 'now',
+  };
+}
+
+/** A failed turn whose cure the daemon recognised. */
+function authError(seq: number): ChatItem {
+  return {
+    id: `i${seq}`,
+    runId: 'r1',
+    nodeId: null,
+    seq,
+    kind: 'error',
+    role: null,
+    payload: {
+      message:
+        'Failed to authenticate: OAuth session expired and could not be refreshed',
+      recovery: 'cli-login',
+    },
     createdAt: 'now',
   };
 }
@@ -461,6 +480,7 @@ beforeEach(() => {
   });
   handoffApi.resolveHandoff.mockReset();
   handoffApi.resolveMcpLogin.mockReset();
+  handoffApi.resolveCliLogin.mockReset();
 });
 
 afterEach(async () => {
@@ -5057,6 +5077,90 @@ describe('Chats — signing a server in', () => {
   });
 });
 
+describe('Chats — signing the CLI itself back in from a failed turn', () => {
+  const SIGN_IN_TITLE =
+    'Open this agent’s CLI sign-in in your terminal, then send the message again';
+
+  const signInOnRow = (container: HTMLElement): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>(
+      `button[title="${SIGN_IN_TITLE}"]`,
+    );
+
+  it('offers Sign in on the row, and opens that CLI’s own sign-in', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), authError(1)]);
+    handoffApi.resolveCliLogin.mockResolvedValue({
+      kind: 'command',
+      command: 'claude',
+      args: ['auth', 'login'],
+      cwd: '/home/me',
+      display: 'claude auth login',
+      unavailableReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      signInOnRow(container)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    // No folder is sent: an account is machine-wide, and the daemon answers
+    // with the home directory the terminal contract needs.
+    expect(handoffApi.resolveCliLogin).toHaveBeenCalledWith({
+      agent: 'claude',
+    });
+    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
+      command: 'claude',
+      args: ['auth', 'login'],
+      cwd: '/home/me',
+    });
+  });
+
+  it('offers nothing on a failure the daemon named no cure for', async () => {
+    // Order, not presence: an unconditional button would send the user to a
+    // sign-in for a failure signing in cannot fix.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      {
+        ...authError(1),
+        payload: { message: 'ENOSPC: no space left on device' },
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('no space left on device');
+    expect(signInOnRow(container)).toBeNull();
+  });
+
+  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), authError(1)]);
+    handoffApi.resolveCliLogin.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      display: null,
+      unavailableReason: 'this CLI has no account sign-in',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      signInOnRow(container)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('this CLI has no account sign-in');
+  });
+});
+
 describe('Chats — the MCP read waits to be asked, on every chat', () => {
   const chatIn = (id: string, title: string, cwd: string): ChatRun => ({
     ...run1,
@@ -5186,7 +5290,7 @@ describe('Chats — the open thread lays its composer out differently', () => {
     expect(order(container, approval)).toBeLessThan(order(container, ring));
   });
 
-  it('puts the folder chip after Send, not in the row above the textarea', async () => {
+  it('puts the folder chip on the actions line, ahead of Send', async () => {
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
     const { client } = makeClient();
     const container = await mount(client);
@@ -5196,11 +5300,30 @@ describe('Chats — the open thread lays its composer out differently', () => {
     const folder = folderChip(container);
     expect(folder, 'folder chip').toBeDefined();
     expect(send, 'send button').not.toBeNull();
-    // Order, not presence: the chip existed in the old layout too — it just sat
-    // above the textarea, i.e. BEFORE Send. This is the assertion that flips.
-    expect(order(container, send)).toBeLessThan(order(container, folder));
+    // Order, not presence: the chip renders in every layout this ever had — it
+    // is WHERE that is under test. It leads the actions line rather than
+    // trailing it, so this is the assertion that flips if it moves back.
+    expect(order(container, folder)).toBeLessThan(order(container, send));
     // Still carries its full-path tooltip after the move.
     expect(folder?.getAttribute('title')).toBe('/proj');
+  });
+
+  it('keeps the folder chip ahead of Stop mid-turn', async () => {
+    // The reported case. Idle, the chip trails Send; mid-turn the trailing slot
+    // is Stop, and a caption sitting after the one control that destroys work
+    // reads as belonging to it. Asserted separately because the two layouts
+    // render different buttons — pinning only the Send case leaves the one the
+    // user actually saw unpinned.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const stop = composerButton(container, 'Stop');
+    const folder = folderChip(container);
+    expect(stop, 'stop button').not.toBeNull();
+    expect(folder, 'folder chip').toBeDefined();
+    expect(order(container, folder)).toBeLessThan(order(container, stop));
   });
 
   it('shows no branch control once a thread is open, even in a real repo', async () => {

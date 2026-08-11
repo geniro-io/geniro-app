@@ -29,6 +29,7 @@ import {
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
   CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
+  CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import {
@@ -529,6 +530,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         cursorAutoDecision(input.approvalMode, toolCall),
       preferredModeId:
         input.approvalMode === 'plan' ? CURSOR_PLAN_MODE_ID : null,
+      declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
       question: {
         method: CURSOR_ASK_QUESTION_METHOD,
         toolName: this.getConfig().questionToolName ?? '',

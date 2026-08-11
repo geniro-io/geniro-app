@@ -100,6 +100,20 @@ export interface AcpDriverOptions {
   /** How this agent asks the user a question, or absent when it cannot. */
   question?: AcpQuestionProtocol;
   /**
+   * Agent→client methods this client refuses WITHOUT narrating it — the ones
+   * whose own agent absorbs the refusal, so nothing about the turn changed.
+   *
+   * They are still declined in-protocol; what is withheld is only the
+   * transcript notice, which is a per-turn budget of ONE. Spending it on a
+   * refusal that cost nothing leaves a refusal that cost something unmentioned
+   * later in the same turn.
+   *
+   * Membership must be EVIDENCE, not a guess: the entry belongs here only once
+   * that agent's own handling of the refusal has been read or observed. An
+   * unlisted method keeps the notice, which is the safe default.
+   */
+  declinedWithoutNotice?: readonly string[];
+  /**
    * The turn's instruction text, given whether the call tools were registered.
    * Supplied by the adapter so the include-the-callee-block rule stays owned
    * by `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
@@ -919,10 +933,10 @@ export class AcpTurnDriver implements TurnDriver {
       );
     }
     // Everything else is a client capability we deliberately did not advertise
-    // (`fs/*`, `terminal/*`) or a vendor extension we don't implement
-    // (`cursor/create_plan`). A blocking request MUST be answered or the agent
-    // parks forever, so refuse it in-protocol — and say so once, since a
-    // refused extension can change what the agent is able to do this turn.
+    // (`fs/*`, `terminal/*`) or a vendor extension we don't implement. A
+    // blocking request MUST be answered or the agent parks forever, so refuse
+    // it in-protocol — and say so once, since a refused extension can change
+    // what the agent is able to do this turn.
     if (
       this.io?.write(
         encodeError(
@@ -935,6 +949,18 @@ export class AcpTurnDriver implements TurnDriver {
       this.options.logger?.warn(
         `acp: dropped the error reply to ${method} — stdin is closed`,
       );
+    }
+    if (this.options.declinedWithoutNotice?.includes(method) === true) {
+      // A refusal its own agent absorbs. The notice above is a per-TURN
+      // budget of one, so narrating a harmless refusal does not merely add
+      // noise — it spends the slot, and a consequential refusal later in the
+      // same turn then goes unmentioned. Measured: an ordinary planning turn
+      // on cursor-agent 2026.08.04 sends `cursor/update_todos`, which would
+      // have burnt it. Still recorded, on the debug channel.
+      this.options.logger?.debug?.(
+        `acp: declined ${method}; the agent handles that refusal itself`,
+      );
+      return [];
     }
     if (this.warnedUnsupportedRequest) {
       return [];

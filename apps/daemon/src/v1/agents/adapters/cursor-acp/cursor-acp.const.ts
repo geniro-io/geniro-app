@@ -210,3 +210,33 @@ export const CURSOR_QUESTION_OUTCOME_SKIPPED = 'skipped';
  * the vendor might add.
  */
 export const CURSOR_ANSWER_KEY = '__geniroAnswer';
+
+/**
+ * The vendor extensions this client refuses SILENTLY — declined in-protocol
+ * like any other, but without spending the turn's single "declined" notice.
+ *
+ * Each entry is a reading of that method's own handler in the CLI source
+ * (same file as {@link CURSOR_ASK_QUESTION_METHOD}), never an assumption:
+ *
+ * - `update_todos`, `task`, `generate_image` go out through
+ *   `sendNonBlockingExtensionNotification`, which is
+ *   `connection.extMethod(...).catch(debugLog)`. The agent discards the
+ *   outcome entirely, so a refusal changes nothing about the turn. Wire-
+ *   confirmed for `update_todos` on 2026.08.04-aaa8809: an ordinary "make a
+ *   todo list" turn sends it and then completes normally after a `-32601`.
+ * - `create_plan` DOES block, but its handler treats Unimplemented as a cue to
+ *   write the plan locally and report success. The work still happens; only
+ *   the delivery differs.
+ *
+ * `ask_question` is deliberately ABSENT, and is the reason this list is not
+ * simply "every `cursor/*`": its fallback answers the user's question with the
+ * first option on their behalf. That is the shape of harm this list must never
+ * cover — so an entry is earned by reading the handler, not by sharing a
+ * prefix with one that was.
+ */
+export const CURSOR_SILENTLY_DECLINED_METHODS: readonly string[] = [
+  'cursor/update_todos',
+  'cursor/task',
+  'cursor/generate_image',
+  'cursor/create_plan',
+];

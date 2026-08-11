@@ -1390,6 +1390,63 @@ describe('AcpTurnDriver vendor question channel', () => {
   });
 });
 
+describe('AcpTurnDriver refusals the agent absorbs', () => {
+  const HARMLESS = 'vendor/update_todos';
+  const options = { declinedWithoutNotice: [HARMLESS] };
+
+  it('declines them in-protocol but spends no notice', () => {
+    const h = harness(options);
+    const events = h.feed({ id: 7, method: HARMLESS, params: { todos: [] } });
+
+    // Still answered — a request left hanging parks the agent either way.
+    expect(h.sent.find((frame) => frame.id === 7)?.error).toEqual({
+      code: -32601,
+      message: `${HARMLESS} is not implemented by this client`,
+    });
+    expect(events).toEqual([]);
+  });
+
+  it('leaves the turn’s ONE notice for a refusal that actually costs something', () => {
+    // The regression this pins, and the reason the list exists at all: the
+    // notice is a per-turn budget of one. Measured on cursor-agent
+    // 2026.08.04, an ordinary planning turn sends `cursor/update_todos` — a
+    // refusal its own agent discards — which under the old behaviour burnt
+    // the slot, leaving a consequential refusal later in the same turn
+    // unmentioned.
+    const h = harness(options);
+    expect(h.feed({ id: 7, method: HARMLESS, params: {} })).toEqual([]);
+
+    const events = h.feed({ id: 8, method: 'fs/read_text_file', params: {} });
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        message:
+          "agent asked for 'fs/read_text_file', which this client does not implement; it was declined",
+      },
+    ]);
+  });
+
+  it('still narrates a method that is NOT on the list', () => {
+    const h = harness(options);
+    const events = h.feed({
+      id: 7,
+      method: 'vendor/something_else',
+      params: {},
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it('records the silent refusal on the debug channel rather than nowhere', () => {
+    const debug = vi.fn();
+    const h = harness({ ...options, logger: { warn: vi.fn(), debug } });
+    h.feed({ id: 7, method: HARMLESS, params: {} });
+
+    expect(debug).toHaveBeenCalledWith(
+      `acp: declined ${HARMLESS}; the agent handles that refusal itself`,
+    );
+  });
+});
+
 describe('AcpTurnDriver image attachments', () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 

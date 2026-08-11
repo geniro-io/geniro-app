@@ -124,6 +124,36 @@ describe('CapabilitiesService — a message into a running turn', () => {
   });
 });
 
+describe('CapabilitiesService — background sub-agents', () => {
+  const subagents = (): Map<string, string | null> =>
+    new Map(
+      service()
+        .service.capabilitiesWire()
+        .subagents.map((s) => [s.agent, s.unavailableReason]),
+    );
+
+  it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
+    expect([...subagents().keys()]).toEqual([...registry().all().keys()]);
+  });
+
+  it('carries each adapter’s OWN reason, verbatim', () => {
+    expect(subagents().get('claude')).toBe(
+      new ClaudeAdapter().getConfig().subagents.unavailableReason,
+    );
+    expect(subagents().get('cursor-agent')).toBe(
+      new CursorAcpAdapter().getConfig().subagents.unavailableReason,
+    );
+  });
+
+  it('states claude’s support as null and cursor’s absence as a real sentence', () => {
+    // This is what lets a cursor chat SAY why it lists no delegates. An empty
+    // list with no reason reads as a bug; the sentence reads as a fact.
+    expect(subagents().get('claude')).toBeNull();
+    expect(subagents().get('cursor-agent')).toEqual(expect.any(String));
+    expect(subagents().get('cursor-agent')).not.toBe('');
+  });
+});
+
 describe('CapabilitiesService — the interactive terminal', () => {
   it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
     expect(

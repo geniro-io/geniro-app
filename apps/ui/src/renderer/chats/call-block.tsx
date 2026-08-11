@@ -1,21 +1,20 @@
-import {
-  ArrowRight,
-  ArrowRightLeft,
-  ChevronDown,
-  ChevronUp,
-} from 'lucide-react';
-import { memo, useState } from 'react';
+import { ArrowRight, ArrowRightLeft } from 'lucide-react';
+import { memo } from 'react';
 
 import { avatarTone, initialsOf } from '../components/ui/avatar';
-import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
-import { MarkdownContent } from './markdown-content';
+import {
+  BlockPendingLine,
+  BlockRequest,
+  BlockResult,
+  BlockShell,
+  type BlockStatus,
+  BlockTitle,
+  BlockToolFooter,
+} from './block-shell';
 import { TranscriptEntryView } from './transcript-entry';
-import type { CallBlockEntry } from './transcript-groups';
+import { type CallBlockEntry, countTools } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
-
-/** Block lifecycle in geniro web's vocabulary (StatusBadge). */
-type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
 
 function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
   switch (status) {
@@ -28,93 +27,6 @@ function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
     default:
       return 'running';
   }
-}
-
-const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
-  running: 'bg-primary/10 text-primary',
-  done: 'bg-success/15 text-success',
-  error: 'bg-destructive/10 text-destructive',
-  stopped: 'bg-muted text-muted-foreground',
-};
-
-function StatusBadge({ status }: { status: BlockStatus }): React.JSX.Element {
-  return (
-    <span
-      className={cn(
-        'rounded px-1.5 py-0.5 text-[10px] font-medium',
-        STATUS_BADGE_CLASS[status],
-      )}>
-      {status}
-    </span>
-  );
-}
-
-/** Geniro web's SectionLabel. */
-function SectionLabel({
-  children,
-}: {
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <p className="m-0 mb-1 text-[10px] tracking-wide text-muted-foreground uppercase">
-      {children}
-    </p>
-  );
-}
-
-/**
- * Geniro web's InlineText: an accent-tinted text panel clamped to a few
- * lines with a bottom fade and a Show more / Show less toggle.
- */
-function InlineClampText({
-  text,
-  accentClass,
-  lines = 3,
-}: {
-  text: string;
-  accentClass: string;
-  lines?: number;
-}): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-  const isLong = text.split('\n').length > lines || text.length > lines * 80;
-  return (
-    <div
-      className={cn(
-        'rounded-lg px-3 py-2.5 text-[11px] leading-relaxed',
-        accentClass,
-      )}>
-      <div
-        className={cn(!expanded && isLong && 'overflow-hidden')}
-        style={
-          !expanded && isLong
-            ? {
-                maxHeight: `${lines * 1.8}em`,
-                maskImage: 'linear-gradient(to bottom, black 40%, transparent)',
-                WebkitMaskImage:
-                  'linear-gradient(to bottom, black 40%, transparent)',
-              }
-            : undefined
-        }>
-        <MarkdownContent content={text} className="text-[11px]" />
-      </div>
-      {isLong ? (
-        <button
-          type="button"
-          className="mt-1.5 flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => setExpanded((v) => !v)}>
-          {expanded ? (
-            <>
-              <ChevronUp aria-hidden="true" className="size-3" /> Show less
-            </>
-          ) : (
-            <>
-              <ChevronDown aria-hidden="true" className="size-3" /> Show more
-            </>
-          )}
-        </button>
-      ) : null}
-    </div>
-  );
 }
 
 /** Geniro web's AgentAvatars pair (caller → callee) for the block header. */
@@ -155,6 +67,11 @@ function AvatarPair({
  * the status chip; the body holds the clamped "Instructions for X" section,
  * the callee's streamed work (each entry in its own sender frame), the
  * clamped "Result from X" (or error) section, and an "N tools" footer.
+ *
+ * The card chrome itself lives in {@link BlockShell}, shared with the
+ * sub-agent block. This block passes no `collapsible`: a call is the point of
+ * the row it sits on, so it stays open — unlike a sub-agent aside, which the
+ * reader opens deliberately.
  */
 export const CallBlock = memo(function CallBlock({
   block,
@@ -170,75 +87,52 @@ export const CallBlock = memo(function CallBlock({
   const callee = nameOf(block.calleeNodeId) ?? 'agent';
   const caller = nameOf(block.callerNodeId);
   const status = blockStatusOf(block.status);
-  const toolCount = block.entries.reduce(
-    (sum, entry) => (entry.type === 'tools' ? sum + entry.pairs.length : sum),
-    0,
-  );
+  const toolCount = countTools(block.entries);
   const failed = block.status === 'failed';
   return (
     <div data-role="call-block" className="w-full">
-      <div className="mb-1.5 ml-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-        <ArrowRightLeft aria-hidden="true" className="size-3" />
-        <span>Agent communication</span>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-2.5">
-          {caller ? (
-            <AvatarPair
-              caller={caller}
-              callerKey={block.callerNodeId ?? caller}
-              callee={callee}
-              calleeKey={block.calleeNodeId ?? callee}
-            />
-          ) : null}
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-            {caller ? `${caller} → ${callee}` : callee}
-          </span>
-          {status === 'running' ? <Spinner className="size-3.5" /> : null}
-          <StatusBadge status={status} />
-        </div>
-        <div className="flex flex-col gap-2.5 p-3">
-          {block.message ? (
-            <div>
-              <SectionLabel>Providing instructions for {callee}</SectionLabel>
-              <InlineClampText
-                text={block.message}
-                accentClass="bg-primary/5 border border-primary/20 text-muted-foreground"
+      <BlockShell
+        eyebrow="Agent communication"
+        eyebrowIcon={<ArrowRightLeft aria-hidden="true" className="size-3" />}
+        status={status}
+        header={
+          <>
+            {caller ? (
+              <AvatarPair
+                caller={caller}
+                callerKey={block.callerNodeId ?? caller}
+                callee={callee}
+                calleeKey={block.calleeNodeId ?? callee}
               />
-            </div>
-          ) : null}
-          {block.entries.map((entry) => (
-            <TranscriptEntryView
-              key={entry.type === 'item' ? entry.item.id : entry.id}
-              entry={entry}
-              nodes={nodes}
-              chatAgentName={chatAgentName}
-            />
-          ))}
-          {block.result ? (
-            <div>
-              <SectionLabel>Result from {callee}</SectionLabel>
-              <InlineClampText
-                text={block.result}
-                accentClass="bg-success/5 border border-success/40 text-foreground"
-              />
-            </div>
-          ) : null}
-          {status === 'running' ? (
-            <span className="animate-pulse text-[11px] text-muted-foreground italic">
-              {callee} is thinking...
-            </span>
-          ) : null}
-          {toolCount > 0 ? (
-            <div className="flex items-center gap-3 pt-0.5 text-[10px] text-muted-foreground">
-              <span>
-                {toolCount} tool{toolCount === 1 ? '' : 's'}
-              </span>
-              {failed ? <span>finished with an error</span> : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
+            ) : null}
+            <BlockTitle>{caller ? `${caller} → ${callee}` : callee}</BlockTitle>
+          </>
+        }>
+        {block.message ? (
+          <BlockRequest
+            label={`Providing instructions for ${callee}`}
+            text={block.message}
+          />
+        ) : null}
+        {block.entries.map((entry) => (
+          <TranscriptEntryView
+            key={entry.type === 'item' ? entry.item.id : entry.id}
+            entry={entry}
+            nodes={nodes}
+            chatAgentName={chatAgentName}
+          />
+        ))}
+        {block.result ? (
+          <BlockResult label={`Result from ${callee}`} text={block.result} />
+        ) : null}
+        {status === 'running' ? (
+          <BlockPendingLine>{callee} is thinking...</BlockPendingLine>
+        ) : null}
+        <BlockToolFooter
+          count={toolCount}
+          note={failed ? <span>finished with an error</span> : undefined}
+        />
+      </BlockShell>
     </div>
   );
 });

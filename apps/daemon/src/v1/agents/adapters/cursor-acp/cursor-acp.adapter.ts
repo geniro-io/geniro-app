@@ -121,6 +121,44 @@ export class CursorAcpAdapter extends AgentAdapter {
        * permission dialogue to keep the tool wired at all.
        */
       questionsCostAskPosture: false,
+      subagents: {
+        /**
+         * No sub-agent signal has been found on this transport — so a cursor
+         * run genuinely lists no delegates, rather than listing none because
+         * geniro forgot to look.
+         *
+         * MEASURED 2026-08-11, and these are its exact bounds, because the
+         * next reader needs to know what to re-check rather than trust the
+         * absence:
+         * - `adapters/acp/acp.types.ts` declares no `session/update` variant
+         *   types at all, and no field of any type it DOES declare
+         *   (`AcpToolCall`: `toolCallId`, `name`, `title`, `status`, `kind`,
+         *   `rawInput`, `rawOutput`) is a parent, task or sub-session id.
+         * - `acp-driver.ts` reads none either: `readToolCall` takes only the
+         *   seven fields above, and the update envelope's own `sessionId` is
+         *   discarded — the driver holds ONE session per turn.
+         * - `cursor-acp/` carries no delegation handling anywhere.
+         *
+         * Three things this does NOT settle, each a place to look first if a
+         * delegate ever needs surfacing here:
+         * 1. `cursor/task` — a vendor method this adapter declines without
+         *    notice ({@link CURSOR_SILENTLY_DECLINED_METHODS}). Its name is the
+         *    single most suggestive artifact found; its PAYLOAD shape is
+         *    documented nowhere here and has never been captured on the wire.
+         *    Settling it means re-reading the CLI's own shipped source, the way
+         *    {@link CURSOR_ASK_QUESTION_METHOD}'s contract was.
+         * 2. The `session/update` variants the driver drops unread —
+         *    `plan`/`plan_update`, `session_info_update` — named in a comment
+         *    and declared nowhere.
+         * 3. The published ACP schema itself. `acp.types.ts` is a deliberate
+         *    PROJECTION of what geniro sends and hopes to read, not a
+         *    transcription, so absence here is weaker than absence from the
+         *    protocol.
+         */
+        reports: false,
+        unavailableReason:
+          'cursor-agent reports no sub-agents over ACP — no session/update variant this client reads carries a parent, task or sub-session id',
+      },
       approval: {
         /**
          * Real, unlike the `-p` transport this replaces:

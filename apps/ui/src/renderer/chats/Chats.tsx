@@ -40,6 +40,7 @@ import { ConfirmDialog } from '../components/confirm-dialog';
 import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
+import { Dialog } from '../components/ui/dialog';
 import { Select } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
@@ -57,6 +58,7 @@ import {
   CHAT_AGENT_KEY,
   computeAgentActivity,
   displayStatus,
+  subagentThreadsByAgent,
   threadsOf,
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
@@ -93,10 +95,17 @@ import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
+import { SubagentDetail } from './subagent-block';
+import { SubagentDetailContext } from './subagent-context';
 import { TranscriptEntryView } from './transcript-entry';
 import {
+  buildSubagentBlocks,
   buildTurnBlocks,
+  collectSubagentBlocks,
   groupTranscript,
+  type SubagentBlockEntry,
+  subagentBlockStatus,
+  subagentTitle,
   withLiveText,
 } from './transcript-groups';
 import {
@@ -2244,17 +2253,6 @@ export function Chats({
    * for a chat it is not looking at. A background row keeps the daemon's own
    * status, which the client-wide `run_status` broadcast already keeps honest.
    */
-  const activeRunStatus = useMemo(
-    () =>
-      activeRun
-        ? displayRunStatus({
-            status: activeRun.status,
-            streaming,
-            awaitingAnswer: awaitingAnswer.size > 0,
-          })
-        : 'idle',
-    [activeRun, streaming, awaitingAnswer],
-  );
   /**
    * The DURABLE fold, memoized on the items alone.
    *
@@ -2264,10 +2262,64 @@ export function Chats({
    * prop identity and the whole transcript re-rendered, which is the visible
    * blink. `withLiveText` copies only the ONE block it appends to, so with the
    * fold held stable here every other block keeps its identity and its memo.
+   *
+   * Ordered before the badge below because the badge READS it: whether a
+   * background sub-agent is still working is a fact about the folded
+   * transcript, not one the run row carries.
    */
   const durableEntries = useMemo(
-    () => buildTurnBlocks(groupTranscript(items)),
+    () => buildTurnBlocks(buildSubagentBlocks(groupTranscript(items), items)),
     [items],
+  );
+  /**
+   * The run STOPPED for a reason that outranks a delegate still being out.
+   *
+   * Only `failed` and `cancelled` — deliberately NOT every settled status, and
+   * not `isSettledRunStatus`. A `completed` row is exactly the stale value
+   * this whole signal exists to override (`displayRunStatus` documents the
+   * three writers that produce it), so treating it as a stop would let the
+   * badge suppress itself and the feature would do nothing. The two kept here
+   * are the same two `displayRunStatus` refuses to override for `streaming`,
+   * for the same reason: both are genuine settle paths, and a cancelled run is
+   * precisely where a delegate's last rows are still landing with no turn-end
+   * item to close it.
+   */
+  const runRowStopped =
+    activeRun?.status === 'failed' || activeRun?.status === 'cancelled';
+  /**
+   * Why THIS chat's CLI never lists delegates, or null when it reports them.
+   *
+   * A chat that shows no sub-agents is otherwise indistinguishable from a
+   * broken one, and for cursor-agent that is the permanent, correct state — its
+   * ACP transport carries no sub-agent signal at all. Read off the daemon's own
+   * per-adapter report rather than decided by agent name here, on the same rule
+   * as the interactive-terminal set above.
+   */
+  const subagentUnavailableReason = useMemo(() => {
+    const kind = activeRun?.agentKind;
+    return kind
+      ? (capabilities?.subagents?.find((row) => row.agent === kind)
+          ?.unavailableReason ?? null)
+      : null;
+  }, [capabilities, activeRun]);
+  const subagentRunning = useMemo(
+    () =>
+      collectSubagentBlocks(durableEntries).some(
+        (block) => subagentBlockStatus(block, runRowStopped) === 'running',
+      ),
+    [durableEntries, runRowStopped],
+  );
+  const activeRunStatus = useMemo(
+    () =>
+      activeRun
+        ? displayRunStatus({
+            status: activeRun.status,
+            streaming,
+            awaitingAnswer: awaitingAnswer.size > 0,
+            subagentRunning,
+          })
+        : 'idle',
+    [activeRun, streaming, awaitingAnswer, subagentRunning],
   );
   const transcriptEntries = useMemo(
     () => withLiveText(durableEntries, liveText, workingAgents),
@@ -2290,6 +2342,29 @@ export function Chats({
   const toggleAgentsPanel = useCallback(
     () => setAgentsPanelOpen((open) => !open),
     [],
+  );
+  /**
+   * The open chat's sub-agents, listed as threads of the agent that launched
+   * them, newest last.
+   *
+   * Sourced from the FOLD rather than from `activity`: the delegates and their
+   * state are already derived there, and re-deriving them from the raw items
+   * for the panel is the mirror-instead-of-extract shape that put the same
+   * logic in four places once before.
+   *
+   * `stopped` maps to `cancelled` — a delegate whose turn ended before it
+   * reported back did stop without completing, and `cancelled` is the only
+   * status in the vocabulary that says that. It is the nearest true word, not
+   * a claim that the user cancelled it.
+   */
+  const subagentThreads = useMemo(
+    () =>
+      subagentThreadsByAgent(
+        collectSubagentBlocks(durableEntries),
+        CHAT_AGENT_KEY,
+        runRowStopped,
+      ),
+    [durableEntries, runRowStopped],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {
@@ -2340,6 +2415,7 @@ export function Chats({
               status: activeRunStatus,
               sessionId: null,
             },
+            ...(subagentThreads.get(CHAT_AGENT_KEY) ?? []),
           ],
         },
       ];
@@ -2366,7 +2442,10 @@ export function Chats({
           nodeActivity?.contextWindowTokens ??
           null,
         spentUsd: nodeActivity?.spentUsd ?? null,
-        threads: threadsOf(nodeActivity),
+        threads: [
+          ...threadsOf(nodeActivity),
+          ...(subagentThreads.get(node.id) ?? []),
+        ],
       };
     });
     // Items can reference nodes a since-edited workflow no longer has — list
@@ -2390,14 +2469,45 @@ export function Chats({
           liveText.get(nodeId)?.contextWindowTokens ??
           nodeActivity.contextWindowTokens,
         spentUsd: nodeActivity.spentUsd,
-        threads: threadsOf(nodeActivity),
+        threads: [
+          ...threadsOf(nodeActivity),
+          ...(subagentThreads.get(nodeId) ?? []),
+        ],
       }));
     return [...known, ...extras];
     // `liveText` is READ above for the live context figure, so it belongs here:
     // without it the meter could only move when a durable item landed, which is
     // the "context never grows" complaint this panel exists to answer. There is
     // no react-hooks eslint plugin in this repo to catch the omission.
-  }, [activeRun, activeRunStatus, activity, streaming, wfNodes, liveText]);
+  }, [
+    activeRun,
+    activeRunStatus,
+    activity,
+    streaming,
+    wfNodes,
+    liveText,
+    subagentThreads,
+  ]);
+  /**
+   * Which sub-agent's detail panel is open, by the id of the tool call that
+   * launched it — an ID rather than the block itself, so the panel follows the
+   * LIVE fold as the delegate keeps working instead of freezing the snapshot
+   * it was opened from.
+   */
+  const [detailSubagentId, setDetailSubagentId] = useState<string | null>(null);
+  const detailSubagent = useMemo(
+    (): SubagentBlockEntry | null =>
+      detailSubagentId === null
+        ? null
+        : (collectSubagentBlocks(transcriptEntries).find(
+            (block) => block.id === detailSubagentId,
+          ) ?? null),
+    [detailSubagentId, transcriptEntries],
+  );
+  const openSubagentDetail = useCallback(
+    (block: SubagentBlockEntry) => setDetailSubagentId(block.id),
+    [],
+  );
 
   /**
    * Where this thread can be picked up by hand: the CLI invocation that reopens
@@ -2971,61 +3081,66 @@ export function Chats({
                   <RunSettledContext.Provider
                     value={isSettledRunStatus(activeRunStatus)}>
                     <RunActivityContext.Provider value={activeActivity}>
-                      {transcriptEntries.map((entry) => {
-                        if (
-                          entry.type !== 'item' ||
-                          entry.item.kind !== 'approval_request'
-                        ) {
-                          const key =
-                            entry.type === 'item' ? entry.item.id : entry.id;
-                          return (
-                            <TranscriptEntryView
-                              key={key}
-                              entry={entry}
-                              nodes={nodeMeta}
-                              chatAgentName={activeRun?.agentKind ?? null}
-                              soloAgent={soloAgent}
-                            />
+                      <SubagentDetailContext.Provider
+                        value={openSubagentDetail}>
+                        {transcriptEntries.map((entry) => {
+                          if (
+                            entry.type !== 'item' ||
+                            entry.item.kind !== 'approval_request'
+                          ) {
+                            const key =
+                              entry.type === 'item' ? entry.item.id : entry.id;
+                            return (
+                              <TranscriptEntryView
+                                key={key}
+                                entry={entry}
+                                nodes={nodeMeta}
+                                chatAgentName={activeRun?.agentKind ?? null}
+                                soloAgent={soloAgent}
+                              />
+                            );
+                          }
+                          const item = entry.item;
+                          // EVERY open request's card lives above the composer, so
+                          // every one of them leaves a marker here. Keyed on openness
+                          // rather than on the pinned id: keying on the pin gave the
+                          // SECOND open question a fully live card in the scroller,
+                          // which is the failure the pin exists to end. Leaving the
+                          // live card here too would put two sets of buttons over one
+                          // one-shot verdict channel; leaving nothing would silently
+                          // drop a row out of the conversation's order.
+                          if (openRequestId(item) !== null) {
+                            return (
+                              <MessageBubble key={item.id} variant="note">
+                                {pinnedRequest?.id === item.id
+                                  ? '❓ waiting on your answer — the card is pinned below'
+                                  : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                              </MessageBubble>
+                            );
+                          }
+                          const askerName =
+                            (item.nodeId
+                              ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
+                              : activeRun?.agentKind) ?? 'agent';
+                          const card = (
+                            <div className="w-full">
+                              {approvalCardFor(item)}
+                            </div>
                           );
-                        }
-                        const item = entry.item;
-                        // EVERY open request's card lives above the composer, so
-                        // every one of them leaves a marker here. Keyed on openness
-                        // rather than on the pinned id: keying on the pin gave the
-                        // SECOND open question a fully live card in the scroller,
-                        // which is the failure the pin exists to end. Leaving the
-                        // live card here too would put two sets of buttons over one
-                        // one-shot verdict channel; leaving nothing would silently
-                        // drop a row out of the conversation's order.
-                        if (openRequestId(item) !== null) {
-                          return (
-                            <MessageBubble key={item.id} variant="note">
-                              {pinnedRequest?.id === item.id
-                                ? '❓ waiting on your answer — the card is pinned below'
-                                : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                            </MessageBubble>
+                          // A solo agent's card needs no identity frame either.
+                          return soloAgent ? (
+                            <div key={item.id}>{card}</div>
+                          ) : (
+                            <SenderRow
+                              key={item.id}
+                              name={askerName}
+                              colorKey={item.nodeId ?? undefined}
+                              time={formatClockTime(item.createdAt)}>
+                              {card}
+                            </SenderRow>
                           );
-                        }
-                        const askerName =
-                          (item.nodeId
-                            ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
-                            : activeRun?.agentKind) ?? 'agent';
-                        const card = (
-                          <div className="w-full">{approvalCardFor(item)}</div>
-                        );
-                        // A solo agent's card needs no identity frame either.
-                        return soloAgent ? (
-                          <div key={item.id}>{card}</div>
-                        ) : (
-                          <SenderRow
-                            key={item.id}
-                            name={askerName}
-                            colorKey={item.nodeId ?? undefined}
-                            time={formatClockTime(item.createdAt)}>
-                            {card}
-                          </SenderRow>
-                        );
-                      })}
+                        })}
+                      </SubagentDetailContext.Provider>
                     </RunActivityContext.Provider>
                   </RunSettledContext.Provider>
                   <div ref={transcriptEndRef} />
@@ -3419,9 +3534,38 @@ export function Chats({
                 onOpenThread={(agent, thread) =>
                   void openThreadTerminal(agent, thread)
                 }
+                onOpenSubagent={setDetailSubagentId}
+                subagentUnavailableReason={subagentUnavailableReason}
                 onClose={() => setAgentsPanelOpen(false)}
               />
             ) : null}
+
+            <Dialog
+              open={detailSubagent !== null}
+              onClose={() => setDetailSubagentId(null)}
+              title={
+                detailSubagent
+                  ? `Sub-agent · ${subagentTitle(detailSubagent)}`
+                  : 'Sub-agent'
+              }
+              className="max-w-2xl">
+              {detailSubagent ? (
+                // The dialog is a SIBLING subtree of the transcript, so it
+                // inherits none of the transcript's providers. Without this it
+                // read the context default (`false`) and drew a pulsing "is
+                // working…" for a delegate the block behind it correctly
+                // showed as stopped — the original bug, surviving on the new
+                // surface.
+                <RunSettledContext.Provider
+                  value={isSettledRunStatus(activeRunStatus)}>
+                  <SubagentDetail
+                    block={detailSubagent}
+                    nodes={nodeMeta}
+                    chatAgentName={activeRun?.agentKind ?? null}
+                  />
+                </RunSettledContext.Provider>
+              ) : null}
+            </Dialog>
 
             <ConfirmDialog
               open={deleting !== null}

@@ -3,6 +3,7 @@ import { memo } from 'react';
 import { CallBlock } from './call-block';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
+import { SubagentBlock } from './subagent-block';
 import { ToolGroup } from './tool-group';
 import type { TranscriptEntry } from './transcript-groups';
 import {
@@ -75,6 +76,17 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
     // geniro web reference.
     return (
       <CallBlock block={entry} nodes={nodes} chatAgentName={chatAgentName} />
+    );
+  }
+  if (entry.type === 'subagent-block') {
+    // Same rule as the call block: the card names the delegate itself, so a
+    // sender frame around it would attribute the aside to the main agent.
+    return (
+      <SubagentBlock
+        block={entry}
+        nodes={nodes}
+        chatAgentName={chatAgentName}
+      />
     );
   }
 

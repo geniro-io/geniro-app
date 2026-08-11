@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
@@ -6,6 +6,8 @@ import { CallBlock } from './call-block';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { formatClockTime } from './relative-time';
+import { SubagentBlock } from './subagent-block';
+import { NestedThreadContext } from './subagent-context';
 import { ToolGroup } from './tool-group';
 import type { TranscriptEntry, TurnBlockEntry } from './transcript-groups';
 import {
@@ -39,6 +41,7 @@ export const TurnBlock = memo(function TurnBlock({
   /** The run has exactly one agent — drop the identity frame. */
   soloAgent?: boolean;
 }): React.JSX.Element {
+  const nested = useContext(NestedThreadContext);
   const name =
     (block.nodeId === null
       ? (chatAgentName ?? null)
@@ -51,9 +54,12 @@ export const TurnBlock = memo(function TurnBlock({
    * anything inside a block — and every assistant message is inside one. The
    * whole block is one thread (the fold splits on exactly this), so one label
    * says it once instead of repeating on every row.
+   *
+   * Withheld inside a sub-agent ENCLOSURE, which names the delegate in its own
+   * header: there the caption is the same fact stated twice, one line apart.
    */
   const subagentLabel =
-    block.subagentId === null ? null : (
+    block.subagentId === null || nested ? null : (
       <span
         data-role="subagent-label"
         className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase opacity-70">
@@ -67,6 +73,16 @@ export const TurnBlock = memo(function TurnBlock({
     if (entry.type === 'call-block') {
       return (
         <CallBlock
+          key={entry.id}
+          block={entry}
+          nodes={nodes}
+          chatAgentName={chatAgentName}
+        />
+      );
+    }
+    if (entry.type === 'subagent-block') {
+      return (
+        <SubagentBlock
           key={entry.id}
           block={entry}
           nodes={nodes}

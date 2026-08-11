@@ -6,6 +6,7 @@ import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { DiffView } from './diff-view';
 import { RunSettledContext } from './live-row';
+import { NestedThreadContext } from './subagent-context';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
   toolCallSummary,
@@ -100,6 +101,7 @@ export const ToolGroup = memo(function ToolGroup({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const runSettled = useContext(RunSettledContext);
+  const nested = useContext(NestedThreadContext);
   // A missing `result` is only evidence of work in flight while the work could
   // still be happening. Two independent things end it, and both are needed:
   // the group's OWN turn ended (`group.closed`), or the whole run has stopped.
@@ -132,8 +134,11 @@ export const ToolGroup = memo(function ToolGroup({
           on screen explaining where they came from. The parent tool call's id
           is not shown — it means nothing to a reader — only the fact of the
           delegation.
+
+          Withheld inside a sub-agent enclosure, whose header already names the
+          delegate: there, every row of the block would repeat it.
         */}
-        {group.parentToolUseId === null ? null : (
+        {group.parentToolUseId === null || nested ? null : (
           <span className="shrink-0 text-muted-foreground/70">sub-agent</span>
         )}
         <span className="truncate">{toolGroupSummary(group.pairs)}</span>

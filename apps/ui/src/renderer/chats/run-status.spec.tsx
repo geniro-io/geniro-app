@@ -51,6 +51,63 @@ describe('displayRunStatus', () => {
     ).toBe('failed');
   });
 
+  it('reports a run whose sub-agent is still working as running, with nothing streaming', () => {
+    // The requirement: while at least one background sub-agent is out, the
+    // thread must read as in progress. `streaming` cannot carry it — the
+    // daemon drops a delegate's deltas from the live tail, so a delegating
+    // turn has nothing streaming while its delegates work, and the run fell
+    // back to its stale `completed` row.
+    expect(
+      displayRunStatus({
+        status: 'completed',
+        streaming: false,
+        awaitingAnswer: false,
+        subagentRunning: true,
+      }),
+    ).toBe('running');
+  });
+
+  it('does not invent liveness from a sub-agent that has reported back', () => {
+    // The other half: the override is conditional on a delegate actually being
+    // in flight, not on the run ever having had one.
+    expect(
+      displayRunStatus({
+        status: 'completed',
+        streaming: false,
+        awaitingAnswer: false,
+        subagentRunning: false,
+      }),
+    ).toBe('completed');
+  });
+
+  it('lets failed and cancelled through even while a sub-agent is still out', () => {
+    // A cancelled run is exactly where a delegate's last rows are still
+    // landing, so the sub-agent signal earns no exception the live plane does
+    // not get.
+    for (const status of ['failed', 'cancelled'] as const) {
+      expect(
+        displayRunStatus({
+          status,
+          streaming: false,
+          awaitingAnswer: false,
+          subagentRunning: true,
+        }),
+      ).toBe(status);
+    }
+  });
+
+  it('an open question still outranks a working sub-agent', () => {
+    // Nothing advances until a human answers, delegates in flight or not.
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: true,
+        awaitingAnswer: true,
+        subagentRunning: true,
+      }),
+    ).toBe('needs-input');
+  });
+
   it('an open question outranks every other signal', () => {
     // The turn IS still open at the daemon while a card waits, so `streaming`
     // and a `running` row both say "busy". Reporting that as running is what

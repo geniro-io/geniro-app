@@ -534,6 +534,51 @@ describe('CursorAcpAdapter — no mid-turn user message', () => {
   });
 });
 
+describe('CursorAcpAdapter — no sub-agent signal', () => {
+  it('declares that it reports none, with the reason beside it', () => {
+    // A CLI with no answer declares that as a fact rather than leaving the
+    // gap to be rediscovered (.claude/rules/agent-adapters.md). Claude
+    // declares `reports: true`, so the two must stay tellable apart by the
+    // DECLARATION rather than by a caller checking which CLI it is.
+    const config = new CursorAcpAdapter().getConfig();
+    expect(config.subagents.reports).toBe(false);
+    expect(config.subagents.unavailableReason).toContain('no sub-agents');
+  });
+
+  it('never stamps a sub-agent origin on an event it emits', () => {
+    // The observable half of the declaration above: nothing on this transport
+    // sets `parentToolUseId`, so the renderer's enclosure has nothing to key
+    // on and a cursor run honestly lists no delegates. If a future ACP variant
+    // starts carrying one, this fails and the declaration gets revisited —
+    // which is the point of pinning it against events rather than the string.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({ spawn }).start({ ...BASE }, (event) =>
+      events.push(event),
+    );
+    handshake(child);
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'working' },
+      }),
+    );
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        title: 'Read a file',
+        rawInput: { path: '/repo/a.ts' },
+      }),
+    );
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.parentToolUseId === undefined)).toBe(
+      true,
+    );
+  });
+});
+
 describe('CursorAcpAdapter misuse', () => {
   it('fails loudly if the stateless mapper path is ever reached', () => {
     // ACP state cannot live on the adapter (one instance serves N concurrent

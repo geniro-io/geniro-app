@@ -332,6 +332,27 @@ export type AgentSkillDtoSourceEnum = typeof AgentSkillDtoSourceEnum[keyof typeo
 /**
  * 
  * @export
+ * @interface AgentSubagentCapability
+ */
+export interface AgentSubagentCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentSubagentCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentSubagentCapability
+     */
+    unavailableReason: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentTerminalCapability
  */
 export interface AgentTerminalCapability {
@@ -451,6 +472,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     followUps: Array<AgentFollowUpCapability>;
+    /**
+     * Per-CLI background sub-agent reporting, one entry per known agent
+     * @type {Array<AgentSubagentCapability>}
+     * @memberof CapabilitiesDto
+     */
+    subagents: Array<AgentSubagentCapability>;
 }
 
 /**

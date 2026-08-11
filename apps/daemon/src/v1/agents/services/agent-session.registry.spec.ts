@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { FakeChild } from '../__tests__/fake-child';
 import type {
+  AdapterConfig,
   AgentEvent,
+  AgentModel,
   AgentSession,
   AgentTurnHandle,
   AgentTurnInput,
 } from '../adapters/adapter.types';
-import type { AgentAdapter } from '../adapters/agent-adapter';
+import { AgentAdapter } from '../adapters/agent-adapter';
+import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import {
   AgentSessionRegistry,
   MAX_LIVE_SESSIONS,
@@ -21,6 +26,13 @@ class FakeSession implements AgentSession {
   turns = 0;
   refuse = false;
   closeThrows = false;
+  /**
+   * Alive but unable to serve a turn. Left false here and set by the one case
+   * that needs it: `refuse` models a session that declines THIS turn (a changed
+   * model, a one-turn CLI), which the registry replaces; `retired` is the
+   * stronger state it must close on sight instead of counting as reusable.
+   */
+  retired = false;
   private settle: (() => void) | null = null;
 
   startTurn(): AgentTurnHandle | null {
@@ -112,6 +124,92 @@ function fakeAdapter(): {
 }
 
 const noop = (_event: AgentEvent): void => {};
+
+/**
+ * A REAL adapter over a synchronous child double, for the cases whose subject
+ * is a session state the double above cannot hold honestly — the sessions it
+ * hands out are `AgentAdapter.startSession`'s own wrapper over the real
+ * `runCliSession` state machine, so what the registry is told about a process is
+ * what production tells it.
+ */
+class SessionfulAdapter extends AgentAdapter {
+  constructor(spawn: SpawnFn) {
+    super({ spawn });
+  }
+
+  protected get command(): string {
+    return 'sessionful-cli';
+  }
+
+  getConfig(): AdapterConfig {
+    return new CursorAcpAdapter().getConfig();
+  }
+
+  protected buildArgs(): string[] {
+    return [];
+  }
+
+  /** This fake CLI's whole result-line vocabulary. */
+  protected mapMessage(obj: unknown): AgentEvent[] {
+    const row = obj as { done?: boolean; failed?: boolean };
+    if (row.done === true) {
+      return [
+        {
+          type: 'turn_complete',
+          usage: null,
+          stopReason: null,
+          finalText: null,
+        },
+      ];
+    }
+    if (row.failed === true) {
+      return [{ type: 'error', message: 'result: is_error' }];
+    }
+    return [];
+  }
+
+  override listModels(): Promise<AgentModel[]> {
+    return Promise.resolve([]);
+  }
+
+  protected override canHostSession(): boolean {
+    return true;
+  }
+
+  protected override buildNextTurnPayload(): string {
+    return 'next\n';
+  }
+
+  /** Every real CLI that hosts a session has one; without it a cancel could
+   * only kill the process group, which is a different case entirely. */
+  protected override buildInterruptPayload(): string {
+    return 'INTERRUPT\n';
+  }
+}
+
+/** One fresh child per spawn, kept in call order for the assertions. */
+function recordingSpawn(): { spawn: SpawnFn; children: FakeChild[] } {
+  const children: FakeChild[] = [];
+  return {
+    children,
+    spawn: () => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as SpawnedProcess;
+    },
+  };
+}
+
+/** Feed one NDJSON line to a real session's child. */
+function feed(child: FakeChild, obj: unknown): void {
+  child.stdout.emitData(`${JSON.stringify(obj)}\n`);
+}
+
+/** Let the registry's own `done.then` bookkeeping land before asserting. */
+async function settleRegistry(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 /**
  * Index into a list the test has just caused to be long enough. `noUncheckedIndexedAccess`
@@ -427,6 +525,56 @@ describe('AgentSessionRegistry — the ceiling', () => {
 
     // Gone from the map, so it occupies no slot and no later turn is handed it.
     expect(registry.liveCount).toBe(0);
+  });
+
+  it('reclaims a stopped chat’s idle process before a warm one the user is still using', async () => {
+    // Driven through the REAL session state machine rather than the double
+    // above, because the state under test only exists inside `spawn-cli`: a
+    // turn that was asked to stop retires its session from reuse WITHOUT
+    // killing the process, so the entry goes on reporting itself alive and idle
+    // while refusing every turn it is offered.
+    //
+    // The registry cannot see that, so the retired process is the LAST thing
+    // its eviction scan considers giving up — it was used most recently. With
+    // three slots, one Stop therefore costs a different chat its warm CLI:
+    // that run respawns and re-boots every MCP server the user's CLI loads,
+    // which is the exact harm `drops a dead session rather than evicting a
+    // live one` was written to remove, reached through a new door.
+    const registry = new AgentSessionRegistry();
+    const { spawn, children } = recordingSpawn();
+    const adapter = new SessionfulAdapter(spawn);
+
+    // Two chats whose turns ended on their own, so both hold a healthy process.
+    for (const runId of ['run-warm', 'run-other']) {
+      const handle = registry.startTurn(runId, adapter, INPUT, noop);
+      feed(at(children, children.length - 1), { done: true });
+      await handle.done;
+      await settleRegistry();
+    }
+    // A third chat where the user pressed Stop. The CLI acknowledges the
+    // interrupt and the turn ends on it; the process is deliberately left
+    // running, so nothing about this entry looks unusable from outside.
+    const stopped = registry.startTurn('run-stopped', adapter, INPUT, noop);
+    stopped.cancel();
+    feed(at(children, 2), { failed: true });
+    await stopped.done;
+    await settleRegistry();
+    expect(at(children, 2).kills).toBe(0);
+    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+
+    // A fourth chat's first message: one slot has to be given back.
+    registry.startTurn('run-new', adapter, INPUT, noop);
+    // …and then the user carries on in the first chat.
+    registry.startTurn('run-warm', adapter, INPUT, noop);
+
+    // The warm chat's CLI was never signalled, so the MCP servers it is holding
+    // up — and anything one of them owns, a logged-in browser included —
+    // survived a Stop pressed in a different chat.
+    expect(at(children, 0).kills).toBe(0);
+    // And the consequence of that, stated where a reader meets it: one spawn per
+    // chat, because the stopped chat's useless process is what paid for the
+    // fourth slot and the warm chat answered on the CLI it already had.
+    expect(children).toHaveLength(4);
   });
 
   it('goes over the ceiling rather than killing a running turn', () => {

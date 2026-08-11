@@ -89,6 +89,9 @@ describe('McpSection — what the CLI loads only for itself', () => {
 
     expect(el.textContent).toContain('No servers');
     expect(el.textContent).toContain(NOTE);
+    // The settled-empty half of the loading/empty pair: `servers: []` with
+    // `loading: false` is the only state that may claim the folder has none.
+    expect(el.textContent).not.toContain('Loading…');
   });
 
   it('renders nothing extra for a CLI that declares no such gap', () => {
@@ -429,6 +432,20 @@ describe('McpSection', () => {
       button!.click();
     });
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('McpSection — an empty listing that is still being dialled', () => {
+  // `servers: []` is what a cold read in progress and a folder with none BOTH
+  // look like on the wire: the daemon answers early with empty rows and
+  // `pending: true` because dialling every server takes seconds. `loading` is
+  // the only thing separating them, so these two cases hold the listing fixed
+  // and vary that alone.
+  it('says the read is in flight rather than claiming the folder has none', () => {
+    const el = render({ listing: listing(), loading: true });
+
+    expect(el.textContent).toContain('Loading…');
+    expect(el.textContent).not.toContain('No servers');
   });
 });
 

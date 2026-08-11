@@ -19,12 +19,24 @@ const COMPLETE: AgentEvent = {
  * into an error — the two shapes a real `result` line reduces to.
  */
 const resultOnDone = (obj: unknown): AgentEvent[] => {
-  const row = obj as { done?: boolean; failed?: boolean };
+  const row = obj as { done?: boolean; failed?: boolean; tool?: string };
   if (row.done === true) {
     return [COMPLETE];
   }
   if (row.failed === true) {
     return [{ type: 'error', message: 'result: is_error' }];
+  }
+  // A non-terminal line, for the cases that care where mid-turn output lands.
+  if (typeof row.tool === 'string') {
+    return [
+      {
+        type: 'tool_result',
+        id: row.tool,
+        name: null,
+        result: 'ok',
+        isError: false,
+      },
+    ];
   }
   return [];
 };
@@ -32,6 +44,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
 function openSession(
   child?: Parameters<typeof fakeSpawn>[0],
   logger?: SessionLogger,
+  onBetweenTurnEvent?: (event: AgentEvent) => void,
 ) {
   const { spawn, child: c, captured } = fakeSpawn(child);
   const session = runCliSession({
@@ -42,6 +55,7 @@ function openSession(
     mapper: resultOnDone,
     spawn,
     logger,
+    onBetweenTurnEvent,
   });
   return { session, child: c, captured };
 }
@@ -364,6 +378,70 @@ describe('cancelling a session turn', () => {
     expect(events).toEqual([{ type: 'turn_cancelled' }]);
     expect(child.kills).toBe(0);
     expect(session.alive).toBe(true);
+  });
+
+  it('refuses the NEXT turn, because the cancelled one may still be talking', async () => {
+    // The defect this pins: a stream-json line carries no turn id, so `emit`
+    // can only ask which turn is open NOW. After a Stop the CLI keeps printing
+    // the rest of the cancelled turn, and every one of those lines was read as
+    // the next turn's output — a trailing `result` settled that turn the
+    // instant it opened, so the user's next message got no answer at all.
+    //
+    // Refusing here is what the registry turns into "replace this session", and
+    // it costs the process nothing: the assertions above still hold, so Stop
+    // has not killed anyone's MCP servers.
+    const { session, child } = openSession();
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildInterruptPayload: () => 'INTERRUPT\n',
+    });
+
+    first?.cancel();
+    line(child, { failed: true });
+    await first?.done;
+
+    expect(session.startTurn({ onEvent: () => {} })).toBeNull();
+    // Retired from REUSE only — the process is untouched and still reapable by
+    // the idle window rather than by a kill.
+    expect(child.kills).toBe(0);
+    expect(session.alive).toBe(true);
+  });
+
+  it('sends the cancelled turn’s STRAGGLERS to the between-turn path, not to a turn', async () => {
+    // The defect itself, rather than the guard that prevents it. Retiring the
+    // session is only half the fix: the tail still arrives, and where it lands
+    // is what the user saw — a terminal line settling their next message
+    // instantly, and text rendering under a message sent after it. With no turn
+    // open it must reach `onBetweenTurnEvent`, which is where the run persists
+    // it as its own late row.
+    const betweenTurns: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (event) =>
+      betweenTurns.push(event),
+    );
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildInterruptPayload: () => 'INTERRUPT\n',
+    });
+
+    first?.cancel();
+    line(child, { failed: true });
+    await first?.done;
+
+    // The CLI keeps talking after the settle — including a terminal line, the
+    // one that used to end the next turn on arrival.
+    line(child, { tool: 't1' });
+    line(child, { done: true });
+
+    expect(betweenTurns).toEqual([
+      {
+        type: 'tool_result',
+        id: 't1',
+        name: null,
+        result: 'ok',
+        isError: false,
+      },
+      COMPLETE,
+    ]);
   });
 
   it('kills the group when the CLI has no interrupt to send', () => {

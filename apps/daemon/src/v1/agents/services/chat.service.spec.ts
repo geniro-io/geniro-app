@@ -227,6 +227,12 @@ function fakeAdapter(kind: AgentKind): {
       toolName: string;
       requiresUserInteraction?: boolean;
     }) => boolean | null;
+    /**
+     * Where the session sends an event it produced with no turn in flight —
+     * the only path a spec can drive to play a run-scoped CLI still finishing
+     * a turn that has already settled.
+     */
+    onBetweenTurnEvent?: (event: AgentEvent) => void;
   }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
@@ -278,6 +284,11 @@ function fakeAdapter(kind: AgentKind): {
       toolName: string;
       requiresUserInteraction?: boolean;
     }) => boolean | null;
+    /**
+     * Captured so a spec can play the one thing only a run-scoped process can
+     * do: emit AFTER its turn settled. Nothing else can reach that path.
+     */
+    onBetweenTurnEvent?: (event: AgentEvent) => void;
   }[] = [];
   const startSession = vi.fn(
     (
@@ -287,11 +298,13 @@ function fakeAdapter(kind: AgentKind): {
           toolName: string;
           requiresUserInteraction?: boolean;
         }) => boolean | null;
+        onBetweenTurnEvent?: (event: AgentEvent) => void;
       } = {},
     ) => {
       const record = {
         closed: false,
         betweenTurnApproval: opts.betweenTurnApproval,
+        onBetweenTurnEvent: opts.onBetweenTurnEvent,
       };
       sessions.push(record);
       let inFlight = 0;
@@ -2479,6 +2492,70 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect((await runDao.getById(run.id))?.status).toBe('cancelled');
     // …and the transcript gets its terminal item, so it does not dangle.
     expect(itemDao.items.map((i) => i.kind)).toContain('turn_cancelled');
+  });
+
+  it('persists BOTH halves of a tool call that arrives after its turn settled', async () => {
+    // A run-scoped CLI keeps talking after a turn ends — most visibly after a
+    // Stop. Only the RESULT half used to be persisted, on the argument that it
+    // "lands on a row already on the transcript". That is false when the CALL
+    // arrived between turns too and was dropped by the same filter: the
+    // renderer then has a result with no call to pair it with, and draws it as
+    // its own top-level row. That is what a user reported as strange messages
+    // appearing after a cancel — a bare RESULT block holding raw tool output.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    expect(emit).toBeTypeOf('function');
+    emit?.({ type: 'tool_call', id: 'call-1', name: 'WebSearch', input: {} });
+    emit?.({
+      type: 'tool_result',
+      id: 'call-1',
+      name: 'WebSearch',
+      result: 'searched',
+      isError: false,
+    });
+    await drain();
+
+    // ORDER and the shared id, not merely presence: `transcript-groups` pairs
+    // in one forward pass keyed on the call id, so a result persisted ahead of
+    // its call is still an orphan row. An order-blind assertion here would go
+    // green on the very bug this test exists for.
+    const pair = itemDao.items.filter(
+      (i) => i.kind === 'tool_call' || i.kind === 'tool_result',
+    );
+    expect(pair.map((i) => i.kind)).toEqual(['tool_call', 'tool_result']);
+    expect(
+      pair.map((i) => (JSON.parse(i.payload) as { id?: string }).id),
+    ).toEqual(['call-1', 'call-1']);
+  });
+
+  it('still drops a between-turn event that has nothing to anchor it', async () => {
+    // The narrowness is the safety argument: a stray message or delta carries
+    // no id pairing it to anything, and filing one turn's words under another's
+    // is worse than dropping them. This is the assertion that fails if the
+    // filter is ever widened to "persist whatever arrives".
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text',
+      text: 'a stray sentence from the turn that was stopped',
+    });
+    await drain();
+
+    expect(itemDao.items).toHaveLength(before);
   });
 
   it('leaves a settled run alone — cancel is not a way to reopen it', async () => {

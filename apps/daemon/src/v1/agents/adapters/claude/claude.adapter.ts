@@ -265,6 +265,11 @@ export class ClaudeAdapter extends AgentAdapter {
          * pointed at an empty directory wrote its whole profile there and
          * reported "Not logged in", which is what makes a second directory a
          * second account.
+         *
+         * This var is ALSO named in `utils/child-env.ts`'s stripped set, so an
+         * ambient one cannot select a profile for a run that named none; that
+         * set has to be the union over every CLI, which is why the name appears
+         * in both places. Keep them in step.
          */
         envVar: CLAUDE_CONFIG_DIR_ENV,
         unavailableReason: null,

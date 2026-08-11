@@ -286,6 +286,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     for (const [runId, entry] of [...this.entries]) {
       if (!entry.session.alive) {
         this.closeEntry(runId, entry, 'its process was already gone');
+      } else if (entry.session.retired) {
+        // Alive, idle, and unable to serve a turn — the state a cancelled (or
+        // deadline-ended) turn leaves behind. It has to be dropped HERE and not
+        // merely skipped: its `lastUsedAt` was just refreshed, so it is the
+        // NEWEST entry, and the loop below would keep it and close a genuinely
+        // reusable session instead — re-booting that run's MCP servers to make
+        // room for a process nothing can use.
+        this.closeEntry(runId, entry, 'it can no longer serve a turn');
       }
     }
     while (this.entries.size >= MAX_LIVE_SESSIONS) {

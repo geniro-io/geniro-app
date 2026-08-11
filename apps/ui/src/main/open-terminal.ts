@@ -18,6 +18,15 @@ import { join } from 'node:path';
  * world-readable in a shared temp dir. It is left behind on purpose — the
  * terminal reads it asynchronously, and deleting it on a timer would be a race
  * against a slow app launch for a few hundred bytes.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/handoff/utils/shell-line.ts` `shellLine`
+ * renders the SAME `HandoffTarget` (command + args + env) as the one pasteable
+ * line the button shows on hover. Two renderings of one invocation, in two apps
+ * that share no code, so a change to what env a target carries must land on
+ * both. They differ in exactly one respect, deliberately: a pasted line uses
+ * the `NAME=value cmd …` prefix form, while this script must export ahead of
+ * its `exec` (see the exec comment below). Adding a field here without adding
+ * it there ships a button and a copyable line that do different things.
  */
 export async function openInTerminal(input: {
   command: string;
@@ -26,8 +35,8 @@ export async function openInTerminal(input: {
   /**
    * Env the invocation needs — today the run's config directory, which decides
    * which ACCOUNT the reopened conversation belongs to and has no argv form.
-   * Written as a prefix assignment on the exec line, so it applies to the CLI
-   * and dies with it.
+   * Exported in the script ahead of the exec, so it reaches the CLI and dies
+   * with the window.
    */
   env?: Record<string, string>;
 }): Promise<void> {
@@ -37,19 +46,27 @@ export async function openInTerminal(input: {
   const dir = mkdtempSync(join(tmpdir(), 'geniro-open-'));
   const script = join(dir, 'continue-in-cli.command');
   // `exec` so the shell becomes the CLI: closing the CLI closes the window's
-  // process rather than dropping the user at a stray prompt. The line itself
-  // is quoted by the daemon, which is also what the user sees and can copy.
-  // Sorted for the same reason the daemon's `shellLine` sorts: one target must
-  // always render the same script. Only the value is quoted — an assignment is
-  // not an argument, and re-quoting it would make the shell hunt for a command
-  // named `NAME=value`.
-  const assignments = Object.entries(input.env ?? {})
+  // process rather than dropping the user at a stray prompt.
+  //
+  // Each variable gets its own assignment + `export` LINE, ahead of the exec —
+  // NOT the `NAME=value cmd …` prefix form the daemon's `shellLine` twin
+  // renders. A shell recognizes assignments only ahead of a simple command's
+  // FIRST word, and here that word is `exec`, so `exec NAME=value cmd` hands
+  // `NAME=value` to exec as the program to run; containing a `/`, it is then
+  // resolved as a path, and the window dies on
+  // `<cwd>/NAME=value: No such file or directory`. The twin is correct because
+  // a pasted line has no `exec` in front of it.
+  //
+  // Sorted for the reason `shellLine` sorts: one target must always render the
+  // same script. Only the value is quoted — a name is an identifier, and
+  // quoting the pair would assign to nothing.
+  const exportLines = Object.entries(input.env ?? {})
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, value]) => `${name}=${quote(value)} `)
+    .map(([name, value]) => `${name}=${quote(value)}\nexport ${name}\n`)
     .join('');
   writeFileSync(
     script,
-    `#!/bin/sh\ncd ${quote(input.cwd)} || exit 1\nexec ${assignments}${[input.command, ...input.args].map(quote).join(' ')}\n`,
+    `#!/bin/sh\ncd ${quote(input.cwd)} || exit 1\n${exportLines}exec ${[input.command, ...input.args].map(quote).join(' ')}\n`,
     { mode: 0o700 },
   );
   chmodSync(script, 0o700);

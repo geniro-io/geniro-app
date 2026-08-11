@@ -210,12 +210,14 @@ export class CursorAcpAdapter extends AgentAdapter {
          * from the CLI's own `mcp --help`. Inline rather than named, per this
          * adapter's rule: `getConfig()` is its only reader.
          *
-         * Declared even though no cursor row can carry `needs_auth` today —
-         * `parseCursorMcpList` knows `ready` / `Error:` / `not loaded` /
-         * `disabled` and nothing that names authentication, and inventing a
-         * marker for wording never observed is how a parser silently matches
-         * nothing. The capability is real and stated here; the row that would
-         * offer it appears when the CLI's listing starts reporting one.
+         * The row this serves now exists. When this was written no cursor row
+         * could carry `needs_auth` — the parser knew `ready` / `Error:` /
+         * `not loaded` / `disabled` and nothing naming authentication, and a
+         * marker invented for unobserved wording is how a parser silently
+         * matches nothing. On 2026-08-11, against 2026.08.04-aaa8809, a real
+         * listing printed `requires_authentication` on eight of eleven servers;
+         * {@link CURSOR_MCP_NEEDS_AUTH_MARKER} carries that capture and the
+         * parser maps it, so this sign-in is reachable rather than latent.
          */
         loginArgs: ['mcp', 'login'],
         loginUnavailableReason: null,
@@ -296,6 +298,35 @@ export class CursorAcpAdapter extends AgentAdapter {
        *
        * So the button must be refused rather than wired: it would look like it
        * worked and drop the user into a blank conversation.
+       *
+       * RE-VERIFIED 2026-08-11 against 2026.08.04-aaa8809, because a user asked
+       * for exactly this button and a sibling claim in this same config (that
+       * ACP carries no per-session model) had been refuted by a later probe. It
+       * held, and now has a mechanism rather than an observation:
+       *
+       * - THREE stores, built by two path helpers in the shipped bundle:
+       *   `chats/<md5(abs cwd)>/<uuid>/store.db` (what `--resume` reads),
+       *   `acp-sessions/<uuid>/store.db` (what ACP writes, referenced only by
+       *   the ACP module), and the IDE's own `state.vscdb`.
+       * - `md5` of this repo's path resolves to a `chats/` directory that
+       *   EXISTS AND IS EMPTY while `~/.cursor/acp-sessions/` holds nine
+       *   sessions naming that same cwd. That is precisely why `--resume`
+       *   opened a blank chat: it looks somewhere ACP never writes.
+       * - Cross-store id joins: 23 ACP ids and 2556 CLI chat ids against the
+       *   IDE's 708 `composerHeaders` rows — zero matches either way. Ids are
+       *   UUIDs in all three, so the separation is the STORE, never the format.
+       * - `Cursor.app` declares one URL scheme (`cursor`) and no route targets a
+       *   thread by id; `/prompt?text=` opens a NEW chat. A per-agent web URL
+       *   (`cursor.com/agents/bc-…`) is minted only for `kind === "cloud"`, and
+       *   a local run has no `bc-…` id to put in it.
+       * - Cursor staff, 2026-07-13, naming the paths: "no common stable session
+       *   id and no IDE to CLI bridge for `--resume`."
+       *
+       * Re-check when either of two specific things changes, not on the general
+       * "it's on our radar": a `cli`/`acp` member appearing in the IDE's
+       * `conversation-search` `source` union, or a `bc-…` id being minted for a
+       * local run — which would make the existing `background-agent?bcId=`
+       * deeplink template suddenly applicable.
        */
       handoff: {
         kind: 'unavailable',

@@ -251,6 +251,13 @@ export interface CliSession {
   readonly idle: boolean;
   /** The process has not been observed to end. */
   readonly alive: boolean;
+  /**
+   * Alive, but `startTurn` will refuse every further turn — the last turn was
+   * ended for the CLI rather than by it, so this process may still print that
+   * turn's tail. The owner closes such an entry instead of counting it as a
+   * reusable one.
+   */
+  readonly retired: boolean;
   /** Terminate the process group (the CLI plus every grandchild). */
   close(): void;
   /** Resolves once the process is gone. Never rejects. */
@@ -454,6 +461,39 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   let processExited = false;
   let stdinEnded = false;
+  /**
+   * A cancelled turn ended, and this process may still print the rest of it.
+   *
+   * Set when a turn that was asked to stop settles, and never cleared: the
+   * session is retired from REUSE, so a straggler can only ever arrive with no
+   * turn open and reach {@link handleOrphanEvent}.
+   *
+   * WHAT THIS COSTS, stated plainly because it is a real regression against the
+   * kept-session feature: `startTurn` refusing is read by
+   * `AgentSessionRegistry` as "close and replace", so the NEXT message after a
+   * Stop pays a full respawn — the user's MCP servers go down and boot again
+   * (measured at 6.5s for ten servers on claude 2.1.223). Stop alone costs
+   * nothing: the process stays alive and idle, and if the chat is never
+   * continued only the idle window reaps it. So this defers the group kill that
+   * `cancel` below refuses to do, rather than avoiding it.
+   *
+   * Why that trade and not the cheaper drain. Routing late events to the orphan
+   * path while KEEPING the session reusable is the version that would cost
+   * nothing, and it needs a way to know the tail has ended. There is none on
+   * this wire: a stream-json line carries no turn id, so once a second turn is
+   * open, `emit` cannot tell that turn's own output from the previous one's
+   * tail — and guessing wrong in that direction is worse than a respawn,
+   * because it silently answers the user's new message with the old turn's
+   * result. Bounding the drain by time instead would need a grace nobody has
+   * measured AND a registry that waits rather than replaces. Both are open
+   * options; neither is free, and correctness came first here.
+   *
+   * The defect this replaced, for the record: after a Stop the cancelled turn's
+   * trailing `result` line settled the NEXT turn the moment it opened (a
+   * message that got no answer at all), and its closing text was persisted with
+   * the new turn's seq, so it rendered underneath a message sent after it.
+   */
+  let cancelledTurnMayStillEmit = false;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -483,15 +523,41 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (current === turn) {
       current = null;
     }
+    // Asked to stop — see {@link cancelledTurnMayStillEmit}.
+    //
+    // Keyed on the cancel alone, NOT on the broader "did not end by itself".
+    // The silence deadline settles a turn the same way and leaves the same tail
+    // coming, so it shares this defect — but the deadline path deliberately
+    // keeps the process reusable ("Only the turn was given up on, so the next
+    // one still reuses it", pinned in `spawn-cli.session.spec.ts`), and
+    // retiring there would reverse that decision and make a >30-minute tool
+    // call cost a respawn. That reversal is a separate call to make with
+    // evidence, not a side effect of this fix.
+    const retiring = turn.cancelRequested;
+    if (retiring) {
+      cancelledTurnMayStillEmit = true;
+    }
     // Anything this turn was shown but never answered goes back on the hold
     // buffer, ahead of whatever arrived later, so the next turn offers it
     // again. The CLI is still blocked on it either way; the only question is
     // whether it can ever be reached again.
+    //
+    // Which is exactly why a RETIRING settle must not say that: this session
+    // will serve no next turn, and `pendingApprovals` is drained nowhere else,
+    // so re-holding would park the request where nothing can reach it while the
+    // log claimed it had been re-offered. Say it is abandoned instead — the
+    // process is replaced on the next message, which is what unblocks the CLI.
     if (turn.outstanding.size > 0) {
-      pendingApprovals.unshift(...turn.outstanding.values());
-      opts.logger?.warn(
-        `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn settled — re-held for the next turn`,
-      );
+      if (retiring) {
+        opts.logger?.warn(
+          `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn was ended — abandoned with the session, which will not serve another turn`,
+        );
+      } else {
+        pendingApprovals.unshift(...turn.outstanding.values());
+        opts.logger?.warn(
+          `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn settled — re-held for the next turn`,
+        );
+      }
       turn.outstanding.clear();
     }
     // The map only ever times a WITHIN-turn round trip, so nothing in it can
@@ -981,7 +1047,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   const killGroup = (): void => terminator.terminate();
 
   const startTurn = (turnOptions: CliTurnOptions): AgentTurnHandle | null => {
-    if (processGone || processExited || stdinEnded || current !== null) {
+    if (
+      processGone ||
+      processExited ||
+      stdinEnded ||
+      current !== null ||
+      cancelledTurnMayStillEmit
+    ) {
       return null;
     }
     let resolveDone!: () => void;
@@ -1147,6 +1219,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get alive() {
       return !processGone && !processExited;
     },
+    /**
+     * This process will serve no further turn, though it is still running.
+     *
+     * Separate from `idle` on purpose, and it must stay that way: every reader
+     * treats a NON-idle entry as BUSY, so folding retirement into `idle` would
+     * stop the idle timer reaping it (`AgentSessionRegistry.arm`) while
+     * `evictIfFull` went on counting it against the ceiling — the same
+     * inversion the dead-session sweep exists to prevent, which its own doc
+     * block spells out. The owner drops a retired entry in that same sweep.
+     */
+    get retired() {
+      return cancelledTurnMayStillEmit;
+    },
     close: () => {
       if (processGone) {
         return;
@@ -1185,6 +1270,10 @@ function deadSession(message: string): CliSession {
     },
     idle: false,
     alive: false,
+    // Not retired but DEAD, and the distinction matters to the holder: a
+    // retired session is a live process to close, while this one has no process
+    // at all. `alive: false` is what gets this entry dropped.
+    retired: false,
     close: () => {},
     closed: Promise.resolve(),
   };

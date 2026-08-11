@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+
 import { describe, expect, it } from 'vitest';
 
 import { shellLine } from './shell-line';
@@ -48,6 +50,25 @@ describe('shellLine', () => {
         CLAUDE_CONFIG_DIR: '/profiles/work',
       }),
     ).toBe('CLAUDE_CONFIG_DIR=/profiles/work claude --resume sess-1');
+  });
+
+  it('renders a line a real shell runs, with the env reaching the command', () => {
+    // Every other case here asserts the STRING, which is what let this line's
+    // Electron twin (`apps/ui/src/main/open-terminal.ts`) ship a rendering no
+    // shell could run: `exec NAME=value cmd` makes the shell resolve
+    // `NAME=value` as the program. Text equality cannot catch that class of
+    // bug, so the twin's spec runs its script — and this side, which is meant
+    // to be PASTED into a shell, gets the same treatment for the same reason.
+    const line = shellLine(
+      '/bin/sh',
+      ['-c', 'printf %s "$CLAUDE_CONFIG_DIR"'],
+      { CLAUDE_CONFIG_DIR: '/profiles/with a space' },
+    );
+
+    const run = spawnSync('/bin/sh', ['-c', line], { encoding: 'utf8' });
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe('/profiles/with a space');
   });
 
   it('quotes the VALUE of an assignment without re-quoting the assignment', () => {

@@ -7,8 +7,11 @@ const TOUCHED = [
   'GENIRO_CURSOR_API_KEY',
   'CURSOR_API_KEY',
   'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CONFIG_DIR',
   'ANTHROPIC_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_CUSTOM_HEADERS',
   'CHILD_ENV_SPEC_PLAIN',
 ] as const;
 
@@ -36,6 +39,29 @@ describe('buildChildEnv', () => {
     process.env.CLAUDE_CODE_SESSION_ID = 'outer-session';
 
     expect(buildChildEnv().CLAUDE_CODE_SESSION_ID).toBeUndefined();
+  });
+
+  it('strips an inherited claude config directory, so a chat keeps its OWN profile', () => {
+    // The daemon may be launched from a shell that chose a profile for itself.
+    // A chat's config directory is part of the run's identity — picked in the UI
+    // and stored on the run row — so inheriting this made a chat that named
+    // NONE run under a different account, resuming a session id that is not in
+    // that profile's store at all.
+    process.env.CLAUDE_CONFIG_DIR = '/Users/someone/.claude-other-profile';
+
+    expect(buildChildEnv().CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
+  it('still lets the run’s OWN config directory through as extra', () => {
+    // The other direction: stripping must not disarm the feature. The adapter
+    // passes the run's directory as `extra`, which wins over the stripped
+    // inheritance — this is the assertion that fails if the key is stripped
+    // AFTER the merge instead of before it.
+    process.env.CLAUDE_CONFIG_DIR = '/Users/someone/.claude-other-profile';
+
+    const env = buildChildEnv({ CLAUDE_CONFIG_DIR: '/runs/own-profile' });
+
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/runs/own-profile');
   });
 
   it('merges extra over the stripped env (single-secret re-injection)', () => {

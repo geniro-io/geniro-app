@@ -632,6 +632,49 @@ class SessionWithoutModeChangeAdapter extends AgentAdapter {
   // message, which is exactly what the refusal below is about.
 }
 
+/** The same fake CLI, plus the in-protocol stop a real one answers. */
+class InterruptibleSessionAdapter extends SessionWithoutModeChangeAdapter {
+  protected override buildInterruptPayload(): string {
+    return 'INTERRUPT\n';
+  }
+}
+
+describe('AgentAdapter reports a session that will serve no further turn', () => {
+  it('passes the retirement of a stopped turn out to the session’s owner', async () => {
+    // A cancelled turn leaves the process RUNNING — pressing Stop must not take
+    // the user's MCP servers down with the turn — but unable to serve another,
+    // because it may still be printing the tail of the one that was stopped and
+    // a stream-json line carries no turn id to tell that tail apart.
+    //
+    // Whoever holds the session is the only thing that can reclaim it, and it
+    // has nothing else to go on: the process is alive and no turn is in flight,
+    // so `alive` and `idle` both read exactly as a healthy reusable session's
+    // do. A retirement the wrapper does not pass on is a retirement the owner
+    // cannot act on — it counts the process against its ceiling and gives up a
+    // genuinely warm session elsewhere to stay under it.
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = { prompt: 'first', cwd: '/proj' };
+    const session = new InterruptibleSessionAdapter(spawn).startSession(input, {
+      runScoped: true,
+    });
+
+    const turn = session.startTurn(input, () => {});
+    turn?.cancel();
+    // The CLI acknowledges the interrupt and ends the turn on it, rather than
+    // being killed — which is the whole state under test.
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+
+    expect(session.alive).toBe(true);
+    expect(session.startTurn(input, () => {})).toBeNull();
+    // Read off the declared session contract, deliberately: this is the answer
+    // `AgentSessionRegistry.evictIfFull` acts on, and a session that keeps it to
+    // itself reads `undefined` there — the sweep then never fires and the
+    // ceiling is paid for by a reusable session instead.
+    expect(session.retired).toBe(true);
+  });
+});
+
 describe('AgentAdapter re-modes a session it can, and refuses one it cannot', () => {
   it('refuses a turn whose mode the running process cannot be told about', async () => {
     // Silently accepting would run the turn under the mode the PREVIOUS one

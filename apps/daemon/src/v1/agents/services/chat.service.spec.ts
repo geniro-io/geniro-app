@@ -1717,7 +1717,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
-  it('sendMessage passes the run row mode to the adapter; a legacy null row passes none', async () => {
+  it("sendMessage passes the run row mode to the adapter; a legacy null row runs as 'ask'", async () => {
     const { service, claude, runDao } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -1731,7 +1731,12 @@ describe('ChatService — approval modes (parity M1)', () => {
     claude.finish();
     await drain();
 
-    // A pre-selector row (approval null) keeps the exact legacy spawn.
+    // A pre-selector row (approval null) used to pass `undefined`, which
+    // spawns the CLI with no permission flag and inherits ITS default. That
+    // default moved: probed on claude 2.1.227, a headless turn with no flag
+    // reports `permissionMode: "auto"`. So the old behaviour silently turned
+    // an unattended-approval posture on for every legacy chat, decided by the
+    // vendor. `undefined` here is the regression.
     const legacy = await runDao.create({
       workflowId: null,
       status: 'pending',
@@ -1742,7 +1747,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     await service.sendMessage(legacy.id, 'hi');
     expect(
       (claude.start.mock.calls[1]![0] as AgentTurnInput).approvalMode,
-    ).toBeUndefined();
+    ).toBe('ask');
     claude.finish();
     await drain();
   });

@@ -701,8 +701,25 @@ export class ChatService {
       // for a PATCH that deliberately cleared it back to the CLI default.
       const settings =
         (await this.runDao.getById(runId, this.em.fork())) ?? run;
-      let approvalMode: ChatApprovalMode | undefined =
-        settings.approval ?? undefined;
+      // A null `approval` is a chat row created before the mode selector
+      // existed. It used to ride through as `undefined`, which spawns the CLI
+      // with no permission flag at all and inherits whatever that CLI defaults
+      // to — safe while claude's default was "ask about everything", and no
+      // longer: probed on 2.1.227, a headless turn with no flag now reports
+      // `permissionMode: "auto"`, the new default Anthropic is rolling out.
+      // So an old chat would have started approving every tool call
+      // unattended, on a decision the vendor made and the user never saw.
+      //
+      // Resolved HERE rather than in the adapter because this is the layer
+      // that knows what a null row MEANS. The same undefined reaching an
+      // adapter from a geniro-internal probe turn means something else
+      // entirely, and pinning it there would put a permission dialogue on
+      // turns that exist only to read one `system/init` line.
+      //
+      // `ask` is the answer because "the user never chose a posture" and "do
+      // not act unattended" are the same statement.
+      const approvalDefault: ChatApprovalMode = 'ask';
+      let approvalMode: ChatApprovalMode = settings.approval ?? approvalDefault;
       this.runPosture.set(runId, approvalMode);
       /**
        * Whether the daemon answers this tool's permission itself, without a
@@ -758,31 +775,29 @@ export class ChatService {
       // executor uses for a node, so a fix here cannot miss that path. The
       // probe is awaited only for a mode whose support is empirical, so a turn
       // that never asks for one never pays for it.
-      if (approvalMode !== undefined) {
-        const resolved = adapter.resolveApprovalMode(
-          approvalMode,
-          // The ADAPTER reads its own slice of the capability bag; this
-          // service only assembles the bag from the probes it holds. Reading
-          // claude's field here instead would judge any future CLI with a
-          // probed mode against claude's installed binary.
-          adapter.getConfig().approval.probedModes.includes(approvalMode)
-            ? adapter.approvalSupportFrom({
-                claudeModes: await this.claudeModesSafe(),
-              })
-            : { supported: {} },
+      const resolved = adapter.resolveApprovalMode(
+        approvalMode,
+        // The ADAPTER reads its own slice of the capability bag; this
+        // service only assembles the bag from the probes it holds. Reading
+        // claude's field here instead would judge any future CLI with a
+        // probed mode against claude's installed binary.
+        adapter.getConfig().approval.probedModes.includes(approvalMode)
+          ? adapter.approvalSupportFrom({
+              claudeModes: await this.claudeModesSafe(),
+            })
+          : { supported: {} },
+      );
+      if (resolved.degradeReason !== null) {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          'system',
+          null,
+          { message: resolved.degradeReason },
         );
-        if (resolved.degradeReason !== null) {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'system',
-            null,
-            { message: resolved.degradeReason },
-          );
-        }
-        approvalMode = resolved.mode;
       }
+      approvalMode = resolved.mode;
 
       const node = await this.nodeStateDao.getByRunNode(
         runId,

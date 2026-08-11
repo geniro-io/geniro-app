@@ -35,6 +35,7 @@ import {
 import {
   acpOffersModel,
   readAcpCurrentModelId,
+  readAcpModelConfigId,
   readAcpModels,
 } from './acp-models';
 
@@ -44,6 +45,43 @@ type PendingKind =
 
 /** A permission verdict this turn can reach without asking the user. */
 export type AutoDecision = 'allow' | 'deny' | null;
+
+/**
+ * How ONE agent asks the USER an open-ended question over its own extension
+ * method, since baseline ACP has no such call.
+ *
+ * Supplied by the adapter, never known here: this file is the agent-agnostic
+ * protocol client, and the method name, the params shape and the reply shape
+ * are all that CLI's own facts. What the driver owns is the LIFECYCLE — park
+ * the JSON-RPC id, surface an `approval_request` the daemon's question seam
+ * recognises, and answer with the encoder below when a verdict arrives. That
+ * split is what lets a second agent's question channel be four values rather
+ * than another branch in here.
+ *
+ * An adapter that declares none keeps the old behaviour: the request is
+ * declined in-protocol with `-32601`, which is still the right answer for
+ * every OTHER vendor extension.
+ */
+export interface AcpQuestionProtocol {
+  /** The agent→client method that carries a question for the user. */
+  method: string;
+  /**
+   * The name this question is surfaced under — the adapter's own
+   * `questionToolName`, which is the ONE discriminator the daemon keys "render
+   * a question card" and "never auto-answer this" on. Passing anything else
+   * here would surface the question as an ordinary permission request.
+   */
+  toolName: string;
+  /**
+   * Whether these params READ as a question. False falls through to the
+   * decline path, deliberately: this contract is documented rather than
+   * observed live, so a shape that has drifted costs today's behaviour and
+   * nothing more — never a turn parked on a card the user cannot answer.
+   */
+  accepts(params: unknown): boolean;
+  /** The JSON-RPC result answering it, given the card's verdict. */
+  encodeReply(params: unknown, allow: boolean, updatedInput: unknown): unknown;
+}
 
 export interface AcpDriverOptions {
   /** The turn being driven — prompt, cwd, resume id, MCP endpoint. */
@@ -59,6 +97,8 @@ export interface AcpDriverOptions {
   autoDecide: (toolCall: AcpToolCall) => AutoDecision;
   /** Session mode to request after the session exists, when the agent offers it. */
   preferredModeId?: string | null;
+  /** How this agent asks the user a question, or absent when it cannot. */
+  question?: AcpQuestionProtocol;
   /**
    * The turn's instruction text, given whether the call tools were registered.
    * Supplied by the adapter so the include-the-callee-block rule stays owned
@@ -216,6 +256,13 @@ export class AcpTurnDriver implements TurnDriver {
   private readonly toolInputs = new Map<string, unknown>();
   /** Options offered per parked permission request, keyed by encoded id. */
   private readonly parkedPermissions = new Map<string, AcpPermissionOption[]>();
+  /**
+   * Params of each parked QUESTION, keyed by encoded id. A separate map from
+   * the permissions above, and not merely for the payload: which map an id is
+   * in is what picks the reply encoder, so a question can never be answered
+   * with a permission outcome the agent would reject.
+   */
+  private readonly parkedQuestions = new Map<string, unknown>();
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
   /**
@@ -286,17 +333,32 @@ export class AcpTurnDriver implements TurnDriver {
   }
 
   /**
-   * Encode a verdict for a parked `session/request_permission`. `updatedInput`
-   * is ignored: ACP's permission outcome carries an option choice only, with no
-   * channel for a modified tool input (claude's `updatedInput` free-text answer
-   * has no ACP counterpart).
+   * Encode a verdict for a parked agent request.
+   *
+   * For a `session/request_permission`, `updatedInput` is ignored: ACP's
+   * permission outcome carries an option choice only, with no channel for a
+   * modified tool input. For a parked QUESTION it is the whole payload — the
+   * card's answer folded in by the adapter's `withAnswer` — and the adapter's
+   * own encoder turns it into that agent's reply shape.
    */
   buildApprovalResponse(
     id: string,
     allow: boolean,
-    _updatedInput?: unknown,
+    updatedInput?: unknown,
   ): string | undefined {
     const requestId = decodeRequestId(id);
+    if (this.parkedQuestions.has(id)) {
+      const params = this.parkedQuestions.get(id);
+      this.parkedQuestions.delete(id);
+      const question = this.options.question;
+      if (requestId === null || question === undefined) {
+        return undefined;
+      }
+      return encodeResult(
+        requestId,
+        question.encodeReply(params, allow, updatedInput),
+      );
+    }
     const options = this.parkedPermissions.get(id);
     if (requestId === null || options === undefined) {
       return undefined;
@@ -603,6 +665,23 @@ export class AcpTurnDriver implements TurnDriver {
       return;
     }
     this.requestedModelId = wanted;
+    // ACP 1.0 replaced `session/set_model` with the general
+    // `session/set_config_option`. Which one this agent gets is decided by
+    // whether IT enumerated a model config option, not by its version string —
+    // an agent that listed its models there implements the method that sets
+    // them. Both replies route to the same `set_model` pending kind: the
+    // operation the user asked for is "put this turn on that model", and the
+    // degrade notice owes them that sentence whichever frame carried it.
+    const configId = readAcpModelConfigId(sessionResult);
+    if (configId !== null) {
+      this.request(
+        ACP_AGENT_METHODS.sessionSetConfigOption,
+        { sessionId: this.sessionId, configId, value: wanted },
+        'set_model',
+        events,
+      );
+      return;
+    }
     this.request(
       ACP_AGENT_METHODS.sessionSetModel,
       { sessionId: this.sessionId, modelId: wanted },
@@ -820,9 +899,25 @@ export class AcpTurnDriver implements TurnDriver {
     if (method === ACP_CLIENT_METHODS.sessionRequestPermission) {
       return this.onPermissionRequest(id, params);
     }
+    const question = this.options.question;
+    if (question !== undefined && method === question.method) {
+      // The agent is asking the USER something. Declining this one is not a
+      // neutral refusal like the others below: the agent stops on a question
+      // the user was never shown, and it is a BLOCKING request, so the turn
+      // stalls on it. Park it as a card instead.
+      if (question.accepts(params)) {
+        return this.onQuestionRequest(id, params, question);
+      }
+      // Params that do not read as a question fall through to the decline.
+      // The shape is documented rather than probe-observed, and a card built
+      // from a payload we could not parse is worse than the refusal.
+      this.options.logger?.warn(
+        `acp: ${method} arrived in an unrecognized shape — declined rather than shown as a question`,
+      );
+    }
     // Everything else is a client capability we deliberately did not advertise
     // (`fs/*`, `terminal/*`) or a vendor extension we don't implement
-    // (`cursor/ask_question`). A blocking request MUST be answered or the agent
+    // (`cursor/create_plan`). A blocking request MUST be answered or the agent
     // parks forever, so refuse it in-protocol — and say so once, since a
     // refused extension can change what the agent is able to do this turn.
     if (
@@ -846,6 +941,33 @@ export class AcpTurnDriver implements TurnDriver {
       {
         type: 'notice',
         message: `agent asked for '${method}', which this client does not implement; it was declined`,
+      },
+    ];
+  }
+
+  /**
+   * Park a question and surface it as a card.
+   *
+   * `autoDecide` is deliberately NOT consulted, unlike the permission path
+   * below: that hook resolves a PERMISSION posture (`auto` approves, plan
+   * rejects), and a question has no safe machine answer — approving one on the
+   * user's behalf invents an opinion they never gave. The same floor is
+   * enforced again in `spawn-cli`, so neither layer relies on the other.
+   */
+  private onQuestionRequest(
+    id: JsonRpcId,
+    params: unknown,
+    question: AcpQuestionProtocol,
+  ): AgentEvent[] {
+    const encodedId = encodeRequestId(id);
+    this.parkedQuestions.set(encodedId, params);
+    return [
+      {
+        type: 'approval_request',
+        id: encodedId,
+        toolName: question.toolName,
+        input: params,
+        requiresUserInteraction: true,
       },
     ];
   }

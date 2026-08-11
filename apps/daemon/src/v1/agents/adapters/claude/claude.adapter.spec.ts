@@ -348,6 +348,9 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       ]),
     );
 
+    // A turn with NO mode is a geniro-internal probe (`ChatService` resolves a
+    // user's null approval to `ask` before it ever reaches an adapter), so it
+    // keeps the lean argv: no dialogue, no bypass, nothing to answer.
     const plain = fakeSpawn();
     new ClaudeAdapter({ spawn: plain.spawn }).start(
       { prompt: 'p', cwd: '/proj' },
@@ -462,7 +465,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   });
 
   it('leaves a legacy turn (no approval mode) byte-identical when asking is allowed', () => {
-    // A pre-selector chat row carries no mode: it must keep the CLI's own
+    // A geniro-internal probe turn carries no mode: it must keep the CLI's own
     // defaults and no permission flags, even though every chat now asks for
     // the question channel.
     const plain = fakeSpawn();

@@ -62,6 +62,7 @@ import {
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
 import { buildImageBlocks } from './utils/claude-images.utils';
@@ -111,6 +112,14 @@ export class ClaudeAdapter extends AgentAdapter {
        * arrives as `can_use_tool` with `requires_user_interaction: true`.
        */
       questionToolName: 'AskUserQuestion',
+      /**
+       * True: the tool is wired only when the turn HAS a permission-prompt
+       * channel. Re-probed on 2.1.227 by reading `system/init`'s own tool
+       * list — with `--permission-prompt-tool stdio` it is present under every
+       * mode, and without it absent under every mode — so an unattended turn
+       * that must be able to ask has to be moved off the bypass.
+       */
+      questionsCostAskPosture: true,
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],
@@ -614,33 +623,26 @@ export class ClaudeAdapter extends AgentAdapter {
     if (systemPrompt) {
       args.push(CLAUDE_APPEND_SYSTEM_PROMPT_FLAG, systemPrompt);
     }
-    if (input.approvalMode === 'auto' && input.allowUserQuestions) {
-      // `--dangerously-skip-permissions` STRIPS AskUserQuestion, so an auto
-      // turn that must be able to ask spawns on the stdio dialogue instead
-      // (`default` is the CLI's name for ask). Unattended semantics are not
+    if (this.spawnsOnPermissionDialogue(input)) {
+      // acceptEdits/plan map by name. `ask` is the CLI's `default`, and so is
+      // an auto turn that must be able to ask: `--dangerously-skip-permissions`
+      // strips AskUserQuestion (it leaves the turn no channel to ask on), so
+      // that turn spawns on the dialogue instead. Unattended semantics are not
       // lost — the DAEMON becomes the bypass, auto-approving every plain
       // permission request at its approval seam and reserving the human card
       // for genuine questions.
-      args.push(CLAUDE_PERMISSION_MODE_FLAG, CLAUDE_PERMISSION_MODE_DEFAULT);
+      args.push(
+        CLAUDE_PERMISSION_MODE_FLAG,
+        input.approvalMode === 'ask' || input.approvalMode === 'auto'
+          ? CLAUDE_PERMISSION_MODE_DEFAULT
+          : (input.approvalMode ?? CLAUDE_UNSET_MODE_FALLBACK),
+      );
       args.push(
         CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
         CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
       );
     } else if (input.approvalMode === 'auto') {
       args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
-    } else if (input.approvalMode) {
-      // ask/acceptEdits/plan all hold the stdio approval dialogue; `ask` is
-      // the CLI's `default` permission mode, the other modes map by name.
-      args.push(
-        CLAUDE_PERMISSION_MODE_FLAG,
-        input.approvalMode === 'ask'
-          ? CLAUDE_PERMISSION_MODE_DEFAULT
-          : input.approvalMode,
-      );
-      args.push(
-        CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
-        CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
-      );
     }
     if (input.isolateMcpServers) {
       // The one path that passes the strict flag. Without it the probe loads
@@ -780,16 +782,34 @@ export class ClaudeAdapter extends AgentAdapter {
     })}\n`;
   }
 
-  protected override keepStdinOpen(input: AgentTurnInput): boolean {
-    // Every stdio-dialogue mode (ask/acceptEdits/plan) can raise a mid-turn
-    // control_request; only auto (and plain chat) closes stdin after the
-    // prompt payload — UNLESS that auto turn was spawned on the dialogue to
-    // keep its question channel, in which case the verdict has to have a way
-    // back in (see buildArgs).
+  /**
+   * Whether this turn spawns holding the stdio permission dialogue —
+   * `--permission-prompt-tool stdio`, which is what lets the CLI raise a
+   * `can_use_tool` control_request mid-turn.
+   *
+   * ONE predicate, read by `buildArgs` (which decides the argv) and by
+   * `keepStdinOpen` (which decides whether a verdict has a way back in). They
+   * are the same question and must never be answered differently: a turn given
+   * the dialogue with stdin already closed parks on a request nobody can
+   * answer, and a turn denied the dialogue with stdin held open leaks a
+   * process per turn.
+   *
+   * Two turns are outside it: an `auto` turn that will not ask (it spawns
+   * under `--dangerously-skip-permissions`, which wires no prompt tool at
+   * all), and a turn that named no mode at all — which after
+   * {@link CLAUDE_UNSET_MODE_FALLBACK} means a geniro-INTERNAL turn, never a
+   * user's chat. Those probes read one `system/init` line and are cancelled;
+   * handing them a permission dialogue and an open stdin buys nothing.
+   */
+  private spawnsOnPermissionDialogue(input: AgentTurnInput): boolean {
     if (input.approvalMode === undefined) {
       return false;
     }
     return input.approvalMode !== 'auto' || input.allowUserQuestions === true;
+  }
+
+  protected override keepStdinOpen(input: AgentTurnInput): boolean {
+    return this.spawnsOnPermissionDialogue(input);
   }
 
   protected override buildApprovalResponse(
@@ -831,11 +851,16 @@ export class ClaudeAdapter extends AgentAdapter {
       request_id: `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}${CLAUDE_SET_PERMISSION_MODE_SUBTYPE}`,
       request: {
         subtype: CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
-        // `auto` is not a mode the CLI has. It is the DAEMON auto-approving at
+        // geniro's `auto` is NOT the CLI's. It is the DAEMON auto-approving at
         // its own seam, so the CLI must keep prompting — which is `default`,
         // exactly what `buildArgs` spawns an auto question-capable turn with.
-        // Sending `auto` would earn a rejected control request and leave the
-        // turn on whatever mode it had.
+        //
+        // The collision is real and recent: 2.1.227 added a `--permission-mode
+        // auto` of its own, so passing the string through would now be
+        // ACCEPTED and would hand the turn to the CLI's auto-approval instead
+        // of the daemon's — silently, since an accepted control request says
+        // nothing. It used to be merely rejected. Do not "simplify" this to
+        // pass the mode straight through.
         mode:
           mode === 'auto' || mode === 'ask'
             ? CLAUDE_PERMISSION_MODE_DEFAULT

@@ -403,15 +403,39 @@ describe('AgentAdapter.loginTarget', () => {
 });
 
 describe('AgentAdapter question channel', () => {
-  /** Claude's AskUserQuestion shape — the only question payload that ships. */
-  const QUESTION_INPUT = {
-    questions: [
-      {
-        question: 'Which color?',
-        options: [{ label: 'Red' }, { label: 'Blue' }],
-      },
-    ],
+  /**
+   * One question payload per CLI — each in ITS OWN wire shape, because the
+   * whole point of the seam is that no layer above the adapter knows them
+   * apart. Claude's is an AskUserQuestion tool input; cursor's is the params
+   * of its `cursor/ask_question` JSON-RPC request.
+   *
+   * A CLI with no channel gets claude's, arbitrarily: the assertion for it is
+   * that the base default ignores whatever it is handed.
+   */
+  const QUESTION_INPUTS: Record<string, unknown> = {
+    claude: {
+      questions: [
+        {
+          question: 'Which color?',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+        },
+      ],
+    },
+    'cursor-agent': {
+      toolCallId: 'tool_1',
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Which color?',
+          options: [
+            { id: 'red', label: 'Red' },
+            { id: 'blue', label: 'Blue' },
+          ],
+        },
+      ],
+    },
   };
+  const NO_CHANNEL_INPUT = QUESTION_INPUTS.claude;
 
   for (const { name, adapter } of ADAPTERS) {
     it(`projects a question exactly when ${name} declares a question tool`, () => {
@@ -421,13 +445,28 @@ describe('AgentAdapter question channel', () => {
       // a CLI that declares one must override both, or a callee's question
       // reaches its caller blank and the answer never reaches the CLI.
       const hasChannel = adapter.getConfig().questionToolName !== null;
+      const input = QUESTION_INPUTS[name] ?? NO_CHANNEL_INPUT;
 
-      expect(adapter.questionFrom(QUESTION_INPUT) !== null).toBe(hasChannel);
-      expect(adapter.withAnswer(QUESTION_INPUT, 'Red') === QUESTION_INPUT).toBe(
-        !hasChannel,
-      );
+      expect(adapter.questionFrom(input) !== null).toBe(hasChannel);
+      expect(adapter.withAnswer(input, 'Red') === input).toBe(!hasChannel);
     });
   }
+
+  it('carries every CLI’s question through the shared projection', () => {
+    // What the caller envelope and the renderer card are built from. Both
+    // adapters must land on the same shape out of payloads that share no
+    // field name — which is the property that lets `AdapterQuestion` be the
+    // only thing either consumer knows.
+    for (const { name, adapter } of ADAPTERS) {
+      if (adapter.getConfig().questionToolName === null) {
+        continue;
+      }
+      expect(adapter.questionFrom(QUESTION_INPUTS[name])).toEqual({
+        text: 'Which color?',
+        options: ['Red', 'Blue'],
+      });
+    }
+  });
 });
 
 describe('AgentAdapter.listReportedCommands', () => {

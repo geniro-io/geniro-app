@@ -96,7 +96,12 @@ Rules:
   block is what makes that obligation discoverable. Reference twins:
   `apps/daemon/src/v1/agents/adapters/claude/utils/claude-question.utils.ts` ↔
   `apps/ui/src/renderer/chats/approval-card.tsx` (the AskUserQuestion
-  `{questions:[{question,options:[{label}]}]}` shape, M4), and
+  `{questions:[{question,options:[{label}]}]}` shape, M4);
+  `apps/daemon/src/v1/agents/adapters/cursor-acp/utils/cursor-question.utils.ts` ↔
+  the SAME renderer file's `readCursorQuestions` (the `cursor/ask_question`
+  `{questions:[{id,prompt,options:[{id,label}]}]}` shape) — one file holding
+  two twins, one per CLI, because a question card is routed by the tool name
+  the daemon put on the request and each name owns its own parser; and
   `apps/daemon/src/v1/agents/chat.types.ts` `AttachmentWireSchema` ↔
   `apps/ui/src/renderer/chats/attachment-payload.ts` (the `{id, mediaType}`
   image rows inside a message item's `z.unknown()` payload — the payload is

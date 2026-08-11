@@ -982,11 +982,19 @@ export class GraphExecutorService {
         resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: node.role ?? null,
         callSurfacePrompt: callSurfaceFor(node),
-        // A questionCapable AUTO node still spawns in ask mode (the question
-        // channel needs the stdio dialogue; the daemon auto-approves plain
-        // permissions below). ask/acceptEdits already carry the stdio
-        // dialogue, so they spawn as themselves.
-        approvalMode: questionCapable && approval === 'auto' ? 'ask' : approval,
+        // A questionCapable AUTO node spawns in ask mode when its CLI's
+        // question channel COSTS that posture (the daemon auto-approves plain
+        // permissions below, so unattended semantics survive).
+        // ask/acceptEdits already carry the dialogue and spawn as themselves.
+        // A CLI whose questions arrive out-of-band declares the cost as false
+        // and keeps `auto` — forcing ask there would park every permission in
+        // an unwatched graph on a human verdict that never comes.
+        approvalMode:
+          questionCapable &&
+          approval === 'auto' &&
+          adapter.getConfig().questionsCostAskPosture
+            ? 'ask'
+            : approval,
         mcpEndpoint: mcpEndpointFor(node),
         // Per NODE, not per run: two nodes pointed at different plugin
         // directories are meant to run with different tools. Already refused

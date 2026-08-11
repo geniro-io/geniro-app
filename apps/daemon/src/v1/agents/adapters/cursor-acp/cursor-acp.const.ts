@@ -149,3 +149,46 @@ export const CURSOR_MCP_LIST_FAILED_MESSAGE =
 /** Shown when the CLI answered but nothing in its output looked like a row. */
 export const CURSOR_MCP_LIST_UNREADABLE_MESSAGE =
   'could not read MCP servers — the cursor-agent output format may have changed';
+
+// ── Asking the user a question (`cursor/ask_question`) ────────────────────
+//
+// WHERE THIS SHAPE CAME FROM, and how much to trust it. Baseline ACP has no
+// agent→client call for asking the user something open-ended — permissions
+// are the only round-trip it defines — so Cursor added one as a vendor
+// extension. The request/response shapes below are transcribed from
+// `cursor.com/docs/cli/acp`, NOT observed on the wire: driving
+// cursor-agent 2026.08.04-aaa8809 into asking a multiple-choice question
+// (directly, and through its own `/multi-model-review` command, which
+// advertises "structured question or inline") produced the question as plain
+// markdown in an `agent_message_chunk` both times, and no `cursor/*` request
+// at all.
+//
+// That is why every reader below is defensive and why the driver's
+// `accepts()` gate exists: an unparseable payload is DECLINED exactly as it
+// was before this channel was implemented, so a doc that has drifted costs
+// nothing. What is not acceptable is the old behaviour on a payload we CAN
+// read — a blocking request refused in-protocol, which stalls the turn on a
+// question the user was never shown.
+//
+// Re-probe and pin this against a live sighting when one occurs.
+
+/** The vendor method carrying a question for the user. */
+export const CURSOR_ASK_QUESTION_METHOD = 'cursor/ask_question';
+
+/** `CursorAskQuestionResponse.outcome.outcome` — the arm we answer with. */
+export const CURSOR_QUESTION_OUTCOME_ANSWERED = 'answered';
+/** The arm for a question the user declined to answer, carrying a `reason`. */
+export const CURSOR_QUESTION_OUTCOME_SKIPPED = 'skipped';
+
+/**
+ * Where {@link CursorAcpAdapter.withAnswer} stashes the card's free text on
+ * the request params, for the reply encoder to read back.
+ *
+ * The seam it has to cross is `AgentAdapter.withAnswer` → `respondApproval` →
+ * `TurnDriver.buildApprovalResponse`, which carries ONE opaque `updatedInput`
+ * — a shape claude uses to fold an answer into a tool input and cursor has no
+ * equivalent of. Both ends of this key are in this adapter, so no other layer
+ * sees it; the `geniro` prefix is what keeps it from colliding with a field
+ * the vendor might add.
+ */
+export const CURSOR_ANSWER_KEY = '__geniroAnswer';

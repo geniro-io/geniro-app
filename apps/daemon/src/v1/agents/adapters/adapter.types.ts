@@ -1012,6 +1012,22 @@ export interface AdapterConfig {
    * itself.
    */
   readonly questionToolName: string | null;
+  /**
+   * Whether keeping this CLI's question channel open forces an unattended turn
+   * onto the ask posture.
+   *
+   * True for claude, where it is load-bearing: `--dangerously-skip-permissions`
+   * leaves the turn no permission-prompt channel and the AskUserQuestion tool
+   * is not wired without one (probe-verified on 2.1.227 across every mode), so
+   * a question-capable `auto` node has to spawn on the stdio dialogue with the
+   * DAEMON standing in for the bypass. False for a CLI whose questions arrive
+   * out-of-band — an ACP vendor request reaches the client whatever session
+   * mode the agent is in — where forcing `ask` would park every ordinary
+   * permission on a human verdict in a graph nobody is watching.
+   *
+   * Meaningless when `questionToolName` is null; declare it false there.
+   */
+  readonly questionsCostAskPosture: boolean;
 
   // ── Approval policy ─────────────────────────────────────────────────────
   readonly approval: {

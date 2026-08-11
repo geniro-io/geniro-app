@@ -1,10 +1,11 @@
 import { ChevronRight } from 'lucide-react';
-import { memo, useState } from 'react';
+import { memo, useContext, useState } from 'react';
 
 import { CodeBlock } from '../components/ui/code-block';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { DiffView } from './diff-view';
+import { RunSettledContext } from './live-row';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
   toolCallSummary,
@@ -98,7 +99,17 @@ export const ToolGroup = memo(function ToolGroup({
   group: ToolGroupEntry;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  const running = group.pairs.some((pair) => pair.result === null);
+  const runSettled = useContext(RunSettledContext);
+  // A missing `result` is only evidence of work in flight while the work could
+  // still be happening. Two independent things end it, and both are needed:
+  // the group's OWN turn ended (`group.closed`), or the whole run has stopped.
+  // Neither subsumes the other — the run goes back to `running` on the next
+  // message, which is what let a stale group spin again through later turns,
+  // while a run cancelled mid-turn ends a group no turn-end item ever closed.
+  const running =
+    !group.closed &&
+    !runSettled &&
+    group.pairs.some((pair) => pair.result === null);
   return (
     <div
       data-role="tool-group"

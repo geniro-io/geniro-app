@@ -283,6 +283,42 @@ describe('mapClaudeMessage', () => {
     }
   });
 
+  it('does NOT fire when a tool result merely QUOTES the sentence further down', () => {
+    // Measured, not hypothetical. On a real 47-minute run this fired three
+    // times, every one of them a sub-agent `Read`ing geniro's own source: the
+    // marker constants live in `claude.const.ts` and `spawn-cli.ts` quotes the
+    // CLI's sentence verbatim in a doc block, so reading either one reported
+    // that claude's permission channel had died. Twelve matches in that
+    // daemon's log, and not one genuine CLI failure among them.
+    //
+    // The first line is what discriminates: the failing tool's result IS the
+    // sentence and arrives alone, while a file that documents it has content
+    // above it.
+    const readOfThisRepo = [
+      '330\tconst settlesOnTerminalEvent = opts.stdinLifetime === 0;',
+      '331\t  /** they carried 165 of the 181 `Tool permission request failed:',
+      '332\t   * AbortError: Stream closed` failures (10.4% here). */',
+    ].join('\n');
+
+    expect(permissionFailure(readOfThisRepo)).toEqual([
+      expect.objectContaining({ type: 'tool_result' }),
+    ]);
+  });
+
+  it('still fires when the sentence is the whole result, blank lines and all', () => {
+    // The other side of the first-line rule: a leading newline must not hide a
+    // genuine failure. Losing this is worse than the false positive it fixes —
+    // it is the 239-unremarked-failures bug coming back.
+    expect(
+      permissionFailure(
+        '\n\nTool permission request failed: AbortError: Stream closed',
+      ),
+    ).toEqual([
+      expect.objectContaining({ type: 'tool_result' }),
+      expect.objectContaining({ type: 'notice' }),
+    ]);
+  });
+
   it('requires both markers in ONE text leaf, not merely somewhere in the payload', () => {
     // The detector reads text leaves; it does NOT serialize the payload. Two
     // unrelated blocks each carrying one half are not the CLI's sentence, and

@@ -17,6 +17,25 @@ import { MessageBubble } from './message-bubble';
 export const RunActivityContext = createContext<string | null>(null);
 
 /**
+ * Whether the active run has reached a terminal status — nothing more is
+ * coming for it.
+ *
+ * The transcript alone cannot answer this, and that gap is the bug it exists to
+ * close: a tool row spins while its `tool_result` is missing, and a result the
+ * daemon dropped between turns never arrives, so a run whose header read
+ * `completed` kept a sub-agent row spinning indefinitely. Authoritative run
+ * state is the only thing that can retire it — the same rule the live rows
+ * already follow.
+ *
+ * A context for the reason {@link RunActivityContext} is one: the shells
+ * between `Chats` and a tool group are memoized, and a prop that flips once at
+ * the end of a run would defeat that for every row. False outside a provider,
+ * which is the safe reading — a group with no run behind it keeps whatever its
+ * own pairs say.
+ */
+export const RunSettledContext = createContext<boolean>(false);
+
+/**
  * The two synthetic transcript rows that describe what an agent is doing RIGHT
  * NOW: a reasoning stretch, and the silence between one thing and the next.
  *

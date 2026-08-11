@@ -149,3 +149,94 @@ export const CURSOR_MCP_LIST_FAILED_MESSAGE =
 /** Shown when the CLI answered but nothing in its output looked like a row. */
 export const CURSOR_MCP_LIST_UNREADABLE_MESSAGE =
   'could not read MCP servers — the cursor-agent output format may have changed';
+
+// ── Asking the user a question (`cursor/ask_question`) ────────────────────
+//
+// WHERE THIS SHAPE CAME FROM. Baseline ACP has no agent→client call for
+// asking the user something open-ended — permissions are the only round-trip
+// it defines — so Cursor added one as a vendor extension.
+//
+// Read out of the CLI'S OWN SOURCE, not its docs. cursor-agent ships as plain
+// bundled JavaScript, and its handler is legible:
+//
+//   ~/.local/share/cursor-agent/versions/<v>/8869.index.js
+//   → "./src/acp/interaction-handlers/ask-question-handler.ts"
+//
+// on 2026.08.04-aaa8809, which is where the request fields
+// (`toolCallId`/`title`/`questions[].id`/`prompt`/`options[].id`/`label`/
+// `allowMultiple`) and the three response outcomes below are transcribed
+// from. That is a stronger source than the published docs AND than a wire
+// capture: it is what the binary will actually send and accept. It still
+// expires — a release can rewrite it — so re-read that handler rather than
+// trusting this block on a new cursor series.
+//
+// It has NOT been seen on the wire. Driving 2026.08.04 into asking a
+// multiple-choice question (directly, and through its own
+// `/multi-model-review` command, which advertises "structured question or
+// inline") produced plain markdown in an `agent_message_chunk` both times.
+// So the readers below stay defensive and the driver keeps its `accepts()`
+// gate: an unparseable payload is declined exactly as before.
+//
+// WHAT DECLINING ACTUALLY COST, measured rather than assumed. The same
+// handler catches an Unimplemented/-32601 reply and FALLS BACK to one
+// `session/request_permission` per single-select question, each option
+// becoming an `allow_once` option beside a synthetic `__ask_question_skip__`
+// rejection. So the old behaviour did not stall the turn — it was worse than
+// that. Replayed against the pre-fix build: geniro rendered a generic
+// permission card titled with the ask's `title` and NO arguments, whose
+// Approve picks the FIRST allow_once option; and under `auto` the daemon
+// auto-approved it, answering the user's question with option #1 and no
+// human involved at all. The fallback also drops every `allowMultiple`
+// question on the floor, which is why answering one is a capability of this
+// channel specifically.
+
+/** The vendor method carrying a question for the user. */
+export const CURSOR_ASK_QUESTION_METHOD = 'cursor/ask_question';
+
+/** `CursorAskQuestionResponse.outcome.outcome` — the arm we answer with. */
+export const CURSOR_QUESTION_OUTCOME_ANSWERED = 'answered';
+/** The arm for a question the user declined to answer, carrying a `reason`. */
+export const CURSOR_QUESTION_OUTCOME_SKIPPED = 'skipped';
+
+/**
+ * Where {@link CursorAcpAdapter.withAnswer} stashes the card's free text on
+ * the request params, for the reply encoder to read back.
+ *
+ * The seam it has to cross is `AgentAdapter.withAnswer` → `respondApproval` →
+ * `TurnDriver.buildApprovalResponse`, which carries ONE opaque `updatedInput`
+ * — a shape claude uses to fold an answer into a tool input and cursor has no
+ * equivalent of. Both ends of this key are in this adapter, so no other layer
+ * sees it; the `geniro` prefix is what keeps it from colliding with a field
+ * the vendor might add.
+ */
+export const CURSOR_ANSWER_KEY = '__geniroAnswer';
+
+/**
+ * The vendor extensions this client refuses SILENTLY — declined in-protocol
+ * like any other, but without spending the turn's single "declined" notice.
+ *
+ * Each entry is a reading of that method's own handler in the CLI source
+ * (same file as {@link CURSOR_ASK_QUESTION_METHOD}), never an assumption:
+ *
+ * - `update_todos`, `task`, `generate_image` go out through
+ *   `sendNonBlockingExtensionNotification`, which is
+ *   `connection.extMethod(...).catch(debugLog)`. The agent discards the
+ *   outcome entirely, so a refusal changes nothing about the turn. Wire-
+ *   confirmed for `update_todos` on 2026.08.04-aaa8809: an ordinary "make a
+ *   todo list" turn sends it and then completes normally after a `-32601`.
+ * - `create_plan` DOES block, but its handler treats Unimplemented as a cue to
+ *   write the plan locally and report success. The work still happens; only
+ *   the delivery differs.
+ *
+ * `ask_question` is deliberately ABSENT, and is the reason this list is not
+ * simply "every `cursor/*`": its fallback answers the user's question with the
+ * first option on their behalf. That is the shape of harm this list must never
+ * cover — so an entry is earned by reading the handler, not by sharing a
+ * prefix with one that was.
+ */
+export const CURSOR_SILENTLY_DECLINED_METHODS: readonly string[] = [
+  'cursor/update_todos',
+  'cursor/task',
+  'cursor/generate_image',
+  'cursor/create_plan',
+];

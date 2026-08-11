@@ -14,6 +14,7 @@ import {
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
+import type { AgentEvent } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
 import {
@@ -117,6 +118,23 @@ export class ChatService {
     string,
     (mode: ChatApprovalMode) => boolean
   >();
+  /**
+   * The approval posture each run's KEPT PROCESS should be judged by right
+   * now, including while no turn is running.
+   *
+   * Separate from the per-turn `approvalMode` because the two have genuinely
+   * different lifetimes: a turn's copy dies with the turn, while the CLI
+   * process lives on and can raise a permission request at any point in
+   * between. Reading a turn-scoped copy there answered with whatever the LAST
+   * turn was started under — so a user who ended a turn and then moved the chip
+   * to `ask` still had the next between-turn tool call approved in their name,
+   * with no card. `liveApproval` cannot cover that window by construction: it
+   * is registered per turn and only consulted while one is in flight.
+   *
+   * Written on every turn start and by `updateSettings` whichever path it
+   * takes; dropped when the run's session is torn down.
+   */
+  private readonly runPosture = new Map<string, ChatApprovalMode | undefined>();
 
   constructor(
     private readonly em: EntityManager,
@@ -357,6 +375,12 @@ export class ChatService {
         );
       }
     }
+    if (patch.approval !== undefined) {
+      // Also when NO turn is in flight, which is the whole point: the run's
+      // process is still alive and can ask permission before the next turn
+      // opens, and this is the only record of what to answer it with.
+      this.runPosture.set(runId, patch.approval);
+    }
     await this.runDao.updateById(runId, changes, em);
     // A turn may have claimed the run DURING the write — after the check above
     // but before the flush — and `sendMessage` snapshots the row in its own
@@ -570,6 +594,62 @@ export class ChatService {
       return await this.teardown.purge(em, runId, this.finalizing.get(runId));
     } finally {
       this.deleting.delete(runId);
+      // The run is gone, so its posture has nothing left to govern — and the
+      // teardown has already closed the process that would have consulted it.
+      this.runPosture.delete(runId);
+    }
+  }
+
+  /**
+   * Write an event the CLI produced with no turn in flight into the run's
+   * transcript.
+   *
+   * Only a `tool_result`, and the narrowness is the whole safety argument. It
+   * carries the id of the call it answers, so it lands on a row already on the
+   * transcript and cannot be attributed to the wrong work; anything else
+   * arriving here (a stray message, a delta) has no such anchor, and filing
+   * one turn's words under another's is worse than dropping them. That is why
+   * `spawn-cli` hands these over rather than replaying them into the next
+   * turn, and why this filters rather than persisting whatever it is given.
+   *
+   * Without it the row stayed unpaired forever: the renderer now stops
+   * SPINNING over one (the group's turn has ended), but the result itself was
+   * simply gone, so expanding the row showed a call with no answer.
+   *
+   * Run-scoped by construction — its own `em` fork and the run's seq
+   * allocator, nothing borrowed from a turn that has already settled. Failure
+   * is logged and swallowed: this is called from the session's event path,
+   * where a throw has no caller to reach.
+   */
+  private async persistBetweenTurnEvent(
+    runId: string,
+    event: AgentEvent,
+  ): Promise<void> {
+    if (event.type !== 'tool_result') {
+      this.logger.warn(
+        `run ${runId} dropped a '${event.type}' event arriving between turns`,
+      );
+      return;
+    }
+    const mapped = mapEventToItem(event);
+    if (!mapped) {
+      return;
+    }
+    try {
+      await this.persist(
+        this.em.fork(),
+        runId,
+        await this.seqs.reserve(runId),
+        mapped.kind,
+        mapped.role,
+        mapped.payload,
+      );
+    } catch (err: unknown) {
+      this.logger.error(
+        `run ${runId} failed to persist a between-turn ${event.type}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 
@@ -621,8 +701,48 @@ export class ChatService {
       // for a PATCH that deliberately cleared it back to the CLI default.
       const settings =
         (await this.runDao.getById(runId, this.em.fork())) ?? run;
-      let approvalMode: ChatApprovalMode | undefined =
-        settings.approval ?? undefined;
+      // A null `approval` is a chat row created before the mode selector
+      // existed. It used to ride through as `undefined`, which spawns the CLI
+      // with no permission flag at all and inherits whatever that CLI defaults
+      // to — safe while claude's default was "ask about everything", and no
+      // longer: probed on 2.1.227, a headless turn with no flag now reports
+      // `permissionMode: "auto"`, the new default Anthropic is rolling out.
+      // So an old chat would have started approving every tool call
+      // unattended, on a decision the vendor made and the user never saw.
+      //
+      // Resolved HERE rather than in the adapter because this is the layer
+      // that knows what a null row MEANS. The same undefined reaching an
+      // adapter from a geniro-internal probe turn means something else
+      // entirely, and pinning it there would put a permission dialogue on
+      // turns that exist only to read one `system/init` line.
+      //
+      // `ask` is the answer because "the user never chose a posture" and "do
+      // not act unattended" are the same statement.
+      const approvalDefault: ChatApprovalMode = 'ask';
+      let approvalMode: ChatApprovalMode = settings.approval ?? approvalDefault;
+      this.runPosture.set(runId, approvalMode);
+      /**
+       * Whether the daemon answers this tool's permission itself, without a
+       * card — the stand-in for `--dangerously-skip-permissions`.
+       *
+       * ONE predicate, read by both seams that need it: the in-turn
+       * `approval_request` branch, and the between-turn policy handed to the
+       * session. They must never diverge — a request judged one way inside the
+       * turn and the other way a second after it settled is precisely the
+       * inconsistency this change exists to remove.
+       *
+       * The POSTURE it reads differs by seam, and deliberately: in-turn takes
+       * the turn's own `approvalMode` (which `liveApproval` rewrites on a
+       * mid-turn chip change), while between turns there is no turn to have a
+       * mode, so it reads the run's. Passing the turn's copy there is what let
+       * a chip moved to `ask` after a turn ended go on auto-approving.
+       */
+      const autoApproves = (
+        toolName: string,
+        mode: ChatApprovalMode | undefined,
+      ): boolean =>
+        mode === 'auto' &&
+        !isUserQuestion(adapter.getConfig().questionToolName, toolName);
       const model = settings.model ?? undefined;
       const effort = settings.effort ?? undefined;
 
@@ -655,31 +775,29 @@ export class ChatService {
       // executor uses for a node, so a fix here cannot miss that path. The
       // probe is awaited only for a mode whose support is empirical, so a turn
       // that never asks for one never pays for it.
-      if (approvalMode !== undefined) {
-        const resolved = adapter.resolveApprovalMode(
-          approvalMode,
-          // The ADAPTER reads its own slice of the capability bag; this
-          // service only assembles the bag from the probes it holds. Reading
-          // claude's field here instead would judge any future CLI with a
-          // probed mode against claude's installed binary.
-          adapter.getConfig().approval.probedModes.includes(approvalMode)
-            ? adapter.approvalSupportFrom({
-                claudeModes: await this.claudeModesSafe(),
-              })
-            : { supported: {} },
+      const resolved = adapter.resolveApprovalMode(
+        approvalMode,
+        // The ADAPTER reads its own slice of the capability bag; this
+        // service only assembles the bag from the probes it holds. Reading
+        // claude's field here instead would judge any future CLI with a
+        // probed mode against claude's installed binary.
+        adapter.getConfig().approval.probedModes.includes(approvalMode)
+          ? adapter.approvalSupportFrom({
+              claudeModes: await this.claudeModesSafe(),
+            })
+          : { supported: {} },
+      );
+      if (resolved.degradeReason !== null) {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          'system',
+          null,
+          { message: resolved.degradeReason },
         );
-        if (resolved.degradeReason !== null) {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'system',
-            null,
-            { message: resolved.degradeReason },
-          );
-        }
-        approvalMode = resolved.mode;
       }
+      approvalMode = resolved.mode;
 
       const node = await this.nodeStateDao.getByRunNode(
         runId,
@@ -932,7 +1050,7 @@ export class ChatService {
                   `interactive control_request for unrecognized tool '${event.toolName}' on run ${runId} — kept on the approval path`,
                 );
               }
-              if (approvalMode === 'auto' && !isQuestion) {
+              if (autoApproves(event.toolName, approvalMode)) {
                 // The daemon-side stand-in for --dangerously-skip-permissions.
                 // An auto chat spawns on the stdio dialogue ONLY so the
                 // question channel survives (buildArgs), so every plain
@@ -1058,6 +1176,23 @@ export class ChatService {
             }
           });
         },
+        // This turn's answer for a request that arrives after it settles —
+        // literally the same predicate the in-turn branch uses, so a tool call
+        // cannot be judged one way inside the turn and the other way a moment
+        // later. The registry installs it on EVERY turn, spawn or reuse, so the
+        // posture is the one the user most recently chose rather than the one
+        // the session was opened with.
+        //
+        // Everything else returns null, which HOLDS the request for the next
+        // turn to adopt as an ordinary card, rather than refusing it. A refusal
+        // reached the agent as the user's own "no" for a card nobody rendered —
+        // which is how an `auto` chat came to report that it had lost write
+        // access to the worktree.
+        ({ toolName }) =>
+          autoApproves(toolName, this.runPosture.get(runId)) ? true : null,
+        (event) => {
+          void this.persistBetweenTurnEvent(runId, event);
+        },
       );
       this.registry.register(runId, handle);
       // How a mid-turn approval change reaches THIS turn's own seam. The
@@ -1074,6 +1209,9 @@ export class ChatService {
           return false;
         }
         approvalMode = mode;
+        // The run's posture moves with the turn's, so a mode changed mid-turn
+        // still governs a request that arrives once this turn has settled.
+        this.runPosture.set(runId, mode);
         return true;
       });
 

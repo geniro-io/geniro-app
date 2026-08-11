@@ -619,6 +619,121 @@ describe('AcpTurnDriver model selection', () => {
       expect(events).not.toContainEqual(refused);
     });
   });
+
+  describe('over the ACP 1.0 config-option carrier', () => {
+    /** A `session/new` reply that enumerates models the ACP 1.0 way. */
+    function sessionWithConfigOptions(
+      current: string,
+      available: string[],
+    ): Record<string, unknown> {
+      return {
+        sessionId: 's-1',
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: current,
+            options: available.map((value) => ({ value, name: value })),
+          },
+        ],
+      };
+    }
+
+    it('sets the model with session/set_config_option, not session/set_model', () => {
+      // ACP removed `session/set_model` at schema v1.16.0. An agent that
+      // enumerated its models under `configOptions` is one that implements the
+      // replacement, so sending the removed method would be a refused frame
+      // and a degrade notice for a model the agent was perfectly able to use.
+      const h = harness(wanting);
+      h.feed(initializeReply(1));
+      const events = h.feed({
+        id: 2,
+        result: sessionWithConfigOptions('composer-2.5', [WANTED]),
+      });
+
+      expect(h.sentMethod('session/set_config_option')?.params).toEqual({
+        sessionId: 's-1',
+        // `configId`, NOT the `configOptionId` the docs' prose uses — probed
+        // on cursor-agent 2026.08.04, which rejects the latter as invalid.
+        configId: 'model',
+        value: WANTED,
+      });
+      expect(h.sentMethod('session/set_model')).toBeUndefined();
+      expect(noticesIn(events)).toEqual([]);
+    });
+
+    it('still puts it before the prompt', () => {
+      const h = harness(wanting);
+      h.feed(initializeReply(1));
+      h.feed({
+        id: 2,
+        result: sessionWithConfigOptions('composer-2.5', [WANTED]),
+      });
+
+      const methods = methodsOf(h);
+      expect(methods.indexOf('session/set_config_option')).toBeLessThan(
+        methods.indexOf('session/prompt'),
+      );
+    });
+
+    it('keeps the legacy frame for an agent that offers no model option', () => {
+      // Removal from the SPEC is not removal from the binaries. An agent
+      // predating v1.16.0 enumerates under `models` and answers only
+      // `session/set_model`.
+      const h = harness(wanting);
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: sessionWithModels('composer-2.5', [WANTED]) });
+
+      expect(h.sentMethod('session/set_model')?.params).toEqual({
+        sessionId: 's-1',
+        modelId: WANTED,
+      });
+      expect(h.sentMethod('session/set_config_option')).toBeUndefined();
+    });
+
+    it('refuses locally against a config-option list that omits the model', () => {
+      const h = harness(wanting);
+      h.feed(initializeReply(1));
+      const events = h.feed({
+        id: 2,
+        result: sessionWithConfigOptions('composer-2.5', ['gpt-5.2']),
+      });
+
+      expect(h.sentMethod('session/set_config_option')).toBeUndefined();
+      expect(events).toContainEqual({
+        type: 'notice',
+        message: `agent does not offer the model '${WANTED}' — this turn runs on the agent's current model instead`,
+      });
+    });
+
+    it('reports a refused set_config_option as the same model degrade', () => {
+      // The user asked to run on a model; which frame carried that request is
+      // not something they should have to learn from the failure line.
+      const h = harness(wanting);
+      h.feed(initializeReply(1));
+      h.feed({
+        id: 2,
+        result: sessionWithConfigOptions('composer-2.5', [WANTED]),
+      });
+      const sentId = h.sent.find(
+        (frame) => frame.method === 'session/set_config_option',
+      )?.id;
+
+      const events = h.feed({
+        id: sentId,
+        error: { code: -32602, message: 'Invalid model value' },
+      });
+
+      expect(events).toEqual([
+        {
+          type: 'notice',
+          message: `agent declined model '${WANTED}': Invalid model value — this turn runs on the agent's current model`,
+        },
+      ]);
+    });
+  });
 });
 
 describe('AcpTurnDriver session modes', () => {
@@ -1183,6 +1298,151 @@ describe('AcpTurnDriver unsupported requests', () => {
     h.feed({ id: 9, method: 'fs/read_text_file', params: {} });
     expect(warn).toHaveBeenCalledWith(
       'acp: dropped the error reply to fs/read_text_file — stdin is closed',
+    );
+  });
+});
+
+describe('AcpTurnDriver vendor question channel', () => {
+  const ASK = 'vendor/ask_question';
+  /** A stand-in protocol: the driver must know NO agent's question shape. */
+  const question = {
+    method: ASK,
+    toolName: ASK,
+    accepts: (params: unknown) =>
+      Array.isArray((params as { questions?: unknown[] })?.questions),
+    encodeReply: (_params: unknown, allow: boolean, updatedInput: unknown) => ({
+      outcome: allow ? { outcome: 'answered', updatedInput } : 'declined',
+    }),
+  };
+  const askRequest = {
+    id: 9,
+    method: ASK,
+    params: { questions: [{ id: 'q1', prompt: 'Which?' }] },
+  };
+
+  it('parks the question as a card rather than declining it', () => {
+    // The regression: a BLOCKING vendor request answered with -32601 stalls
+    // the turn on a question the user was never shown.
+    const h = harness({ question });
+    const events = h.feed(askRequest);
+
+    expect(events).toEqual([
+      {
+        type: 'approval_request',
+        id: 'n:9',
+        toolName: ASK,
+        input: askRequest.params,
+        requiresUserInteraction: true,
+      },
+    ]);
+    // Nothing was sent — the agent stays parked until a verdict arrives.
+    expect(h.sent.some((frame) => frame.id === 9)).toBe(false);
+  });
+
+  it('answers it with the adapter’s encoder, not a permission outcome', () => {
+    const h = harness({ question });
+    h.feed(askRequest);
+
+    const reply = h.driver.buildApprovalResponse('n:9', true, { answer: 'a' });
+    expect(JSON.parse(reply ?? '')).toEqual({
+      jsonrpc: '2.0',
+      id: 9,
+      result: {
+        outcome: { outcome: 'answered', updatedInput: { answer: 'a' } },
+      },
+    });
+  });
+
+  it('is never auto-decided, however permissive the turn’s posture', () => {
+    // `autoDecide` resolves a PERMISSION posture. A question has no safe
+    // machine answer, so an `auto` turn must still surface the card.
+    const h = harness({ question, autoDecide: () => 'allow' as const });
+    expect(h.feed(askRequest)).toHaveLength(1);
+    expect(h.sent.some((frame) => frame.id === 9)).toBe(false);
+  });
+
+  it('declines a payload it cannot read as a question, as before', () => {
+    // The shape is documented rather than observed, so drift must cost only
+    // today's behaviour — never a card the user cannot answer.
+    const warn = vi.fn();
+    const h = harness({ question, logger: { warn } });
+    const events = h.feed({ id: 9, method: ASK, params: { nope: true } });
+
+    expect(h.sent.find((frame) => frame.id === 9)?.error).toEqual({
+      code: -32601,
+      message: `${ASK} is not implemented by this client`,
+    });
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        message: `agent asked for '${ASK}', which this client does not implement; it was declined`,
+      },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      `acp: ${ASK} arrived in an unrecognized shape — declined rather than shown as a question`,
+    );
+  });
+
+  it('declines it outright for a driver given no question protocol', () => {
+    const h = harness();
+    h.feed(askRequest);
+    expect(h.sent.find((frame) => frame.id === 9)?.error).toBeDefined();
+  });
+});
+
+describe('AcpTurnDriver refusals the agent absorbs', () => {
+  const HARMLESS = 'vendor/update_todos';
+  const options = { declinedWithoutNotice: [HARMLESS] };
+
+  it('declines them in-protocol but spends no notice', () => {
+    const h = harness(options);
+    const events = h.feed({ id: 7, method: HARMLESS, params: { todos: [] } });
+
+    // Still answered — a request left hanging parks the agent either way.
+    expect(h.sent.find((frame) => frame.id === 7)?.error).toEqual({
+      code: -32601,
+      message: `${HARMLESS} is not implemented by this client`,
+    });
+    expect(events).toEqual([]);
+  });
+
+  it('leaves the turn’s ONE notice for a refusal that actually costs something', () => {
+    // The regression this pins, and the reason the list exists at all: the
+    // notice is a per-turn budget of one. Measured on cursor-agent
+    // 2026.08.04, an ordinary planning turn sends `cursor/update_todos` — a
+    // refusal its own agent discards — which under the old behaviour burnt
+    // the slot, leaving a consequential refusal later in the same turn
+    // unmentioned.
+    const h = harness(options);
+    expect(h.feed({ id: 7, method: HARMLESS, params: {} })).toEqual([]);
+
+    const events = h.feed({ id: 8, method: 'fs/read_text_file', params: {} });
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        message:
+          "agent asked for 'fs/read_text_file', which this client does not implement; it was declined",
+      },
+    ]);
+  });
+
+  it('still narrates a method that is NOT on the list', () => {
+    const h = harness(options);
+    const events = h.feed({
+      id: 7,
+      method: 'vendor/something_else',
+      params: {},
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it('records the silent refusal on the debug channel rather than nowhere', () => {
+    const debug = vi.fn();
+    const h = harness({ ...options, logger: { warn: vi.fn(), debug } });
+    h.feed({ id: 7, method: HARMLESS, params: {} });
+
+    expect(debug).toHaveBeenCalledWith(
+      `acp: declined ${HARMLESS}; the agent handles that refusal itself`,
     );
   });
 });

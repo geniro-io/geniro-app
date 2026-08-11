@@ -126,6 +126,27 @@ export function displayRunStatus({
   return status;
 }
 
+/**
+ * This run has stopped for good — nothing further will arrive for it.
+ *
+ * Deliberately takes the status {@link displayRunStatus} produced rather than
+ * the raw row, so "has it stopped" is answered by the same authority the badge
+ * shows. Reading the row directly is how a transcript came to contradict its
+ * own header.
+ *
+ * `pending` and `idle` are NOT settled: they are states a run has yet to leave,
+ * not ones it has finished in. `needs-input` is not either — the turn is open
+ * and waiting on a human.
+ */
+export function isSettledRunStatus(status: RunStatusKind): boolean {
+  return (
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'skipped'
+  );
+}
+
 /** The status glyph alone — spinning while running. */
 export function RunStatusIcon({
   status,

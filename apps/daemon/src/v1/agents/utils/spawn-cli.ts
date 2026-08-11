@@ -75,6 +75,38 @@ export const defaultSpawn: SpawnFn = (command, args, options) => {
  */
 export type StdinLifetime = 'payload' | 'turn' | 'session';
 
+/**
+ * The session owner's answer for an approval request that arrives with NO turn
+ * in flight: `true` answer it now, `false` refuse it now, `null` hold it for
+ * the next turn to adopt.
+ *
+ * Named because three signatures spell it — the session option, the adapter's
+ * `startSession` opts, and the registry's `startTurn` — and a shape restated
+ * three times is a shape that drifts.
+ *
+ * The tool NAME is the whole input, deliberately. It is what tells a question
+ * from a permission, and keying on the name rather than on a payload flag is
+ * this codebase's standing rule for that decision — a flag can drift between
+ * CLI releases and quietly move a tool across the human gate.
+ */
+export type BetweenTurnApproval = (request: {
+  toolName: string;
+}) => boolean | null;
+
+/** An `approval_request`, narrowed — the only event kind that is ever held. */
+type ApprovalRequestEvent = Extract<AgentEvent, { type: 'approval_request' }>;
+
+/**
+ * How many between-turn approval requests one session will hold at once.
+ *
+ * Not a tuning knob so much as a refusal to grow without bound: a CLI that
+ * keeps asking on a chat the user has walked away from would otherwise hold
+ * one entry — and one blocked tool call — per request for the session's whole
+ * 30-minute life. Twenty is far above any real conversation's between-turn
+ * backlog (a turn holding even two is unusual) while still being a number.
+ */
+const MAX_HELD_APPROVALS = 20;
+
 /** Everything one turn on a {@link CliSession} needs. */
 export interface CliTurnOptions {
   /**
@@ -150,6 +182,39 @@ export interface CliSessionOptions {
    * name, and they never see it was asked.
    */
   questionToolName?: string | null;
+  /**
+   * What to do with an approval request that arrives with NO turn in flight —
+   * see {@link BetweenTurnApproval} for the tri-state.
+   *
+   * Supplied by the session's OWNER, because the answer depends on the run's
+   * approval posture and nothing at this layer knows it. Without it this module
+   * had to decide alone, and both of its answers were wrong in the same way —
+   * a plain permission was refused under `auto`, where the whole contract is to
+   * approve it, and the refusal reached the user as "Denied by the user in
+   * Geniro" for a card they were never shown.
+   *
+   * Undefined keeps the previous behaviour for callers that have no posture to
+   * offer: refuse a permission, hold a question.
+   */
+  betweenTurnApproval?: BetweenTurnApproval;
+  /**
+   * A NON-approval event that arrived with no turn in flight, handed to the
+   * session's owner instead of being dropped.
+   *
+   * The owner gets it because only it knows what the event belongs to: the
+   * events are turn-less but not run-less, and a run's transcript is exactly
+   * the durable place they still have. Kept as a hand-off rather than a
+   * replay — this module must never give one turn's output to another turn,
+   * which is why these are not buffered like {@link BetweenTurnApproval}'s
+   * held requests.
+   *
+   * WHICH of them are worth keeping is the owner's call too, and the caution
+   * is real: a `tool_result` pairs with a call already on the transcript by
+   * id, so it lands unambiguously, while a stray message has no such anchor.
+   *
+   * Undefined = the previous behaviour, a logged drop.
+   */
+  onBetweenTurnEvent?: (event: AgentEvent) => void;
 }
 
 /**
@@ -284,6 +349,23 @@ interface TurnState {
    * turn already ends with its process.
    */
   silenceTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Every approval request this turn has been shown and not yet answered —
+   * whether it was adopted from the hold buffer or raised inside the turn.
+   *
+   * Both kinds leave the CLI blocked on a verdict, and a turn can settle
+   * without producing one: the user presses Stop, or the turn finishes on its
+   * own while a sub-agent is still parked on the card, or the silence deadline
+   * gives up on it while deliberately leaving the process alive. Whatever the
+   * route, dropping the request strands a live CLI on a question nothing can
+   * ever answer — the wedge this whole seam exists to remove, one turn later.
+   * So the remainder is drained back onto the hold buffer at settle, and
+   * `respondApproval` prunes whatever it actually delivered.
+   *
+   * The in-turn case is the commoner door, not an edge: it needs no
+   * between-turns race at all, just a turn that ends before its user does.
+   */
+  outstanding: Map<string, ApprovalRequestEvent>;
 }
 
 /**
@@ -317,7 +399,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * It is the adapter's pure `(id, allow, input) => line` — the CLI's wire
    * format, identical for every turn of one process — so holding the most
    * recent turn's copy carries no turn state with it. It exists so a permission
-   * request arriving with NO turn in flight can still be answered; see
+   * request arriving with NO turn in flight can still be ANSWERED — per the
+   * owner's posture, or held for the next turn — rather than dropped; see
    * {@link handleOrphanEvent}.
    */
   let approvalEncoder: CliTurnOptions['buildApprovalResponse'];
@@ -332,6 +415,22 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * explanation exactly where the user meets the symptom.
    */
   const pendingNotices: string[] = [];
+  /**
+   * Approval requests held for the next turn to adopt, because no verdict could
+   * be produced without one.
+   *
+   * Unlike a notice this is not an explanation — it is the request itself, and
+   * the CLI is blocked on it. Held rather than refused: a refusal reaches the
+   * agent as the USER's "no", for a card nobody ever saw. Replayed into the next
+   * turn, it becomes an ordinary `approval_request` and takes the same card path
+   * every in-turn request takes, so the user finally sees what was asked and the
+   * verdict they give reaches a live stdin.
+   *
+   * Safe to replay where a general event is not: a verdict is answered by `id`,
+   * so adopting one attributes nothing to the wrong turn — whereas replaying,
+   * say, a `tool_result` would file one turn's output under another's.
+   */
+  const pendingApprovals: ApprovalRequestEvent[] = [];
   /**
    * When each outstanding approval request was seen, for the round-trip line.
    *
@@ -383,6 +482,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     if (current === turn) {
       current = null;
+    }
+    // Anything this turn was shown but never answered goes back on the hold
+    // buffer, ahead of whatever arrived later, so the next turn offers it
+    // again. The CLI is still blocked on it either way; the only question is
+    // whether it can ever be reached again.
+    if (turn.outstanding.size > 0) {
+      pendingApprovals.unshift(...turn.outstanding.values());
+      opts.logger?.warn(
+        `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn settled — re-held for the next turn`,
+      );
+      turn.outstanding.clear();
     }
     // The map only ever times a WITHIN-turn round trip, so nothing in it can
     // still be answered once the turn is over. `respondApproval` and the
@@ -441,46 +551,96 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * turn would attribute one turn's output to another — so they stay dropped.
    * An `approval_request` is the exception, because dropping it is not
    * neutral: the CLI is BLOCKED on a reply that, with no turn, nothing will
-   * ever send. So it is REFUSED. Denying is the only answer that is correct in
-   * every approval mode — it cannot grant a permission nobody is there to
-   * approve, and it unblocks the CLI instead of leaving it parked on a verdict
-   * that cannot arrive. It is also the move this codebase already makes when a
-   * card cannot reach the user: see `ChatService`'s deny when persisting the
-   * approval item throws, and `ApprovalRegistry.sweepNode`'s `unanswerable`.
+   * ever send.
+   *
+   * What to answer is the OWNER's call ({@link CliSessionOptions.betweenTurnApproval}),
+   * because it turns on the run's approval posture and this layer cannot see
+   * one. Deciding here alone was wrong in both directions: under `auto` — whose
+   * entire contract is to approve plain permissions unattended — every
+   * between-turn tool call was REFUSED, and the refusal reached the agent as
+   * the user's own "no" for a card that was never rendered. That is the
+   * "Denied by the user in Geniro" a user saw while their agent reported it had
+   * lost write access to the worktree.
+   *
+   * A request the owner will not decide is HELD rather than refused, and the
+   * next turn adopts it — see {@link pendingApprovals}.
    */
   function handleOrphanEvent(event: AgentEvent): void {
     if (event.type !== 'approval_request') {
+      if (opts.onBetweenTurnEvent) {
+        opts.onBetweenTurnEvent(event);
+        return;
+      }
       opts.logger?.warn(
         `${opts.command}: dropped a '${event.type}' event arriving between turns`,
       );
       return;
     }
-    if (isUserQuestion(opts.questionToolName ?? null, event.toolName)) {
-      // A QUESTION is left standing. The refusal below encodes `allow: false`,
-      // which reaches the CLI as a denial attributed to the user — so an
-      // agent that asked something between turns was told "no" by a person who
-      // never saw the question. Parked, it stalls instead, which is what it did
-      // before the refusal existed and is the honest state: nobody has answered.
-      approvalSeenAt.delete(event.id);
+    const isQuestion = isUserQuestion(
+      opts.questionToolName ?? null,
+      event.toolName,
+    );
+    // The default is the pre-owner behaviour, kept for callers with no posture
+    // to offer: a question is held (refusing answers for the user), a
+    // permission is refused (no turn can carry a verdict).
+    // Not `?? default` — null is a VERDICT here ("hold it"), and `??` would
+    // read it as an absent policy and fall through to the refusal this exists
+    // to remove.
+    const offered = opts.betweenTurnApproval
+      ? opts.betweenTurnApproval({ toolName: event.toolName })
+      : isQuestion
+        ? null
+        : false;
+    // A floor no owner can lower: a QUESTION is never answered without the
+    // user, whatever the posture says. The previous code refused questions
+    // unconditionally and so could not get this wrong; now that an owner
+    // decides, the one verdict that would speak for the user has to be
+    // unavailable rather than merely unused by today's only caller.
+    const verdict = isQuestion && offered === true ? null : offered;
+    if (verdict !== offered) {
       opts.logger?.warn(
-        `${opts.command}: question '${event.toolName}' (id ${event.id}) arrived between turns — ` +
-          'left unanswered, since refusing it would answer for the user',
+        `${opts.command}: refusing to auto-answer the question tool '${event.toolName}' between turns — held for the user instead`,
       );
-      // Said OUT LOUD, not just logged. The refusal this replaced at least
-      // unblocked the CLI; parking does not, and the process is kept between
-      // turns, so the next turn inherits a CLI still waiting on this request
-      // and falls silent until the deadline. Without a transcript row the user
-      // sees a chat that simply stopped answering, with nothing naming the
-      // question that stopped it.
-      pendingNotices.push(
-        `${opts.command} asked a question between turns, so nothing was there to show it to you. ` +
-          'It was left unanswered rather than refused on your behalf — but the CLI is still ' +
-          'waiting on it, so this chat may not answer until it is restarted.',
+    }
+    if (verdict === null) {
+      approvalSeenAt.delete(event.id);
+      pendingApprovals.push(event);
+      opts.logger?.warn(
+        `${opts.command}: ${isQuestion ? 'question' : 'approval_request'} for '${event.toolName}' ` +
+          `(id ${event.id}) arrived between turns — held for the next turn to adopt`,
       );
+      // Oldest first, and SAID rather than silently trimmed. Every held
+      // request is a CLI blocked on a verdict, so dropping one is giving up on
+      // it — a fact the log has to carry, because the user's only other clue
+      // would be an agent that never finished. The cap exists because nothing
+      // else bounds this: a CLI asking repeatedly on a chat nobody returns to
+      // would grow the buffer for as long as the session lives.
+      while (pendingApprovals.length > MAX_HELD_APPROVALS) {
+        const dropped = pendingApprovals.shift()!;
+        opts.logger?.warn(
+          `${opts.command}: dropped held request '${dropped.toolName}' (id ${dropped.id}) — ` +
+            `more than ${MAX_HELD_APPROVALS} are outstanding and the CLI is still blocked on it`,
+        );
+      }
+      // ONE notice per turn however many are held: the sentence explains the
+      // state, not each occurrence, and N verbatim copies of it would bury the
+      // cards it is pointing at.
+      const notice =
+        `${opts.command} asked for something between turns, when nothing was on screen to ` +
+        'show it to you. It was left standing rather than answered on your behalf, and it is ' +
+        'shown above so you can answer it now.';
+      if (!pendingNotices.includes(notice)) {
+        pendingNotices.push(notice);
+      }
       return;
     }
-    const line = approvalEncoder?.(event.id, false, undefined);
-    const refused = line !== undefined && sessionWrite(line);
+    // The request's OWN input rides back, exactly as the in-turn auto-approve
+    // seam does it. Passing undefined was harmless while this branch only ever
+    // denied (a deny drops the field), but an ALLOW echoes it — and the
+    // adapter's `updatedInput ?? {}` would have handed the CLI a blanked
+    // argument list for a call it had just been given permission to make.
+    const line = approvalEncoder?.(event.id, verdict, event.input);
+    const answered = line !== undefined && sessionWrite(line);
     approvalSeenAt.delete(event.id);
     // WARN, not debug: the CLI asked permission for work no turn owns, which
     // is the state the D1 numbers point at. Every field a later reader needs
@@ -488,9 +648,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // were both missing from the message this replaces.
     opts.logger?.warn(
       `${opts.command}: approval_request for '${event.toolName}' (id ${event.id}) arrived between turns — ` +
-        (refused
-          ? 'refused, since no turn can carry a verdict'
-          : 'and could NOT be refused (no approval encoder or stdin is gone) — the CLI is parked'),
+        (answered
+          ? `${verdict ? 'allowed' : 'refused'} by the run's standing approval posture`
+          : 'and could NOT be answered (no approval encoder or stdin is gone) — the CLI is parked'),
     );
   }
 
@@ -506,6 +666,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (!turn) {
       handleOrphanEvent(event);
       return;
+    }
+    if (event.type === 'approval_request') {
+      // Recorded HERE, at the one door every request bound for a turn passes
+      // through — adopted from the hold buffer or raised mid-turn alike. Doing
+      // it at the adoption site instead covered only the rarer of the two, and
+      // left an in-turn request that its turn never answered stranding the CLI
+      // for good (see {@link TurnState.outstanding}).
+      turn.outstanding.set(event.id, event);
     }
     const normalized: AgentEvent =
       turn.cancelRequested && event.type === 'error'
@@ -829,6 +997,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       options: turnOptions,
       interruptTimer: null,
       silenceTimer: null,
+      outstanding: new Map(),
     };
     current = turn;
     // Kept at session scope so a request arriving AFTER this turn settles can
@@ -837,6 +1006,20 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // Anything that happened while no turn was open is told to THIS one, before
     // its own output — it is the context for what this turn is about to do (or
     // fail to do). Drained, not copied: each is said once.
+    // A request held while no turn was open is adopted FIRST, ahead of the
+    // notice explaining it — the notice says "it is shown above", and a card
+    // that arrived after its own explanation would make a liar of it. The CLI
+    // has been blocked on each of these since it asked, so this is also the
+    // earliest moment either could reach a user.
+    while (pendingApprovals.length > 0) {
+      const adopted = pendingApprovals.shift()!;
+      // Recorded the same way `emit` records an in-turn request — this loop
+      // hands the event straight to the turn rather than going through it, so
+      // the bookkeeping has to be repeated rather than inherited.
+      approvalSeenAt.set(adopted.id, Date.now());
+      turn.outstanding.set(adopted.id, adopted);
+      turnOptions.onEvent(adopted);
+    }
     while (pendingNotices.length > 0) {
       turnOptions.onEvent({ type: 'notice', message: pendingNotices.shift()! });
     }
@@ -891,6 +1074,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         const delivered = turnWrite(() =>
           turnOptions.buildApprovalResponse?.(id, allow, updatedInput),
         );
+        if (delivered) {
+          // Answered, so it must not be re-held when this turn settles.
+          // Keyed on delivery: a verdict the CLI never received leaves the
+          // request outstanding, which is exactly when re-holding is right.
+          turn.outstanding.delete(id);
+        }
         const seenAt = approvalSeenAt.get(id);
         approvalSeenAt.delete(id);
         // Both outcomes, deliberately. Recording only the failures is what made

@@ -73,7 +73,7 @@ import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ContextMeter } from './context-meter';
 import { EffortSelect } from './effort-select';
 import { folderName, FolderSelect } from './folder-select';
-import { RunActivityContext } from './live-row';
+import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   applyLiveText,
   CHAT_LIVE_KEY,
@@ -85,7 +85,7 @@ import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
-import { displayRunStatus } from './run-status';
+import { displayRunStatus, isSettledRunStatus } from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
@@ -2825,63 +2825,66 @@ export function Chats({
                   and a `scrollIntoView` on the widest descendant both leave
                   `scrollLeft` at 0. */}
                 <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
-                  <RunActivityContext.Provider value={activeActivity}>
-                    {transcriptEntries.map((entry) => {
-                      if (
-                        entry.type !== 'item' ||
-                        entry.item.kind !== 'approval_request'
-                      ) {
-                        const key =
-                          entry.type === 'item' ? entry.item.id : entry.id;
-                        return (
-                          <TranscriptEntryView
-                            key={key}
-                            entry={entry}
-                            nodes={nodeMeta}
-                            chatAgentName={activeRun?.agentKind ?? null}
-                            soloAgent={soloAgent}
-                          />
+                  <RunSettledContext.Provider
+                    value={isSettledRunStatus(activeRunStatus)}>
+                    <RunActivityContext.Provider value={activeActivity}>
+                      {transcriptEntries.map((entry) => {
+                        if (
+                          entry.type !== 'item' ||
+                          entry.item.kind !== 'approval_request'
+                        ) {
+                          const key =
+                            entry.type === 'item' ? entry.item.id : entry.id;
+                          return (
+                            <TranscriptEntryView
+                              key={key}
+                              entry={entry}
+                              nodes={nodeMeta}
+                              chatAgentName={activeRun?.agentKind ?? null}
+                              soloAgent={soloAgent}
+                            />
+                          );
+                        }
+                        const item = entry.item;
+                        // EVERY open request's card lives above the composer, so
+                        // every one of them leaves a marker here. Keyed on openness
+                        // rather than on the pinned id: keying on the pin gave the
+                        // SECOND open question a fully live card in the scroller,
+                        // which is the failure the pin exists to end. Leaving the
+                        // live card here too would put two sets of buttons over one
+                        // one-shot verdict channel; leaving nothing would silently
+                        // drop a row out of the conversation's order.
+                        if (openRequestId(item) !== null) {
+                          return (
+                            <MessageBubble key={item.id} variant="note">
+                              {pinnedRequest?.id === item.id
+                                ? '❓ waiting on your answer — the card is pinned below'
+                                : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                            </MessageBubble>
+                          );
+                        }
+                        const askerName =
+                          (item.nodeId
+                            ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
+                            : activeRun?.agentKind) ?? 'agent';
+                        const card = (
+                          <div className="w-full">{approvalCardFor(item)}</div>
                         );
-                      }
-                      const item = entry.item;
-                      // EVERY open request's card lives above the composer, so
-                      // every one of them leaves a marker here. Keyed on openness
-                      // rather than on the pinned id: keying on the pin gave the
-                      // SECOND open question a fully live card in the scroller,
-                      // which is the failure the pin exists to end. Leaving the
-                      // live card here too would put two sets of buttons over one
-                      // one-shot verdict channel; leaving nothing would silently
-                      // drop a row out of the conversation's order.
-                      if (openRequestId(item) !== null) {
-                        return (
-                          <MessageBubble key={item.id} variant="note">
-                            {pinnedRequest?.id === item.id
-                              ? '❓ waiting on your answer — the card is pinned below'
-                              : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                          </MessageBubble>
+                        // A solo agent's card needs no identity frame either.
+                        return soloAgent ? (
+                          <div key={item.id}>{card}</div>
+                        ) : (
+                          <SenderRow
+                            key={item.id}
+                            name={askerName}
+                            colorKey={item.nodeId ?? undefined}
+                            time={formatClockTime(item.createdAt)}>
+                            {card}
+                          </SenderRow>
                         );
-                      }
-                      const askerName =
-                        (item.nodeId
-                          ? (nodeMeta.get(item.nodeId)?.name ?? item.nodeId)
-                          : activeRun?.agentKind) ?? 'agent';
-                      const card = (
-                        <div className="w-full">{approvalCardFor(item)}</div>
-                      );
-                      // A solo agent's card needs no identity frame either.
-                      return soloAgent ? (
-                        <div key={item.id}>{card}</div>
-                      ) : (
-                        <SenderRow
-                          key={item.id}
-                          name={askerName}
-                          colorKey={item.nodeId ?? undefined}
-                          time={formatClockTime(item.createdAt)}>
-                          {card}
-                        </SenderRow>
-                      );
-                    })}
-                  </RunActivityContext.Provider>
+                      })}
+                    </RunActivityContext.Provider>
+                  </RunSettledContext.Provider>
                   <div ref={transcriptEndRef} />
                 </div>
 

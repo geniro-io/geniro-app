@@ -40,8 +40,45 @@ export const CLAUDE_APPEND_SYSTEM_PROMPT_FLAG = '--append-system-prompt';
 export const CLAUDE_PERMISSION_MODE_FLAG = '--permission-mode';
 export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';
 
-/** The CLI's own name for the ask-the-user permission mode. */
+/**
+ * The CLI's own name for the ask-the-user permission mode.
+ *
+ * `--help` on 2.1.227 no longer LISTS this value — its choices are
+ * `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`, with
+ * `manual` in its place. It is kept anyway, and deliberately not renamed:
+ * probed on 2.1.227, `--permission-mode default` is still accepted (exit 0),
+ * and BOTH spellings make the CLI report `permissionMode: "default"` back on
+ * its `system/init` line. So `default` is the canonical internal name and
+ * `manual` is the surfaced alias — chasing the alias would swap a name the CLI
+ * answers with for one it only accepts.
+ */
 export const CLAUDE_PERMISSION_MODE_DEFAULT = 'default';
+
+/**
+ * The mode named on argv when a turn holding the permission dialogue somehow
+ * carries no `approvalMode` — the type permits it, so the argv answers it
+ * rather than letting a `--permission-mode undefined` reach the CLI.
+ *
+ * WHY THE UNSET CASE STOPPED BEING FREE. A turn with no mode passes no
+ * `--permission-mode` at all and inherits whatever the installed CLI defaults
+ * to. That was safe while claude's default was `default` (ask about
+ * everything); it is not any more. Probed on 2.1.227: a `-p` turn with NO
+ * permission flag reports `permissionMode: "auto"`, the new default Anthropic
+ * is rolling out to Pro/Max/Team sessions. Inheriting it turns "nobody chose a
+ * posture" into "approve everything unattended", decided by the vendor and
+ * never seen by the user.
+ *
+ * The USER-facing half of that is fixed where a null mode actually has a
+ * meaning — `ChatService` resolves a pre-selector chat row's null `approval`
+ * to `ask` before the turn is built. It is deliberately NOT fixed here: the
+ * same `undefined` also reaches this adapter from geniro's own probe turns,
+ * which read one `system/init` line and are cancelled, and handing those a
+ * permission dialogue and an open stdin buys nothing. So an unset mode still
+ * means "no permission flags" (see `spawnsOnPermissionDialogue`), and this
+ * constant only names the value for the branch that cannot be reached with an
+ * unset mode today.
+ */
+export const CLAUDE_UNSET_MODE_FALLBACK = CLAUDE_PERMISSION_MODE_DEFAULT;
 
 // ── Stdin control protocol (UNDOCUMENTED — probe evidence) ────────────────
 //
@@ -66,7 +103,25 @@ export const CLAUDE_PERMISSION_MODE_DEFAULT = 'default';
 /** The permission-prompt transport: the stdin control dialogue. */
 export const CLAUDE_PERMISSION_PROMPT_TOOL_STDIO = 'stdio';
 
-/** Bypasses every permission check — and STRIPS the question tool with them. */
+/**
+ * Bypasses every permission check — and STRIPS the question tool with them.
+ *
+ * Re-probed on 2.1.227 by reading `system/init`'s own `tools` list, which
+ * sharpens WHY. It is not the bypass that removes `AskUserQuestion`; it is the
+ * absence of a permission-prompt CHANNEL. Measured across every mode: with
+ * `--permission-prompt-tool stdio` the tool is present under `default`,
+ * `manual`, `acceptEdits`, `plan`, `auto` and `dontAsk` alike, and without it
+ * the tool is absent under every one of those too — the mode is not the
+ * variable. This flag strips it because a turn that asks nobody for permission
+ * is given no channel to ask on.
+ *
+ * That distinction matters for the workaround in `buildArgs`, which is
+ * unchanged and still correct: an `auto` turn that must be able to ask spawns
+ * on `default` + stdio, and the probe confirms the tool is there. It also rules
+ * out the tempting shortcut of keeping the bypass and adding stdio to it —
+ * that combination does register the tool, but the same probe measured the
+ * turn's whole tool surface collapsing from 207 entries to 91.
+ */
 export const CLAUDE_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 
 /**

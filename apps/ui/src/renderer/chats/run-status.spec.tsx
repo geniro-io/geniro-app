@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   displayRunStatus,
+  isSettledRunStatus,
   RUN_STATUS_META,
   type RunStatusKind,
 } from './run-status';
@@ -103,5 +104,48 @@ describe('RUN_STATUS_META', () => {
       expect(RUN_STATUS_META[kind].label, kind).toBeTruthy();
       expect(RUN_STATUS_META[kind].className, kind).toBeTruthy();
     }
+  });
+});
+
+describe('isSettledRunStatus', () => {
+  // Table-driven over EVERY kind, because both directions of getting this
+  // wrong are user-visible and silent: widening it to `running` kills the
+  // spinner on live work, and narrowing it restores the reported bug — a
+  // completed chat with a tool row spinning forever.
+  const settled: RunStatusKind[] = [
+    'completed',
+    'failed',
+    'cancelled',
+    'skipped',
+  ];
+  const unsettled: RunStatusKind[] = [
+    'pending',
+    'running',
+    'needs-input',
+    'idle',
+  ];
+
+  it('reports the four end states as settled', () => {
+    for (const kind of settled) {
+      expect(isSettledRunStatus(kind), kind).toBe(true);
+    }
+  });
+
+  it('reports every state a run can still leave as unsettled', () => {
+    // `needs-input` is the one worth naming: the turn is OPEN and waiting on a
+    // human, so work genuinely is in flight and its spinners must keep
+    // running. `pending` and `idle` are states a run has yet to leave, not
+    // ones it has finished in.
+    for (const kind of unsettled) {
+      expect(isSettledRunStatus(kind), kind).toBe(false);
+    }
+  });
+
+  it('covers every RunStatusKind between the two lists', () => {
+    // Without this, a kind added later is silently absent from both lists and
+    // the two cases above go on passing while saying nothing about it.
+    expect([...settled, ...unsettled].sort()).toEqual(
+      Object.keys(RUN_STATUS_META).sort(),
+    );
   });
 });

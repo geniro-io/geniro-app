@@ -49,6 +49,21 @@ export interface ToolGroupEntry {
    * single-call rows with nothing saying where any of them came from.
    */
   parentToolUseId: string | null;
+  /**
+   * A turn ended after this group — so whatever result was coming has come.
+   *
+   * An unpaired call means "still running" only while its turn is open. Once
+   * the turn is over, a missing `tool_result` is a result that never arrived
+   * (the daemon drops one that lands between turns), and a spinner over it
+   * claims work that stopped long ago. That is the reported bug: a chat whose
+   * header read `completed` with a sub-agent row working forever.
+   *
+   * Per-GROUP rather than per-run, and that distinction is the point: the run
+   * reads `running` again the moment the user sends another message, so a
+   * run-level flag let the same stale group start spinning through every
+   * later turn.
+   */
+  closed: boolean;
   pairs: ToolPair[];
 }
 
@@ -365,6 +380,8 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
           id: item.id,
           nodeId: item.nodeId,
           parentToolUseId: subagentIdOf(item),
+          // Filled by the closing sweep below, once the whole stream is known.
+          closed: false,
           pairs: [pair],
         };
         openGroups.set(key, group);
@@ -393,7 +410,53 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     openGroups.delete(groupKey(item));
     entries.push({ type: 'item', item });
   }
+  closeGroupsBeforeTurnEnds(entries, items);
   return entries;
+}
+
+/** Item kinds that end a turn — after one, nothing more is coming for it. */
+const TURN_END_KINDS = new Set(['turn_complete', 'turn_cancelled', 'error']);
+
+/**
+ * Mark every tool group that a turn ended after.
+ *
+ * Answered against the ITEM stream rather than the run's status, because the
+ * question is per-turn: the run goes back to `running` on the user's next
+ * message, and a group left open by turn 1 must stay closed through turn 5
+ * rather than start spinning again with it.
+ *
+ * Recursive over blocks, since the fold nests groups inside turn- and
+ * call-blocks and a nested group is exactly the sub-agent case that was
+ * reported spinning.
+ */
+function closeGroupsBeforeTurnEnds(
+  entries: readonly TranscriptEntry[],
+  items: readonly ChatItem[],
+): void {
+  const turnEndSeqs = items
+    .filter((item) => TURN_END_KINDS.has(item.kind))
+    .map((item) => item.seq);
+  if (turnEndSeqs.length === 0) {
+    return;
+  }
+  const walk = (list: readonly TranscriptEntry[]): void => {
+    for (const entry of list) {
+      if (entry.type === 'tools') {
+        const lastSeq = entry.pairs.reduce(
+          (max, pair) => Math.max(max, pair.result?.seq ?? pair.call.seq),
+          0,
+        );
+        // A turn ended AFTER this group's last row, so this group's turn is
+        // among the ones that finished.
+        entry.closed = turnEndSeqs.some((seq) => seq > lastSeq);
+        continue;
+      }
+      if (entry.type === 'turn-block' || entry.type === 'call-block') {
+        walk(entry.entries);
+      }
+    }
+  };
+  walk(entries);
 }
 
 /**

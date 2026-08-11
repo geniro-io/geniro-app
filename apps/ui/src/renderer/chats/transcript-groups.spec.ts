@@ -547,6 +547,53 @@ describe('toolCallSummary', () => {
   });
 });
 
+describe('groupTranscript — closing a group whose turn ended', () => {
+  const toolsOf = (entries: TranscriptEntry[]): ToolGroupEntry[] =>
+    entries.filter((entry): entry is ToolGroupEntry => entry.type === 'tools');
+
+  it('leaves a group OPEN while its turn is still running', () => {
+    const entries = groupTranscript([
+      item('tool_call', { id: 't1', name: 'Bash', input: {} }),
+    ]);
+    expect(toolsOf(entries)[0]?.closed).toBe(false);
+  });
+
+  it('closes a group once a turn_complete follows it', () => {
+    // The reported bug's data shape: a call whose result never arrived,
+    // followed by the turn ending. Nothing more is coming for it.
+    const entries = groupTranscript([
+      item('tool_call', { id: 't1', name: 'Bash', input: {} }),
+      item('turn_complete', {}),
+    ]);
+    expect(toolsOf(entries)[0]?.closed).toBe(true);
+  });
+
+  it('closes only the groups the turn end came AFTER', () => {
+    // The per-turn part, which a run-level flag could not express: turn 1's
+    // orphaned group stays closed while turn 2's group is genuinely live.
+    const entries = groupTranscript([
+      item('tool_call', { id: 't1', name: 'Bash', input: {} }),
+      item('turn_complete', {}),
+      item('message', { text: 'next turn' }, 'orch', 'assistant'),
+      item('tool_call', { id: 't2', name: 'Bash', input: {} }),
+    ]);
+    const groups = toolsOf(entries);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.closed).toBe(true);
+    expect(groups[1]?.closed).toBe(false);
+  });
+
+  it('treats a cancelled or errored turn as an end too', () => {
+    for (const kind of ['turn_cancelled', 'error'] as const) {
+      const entries = groupTranscript([
+        item('tool_call', { id: 't1', name: 'Bash', input: {} }),
+        item(kind, {}),
+      ]);
+      expect(toolsOf(entries)[0]?.closed, kind).toBe(true);
+    }
+  });
+});
+
 describe('toolResultText', () => {
   it('passes strings through and joins Claude text-block arrays', () => {
     expect(toolResultText('plain')).toBe('plain');

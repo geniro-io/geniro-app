@@ -77,6 +77,82 @@ function combinedAnswer(
 }
 
 /**
+ * Parse a `cursor/ask_question` params object (`{ questions: [{ id, prompt,
+ * options: [{ id, label }], allowMultiple }] }`) into the same renderable
+ * entries. Empty for anything else, including claude's shape — the two share
+ * only the word `questions`.
+ *
+ * TWIN PARSER: the daemon parses the same wire shape in
+ * apps/daemon/src/v1/agents/adapters/cursor-acp/utils/cursor-question.utils.ts
+ * — a shape drift fixed there must be mirrored here, and vice versa. Mirrored
+ * rules: an option is kept only when its `id` is non-empty, and its LABEL
+ * falls back to that id (the daemon answers with the id, so a row whose label
+ * this side dropped would be unpickable while the daemon still had a value
+ * for it); a question with no options is dropped whole, because the vendor's
+ * only answer channel is `selectedOptionIds`.
+ *
+ * `header` is null: the request has no per-question title. Its request-level
+ * `title` is deliberately not used as one — it names the whole ask, and
+ * repeating it on every tab would label them identically.
+ */
+function readCursorQuestions(input: unknown): ParsedQuestion[] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return [];
+  }
+  const questions = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(questions)) {
+    return [];
+  }
+  const parsed: ParsedQuestion[] = [];
+  for (const entry of questions) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const q = entry as {
+      id?: unknown;
+      prompt?: unknown;
+      options?: unknown;
+      allowMultiple?: unknown;
+    };
+    if (
+      typeof q.id !== 'string' ||
+      q.id.length === 0 ||
+      typeof q.prompt !== 'string' ||
+      q.prompt.length === 0
+    ) {
+      continue;
+    }
+    const options = (Array.isArray(q.options) ? q.options : [])
+      .map((o) => {
+        if (!o || typeof o !== 'object') {
+          return null;
+        }
+        const option = o as { id?: unknown; label?: unknown };
+        if (typeof option.id !== 'string' || option.id.length === 0) {
+          return null;
+        }
+        return typeof option.label === 'string' && option.label.length > 0
+          ? option.label
+          : option.id;
+      })
+      .filter(
+        (label): label is string =>
+          label !== null && label.length <= MAX_ANSWER_LENGTH,
+      );
+    if (options.length === 0) {
+      continue;
+    }
+    parsed.push({
+      question: q.prompt,
+      header: null,
+      options,
+      multiSelect: q.allowMultiple === true,
+    });
+  }
+  return parsed;
+}
+
+/**
  * Parse an AskUserQuestion tool input (`{ questions: [{ question, options:
  * [{ label }] }] }`) into renderable entries. Empty for any other tool's
  * input — the card then falls back to the plain approve/deny body.
@@ -791,7 +867,22 @@ export function ApprovalCard({
     images?: SendMessageDtoImagesInner[],
   ) => void;
 }): React.JSX.Element {
-  const questions = toolName === 'AskUserQuestion' ? readQuestions(input) : [];
+  // One parser per CLI's question shape, chosen by the name the DAEMON put on
+  // the request — each adapter's own `questionToolName`. Gated on the name
+  // rather than on "did it parse", because both shapes are just `questions:
+  // [...]`: an ordinary tool call carrying a field of that name would
+  // otherwise be rendered as a question and answered as one.
+  //
+  // Two entries, not a lookup: this is the twin-parser carve-out (the item
+  // payload is untyped on the wire by design, so no generated type reaches
+  // here), and a name spelled on both sides is what the doc blocks above
+  // cross-reference.
+  const questions =
+    toolName === 'AskUserQuestion'
+      ? readQuestions(input)
+      : toolName === 'cursor/ask_question'
+        ? readCursorQuestions(input)
+        : [];
   return questions.length > 0 ? (
     <QuestionCard
       questions={questions}

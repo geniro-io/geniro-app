@@ -79,12 +79,24 @@ describe('isUserQuestion', () => {
     expect(isUserQuestion(QUESTION_TOOL, 'Bash')).toBe(false);
   });
 
-  it('finds no question at all for a CLI with no question channel', () => {
-    // cursor-agent reports null: every request it could raise is a permission
-    // check, so nothing may ever be treated as a user question.
-    expect(cursor.getConfig().questionToolName).toBeNull();
-    expect(
-      isUserQuestion(cursor.getConfig().questionToolName, QUESTION_TOOL),
-    ).toBe(false);
+  it('never crosses one CLI’s question tool with another’s', () => {
+    // Both adapters declare a channel now, and they declare DIFFERENT names —
+    // cursor's is its `cursor/ask_question` method, claude's is a tool. The
+    // discriminator has to be read against the adapter that raised the
+    // request: matched loosely, one CLI's permission check could be mistaken
+    // for the other's question and skip the human gate.
+    const cursorTool = cursor.getConfig().questionToolName;
+    expect(cursorTool).not.toBeNull();
+    expect(cursorTool).not.toBe(QUESTION_TOOL);
+
+    expect(isUserQuestion(cursorTool, QUESTION_TOOL)).toBe(false);
+    expect(isUserQuestion(QUESTION_TOOL, cursorTool ?? '')).toBe(false);
+    expect(isUserQuestion(cursorTool, cursorTool ?? '')).toBe(true);
+  });
+
+  it('finds no question at all for a CLI that declares no channel', () => {
+    // The null arm still has to work: it is what a CLI with no question
+    // channel declares, and nothing it raises may ever be treated as one.
+    expect(isUserQuestion(null, QUESTION_TOOL)).toBe(false);
   });
 });

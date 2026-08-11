@@ -2174,6 +2174,49 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     ],
   };
 
+  it('leaves an auto node on auto when its CLI’s questions cost no ask posture', async () => {
+    // Both CLIs are question-capable now, and only claude PAYS the ask
+    // posture for it: its tool is unwired without a permission channel. A
+    // cursor question is a JSON-RPC request that arrives whatever session
+    // mode the agent is in, so forcing `ask` on it would park every ordinary
+    // permission of an unwatched graph node on a verdict nobody is there to
+    // give. The fact lives on the adapter (`questionsCostAskPosture`); this
+    // pins that the executor reads it instead of assuming claude's answer.
+    const { service, claude, cursor, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'qa',
+      workflow: triggered({
+        ...CALL_WORKFLOW,
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          {
+            id: 'callee',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+        ],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(claude.starts[0]!.input.approvalMode).toBe('ask');
+
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'work',
+    });
+    await drain();
+    expect(cursor.starts[0]!.input.approvalMode).toBe('auto');
+
+    completeTurn(cursor.starts[0]!, 'callee done');
+    await call;
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('parks a call-initiated question in the broker and delivers the answer as updatedInput.answers — never a renderer card', async () => {
     const { service, claude, approvals, callBroker, itemDao } = setup();
     const run = await service.startRun({

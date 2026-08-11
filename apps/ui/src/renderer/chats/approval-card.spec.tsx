@@ -321,6 +321,78 @@ describe('ApprovalCard', () => {
     expect(expired.textContent).toContain('expired');
   });
 
+  it('renders a cursor/ask_question as a question card, out of ITS OWN shape', () => {
+    // The two CLIs' question payloads share only the word `questions`:
+    // cursor's entries carry `id`/`prompt`/`options[].id`, claude's carry
+    // `question`/`options[].label`. Read with the wrong parser this yields
+    // nothing and the user gets a raw approve/deny body instead of the
+    // question — which is what shipped before the vendor channel was wired.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="cursor/ask_question"
+        input={{
+          toolCallId: 'tool_1',
+          title: 'Pick reviewers',
+          questions: [
+            {
+              id: 'q1',
+              prompt: 'Which color should the header be?',
+              options: [
+                { id: 'red', label: 'Red' },
+                { id: 'blue', label: 'Blue' },
+              ],
+            },
+          ],
+        }}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    expect(el.textContent).toContain('Agent asks a question');
+    expect(el.textContent).toContain('Which color should the header be?');
+    const blue = [...el.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Blue',
+    )!;
+    act(() => {
+      blue.click();
+    });
+    // The LABEL, which is what the daemon's encoder matches an option on.
+    expect(onRespond).toHaveBeenLastCalledWith(true, 'Blue');
+  });
+
+  it('falls back to the option id when a cursor option carries no label', () => {
+    // Mirrors the daemon's own fallback. If this side dropped the row while
+    // the daemon kept it, the user would be shown fewer choices than the
+    // agent offered — and one it never showed could still be answered.
+    const el = render(
+      <ApprovalCard
+        toolName="cursor/ask_question"
+        input={{
+          questions: [{ id: 'q1', prompt: 'Which?', options: [{ id: 'red' }] }],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(
+      [...el.querySelectorAll('button')].some((b) => b.textContent === 'red'),
+    ).toBe(true);
+  });
+
+  it('renders claude’s shape under the cursor name as a plain approval body', () => {
+    // Each name gets ITS OWN parser, never a union that would accept either.
+    const el = render(
+      <ApprovalCard
+        toolName="cursor/ask_question"
+        input={QUESTION_INPUT}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Agent asks to run a tool');
+  });
+
   it('an AskUserQuestion with a malformed payload falls back to the plain approval body', () => {
     const el = render(
       <ApprovalCard

@@ -39,6 +39,13 @@ export function useAgentVocabulary<T>(
       setList(cached);
       return;
     }
+    // Nothing known about THIS kind yet, so show nothing — never the kind we
+    // were showing a moment ago. Holding the previous list across the switch
+    // offers one CLI's vocabulary under another's name, and the window is not
+    // a flicker: a cursor model probe spawns a real `cursor-agent acp` and
+    // handshakes twice (7.0s cold), so a cursor target sat there offering
+    // claude's models for seconds.
+    setList([]);
     let stale = false;
     void fetchFor(kind)
       .then((fetched) => {

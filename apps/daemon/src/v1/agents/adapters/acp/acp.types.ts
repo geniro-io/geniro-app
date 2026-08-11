@@ -24,6 +24,7 @@ export const ACP_AGENT_METHODS = {
   sessionLoad: 'session/load',
   sessionSetMode: 'session/set_mode',
   sessionSetModel: 'session/set_model',
+  sessionSetConfigOption: 'session/set_config_option',
   sessionPrompt: 'session/prompt',
 } as const;
 
@@ -118,19 +119,69 @@ export interface AcpSetModeParams {
   modeId: string;
 }
 
-/** `session/set_model` params. */
+/**
+ * `session/set_model` params — the PRE-1.0 way to put a session on a model.
+ *
+ * Removed from the published schema when ACP 1.0 / schema v1.16.0 landed
+ * (2026-06-24); `session/set_config_option` replaced it. Kept because removal
+ * from the SPEC is not removal from the BINARIES: probed on cursor-agent
+ * 2026.08.04-aaa8809, the installed agent still answers it with `{}`. Which of
+ * the two goes out is decided by what the session reply advertises, never by a
+ * version guess — see {@link AcpSetConfigOptionParams}.
+ */
 export interface AcpSetModelParams {
   sessionId: string;
   modelId: string;
 }
 
 /**
- * One entry of `session/new`'s `models.availableModels`.
+ * `session/set_config_option` params — the ACP 1.0 replacement for
+ * `session/set_model`, and the general form: one call sets ANY session config
+ * option, of which the model is the `model`-category one.
  *
- * The identity key is `modelId`, NOT the `id` that `modes.availableModes` uses
- * for the sibling block — the two are shaped alike and named differently, and
- * reading a model entry's `id` yields undefined for every row rather than
- * failing, which is a picker that silently lists nothing.
+ * The field is `configId`, NOT the `configOptionId` the protocol docs' prose
+ * uses: probed on cursor-agent 2026.08.04-aaa8809, `configOptionId` earns
+ * `-32603 Invalid input` naming `configId` as the missing path, while
+ * `configId` succeeds. `value` is one of the `value`s the matching
+ * {@link AcpConfigOption} listed.
+ *
+ * The reply carries the agent's FULL config-option list back, because setting
+ * one option may change another's available values. We discard it: nothing in a
+ * turn re-reads the vocabulary after the prompt has gone out.
+ */
+export interface AcpSetConfigOptionParams {
+  sessionId: string;
+  configId: string;
+  value: string;
+}
+
+/**
+ * One entry of `session/new`'s `configOptions[]` (ACP 1.0), narrowed to the
+ * `select` shape and the fields a model picker needs.
+ *
+ * `category` is what identifies the model option rather than its `id`: the
+ * category is the protocol's own vocabulary (`model`, `mode`, …) while the id
+ * is the agent's, so keying on the id would work on cursor — which happens to
+ * name it `model` too — and silently list nothing on the next agent.
+ */
+export interface AcpConfigOption {
+  id: string;
+  category: string | null;
+  currentValue: string | null;
+  options: { value: string; name: string }[];
+}
+
+/**
+ * One model the session offers, read out of EITHER carrier: ACP 1.0's
+ * `configOptions[]` entry of category `model` (`{value, name}` options), or the
+ * pre-1.0 `models.availableModels` block (`{modelId, name}`). This type is the
+ * normalized form both collapse to, so nothing above `acp-models.ts` has to
+ * know which one the agent used.
+ *
+ * In the legacy block the identity key is `modelId`, NOT the `id` that
+ * `modes.availableModes` uses for the sibling block — the two are shaped alike
+ * and named differently, and reading a model entry's `id` yields undefined for
+ * every row rather than failing, which is a picker that silently lists nothing.
  *
  * These ids are the agent's OWN namespace and are not interchangeable with the
  * ones `cursor-agent models` prints. Probed on cursor-agent 2026.08.04-aaa8809:

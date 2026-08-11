@@ -298,6 +298,66 @@ describe('AgentSessionRegistry — ending a process', () => {
 
     expect(startSession).toHaveBeenCalledWith(INPUT, { runScoped: false });
   });
+
+  it('judges a between-turn request by the LATEST turn’s posture, not the spawn’s', async () => {
+    // The session is opened once and kept for the whole run, but the approval
+    // posture is a per-turn fact. Handing the spawn a bare closure froze it at
+    // turn 1: a chat started in `auto` and switched to `ask` went on
+    // auto-approving between-turn tool calls for the rest of the session, with
+    // no card ever shown — the same silent wrong verdict the between-turn work
+    // exists to end, only inverted. Every later turn reaches the session
+    // through the REUSE path, which never spawns, so that path is where this
+    // has to hold.
+    const registry = new AgentSessionRegistry();
+    const session = new FakeSession();
+    let installed: ((r: { toolName: string }) => boolean | null) | undefined;
+    const adapter = {
+      startSession: (
+        _input: AgentTurnInput,
+        opts: {
+          betweenTurnApproval?: (r: { toolName: string }) => boolean | null;
+        },
+      ) => {
+        installed = opts.betweenTurnApproval;
+        return session;
+      },
+    } as unknown as AgentAdapter;
+
+    // Turn 1 — the run is unattended, so a between-turn permission is answered.
+    registry.startTurn('run-1', adapter, INPUT, noop, () => true);
+    expect(installed?.({ toolName: 'Bash' })).toBe(true);
+    await session.endTurn();
+
+    // Turn 2 — the user has taken the chip off auto. Same session, reuse path.
+    registry.startTurn('run-1', adapter, INPUT, noop, () => null);
+    expect(session.turns).toBe(2);
+    // Read through the ORIGINAL installed callback: that is the one the live
+    // process still calls, so asserting on anything else would prove nothing.
+    expect(installed?.({ toolName: 'Bash' })).toBeNull();
+  });
+
+  it('leaves a caller that supplies no posture on the session’s own default', async () => {
+    // `spawn-cli` still has a default for callers with no posture to offer
+    // (hold a question, refuse a permission). An indirection installed
+    // unconditionally would erase it by answering `null` for everything, so
+    // the option must stay genuinely absent.
+    const registry = new AgentSessionRegistry();
+    let seen: { betweenTurnApproval?: unknown } | undefined;
+    const adapter = {
+      startSession: (
+        _input: AgentTurnInput,
+        opts: { betweenTurnApproval?: unknown },
+      ) => {
+        seen = opts;
+        return new FakeSession();
+      },
+    } as unknown as AgentAdapter;
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(seen).toBeDefined();
+    expect(seen?.betweenTurnApproval).toBeUndefined();
+  });
 });
 
 describe('AgentSessionRegistry — the ceiling', () => {

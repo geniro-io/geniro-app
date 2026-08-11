@@ -9,6 +9,7 @@ import {
 } from '../acp/acp-models';
 import type {
   AdapterConfig,
+  AdapterQuestion,
   AgentCommandOptions,
   AgentMcpListingResult,
   AgentMcpServersInput,
@@ -20,6 +21,7 @@ import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import {
   CURSOR_ACP_ARGS,
   CURSOR_ACP_CLIENT_NAME,
+  CURSOR_ASK_QUESTION_METHOD,
   CURSOR_MCP_EMPTY_MARKER,
   CURSOR_MCP_LIST_ARGS,
   CURSOR_MCP_LIST_FAILED_MESSAGE,
@@ -27,8 +29,15 @@ import {
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
   CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
+  CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
+import {
+  cursorAdapterQuestion,
+  encodeCursorQuestionReply,
+  readCursorQuestions,
+  withCursorAnswer,
+} from './utils/cursor-question.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
 const CURSOR_PLAN_MODE_ID = 'plan';
@@ -93,11 +102,25 @@ export class CursorAcpAdapter extends AgentAdapter {
     return {
       kind: AgentKind.CursorAgent,
       /**
-       * ACP has permission requests but no question channel: there is no
-       * agent→client method for asking the USER something open-ended, so a
-       * callee driven over ACP can never raise one.
+       * Baseline ACP has permission requests and no question channel, but
+       * cursor added one as a vendor extension — so a callee driven over this
+       * transport CAN raise a question, and used to have it declined
+       * in-protocol. The method name doubles as the tool name because that is
+       * the only identity the request carries; nothing outside this adapter
+       * cares which it is.
+       *
+       * Documented rather than observed — see the block above
+       * {@link CURSOR_ASK_QUESTION_METHOD} — which is why the driver gates on
+       * a payload it can actually read and otherwise declines as before.
        */
-      questionToolName: null,
+      questionToolName: CURSOR_ASK_QUESTION_METHOD,
+      /**
+       * False, unlike claude. The question arrives as a JSON-RPC request the
+       * agent sends whatever session mode it is in, so an unattended `auto`
+       * node keeps `auto` — where claude has to be moved onto its stdio
+       * permission dialogue to keep the tool wired at all.
+       */
+      questionsCostAskPosture: false,
       approval: {
         /**
          * Real, unlike the `-p` transport this replaces:
@@ -507,7 +530,32 @@ export class CursorAcpAdapter extends AgentAdapter {
         cursorAutoDecision(input.approvalMode, toolCall),
       preferredModeId:
         input.approvalMode === 'plan' ? CURSOR_PLAN_MODE_ID : null,
+      declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
+      question: {
+        method: CURSOR_ASK_QUESTION_METHOD,
+        toolName: this.getConfig().questionToolName ?? '',
+        accepts: (params) => readCursorQuestions(params).length > 0,
+        encodeReply: encodeCursorQuestionReply,
+      },
       logger: this.cursorOptions.logger,
     });
+  }
+
+  /**
+   * The card projection for a parked `cursor/ask_question`. Reached only for
+   * a payload `accepts()` already read, so the null arm is the base class's
+   * contract rather than a case that happens.
+   */
+  override questionFrom(input: unknown): AdapterQuestion | null {
+    return cursorAdapterQuestion(input);
+  }
+
+  /**
+   * Carry the card's free text to the reply encoder. It cannot be folded into
+   * a tool input the way claude's is — the request is a JSON-RPC call, not a
+   * tool call — so it rides a key both ends of this adapter own.
+   */
+  override withAnswer(input: unknown, answer: string): unknown {
+    return withCursorAnswer(input, answer);
   }
 }

@@ -18,8 +18,12 @@ about itself, which flags it understands, what it cannot do at all. An
 `if (agent === 'claude')` in a service, controller, gateway or util is a missing
 config field or a missing method — never a condition at the read site. A CLI
 with no answer declares that as a fact with the reason beside it
-(`cursor-acp`'s `questionToolName: null`, `terminal: null`), which is how a
-reader learns the feature does not exist.
+(`cursor-acp`'s `terminal: null`, its `efforts: []`), which is how a reader
+learns the feature does not exist. Such a declaration is a MEASUREMENT, not a
+permanent property: `cursor-acp`'s `questionToolName` said `null` on the
+strength of "baseline ACP has no question call", and the vendor had added one
+(`cursor/ask_question`) that geniro was refusing in-protocol. Write down what
+was checked, so the next reader knows what to re-check.
 
 Consumers **compose**, adapters **know**: a service decides WHEN to ask and what
 to do with several answers, never HOW to ask. Reference pair: `ModelsService` /

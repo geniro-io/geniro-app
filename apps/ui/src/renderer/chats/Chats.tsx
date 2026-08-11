@@ -72,6 +72,7 @@ import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ContextMeter } from './context-meter';
 import { EffortSelect } from './effort-select';
+import { ModelEffortReadout } from './model-effort-readout';
 import { folderName, FolderSelect } from './folder-select';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import {
@@ -1941,7 +1942,10 @@ export function Chats({
     }
     return workflowSlug ? null : agentKind;
   }, [activeRunId, activeRun, workflowSlug, agentKind]);
-  const agentModels = useAgentModels(agentsApi, modelKind);
+  const { models: agentModels, loading: agentModelsLoading } = useAgentModels(
+    agentsApi,
+    modelKind,
+  );
   // Same scoping as the models above — whichever CLI the visible composer is
   // about, or none at all for a workflow target.
   const agentEfforts = useAgentEfforts(agentsApi, modelKind);
@@ -2744,21 +2748,25 @@ export function Chats({
                           <ModelSelect
                             agentKind={agentKind}
                             models={agentModels}
+                            loading={agentModelsLoading}
                             value={models[agentKind] ?? null}
                             onChange={(model) => changeModel(agentKind, model)}
                           />
                         ) : null}
                         {!workflowSlug ? (
-                          // Absent, not disabled, for a CLI with no effort
-                          // control — the component decides that from an empty
-                          // list, so nothing here branches on the agent kind.
-                          <EffortSelect
-                            efforts={agentEfforts}
-                            value={efforts[agentKind] ?? null}
-                            onChange={(effort) =>
-                              changeEffort(agentKind, effort)
-                            }
-                          />
+                          <>
+                            <EffortSelect
+                              efforts={agentEfforts}
+                              value={efforts[agentKind] ?? null}
+                              onChange={(effort) =>
+                                changeEffort(agentKind, effort)
+                              }
+                            />
+                            <ModelEffortReadout
+                              agentKind={agentKind}
+                              modelId={models[agentKind] ?? null}
+                            />
+                          </>
                         ) : null}
                       </ComposerBottomRow>
                     </ComposerCard>
@@ -3157,6 +3165,7 @@ export function Chats({
                             <ModelSelect
                               agentKind={activeRun.agentKind}
                               models={agentModels}
+                              loading={agentModelsLoading}
                               value={activeRun.model}
                               nextTurnOnly={streaming}
                               onChange={(model) =>
@@ -3170,6 +3179,10 @@ export function Chats({
                               onChange={(effort) =>
                                 void changeRunSettings({ effort })
                               }
+                            />
+                            <ModelEffortReadout
+                              agentKind={activeRun.agentKind}
+                              modelId={activeRun.model}
                             />
                             {/* Between effort and the context readout, not up in
                           the identity row: the permission posture is editable

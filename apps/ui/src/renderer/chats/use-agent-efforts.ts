@@ -27,5 +27,5 @@ export function useAgentEfforts(
     (agent: CliKind) => agentsApi!.listAgentEfforts({ agent }),
     [agentsApi],
   );
-  return useAgentVocabulary<AgentEffort>(kind, agentsApi && fetchFor);
+  return useAgentVocabulary<AgentEffort>(kind, agentsApi && fetchFor).items;
 }

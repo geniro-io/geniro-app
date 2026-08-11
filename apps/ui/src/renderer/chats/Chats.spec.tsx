@@ -2469,6 +2469,71 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
+  it('shows a loader while cursor models are still being fetched', async () => {
+    let resolveCursorModels!: (models: {
+      id: string;
+      label: string;
+      source: string;
+    }[]) => void;
+    const cursorModels = new Promise<
+      { id: string; label: string; source: string }[]
+    >((resolve) => {
+      resolveCursorModels = resolve;
+    });
+    agentsApi.listAgentModels.mockImplementation(
+      ({ agent }: { agent: string }) =>
+        agent === 'cursor-agent'
+          ? cursorModels
+          : Promise.resolve([
+              { id: 'opus', label: 'opus', source: 'builtin' },
+            ]),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
+    expect(container.textContent).toContain('Loading models…');
+    expect(modelTrigger(container)).toBeUndefined();
+
+    resolveCursorModels([
+      {
+        id: 'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+        label: 'Opus 5',
+        source: 'cli',
+      },
+    ]);
+    await act(async () => {
+      await cursorModels;
+    });
+    expect(container.textContent).not.toContain('Loading models…');
+    expect(modelTrigger(container).textContent).toContain('default model');
+  });
+
+  it('shows the effort baked into a selected cursor model id', async () => {
+    agentsApi.listAgentModels.mockImplementation(
+      ({ agent }: { agent: string }) =>
+        Promise.resolve(
+          agent === 'cursor-agent'
+            ? [
+                {
+                  id: 'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+                  label: 'Opus 5',
+                  source: 'cli',
+                },
+              ]
+            : [{ id: 'opus', label: 'opus', source: 'builtin' }],
+        ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
+    await pickMenuRow(container, modelTrigger(container), 'Opus 5');
+
+    expect(effortTrigger(container)).toBeUndefined();
+    expect(container.textContent).toContain('high');
+  });
+
   it('lists what the DAEMON reports for whichever CLI is selected', async () => {
     // No model list is baked into the renderer: the daemon asks each CLI
     // (cursor's `models` subcommand; for claude the account models it caches

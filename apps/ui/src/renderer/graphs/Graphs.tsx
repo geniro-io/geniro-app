@@ -637,7 +637,7 @@ export function Graphs({
 
   // The inspector's model rows come from the selected node's CLI itself, the
   // same source the chat composer uses — one list, so the two cannot drift.
-  const agentModels = useAgentModels(
+  const { models: agentModels } = useAgentModels(
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
   );

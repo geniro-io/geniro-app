@@ -55,10 +55,30 @@ export function isPermissionChannelFailure(content: unknown): boolean {
   return text !== null && hasFailureMarkers(text);
 }
 
-/** Both halves, in ONE string — the CLI writes them in a single sentence. */
+/**
+ * Both halves on the leaf's FIRST non-empty line — which is the CLI's whole
+ * sentence, not a document that happens to quote it.
+ *
+ * Requiring them merely to co-occur somewhere in the leaf made this fire on any
+ * tool result that MENTIONS the markers, and the commonest such result is a
+ * `Read` of geniro's own source: `claude.const.ts` names both markers, and
+ * `spawn-cli.ts` quotes the CLI's sentence verbatim in a doc block. Measured on
+ * a real 47-minute run — 12 matches in the daemon log, every one of them
+ * geniro's own prose being read back, and not a single genuine CLI failure
+ * among them. The user saw three "claude could not reach its permission
+ * channel" rows for sub-agents that were simply reading this file.
+ *
+ * The first line is the discriminator because the failing tool's result IS the
+ * sentence: it arrives alone, so it is line one. A file that documents the
+ * markers has them on some later line, behind the content above them.
+ */
 function hasFailureMarkers(text: string): boolean {
+  const firstLine = text.split('\n').find((line) => line.trim() !== '');
+  if (firstLine === undefined) {
+    return false;
+  }
   return CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS.every((marker) =>
-    text.includes(marker),
+    firstLine.includes(marker),
   );
 }
 

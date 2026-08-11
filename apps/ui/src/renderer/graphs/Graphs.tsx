@@ -78,8 +78,8 @@ import {
 import { agentCallInfo } from './node-validate';
 import { TriggerNode } from './trigger-node';
 import { useAutosave } from './use-autosave';
+import { useConfigDirCapability } from './use-config-dir-capability';
 import { useNodeMcp } from './use-node-mcp';
-import { usePluginCapability } from './use-plugin-capability';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
@@ -643,17 +643,17 @@ export function Graphs({
   );
 
   // What this node would load regardless of where the run lands: the user's
-  // global servers plus whatever its own plugin directory brings. The folder's
+  // global servers plus whatever its own config directory brings. The folder's
   // own project servers are added by the CLI at run time, so the builder —
   // which has no folder — neither knows nor claims them.
   const nodeMcp = useNodeMcp(
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
-    selected?.kind === 'agent' ? (selected.pluginDir ?? null) : null,
+    selected?.kind === 'agent' ? (selected.configDir ?? null) : null,
   );
 
   /**
-   * Why the plugin directory the node names cannot be used, or null.
+   * Why the config directory the node names cannot be used, or null.
    *
    * On the FIELD rather than only inside the listing, because it is a path
    * the user has to fix — and the CLI itself says nothing, silently ignoring
@@ -661,13 +661,15 @@ export function Graphs({
    * exists. The hook narrows this to a daemon REFUSAL; a missing CLI or an
    * unreachable daemon stays in the section below, where it belongs.
    */
-  const pluginDirError = nodeMcp.invalidPluginDir;
+  const configDirError = nodeMcp.invalidConfigDir;
 
-  // Whether the selected node's CLI can load a plugin directory at all, asked
+  // Whether the selected node's CLI can take a config directory at all, asked
   // of the daemon rather than decided here — the inspector used to allowlist
   // one agent by name, which is how this question came to have three
   // incompatible answers across the app.
-  const pluginCapability = usePluginCapability(apis?.capabilities ?? null);
+  const configDirCapability = useConfigDirCapability(
+    apis?.capabilities ?? null,
+  );
 
   // Read-only "Agent calls" summary for the inspector: who this agent may
   // invoke and who may invoke it (the amber call edges touching the node),
@@ -1042,64 +1044,67 @@ export function Graphs({
                         }
                       />
                     </Field>
-                    {/* Whether this CLI has a plugin mechanism is the DAEMON's
-                        answer (`AdapterConfig.plugin.unavailableReason`), read
+                    {/* Whether this CLI can be pointed at a config directory is
+                        the DAEMON's answer
+                        (`AdapterConfig.configDir.unavailableReason`), read
                         over /v1/capabilities. Undefined means the read has not
                         landed — render nothing rather than guess, since a
                         wrong guess either hides the field from a CLI that has
                         one or offers a field nothing will read. */}
-                    {pluginCapability.unavailableReasonFor(selected.agent) ===
-                    null ? (
+                    {configDirCapability.unavailableReasonFor(
+                      selected.agent,
+                    ) === null ? (
                       <Field
-                        label="Plugin directory"
-                        htmlFor="node-plugin-dir"
-                        hint="Absolute path to a plugin loaded for this node's turns only. A plugin can ship its own MCP servers, so two nodes pointed at different directories run with different tools. Nothing is installed.">
+                        label="Config directory"
+                        htmlFor="node-config-dir"
+                        hint="Absolute path to the agent config directory this node runs under — the folder holding that CLI's credentials, settings and plugins. Two nodes pointed at different directories run as different accounts, with different tools. Leave empty for the CLI's own profile.">
                         <Input
-                          id="node-plugin-dir"
-                          value={selected.pluginDir ?? ''}
-                          placeholder="/Users/you/plugins/reviewer"
-                          aria-invalid={pluginDirError !== null || undefined}
+                          id="node-config-dir"
+                          value={selected.configDir ?? ''}
+                          placeholder="/Users/you/.claude-work"
+                          aria-invalid={configDirError !== null || undefined}
                           aria-describedby={
-                            pluginDirError ? 'node-plugin-dir-error' : undefined
+                            configDirError ? 'node-config-dir-error' : undefined
                           }
                           onChange={(event) =>
                             patchSelected({
-                              pluginDir: event.target.value || undefined,
+                              configDir: event.target.value || undefined,
                             })
                           }
                         />
                         {/* The daemon's refusal is the ONLY thing that can tell
-                            the user their path is wrong — the CLI ignores an
-                            unusable --plugin-dir silently. Folded into the
-                            listing's `unavailableReason` it rendered in the
-                            same muted span as "No servers", which reads as a
-                            fact about the plugin rather than a typo. */}
-                        {pluginDirError ? (
-                          <ErrorText id="node-plugin-dir-error">
-                            {pluginDirError}
+                            the user their path is wrong — claude CREATES a
+                            directory it cannot find and then reports "Not
+                            logged in" about it. Folded into the listing's
+                            `unavailableReason` it rendered in the same muted
+                            span as "No servers", which reads as a fact about
+                            the profile rather than a typo. */}
+                        {configDirError ? (
+                          <ErrorText id="node-config-dir-error">
+                            {configDirError}
                           </ErrorText>
                         ) : null}
                       </Field>
-                    ) : pluginCapability.unavailableReasonFor(
+                    ) : configDirCapability.unavailableReasonFor(
                         selected.agent,
                       ) ? (
                       <NoteBox
-                        aria-label="Plugin directory"
+                        aria-label="Config directory"
                         className="text-xs">
                         <span className="block font-medium text-foreground">
-                          Plugin directory
+                          Config directory
                         </span>
                         <span className="block">
-                          {pluginCapability.unavailableReasonFor(
+                          {configDirCapability.unavailableReasonFor(
                             selected.agent,
                           )}
                         </span>
                         {/* Only when the node actually carries one — a workflow
                             imported from YAML can, and with the field hidden
                             the user had no way to see what to remove. */}
-                        {selected.pluginDir ? (
+                        {selected.configDir ? (
                           <span className="block text-warning">
-                            This node names {selected.pluginDir}, which will be
+                            This node names {selected.configDir}, which will be
                             ignored when it runs.
                           </span>
                         ) : null}
@@ -1109,7 +1114,7 @@ export function Graphs({
                         section would restate the same sentence as though it
                         were a fact about the folder's servers, and there is no
                         listing behind it to show either way. */}
-                    {pluginDirError === null ? (
+                    {configDirError === null ? (
                       <McpSection
                         // No card chrome here: the inspector is a field stack,
                         // not the Agents panel's stacked card.
@@ -1117,8 +1122,8 @@ export function Graphs({
                         listing={nodeMcp.listing}
                         loading={nodeMcp.loading}
                         hint={
-                          selected.pluginDir
-                            ? "Global servers plus this node's plugin. The run folder's own project servers are added when it runs."
+                          selected.configDir
+                            ? "The servers configured in this node's own config directory. The run folder's own project servers are added when it runs."
                             : 'Global servers. The run folder\u2019s own project servers are added when it runs.'
                         }
                         onRefresh={nodeMcp.refresh}

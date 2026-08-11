@@ -37,6 +37,18 @@ export const createChatSchema = z.object({
    * the service — an enum would pin one CLI's levels into the shared schema.
    */
   effort: z.string().min(1).optional(),
+  /**
+   * The agent config directory this chat's turns run under — the folder
+   * holding that CLI's credentials, settings and plugins, so one chat can run
+   * on a different ACCOUNT (a different subscription) than the next. Omitted =
+   * the CLI's own default profile.
+   *
+   * Only a shape check here: whether the path EXISTS (and its canonical form),
+   * and whether this CLI has such a mechanism at all, are the service's job —
+   * `resolveValidConfigDir` and the adapter's own
+   * `AdapterConfig.configDir.unavailableReason`.
+   */
+  configDir: z.string().min(1).optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 

@@ -9,6 +9,7 @@ import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { Run } from '../../runs/entity/run.entity';
@@ -59,7 +60,7 @@ export class HandoffService {
       );
     }
     const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
-    const { agentKind, stateNodeId, model } = await this.resolveNode(
+    const { agentKind, stateNodeId, model, configDir } = await this.resolveNode(
       run,
       nodeId,
       em,
@@ -72,7 +73,7 @@ export class HandoffService {
 
     const target = this.adapters
       .for(agentKind)
-      .handoffTarget({ sessionId, model });
+      .handoffTarget({ sessionId, model, configDir });
     if (!target.ok) {
       return this.unavailable(
         target.reason === 'unsupported'
@@ -111,9 +112,15 @@ export class HandoffService {
     agent: AgentKind;
     cwd: string;
     server: string;
+    configDir?: string;
   }): HandoffTarget {
     const adapter = this.adapters.for(input.agent);
-    const target = adapter.mcpLoginTarget(input.server);
+    const target = adapter.mcpLoginTarget(
+      input.server,
+      input.configDir === undefined
+        ? null
+        : resolveValidConfigDir(input.configDir),
+    );
     if (!target.ok) {
       return this.unavailable(
         adapter.getConfig().mcp.loginUnavailableReason ??
@@ -145,9 +152,17 @@ export class HandoffService {
    * Takes no run — an account is machine-wide, and the screen that offers this
    * may have no run open at all.
    */
-  loginTarget(input: { agent: AgentKind; cwd?: string }): HandoffTarget {
+  loginTarget(input: {
+    agent: AgentKind;
+    cwd?: string;
+    configDir?: string;
+  }): HandoffTarget {
     const adapter = this.adapters.for(input.agent);
-    const target = adapter.loginTarget();
+    const target = adapter.loginTarget(
+      input.configDir === undefined
+        ? null
+        : resolveValidConfigDir(input.configDir),
+    );
     if (!target.ok) {
       return this.unavailable(
         adapter.getConfig().auth.loginUnavailableReason ??
@@ -199,7 +214,11 @@ export class HandoffService {
       command: target.command,
       args: target.args,
       cwd,
-      display: shellLine(target.command, target.args),
+      env: target.env,
+      // The env is part of the line, not a footnote to it: `CLAUDE_CONFIG_DIR=…
+      // claude --resume …` is what a user has to paste for the command to mean
+      // what the button means.
+      display: shellLine(target.command, target.args, target.env),
       unavailableReason: null,
     };
   }
@@ -210,6 +229,7 @@ export class HandoffService {
       command: null,
       args: [],
       cwd: null,
+      env: {},
       display: null,
       unavailableReason: reason,
     };
@@ -230,6 +250,15 @@ export class HandoffService {
     agentKind: AgentKind;
     stateNodeId: string;
     model: string | null;
+    /**
+     * Null for every WORKFLOW node, and deliberately: `node_state` stamps no
+     * config directory, so run history cannot say which one a finished node
+     * ran under, and reading today's YAML would claim one the run may never
+     * have seen — the same reason its agent kind and model are read from the
+     * stamp. A chat's directory IS on its own row, so a chat can be handed
+     * back exactly as it ran.
+     */
+    configDir: string | null;
   }> {
     if (!run.workflowId) {
       if (!run.agentKind) {
@@ -242,6 +271,7 @@ export class HandoffService {
         agentKind: run.agentKind,
         stateNodeId: SINGLE_AGENT_NODE,
         model: run.model,
+        configDir: run.configDir,
       };
     }
     if (!nodeId) {
@@ -259,6 +289,7 @@ export class HandoffService {
         agentKind: stamped,
         stateNodeId: nodeId,
         model: state?.model ?? null,
+        configDir: null,
       };
     }
     const { workflow } = await this.workflowStore.get(run.workflowId);
@@ -279,6 +310,7 @@ export class HandoffService {
       agentKind: node.agent,
       stateNodeId: nodeId,
       model: node.model ?? null,
+      configDir: null,
     };
   }
 }

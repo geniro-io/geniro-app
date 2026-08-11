@@ -42,13 +42,13 @@ const TOGGLE_FAILURE = 'could not change that server';
 const EMPTY_LISTINGS: ReadonlyMap<string, AgentMcpListing> = new Map();
 
 /**
- * What a listing is ABOUT: a CLI, plus the plugin directory the node running
- * it names — a plugin can ship its own MCP servers, so two nodes on the same
+ * What a listing is ABOUT: a CLI, plus the config directory the node running
+ * it names — a profile carries its own MCP servers, so two nodes on the same
  * CLI pointed at different directories genuinely load different sets.
  */
 export interface AgentMcpScope {
   agent: CliKind;
-  pluginDir: string | null;
+  configDir: string | null;
 }
 
 /**
@@ -56,7 +56,7 @@ export interface AgentMcpScope {
  * nor a path can contain — the same key shape the daemon's own cache uses.
  */
 export function mcpScopeKey(scope: AgentMcpScope): string {
-  return `${scope.agent}\u0000${scope.pluginDir ?? ''}`;
+  return `${scope.agent}\u0000${scope.configDir ?? ''}`;
 }
 
 /** One agent scope's servers, as the panel reads them. */
@@ -94,12 +94,12 @@ export interface AgentMcpState {
 /**
  * The MCP servers each agent SCOPE loads in the run's folder.
  *
- * Keyed by (CLI kind, plugin directory) rather than by node, because that is
+ * Keyed by (CLI kind, config directory) rather than by node, because that is
  * the grain the answer actually has: two nodes driving the same CLI with the
- * same plugin directory necessarily load the same servers, and asking once per
+ * same config directory necessarily load the same servers, and asking once per
  * node would health-check the user's servers N times over for one answer.
  *
- * It was keyed by CLI kind ALONE until the plugin directory became a per-NODE
+ * It was keyed by CLI kind ALONE until the config directory became a per-NODE
  * field. The rationale written here then — "a run has one folder, so two nodes
  * on the same CLI load the same servers" — stopped being true at that moment,
  * and the panel went on painting one node's answer onto another's card.
@@ -171,7 +171,7 @@ export function useAgentMcp(
   // Serialized rather than joined on a single byte: a scope is two fields, and
   // flattening them would let ('a', 'b/c') and ('a/b', 'c') collide.
   const scopesKey = JSON.stringify(
-    scopes.map((scope) => [scope.agent, scope.pluginDir ?? '']),
+    scopes.map((scope) => [scope.agent, scope.configDir ?? '']),
   );
   /**
    * Identity of the question being asked — which scopes, in which folder.
@@ -240,7 +240,7 @@ export function useAgentMcp(
               {
                 agent: scope.agent,
                 cwd,
-                ...(scope.pluginDir ? { pluginDir: scope.pluginDir } : {}),
+                ...(scope.configDir ? { configDir: scope.configDir } : {}),
                 ...(bypassCache ? { refresh: 'true' } : {}),
               },
               { signal: AbortSignal.timeout(MCP_ROUTE_TIMEOUT_MS) },
@@ -330,12 +330,12 @@ export function useAgentMcp(
             if (prev.scope !== readScope) {
               return prev;
             }
-            // Applied ONLY to the plugin-less scope of that CLI, because that
+            // Applied ONLY to the default-profile scope of that CLI, because that
             // is the one the write's answer describes: the toggle route takes
             // no plugin directory, so its recomposed listing is the folder's
             // servers alone. Painting it onto a scope that carries a plugin
             // would drop exactly the servers that plugin contributes.
-            const key = mcpScopeKey({ agent: kind, pluginDir: null });
+            const key = mcpScopeKey({ agent: kind, configDir: null });
             if (!prev.byScope.has(key)) {
               return prev;
             }
@@ -351,7 +351,7 @@ export function useAgentMcp(
           // and most workflows have, the write's own answer is already the
           // whole truth, and re-reading would spend a round trip to replace it
           // with a value that cannot differ.
-          if (scopes.some((s) => s.agent === kind && s.pluginDir !== null)) {
+          if (scopes.some((s) => s.agent === kind && s.configDir !== null)) {
             setRereadToken((token) => token + 1);
           }
         })

@@ -238,6 +238,25 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The env that puts an invocation in ONE config directory — the profile a
+   * run belongs to — or `{}` when there is none to state.
+   *
+   * Shared by every invocation this class hands the user (resume, CLI sign-in,
+   * MCP sign-in) because they are all about the same profile: a sign-in run
+   * against the default directory cannot fix a run whose session lives in
+   * another one, and a resume there would open an unrelated conversation. The
+   * var name is the adapter's own fact (`config.configDir.envVar`), so no
+   * caller spells it.
+   */
+  protected configDirEnv(
+    configDir: string | null | undefined,
+  ): Record<string, string> {
+    const trimmed = configDir?.trim();
+    const envVar = this.getConfig().configDir.envVar;
+    return trimmed && envVar ? { [envVar]: trimmed } : {};
+  }
+
+  /**
    * The interactive TUI invocation that mirrors one of this CLI's headless
    * sessions — the same conversation the run produced, reopened in the CLI's
    * own terminal UI.
@@ -270,6 +289,12 @@ export abstract class AgentAdapter {
     // the CLI's default was a different model with a different window beside
     // the chat it was supposed to be mirroring.
     const model = input.model?.trim();
+    // The run's OWN config directory, for the same reason and one step
+    // further: the session being resumed lives INSIDE that profile, so an
+    // invocation without it does not merely open a different account — it
+    // opens an unrelated conversation, since the id it resumes is not in the
+    // default profile's store. It rides env because that is the only channel
+    // the CLI has for it (`config.configDir.envVar`).
     return {
       ok: true,
       kind: 'command',
@@ -279,6 +304,7 @@ export abstract class AgentAdapter {
         handoff.resumeFlag,
         trimmed,
       ],
+      env: this.configDirEnv(input.configDir),
     };
   }
 
@@ -295,7 +321,7 @@ export abstract class AgentAdapter {
    * way a session id can — the caller took it from a listing this same CLI
    * produced — so there is no `no-session` counterpart to invent.
    */
-  mcpLoginTarget(server: string): HandoffResult {
+  mcpLoginTarget(server: string, configDir?: string | null): HandoffResult {
     const { loginArgs } = this.getConfig().mcp;
     if (loginArgs === null) {
       return { ok: false, reason: 'unsupported' };
@@ -305,6 +331,10 @@ export abstract class AgentAdapter {
       kind: 'command',
       command: this.command,
       args: [...loginArgs, server],
+      // A server is authorized INSIDE a profile: signing in under the default
+      // directory leaves the run's own profile exactly as unauthenticated as
+      // it was.
+      env: this.configDirEnv(configDir),
     };
   }
 
@@ -341,7 +371,7 @@ export abstract class AgentAdapter {
    * `unsupported` is the only refusal — a sign-in takes no argument that could
    * be missing, so there is no `no-session` counterpart to invent.
    */
-  loginTarget(): HandoffResult {
+  loginTarget(configDir?: string | null): HandoffResult {
     const { loginArgs } = this.getConfig().auth;
     if (loginArgs === null) {
       return { ok: false, reason: 'unsupported' };
@@ -351,6 +381,11 @@ export abstract class AgentAdapter {
       kind: 'command',
       command: this.command,
       args: [...loginArgs],
+      // The credentials live in the config directory, so a sign-in is about
+      // ONE profile: without this, a user whose second-subscription chat
+      // expired would sign in to their default account and watch the same
+      // turn fail again.
+      env: this.configDirEnv(configDir),
     };
   }
 
@@ -721,7 +756,7 @@ export abstract class AgentAdapter {
             timeout: options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS,
             ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
             encoding: 'utf8',
-            env: buildChildEnv(),
+            env: buildChildEnv(options.env),
           },
           (err, stdout) => resolve(err ? null : String(stdout)),
         );
@@ -821,7 +856,7 @@ export abstract class AgentAdapter {
           ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
           detached: true,
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: buildChildEnv(),
+          env: buildChildEnv(options.env),
         });
       } catch {
         // A missing binary throws synchronously on some platforms.
@@ -1107,7 +1142,7 @@ export abstract class AgentAdapter {
       input.effort ?? null,
       input.systemPrompt ?? null,
       input.callSurfacePrompt ?? null,
-      input.pluginDir ?? null,
+      input.configDir ?? null,
       input.streamPartials === true,
       input.allowUserQuestions === true,
       input.trustWorkspace === true,

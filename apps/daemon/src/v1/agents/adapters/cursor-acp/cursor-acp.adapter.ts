@@ -248,27 +248,28 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         expiredMarkers: [],
       },
-      /** Cursor's subscription TUI stays an explicit M4 scope exclusion. */
-      plugin: {
+      configDir: {
         /**
-         * `cursor-agent` DOES accept a `--plugin-dir` flag — an earlier
-         * revision of this block claimed it did not, which the binary
-         * disproves. What was actually probed (2026.07.23-e383d2b) is
-         * narrower: a plugin directory carrying an `.mcp.json`, a
-         * `.cursor/mcp.json` and a `.cursor-plugin/plugin.json` contributed no
-         * servers to `mcp list`, and a wholly nonexistent path was accepted
-         * just as silently. Whether a plugin's commands or skills reach a TURN
-         * was NOT probed, and the plugin manifest format is undocumented in the
-         * CLI's own `--help`. ACP has no client-supplied plugin channel either,
-         * the way it has one for MCP servers.
+         * `CURSOR_CONFIG_DIR` IS read by this binary — its own bundled source
+         * resolves it first, then `XDG_CONFIG_HOME/cursor`, then the default —
+         * and probing it (2026.08.04-aaa8809) with a fresh empty directory
+         * wrote `cli-config.json` and `statsig-cache.json` into it. So the
+         * mechanism exists.
          *
-         * So the claim is only that the field a node would fill has no VERIFIED
-         * effect on this CLI — which is what keeps a node's `pluginDir` from
-         * being validated, refused, or silently dropped for cursor. Establish
-         * the turn side before weakening or removing this.
+         * What it does NOT do is the thing this field is offered FOR. The same
+         * probe's `mcp list` still reported the DEFAULT profile's servers, so
+         * the toolbelt does not travel with the directory; and the account
+         * cannot either, because geniro hands this CLI its identity as
+         * `CURSOR_API_KEY` from the Keychain (`buildEnv`), not as a file in
+         * that directory. Offering the control here would promise a different
+         * subscription and deliver the same one.
+         *
+         * Re-probe those two things — a signed-in session inside the directory,
+         * and servers that follow it — before declaring it usable.
          */
+        envVar: null,
         unavailableReason:
-          'cursor-agent has no verified way to load a plugin directory',
+          'cursor-agent takes its account from the API key geniro injects, not from a config directory — pointing a run at one would not change the subscription',
       },
       followUp: {
         /**

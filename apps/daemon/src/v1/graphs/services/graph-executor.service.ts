@@ -39,8 +39,8 @@ import {
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
+import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { resolveValidPluginDir } from '../../agents/utils/resolve-plugin-dir';
 import { assertWorkflowRun } from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
@@ -118,32 +118,32 @@ function hasProbedApprovalMode(
 }
 
 /**
- * One node whose `pluginDir` was dropped because its CLI cannot load one.
+ * One node whose `configDir` was dropped because its CLI cannot load one.
  *
- * Private to this file (only `withCanonicalPluginDirs` produces it and only
+ * Private to this file (only `withCanonicalConfigDirs` produces it and only
  * `driveResolved` reads it), so it stays here rather than in `graphs.types.ts`
  * — it is not part of the module's shared vocabulary and nothing on the wire
  * carries it.
  */
-interface IgnoredPluginDir {
+interface IgnoredConfigDir {
   nodeId: string;
   /** The node's own name, or its id when unnamed — the same fallback every
    * other user-facing mention of a node uses. */
   name: string;
-  pluginDir: string;
+  configDir: string;
   /** The adapter's own sentence, shown to the user unchanged. */
   reason: string;
 }
 
 /**
  * A copy of `workflow` whose agent nodes carry the CANONICAL form of their
- * plugin directory, refusing any that cannot be used.
+ * config directory, refusing any that cannot be used.
  *
  * Two things at once, deliberately: the refusal (a bad path fails the run
  * once, up front, rather than one node halfway through the graph) and the
  * canonicalization (what a turn spawns with must be what was actually
  * checked — `resolveValidCwd` one line above has always worked this way, and
- * a `pluginDir` that stayed raw could reach argv as a symlink re-pointed
+ * a `configDir` that stayed raw could reach argv as a symlink re-pointed
  * after the check).
  *
  * A node whose CLI declares no plugin mechanism has the field STRIPPED — not
@@ -154,34 +154,35 @@ interface IgnoredPluginDir {
  * workflow on disk keeps whatever the user wrote.
  *
  * Every strip is REPORTED back, because "stripped quietly" is its own version
- * of going silent: a workflow imported from YAML can carry a `pluginDir` on a
+ * of going silent: a workflow imported from YAML can carry a `configDir` on a
  * CLI that has no such mechanism — the builder never offered the field, so the
  * user never saw it refused — and the run would otherwise proceed as though
  * the node had never named one. The caller turns each entry into a run-level
  * system item carrying the adapter's own reason.
  */
-function withCanonicalPluginDirs(
+function withCanonicalConfigDirs(
   workflow: Workflow,
   adapterFor: (kind: AgentKind) => AgentAdapter,
-): { workflow: Workflow; ignoredPluginDirs: IgnoredPluginDir[] } {
-  const ignoredPluginDirs: IgnoredPluginDir[] = [];
+): { workflow: Workflow; ignoredConfigDirs: IgnoredConfigDir[] } {
+  const ignoredConfigDirs: IgnoredConfigDir[] = [];
   const nodes = workflow.nodes.map((node) => {
-    if (node.kind !== 'agent' || !node.pluginDir) {
+    if (node.kind !== 'agent' || !node.configDir) {
       return node;
     }
-    const reason = adapterFor(node.agent).getConfig().plugin.unavailableReason;
+    const reason = adapterFor(node.agent).getConfig().configDir
+      .unavailableReason;
     if (reason !== null) {
-      ignoredPluginDirs.push({
+      ignoredConfigDirs.push({
         nodeId: node.id,
         name: node.name ?? node.id,
-        pluginDir: node.pluginDir,
+        configDir: node.configDir,
         reason,
       });
-      return { ...node, pluginDir: undefined };
+      return { ...node, configDir: undefined };
     }
-    return { ...node, pluginDir: resolveValidPluginDir(node.pluginDir) };
+    return { ...node, configDir: resolveValidConfigDir(node.configDir) };
   });
-  return { workflow: { ...workflow, nodes }, ignoredPluginDirs };
+  return { workflow: { ...workflow, nodes }, ignoredConfigDirs };
 }
 
 /**
@@ -289,13 +290,13 @@ export class GraphExecutorService {
     computeRunOrder(input.workflow.nodes, input.workflow.edges);
     const cwd = resolveValidCwd(input.cwd);
     // Resolved HERE rather than per turn, for the same two reasons `cwd` is:
-    // a bad plugin directory is a configuration mistake, so refusing the run
+    // a bad config directory is a configuration mistake, so refusing the run
     // names it once up front instead of failing one node halfway through the
     // graph — and the CANONICAL path is what the turn must spawn with, since
     // that is what was actually checked. The CLI itself would say nothing: it
     // ignores an unusable --plugin-dir silently (probe-verified), which reads
     // as "this node has no MCP servers".
-    const { workflow, ignoredPluginDirs } = withCanonicalPluginDirs(
+    const { workflow, ignoredConfigDirs } = withCanonicalConfigDirs(
       input.workflow,
       (kind) => this.adapterFor(kind),
     );
@@ -341,7 +342,7 @@ export class GraphExecutorService {
         'daemon shutdown started before the workflow could launch',
       );
     }
-    this.drive(em, run.id, workflow, cwd, input.prompt, ignoredPluginDirs);
+    this.drive(em, run.id, workflow, cwd, input.prompt, ignoredConfigDirs);
 
     return runToWire(run);
   }
@@ -496,7 +497,7 @@ export class GraphExecutorService {
     workflow: Workflow,
     cwd: string,
     seedPrompt: string,
-    ignoredPluginDirs: IgnoredPluginDir[],
+    ignoredConfigDirs: IgnoredConfigDir[],
   ): void {
     void (async () => {
       let claudeModes: ClaudeModesCapability;
@@ -539,7 +540,7 @@ export class GraphExecutorService {
         cwd,
         seedPrompt,
         claudeModes,
-        ignoredPluginDirs,
+        ignoredConfigDirs,
       );
     })();
   }
@@ -551,7 +552,7 @@ export class GraphExecutorService {
     cwd: string,
     seedPrompt: string,
     claudeModes: ClaudeModesCapability,
-    ignoredPluginDirs: IgnoredPluginDir[],
+    ignoredConfigDirs: IgnoredConfigDir[],
   ): void {
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
@@ -999,7 +1000,7 @@ export class GraphExecutorService {
         // Per NODE, not per run: two nodes pointed at different plugin
         // directories are meant to run with different tools. Already refused
         // at startRun if unusable.
-        pluginDir: node.pluginDir ?? null,
+        configDir: node.configDir ?? null,
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {
@@ -1017,14 +1018,14 @@ export class GraphExecutorService {
           if (event.type === 'mcp_servers') {
             // What this node actually loaded — feeds the MCP panel so it need
             // not re-dial every server to answer, never the transcript. Keyed
-            // by the NODE's plugin directory, because a plugin ships its own
+            // by the NODE's config directory, because a plugin ships its own
             // servers: two nodes on one CLI pointed at different ones load
             // genuinely different sets, and filing both under the folder alone
             // would serve each the other's answer.
             this.mcpHarvest.record(
               node.agent,
               cwd,
-              node.pluginDir ?? null,
+              node.configDir ?? null,
               event.servers,
             );
             return;
@@ -1645,16 +1646,16 @@ export class GraphExecutorService {
     }
 
     // Ahead of the seed, because it is a fact about the run's configuration
-    // rather than about anything an agent did: a node named a plugin directory
+    // rather than about anything an agent did: a node named a config directory
     // its CLI cannot load. The value is dropped either way (see
-    // `withCanonicalPluginDirs`) — this is what stops the drop being silent
+    // `withCanonicalConfigDirs`) — this is what stops the drop being silent
     // for a workflow that arrived as YAML, where the builder never had the
     // chance to refuse the field.
-    for (const ignored of ignoredPluginDirs) {
+    for (const ignored of ignoredConfigDirs) {
       enqueue(async () => {
         await persistItem(null, 'system', null, {
           message:
-            `'${ignored.name}' names a plugin directory (${ignored.pluginDir}) ` +
+            `'${ignored.name}' names a config directory (${ignored.configDir}) ` +
             `that will be ignored: ${ignored.reason}`,
         });
       });

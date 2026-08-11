@@ -50,26 +50,26 @@ describe('CapabilitiesService', () => {
     expect(
       service()
         .service.capabilitiesWire()
-        .plugins.map((p) => p.agent),
+        .configDirs.map((p) => p.agent),
     ).toEqual([...registry().all().keys()]);
   });
 
-  it('carries each adapter’s OWN plugin reason, verbatim', () => {
+  it('carries each adapter’s OWN config-directory reason, verbatim', () => {
     // Not a boolean, and not a sentence composed here: the renderer SHOWS this
     // string, and a reason invented at the wire layer is one the adapter
     // cannot keep true. Reading it off the config is what lets a CLI that
-    // gains plugin support need no change in this file at all.
+    // gains config-directory support need no change in this file at all.
     const byAgent = new Map(
       service()
         .service.capabilitiesWire()
-        .plugins.map((p) => [p.agent, p.unavailableReason]),
+        .configDirs.map((p) => [p.agent, p.unavailableReason]),
     );
 
     expect(byAgent.get('claude')).toBe(
-      new ClaudeAdapter().getConfig().plugin.unavailableReason,
+      new ClaudeAdapter().getConfig().configDir.unavailableReason,
     );
     expect(byAgent.get('cursor-agent')).toBe(
-      new CursorAcpAdapter().getConfig().plugin.unavailableReason,
+      new CursorAcpAdapter().getConfig().configDir.unavailableReason,
     );
   });
 
@@ -81,7 +81,7 @@ describe('CapabilitiesService', () => {
     const byAgent = new Map(
       service()
         .service.capabilitiesWire()
-        .plugins.map((p) => [p.agent, p.unavailableReason]),
+        .configDirs.map((p) => [p.agent, p.unavailableReason]),
     );
 
     expect(byAgent.get('claude')).toBeNull();
@@ -103,7 +103,7 @@ describe('CapabilitiesService — a message into a running turn', () => {
   });
 
   it('carries each adapter’s OWN reason, verbatim', () => {
-    // Same rule as the plugin row: the composer prints this string on the
+    // Same rule as the config-dir row: the composer prints this string on the
     // disabled "send now", so a sentence composed at the wire layer is one the
     // adapter cannot keep true.
     expect(followUps().get('claude')).toBe(

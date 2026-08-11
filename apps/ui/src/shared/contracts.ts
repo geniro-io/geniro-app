@@ -44,6 +44,15 @@ export interface Settings {
   projectFolder: string | null;
   /** Recently used project folders, most recent first (composer suggestions). */
   recentFolders: string[];
+  /**
+   * Plugin directory the next new chat loads, or null for none — the composer's
+   * optional companion to `projectFolder`, so a user who works under one plugin
+   * set (a different subscription, a different toolbelt) does not re-pick it per
+   * chat. Each chat records its OWN, so this is only the picker's default.
+   */
+  configDir: string | null;
+  /** Recently used plugin directories, most recent first (picker rows). */
+  recentConfigDirs: string[];
   /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
   lastChatTarget: string | null;
   /**
@@ -101,6 +110,8 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
   projectFolder: null,
   recentFolders: [],
+  configDir: null,
+  recentConfigDirs: [],
   lastChatTarget: null,
   lastApprovalMode: null,
   lastModels: {},
@@ -294,6 +305,12 @@ export interface GeniroApi {
     command: string;
     args: string[];
     cwd: string;
+    /**
+     * Env the invocation needs, composed by the DAEMON (the run's config
+     * directory — which account the conversation belongs to). Passed through
+     * verbatim: this side names no variable, exactly as it names no flag.
+     */
+    env?: Record<string, string>;
   }): Promise<void>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;

@@ -32,6 +32,10 @@ export const settingsPatchSchema = z.strictObject({
   onboardingComplete: z.boolean().optional(),
   projectFolder: absolutePath.nullable().optional(),
   recentFolders: z.array(absolutePath).max(10).optional(),
+  // Nullable, not merely optional: `null` is how the composer says "no plugin
+  // directory", which is a real choice and must be writable back.
+  configDir: absolutePath.nullable().optional(),
+  recentConfigDirs: z.array(absolutePath).max(10).optional(),
   // A CLI kind or a `wf:<slug>` workflow reference (the composer target).
   lastChatTarget: z
     .union([cliKind, z.string().regex(/^wf:.+/)])
@@ -112,4 +116,10 @@ export const openTerminalSchema = z.strictObject({
   command: z.string().min(1),
   args: z.array(z.string()),
   cwd: absolutePath,
+  /**
+   * Env for that one invocation (the run's config directory). Validated in
+   * SHAPE only — the daemon composed it and owns which vars mean what — but
+   * bounded, since these become assignments in a script this process writes.
+   */
+  env: z.record(z.string().min(1).max(64), z.string().max(4096)).optional(),
 });

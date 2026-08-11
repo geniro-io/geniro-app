@@ -13,7 +13,7 @@ const MAX_POLLS = 5;
  *
  * One fetcher on purpose. Two screens read this endpoint (the chat composer,
  * for whether claude's `plan` mode is usable; the workflow builder, for whether
- * a CLI can load a plugin directory), and when each owned its own effect they
+ * a CLI can be pointed at a config directory), and when each owned its own effect they
  * had different loading, retry and error policies for the same request — so a
  * fix to one silently did not reach the other.
  *
@@ -51,7 +51,7 @@ export function useCapabilities(
             return;
           }
           setCapabilities(caps);
-          // Only the claude mode probe is asynchronous daemon-side; the plugin
+          // Only the claude mode probe is asynchronous daemon-side; the config-dir
           // answers are compile-time config and are settled on the first read.
           const unsettled =
             caps.claudeModes.acceptEdits === 'unknown' ||

@@ -24,6 +24,27 @@ export interface AgentApprovalCapability {
 /**
  * 
  * @export
+ * @interface AgentConfigDirCapability
+ */
+export interface AgentConfigDirCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentConfigDirCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentConfigDirCapability
+     */
+    unavailableReason: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentCount
  */
 export interface AgentCount {
@@ -259,27 +280,6 @@ export type AgentModelDtoSourceEnum = typeof AgentModelDtoSourceEnum[keyof typeo
 /**
  * 
  * @export
- * @interface AgentPluginCapability
- */
-export interface AgentPluginCapability {
-    /**
-     * 
-     * @type {AgentKind}
-     * @memberof AgentPluginCapability
-     */
-    agent: AgentKind;
-    /**
-     * 
-     * @type {string}
-     * @memberof AgentPluginCapability
-     */
-    unavailableReason: string | null;
-}
-
-
-/**
- * 
- * @export
  * @interface AgentSkillDto
  */
 export interface AgentSkillDto {
@@ -428,11 +428,11 @@ export interface CapabilitiesDto {
      */
     claudeModes: ClaudeModesCapability;
     /**
-     * Per-CLI plugin-directory support, one entry per known agent
-     * @type {Array<AgentPluginCapability>}
+     * Per-CLI config-directory (profile / account) support, one entry per known agent
+     * @type {Array<AgentConfigDirCapability>}
      * @memberof CapabilitiesDto
      */
-    plugins: Array<AgentPluginCapability>;
+    configDirs: Array<AgentConfigDirCapability>;
     /**
      * Per-CLI interactive terminal-mirror support, one entry per known agent
      * @type {Array<AgentTerminalCapability>}
@@ -546,6 +546,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    configDir?: string;
 }
 
 
@@ -956,6 +962,12 @@ export interface HandoffTargetDto {
      */
     cwd: string | null;
     /**
+     * Environment the invocation needs; empty unless kind=command. Carries the run’s config directory, which has no argv form
+     * @type {{ [key: string]: string; }}
+     * @memberof HandoffTargetDto
+     */
+    env: { [key: string]: string; };
+    /**
      * 
      * @type {string}
      * @memberof HandoffTargetDto
@@ -1241,6 +1253,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     effort: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    configDir: string | null;
     /**
      * 
      * @type {string}
@@ -1537,11 +1555,11 @@ export interface WorkflowAgentNode {
      */
     approval: ApprovalMode;
     /**
-     * Absolute path to a plugin directory loaded for this node
+     * Absolute path to the agent config directory this node runs under
      * @type {string}
      * @memberof WorkflowAgentNode
      */
-    pluginDir?: string;
+    configDir?: string;
 }
 
 

@@ -125,7 +125,10 @@ describe('useAgentVocabulary', () => {
     // deliberately not claimed here — this harness reads only the latest
     // committed value, so it could not observe one either way.)
     probe.setKind('claude');
-    expect(probe.latest()).toEqual({ items: ['opus', 'sonnet'], loading: false });
+    expect(probe.latest()).toEqual({
+      items: ['opus', 'sonnet'],
+      loading: false,
+    });
     expect(claudeCalls).toBe(1);
   });
 

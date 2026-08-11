@@ -28,7 +28,9 @@ export function ModelEffortReadout({
     return null;
   }
   return (
-    <Chip tone="muted" title={`Reasoning effort baked into this model: ${effort}`}>
+    <Chip
+      tone="muted"
+      title={`Reasoning effort baked into this model: ${effort}`}>
       <Gauge aria-hidden="true" />
       {effort}
     </Chip>

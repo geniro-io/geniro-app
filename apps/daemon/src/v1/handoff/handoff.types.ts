@@ -26,6 +26,11 @@ export const HandoffTargetSchema = z.object({
   command: z.string().nullable().describe('Binary to run, for kind=command'),
   args: z.array(z.string()).describe('Arguments; empty unless kind=command'),
   cwd: z.string().nullable().describe('Folder to run it in, for kind=command'),
+  env: z
+    .record(z.string(), z.string())
+    .describe(
+      'Environment the invocation needs; empty unless kind=command. Carries the run’s config directory, which has no argv form',
+    ),
   /**
    * The same invocation as ONE shell-ready line, quoted where it has to be.
    * Composed here rather than in the renderer because the quoting rule belongs

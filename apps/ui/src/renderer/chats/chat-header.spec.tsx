@@ -130,4 +130,30 @@ describe('ChatHeader — how long this turn has been running', () => {
     expect(el.textContent).toContain('running');
     expect(el.textContent).not.toMatch(/\d+s/);
   });
+
+  it('names the config directory this run belongs to, leaf on the chip and path on hover', () => {
+    // A run on a second profile is a different ACCOUNT with different tools —
+    // the one fact about a conversation that is invisible everywhere else.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        configDir="/Users/me/Desktop/Projects/Lab/.claude-lab"
+      />,
+    );
+
+    expect(el.textContent).toContain('.claude-lab');
+    // The full path is one hover away — the header is an identity line, not a
+    // place to read a deep path.
+    expect(
+      el.querySelector('[title*="/Users/me/Desktop/Projects/Lab/.claude-lab"]'),
+    ).not.toBeNull();
+  });
+
+  it('shows NO config chip for a run on the CLI’s own profile', () => {
+    // The default is not news. A chip on every ordinary chat would be a line of
+    // noise stating what is already true everywhere.
+    const el = render(<ChatHeader {...baseProps} configDir={null} />);
+
+    expect(el.querySelector('[title*="config directory"]')).toBeNull();
+  });
 });

@@ -230,7 +230,7 @@ describe('where the meter lives', () => {
             id: 'agent',
             name: 'claude',
             agent: 'claude',
-            pluginDir: null,
+            configDir: null,
             status: 'running',
             activeTurns: 1,
             ...CONTEXT,

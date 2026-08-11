@@ -38,6 +38,7 @@ function build(
         kind: 'command',
         command: 'claude',
         args: ['--resume', 'sess-1'],
+        env: {},
       },
   );
   const adapter = {
@@ -180,6 +181,7 @@ function buildLogin(
         kind: 'command',
         command: 'claude',
         args: ['mcp', 'login', 'probe-linear'],
+        env: {},
       },
   );
   const adapter = {
@@ -220,6 +222,7 @@ function buildCliLogin(
         kind: 'command',
         command: 'claude',
         args: ['auth', 'login'],
+        env: {},
       },
   );
   const adapter = {
@@ -328,7 +331,7 @@ describe('HandoffService — signing in to an MCP server', () => {
     // The folder is load-bearing, not decoration: a server name resolves
     // against the directory the CLI runs in, so the same name in another folder
     // is a different server or none.
-    expect(mcpLoginTarget).toHaveBeenCalledWith('probe-linear');
+    expect(mcpLoginTarget).toHaveBeenCalledWith('probe-linear', null);
     expect(target).toMatchObject({
       kind: 'command',
       command: 'claude',

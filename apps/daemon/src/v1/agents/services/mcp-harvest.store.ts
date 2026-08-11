@@ -55,7 +55,7 @@ const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
  * also why the CLI's own `/mcp` is instant while ours was not: it never
  * re-dials, it reads the session it already has.
  *
- * Keyed by `(agent, cwd, pluginDir)` — the same three dimensions
+ * Keyed by `(agent, cwd, configDir)` — the same three dimensions
  * `AgentMcpService`'s own cache keys by, and for the same reason: a plugin
  * ships its own MCP servers, so two nodes on one CLI pointed at different
  * plugin directories genuinely load different sets, and one folder is
@@ -109,7 +109,7 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
   record(
     agent: AgentKind,
     cwd: string,
-    pluginDir: string | null,
+    configDir: string | null,
     servers: AgentMcpServer[],
   ): void {
     const cleaned: AgentMcpServer[] = [];
@@ -122,15 +122,15 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
       seen.add(name);
       cleaned.push({ ...server, name });
     }
-    this.recordAt(harvestKey(agent, cwd, pluginDir ?? ''), cleaned);
+    this.recordAt(harvestKey(agent, cwd, configDir ?? ''), cleaned);
   }
 
   /** The last set this agent reported here, or null when it never has. */
   get(
     agent: AgentKind,
     cwd: string,
-    pluginDir: string | null,
+    configDir: string | null,
   ): AgentMcpServer[] | null {
-    return this.getAt(harvestKey(agent, cwd, pluginDir ?? ''));
+    return this.getAt(harvestKey(agent, cwd, configDir ?? ''));
   }
 }

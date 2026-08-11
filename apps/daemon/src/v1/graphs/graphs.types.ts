@@ -152,25 +152,28 @@ export const WorkflowAgentNodeSchema = z
       .describe('Role/system prompt prepended to the node turn'),
     approval: ApprovalModeSchema.describe('Tool-approval mode for this node'),
     /**
-     * A plugin directory this node's turns load, and no other node's.
+     * The agent config directory this node's turns run under, and no other
+     * node's — the folder holding that CLI's credentials, settings, installed
+     * plugins and history.
      *
-     * A plugin may ship its own MCP servers, so two nodes pointed at different
-     * directories genuinely run with different tools — which is the whole
-     * reason this is a NODE field rather than a run-level one. It is loaded
-     * for the session only; nothing is installed and no user config is
-     * written.
+     * A NODE field rather than a run-level one because that is what it buys:
+     * two nodes of one graph can run as different ACCOUNTS (two subscriptions,
+     * two rate limits) with different tools, and neither touches the user's
+     * default profile.
      *
-     * Absolute path, validated before it reaches argv. The CLI silently
-     * ignores a path it cannot use (probe-verified: a missing directory, a
-     * plugin-less one and a plain file all exit 0 reporting no servers), so a
-     * typo would otherwise present as "this node has no MCP servers" —
-     * indistinguishable from the truth.
+     * Absolute path, validated before it reaches the child's env. Existence is
+     * checked because the CLI will not check it: claude CREATES whatever
+     * directory it is handed and reports "Not logged in" (probe-verified on
+     * 2.1.227), so a typo would otherwise fail the node with a login error
+     * about a profile nobody meant to name.
      */
-    pluginDir: z
+    configDir: z
       .string()
       .min(1)
       .optional()
-      .describe('Absolute path to a plugin directory loaded for this node'),
+      .describe(
+        'Absolute path to the agent config directory this node runs under',
+      ),
   })
   .meta({ id: 'WorkflowAgentNode' });
 
@@ -396,34 +399,37 @@ export interface ParkQuestionInput {
 }
 
 /**
- * Whether ONE CLI can load a plugin directory for an invocation.
+ * Whether ONE CLI can be pointed at a different config directory — i.e. run an
+ * invocation as a different account, under a different profile.
  *
- * The wire home for `AdapterConfig.plugin.unavailableReason`, which was the
+ * The wire home for `AdapterConfig.configDir.unavailableReason`, which was the
  * daemon's single source of truth with no way to reach the renderer — so the
  * builder hardcoded its own `agent === 'claude'` allowlist, the executor
- * silently STRIPPED a `pluginDir` it could not honour, and the listing service
+ * silently STRIPPED a `configDir` it could not honour, and the listing service
  * refused one with a 400. Three answers to one question, reachable today by
  * importing a workflow YAML. Carrying the adapter's own reason here is what
  * collapses them back to one.
  */
-export const AgentPluginCapabilitySchema = z
+export const AgentConfigDirCapabilitySchema = z
   .object({
     agent: AgentKindSchema,
     /**
-     * Why this CLI cannot load a plugin directory, or null when it can. A
-     * SENTENCE rather than a boolean, because the renderer shows it: "cannot"
-     * with no reason is the silent refusal this replaced.
+     * Why this CLI cannot be given one, or null when it can. A SENTENCE rather
+     * than a boolean, because the renderer shows it: "cannot" with no reason is
+     * the silent refusal this replaced.
      */
     unavailableReason: z.string().nullable(),
   })
-  .meta({ id: 'AgentPluginCapability' });
-export type AgentPluginCapability = z.infer<typeof AgentPluginCapabilitySchema>;
+  .meta({ id: 'AgentConfigDirCapability' });
+export type AgentConfigDirCapability = z.infer<
+  typeof AgentConfigDirCapabilitySchema
+>;
 
 /**
  * Whether ONE CLI has an INTERACTIVE terminal mirror — a `--resume` session the
  * user can type at.
  *
- * The wire home for `AdapterConfig.terminal`, for exactly the reason the plugin
+ * The wire home for `AdapterConfig.terminal`, for exactly the reason the config-dir
  * row above exists: without it the renderer hardcodes `agent === 'claude'` to
  * decide whether to offer the mirror picker, and a second CLI gaining one (or
  * claude losing one) leaves the picker offering a choice the daemon answers
@@ -438,7 +444,7 @@ export const AgentTerminalCapabilitySchema = z
     agent: AgentKindSchema,
     /**
      * Why this CLI has no interactive terminal, or null when it has one. A
-     * sentence for the same reason as the plugin row: a bare "cannot" is the
+     * sentence for the same reason as the config-dir row: a bare "cannot" is the
      * silent refusal these capabilities exist to replace.
      */
     unavailableReason: z.string().nullable(),
@@ -507,9 +513,11 @@ export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
     'Claude permission-mode probe verdict (acceptEdits / plan support)',
   ),
-  plugins: z
-    .array(AgentPluginCapabilitySchema)
-    .describe('Per-CLI plugin-directory support, one entry per known agent'),
+  configDirs: z
+    .array(AgentConfigDirCapabilitySchema)
+    .describe(
+      'Per-CLI config-directory (profile / account) support, one entry per known agent',
+    ),
   interactiveTerminals: z
     .array(AgentTerminalCapabilitySchema)
     .describe(

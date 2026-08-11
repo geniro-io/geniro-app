@@ -25,7 +25,7 @@ const LOAD_FAILURE = 'could not load MCP servers';
  * `daemon <METHOD> <path> failed (<status>): <detail>`, so the status is the
  * one machine-readable thing the renderer gets. A 4xx is the daemon refusing
  * the request it was handed; a 5xx, a timeout or a transport error is not
- * about the plugin path at all.
+ * about the config-directory path at all.
  */
 function isInputRefusal(message: string): boolean {
   const status = /failed \((\d{3})\)/.exec(message)?.[1];
@@ -37,7 +37,7 @@ export interface NodeMcpState {
   /** Undefined until something has answered for this node. */
   listing: AgentMcpListing | undefined;
   /**
-   * Why the plugin directory this node names cannot be used, or null.
+   * Why the config directory this node names cannot be used, or null.
    *
    * Split OUT of {@link listing}'s `unavailableReason`, which also carries
    * "this CLI is not installed" and raw transport failures. Rendering those
@@ -45,13 +45,13 @@ export interface NodeMcpState {
    * perfectly valid, and hide the section explaining the real cause. Only the
    * daemon REFUSING the input it was given (a 4xx) is about the path.
    */
-  invalidPluginDir: string | null;
+  invalidConfigDir: string | null;
   loading: boolean;
   /**
    * Re-read health from the CLI, bypassing the daemon's cached reading.
    *
    * The automatic read is deliberately CACHED — it exists to populate the
-   * section when a node is selected or its plugin path changes, and it must
+   * section when a node is selected or its config-directory path changes, and it must
    * not re-launch the user's MCP servers to do that. RE-DIALLING a server the
    * daemon has already read is an explicit act, which is what this is: the
    * only thing that can tell a user whose server has since come back up.
@@ -64,24 +64,24 @@ export interface NodeMcpState {
  *
  * A workflow is edited long before it runs anywhere, so the builder has no
  * folder to ask about — and the honest answer is the set that does not depend
- * on one: the user's global servers plus whatever this node's own plugin
+ * on one: the user's global servers plus whatever this node's own profile
  * directory brings. The project servers of whichever folder the run lands in
  * are added by the CLI itself at run time. Omitting `cwd` is how the daemon is
  * asked for exactly that.
  *
  * Separate from the chat panel's `useAgentMcp` because the question differs in
- * every dimension: one agent rather than a map of CLI kinds, a plugin
+ * every dimension: one agent rather than a map of CLI kinds, a config
  * directory rather than a folder, and no write path at all — the graph surface
  * configures and reads, while switching servers off stays in the chat panel.
  *
  * Holds no cache of its own: the daemon already caches per
- * (agent, cwd, pluginDir, version), and a second copy in front of it would
+ * (agent, cwd, configDir, version), and a second copy in front of it would
  * out-live the daemon's own invalidation.
  */
 export function useNodeMcp(
   agentsApi: DaemonApis['agents'] | null,
   agent: CliKind | null,
-  pluginDir: string | null,
+  configDir: string | null,
 ): NodeMcpState {
   // Stored WITH the question it answers. Without that pairing, clicking from
   // one node to another leaves the previous node's rows on screen until the
@@ -90,14 +90,14 @@ export function useNodeMcp(
   const [answered, setAnswered] = useState<{
     scope: string;
     listing: AgentMcpListing | undefined;
-    invalidPluginDir: string | null;
-  }>({ scope: '', listing: undefined, invalidPluginDir: null });
+    invalidConfigDir: string | null;
+  }>({ scope: '', listing: undefined, invalidConfigDir: null });
   const [pending, setPending] = useState(false);
   // Bumped by refresh; the effect keys on it, so a bump re-runs the read.
   const [reloadToken, setReloadToken] = useState(0);
   // The token the last read already spent. Refresh is a ONE-SHOT intent about
   // the node on screen, so it must be consumed rather than latched: the effect
-  // also re-runs when the selection or the plugin path changes, and a
+  // also re-runs when the selection or the config-directory path changes, and a
   // monotonic `reloadToken > 0` would make every later click re-dial the
   // user's own MCP servers for the rest of the session.
   const consumedToken = useRef(0);
@@ -105,7 +105,7 @@ export function useNodeMcp(
   const consumedReread = useRef(0);
   // NUL-joined, the one byte neither an agent kind nor a path can contain —
   // the same key shape the daemon's own caches use.
-  const scope = `${agent ?? ''}\u0000${pluginDir ?? ''}`;
+  const scope = `${agent ?? ''}\u0000${configDir ?? ''}`;
 
   const current = answered.scope === scope;
   const listing = current ? answered.listing : undefined;
@@ -121,7 +121,7 @@ export function useNodeMcp(
     const bypassCache = reloadToken > consumedToken.current;
     // A POLL of a read the daemon said was still running. Like a refresh it is
     // not a keystroke, so it skips the debounce below — that delay exists only
-    // to collapse typing in the plugin-path field, and charging it to every
+    // to collapse typing in the config-directory field, and charging it to every
     // poll would add half a second to each cycle of a wait that is already
     // seconds long.
     const isPoll = rereadToken > consumedReread.current;
@@ -131,16 +131,16 @@ export function useNodeMcp(
     // clicks next — re-dialling a read nobody asked to refresh.
     consumedToken.current = reloadToken;
     if (agentsApi === null || agent === null) {
-      setAnswered({ scope, listing: undefined, invalidPluginDir: null });
+      setAnswered({ scope, listing: undefined, invalidConfigDir: null });
       setPending(false);
       return;
     }
     let stale = false;
     setPending(true);
-    // DEBOUNCED because `pluginDir` comes from a text field, one value per
+    // DEBOUNCED because `configDir` comes from a text field, one value per
     // keystroke, and this read is not cheap: the CLI health-checks, which
     // means launching the user's own MCP servers. An intermediate path can be
-    // a real directory too (`/opt` on the way to `/opt/plugins/x`), so
+    // a real directory too (`/Users/you` on the way to `/Users/you/.claude-work`), so
     // "only fetch valid paths" would not have bounded it.
     //
     // A REFRESH is not debounced: it is one deliberate click, not a keystroke,
@@ -151,7 +151,7 @@ export function useNodeMcp(
           .listAgentMcpServers(
             {
               agent,
-              ...(pluginDir ? { pluginDir } : {}),
+              ...(configDir ? { configDir } : {}),
               ...(bypassCache ? { refresh: 'true' } : {}),
             },
             // Same slow route as the chat panel's read — it health-checks by
@@ -161,13 +161,13 @@ export function useNodeMcp(
           )
           .then((listing) => {
             if (!stale) {
-              setAnswered({ scope, listing, invalidPluginDir: null });
+              setAnswered({ scope, listing, invalidConfigDir: null });
             }
           })
           .catch((err: unknown) => {
             // SURFACED, never swallowed. The daemon's refusal is the only thing
             // that can tell the user their path is wrong — the CLI ignores an
-            // unusable --plugin-dir silently — so discarding it here would
+            // unusable profile path silently — so discarding it here would
             // re-create the exact failure the validation exists to prevent, with
             // a typo reading as "Not checked" until a run is refused.
             //
@@ -193,8 +193,8 @@ export function useNodeMcp(
                   // there is no running read to come back for.
                   pending: false,
                 },
-                invalidPluginDir:
-                  pluginDir && isInputRefusal(message) ? message : null,
+                invalidConfigDir:
+                  configDir && isInputRefusal(message) ? message : null,
               });
             }
           })
@@ -210,7 +210,7 @@ export function useNodeMcp(
       stale = true;
       clearTimeout(timer);
     };
-  }, [agentsApi, agent, pluginDir, scope, reloadToken, rereadToken]);
+  }, [agentsApi, agent, configDir, scope, reloadToken, rereadToken]);
 
   const refresh = useCallback(() => {
     setReloadToken((token) => token + 1);
@@ -218,7 +218,7 @@ export function useNodeMcp(
 
   return {
     listing,
-    invalidPluginDir: current ? answered.invalidPluginDir : null,
+    invalidConfigDir: current ? answered.invalidConfigDir : null,
     loading: pending || stillReading,
     refresh,
   };

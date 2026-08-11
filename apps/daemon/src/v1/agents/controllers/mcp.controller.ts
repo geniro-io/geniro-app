@@ -32,7 +32,7 @@ export class McpController {
     @Query() query: ListMcpServersQueryDto,
   ): Promise<AgentMcpListingWire> {
     return this.mcpService.list(query.agent, query.cwd ?? null, {
-      pluginDir: query.pluginDir ?? null,
+      configDir: query.configDir ?? null,
       refresh: query.refresh ?? false,
     });
   }

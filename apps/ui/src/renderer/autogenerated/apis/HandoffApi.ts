@@ -22,6 +22,7 @@ import type {
 export interface HandoffApiResolveCliLoginRequest {
     agent: AgentKind;
     cwd?: string;
+    configDir?: string;
 }
 
 export interface HandoffApiResolveHandoffRequest {
@@ -34,6 +35,7 @@ export interface HandoffApiResolveMcpLoginRequest {
     agent: AgentKind;
     cwd: string;
     server: string;
+    configDir?: string;
 }
 
 /**
@@ -60,6 +62,10 @@ export class HandoffApi extends runtime.BaseAPI {
 
         if (requestParameters['cwd'] != null) {
             queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -186,6 +192,10 @@ export class HandoffApi extends runtime.BaseAPI {
 
         if (requestParameters['server'] != null) {
             queryParameters['server'] = requestParameters['server'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};

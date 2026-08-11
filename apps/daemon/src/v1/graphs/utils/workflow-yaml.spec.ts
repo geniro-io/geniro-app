@@ -235,12 +235,12 @@ edges:
     expect(out).toContain('# the coder writes the change');
   });
 
-  it('writes an agent pluginDir back into an existing file', () => {
+  it('writes an agent configDir back into an existing file', () => {
     // Same hazard as description above, and the reason this test drives the
     // MERGE path specifically: `serializeWorkflowYaml(wf)` with no source goes
     // through `workflowToPlain`, a JSON round-trip that emits every field
     // whether or not the merge's field list knows about it. A no-source round
-    // trip therefore stays GREEN with `pluginDir` missing from
+    // trip therefore stays GREEN with `configDir` missing from
     // AGENT_ONLY_FIELDS, so it would certify a mirror that silently drops the
     // field on every save of a pre-existing workflow.
     const wf = parseWorkflowYaml(VALID_SOURCE);
@@ -248,35 +248,35 @@ edges:
     if (coder.kind !== 'agent') {
       expect.unreachable('the coder fixture is an agent node');
     }
-    coder.pluginDir = '/opt/plugins/reviewer';
+    coder.configDir = '/opt/plugins/reviewer';
     const out = serializeWorkflowYaml(wf, VALID_SOURCE);
     const back = parseWorkflowYaml(out);
     const saved = back.nodes[0]!;
     expect(saved.kind).toBe('agent');
-    expect((saved as typeof coder).pluginDir).toBe('/opt/plugins/reviewer');
+    expect((saved as typeof coder).configDir).toBe('/opt/plugins/reviewer');
     expect(out).toContain('# the coder writes the change');
   });
 
-  it('clears a pluginDir the inspector removed', () => {
+  it('clears a configDir the inspector removed', () => {
     // The delete half of the mirror: `setOrDelete` only reaches a key the
     // field list names, so an unmirrored field could never be cleared from a
     // file that already carried one.
-    const sourceWithPluginDir = VALID_SOURCE.replace(
+    const sourceWithConfigDir = VALID_SOURCE.replace(
       '    role: You write the code.',
-      '    role: You write the code.\n    pluginDir: /opt/plugins/reviewer',
+      '    role: You write the code.\n    configDir: /opt/plugins/reviewer',
     );
-    const wf = parseWorkflowYaml(sourceWithPluginDir);
+    const wf = parseWorkflowYaml(sourceWithConfigDir);
     const coder = wf.nodes[0]!;
     if (coder.kind !== 'agent') {
       expect.unreachable('the coder fixture is an agent node');
     }
-    expect(coder.pluginDir).toBe('/opt/plugins/reviewer');
-    delete coder.pluginDir;
-    const out = serializeWorkflowYaml(wf, sourceWithPluginDir);
+    expect(coder.configDir).toBe('/opt/plugins/reviewer');
+    delete coder.configDir;
+    const out = serializeWorkflowYaml(wf, sourceWithConfigDir);
     expect(out).not.toContain('/opt/plugins/reviewer');
     const saved = parseWorkflowYaml(out).nodes[0]!;
     expect(saved.kind).toBe('agent');
-    expect((saved as typeof coder).pluginDir).toBeUndefined();
+    expect((saved as typeof coder).configDir).toBeUndefined();
   });
 
   it('does not emit a node twice when the existing file already holds its id twice', () => {

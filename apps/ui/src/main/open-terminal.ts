@@ -23,6 +23,13 @@ export async function openInTerminal(input: {
   command: string;
   args: string[];
   cwd: string;
+  /**
+   * Env the invocation needs — today the run's config directory, which decides
+   * which ACCOUNT the reopened conversation belongs to and has no argv form.
+   * Written as a prefix assignment on the exec line, so it applies to the CLI
+   * and dies with it.
+   */
+  env?: Record<string, string>;
 }): Promise<void> {
   if (process.platform !== 'darwin') {
     throw new Error('opening a terminal is macOS-only in this build');
@@ -32,9 +39,17 @@ export async function openInTerminal(input: {
   // `exec` so the shell becomes the CLI: closing the CLI closes the window's
   // process rather than dropping the user at a stray prompt. The line itself
   // is quoted by the daemon, which is also what the user sees and can copy.
+  // Sorted for the same reason the daemon's `shellLine` sorts: one target must
+  // always render the same script. Only the value is quoted — an assignment is
+  // not an argument, and re-quoting it would make the shell hunt for a command
+  // named `NAME=value`.
+  const assignments = Object.entries(input.env ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => `${name}=${quote(value)} `)
+    .join('');
   writeFileSync(
     script,
-    `#!/bin/sh\ncd ${quote(input.cwd)} || exit 1\nexec ${[input.command, ...input.args].map(quote).join(' ')}\n`,
+    `#!/bin/sh\ncd ${quote(input.cwd)} || exit 1\nexec ${assignments}${[input.command, ...input.args].map(quote).join(' ')}\n`,
     { mode: 0o700 },
   );
   chmodSync(script, 0o700);

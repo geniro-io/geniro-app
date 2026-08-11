@@ -527,6 +527,12 @@ export const RunWireSchema = z.object({
     .describe(
       "Reasoning-effort level for the next turn, in the CLI's own vocabulary; null = the CLI's default (no --effort flag)",
     ),
+  configDir: z
+    .string()
+    .nullable()
+    .describe(
+      "Canonical agent config directory this chat runs under — which account/profile its CLI uses; null = the CLI's default. Fixed at creation, like cwd — the settings PATCH does not carry it",
+    ),
   createdAt: z.string(),
   /**
    * Last write to the run row — every send flips status to `running` and every

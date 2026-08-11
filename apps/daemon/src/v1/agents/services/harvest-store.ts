@@ -17,7 +17,7 @@ interface HarvestRecord<T> {
  * is the one byte neither an agent kind nor a path can contain — the same key
  * shape the daemon's MCP cache and the renderer's own caches use.
  *
- * Extra dimensions are appended by the subclass that has them (a plugin
+ * Extra dimensions are appended by the subclass that has them (a config
  * directory changes which MCP servers a folder loads, so the MCP harvest keys
  * by it; skills do not).
  */

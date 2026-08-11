@@ -38,4 +38,33 @@ describe('shellLine', () => {
     // Dropped to nothing, the paste would silently shift every flag after it.
     expect(shellLine('claude', ['--resume', ''])).toBe("claude --resume ''");
   });
+
+  it('prefixes the env as assignments the pasted command actually gets', () => {
+    // A prefix assignment, not an `export`: the pasted line must not leave the
+    // variable set in the user's shell afterwards, silently re-pointing every
+    // later CLI invocation in that window.
+    expect(
+      shellLine('claude', ['--resume', 'sess-1'], {
+        CLAUDE_CONFIG_DIR: '/profiles/work',
+      }),
+    ).toBe('CLAUDE_CONFIG_DIR=/profiles/work claude --resume sess-1');
+  });
+
+  it('quotes the VALUE of an assignment without re-quoting the assignment', () => {
+    // Re-quoted as one word, the shell looks for a command literally named
+    // `CLAUDE_CONFIG_DIR=/two words` and the whole line fails.
+    expect(
+      shellLine('claude', ['--resume', 'sess-1'], {
+        CLAUDE_CONFIG_DIR: '/two words',
+      }),
+    ).toBe("CLAUDE_CONFIG_DIR='/two words' claude --resume sess-1");
+  });
+
+  it('renders the same line for the same env whatever order it was built in', () => {
+    // An object has no order of its own; a line that reshuffles between reads
+    // reads as a different command.
+    expect(shellLine('claude', [], { B: '2', A: '1' })).toBe(
+      shellLine('claude', [], { A: '1', B: '2' }),
+    );
+  });
 });

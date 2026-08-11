@@ -166,6 +166,7 @@ const run1: ChatRun = {
   model: null,
   approval: null,
   effort: null,
+  configDir: null,
   createdAt: 'now',
   updatedAt: 'now',
   lastMessage: null,
@@ -463,6 +464,17 @@ beforeEach(() => {
     approvals: [
       { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
       { agent: 'cursor-agent', modes: ['auto', 'ask', 'acceptEdits'] },
+    ],
+    // Which CLIs can load a plugin directory — what decides whether the
+    // composer offers the plugin chip at all. Stated for the same reason as
+    // the rows around it: the renderer asks rather than allowlisting claude by
+    // name, so a fixture without it would hide the chip everywhere.
+    configDirs: [
+      { agent: 'claude', unavailableReason: null },
+      {
+        agent: 'cursor-agent',
+        unavailableReason: 'cursor-agent has no plugin directory flag',
+      },
     ],
     // Which CLIs can be handed a message MID-turn — what decides whether the
     // queue strip offers "send now". Stated here for the same reason as the
@@ -1731,6 +1743,7 @@ describe('Chats workflow runs', () => {
     model: null,
     approval: null,
     effort: null,
+    configDir: null,
     createdAt: 'later',
     updatedAt: 'later',
     lastMessage: null,
@@ -2209,6 +2222,7 @@ describe('Chats — handing a conversation to the user', () => {
       model: null,
       approval: null,
       effort: null,
+      configDir: null,
       createdAt: 'later',
       updatedAt: 'later',
       lastMessage: null,
@@ -2423,6 +2437,79 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
+  /** The composer's config-directory chip (absent unless the CLI supports one). */
+  const configDirTrigger = (
+    container: HTMLElement,
+  ): HTMLButtonElement | undefined =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find(
+      (trigger) =>
+        trigger.getAttribute('aria-label') ===
+        'Agent config directory for new chats',
+    );
+
+  it('starts the chat on the config directory the composer names, and remembers it', async () => {
+    stubSettings({ recentConfigDirs: ['/profiles/work'] });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(
+      container,
+      configDirTrigger(container)!,
+      '/profiles/work',
+    );
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        agentKind: 'claude',
+        configDir: '/profiles/work',
+      }),
+    });
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      configDir: '/profiles/work',
+      recentConfigDirs: ['/profiles/work'],
+    });
+  });
+
+  it('omits the config directory entirely when the composer names none', async () => {
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await sendTask(container);
+
+    // Absent, never `configDir: null`: the create schema has no null arm, and
+    // the CLI's own profile is the default the daemon already applies.
+    expect(api.createChat.mock.calls[0]![0].createChatDto).not.toHaveProperty(
+      'configDir',
+    );
+  });
+
+  it('hides the chip — and withholds a remembered directory — on a CLI that has no profile mechanism', async () => {
+    // The daemon REFUSES a config directory on such a CLI (an interactive
+    // choice is answered, not silently dropped), so a directory left over from
+    // a claude chat must not ride into a cursor run: it would 400 every send.
+    stubSettings({ configDir: '/profiles/work' });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    expect(configDirTrigger(container)).toBeDefined();
+
+    await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
+    expect(configDirTrigger(container)).toBeUndefined();
+
+    await sendTask(container);
+    expect(api.createChat.mock.calls[0]![0].createChatDto).not.toHaveProperty(
+      'configDir',
+    );
+  });
+
   it('sends the approval mode even when capabilities land AFTER the composer mounts', async () => {
     // The mode reaches a new run only when the composer's CLI is known to
     // honour it, and that answer arrives asynchronously. The capability is
@@ -2445,6 +2532,7 @@ describe('Chats composer memory & suggestions', () => {
           approvals: [
             { agent: 'claude', modes: ['auto', 'ask', 'acceptEdits', 'plan'] },
           ],
+          configDirs: [{ agent: 'claude', unavailableReason: null }],
         });
     });
     capabilitiesApi.getCapabilities.mockReturnValue(pending);
@@ -2470,11 +2558,13 @@ describe('Chats composer memory & suggestions', () => {
   });
 
   it('shows a loader while cursor models are still being fetched', async () => {
-    let resolveCursorModels!: (models: {
-      id: string;
-      label: string;
-      source: string;
-    }[]) => void;
+    let resolveCursorModels!: (
+      models: {
+        id: string;
+        label: string;
+        source: string;
+      }[],
+    ) => void;
     const cursorModels = new Promise<
       { id: string; label: string; source: string }[]
     >((resolve) => {
@@ -2484,9 +2574,7 @@ describe('Chats composer memory & suggestions', () => {
       ({ agent }: { agent: string }) =>
         agent === 'cursor-agent'
           ? cursorModels
-          : Promise.resolve([
-              { id: 'opus', label: 'opus', source: 'builtin' },
-            ]),
+          : Promise.resolve([{ id: 'opus', label: 'opus', source: 'builtin' }]),
     );
     const { client } = makeClient();
     const container = await mount(client);

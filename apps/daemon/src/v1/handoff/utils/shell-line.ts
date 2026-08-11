@@ -28,6 +28,27 @@ function quote(arg: string): string {
  * from the SAME command and args the button runs, so the two cannot describe
  * different things.
  */
-export function shellLine(command: string, args: string[]): string {
-  return [command, ...args].map(quote).join(' ');
+export function shellLine(
+  command: string,
+  args: string[],
+  env: Record<string, string> = {},
+): string {
+  // `NAME=value cmd …` — a prefix assignment, which every POSIX shell applies
+  // to that command alone. Not `export`: the line is meant to be pasted, and an
+  // export would leave the variable set in the user's own shell afterwards,
+  // silently re-pointing every later CLI invocation in that window at a profile
+  // they chose once for one conversation.
+  //
+  // Sorted, so the same target always renders the same line — a set has no
+  // order of its own, and a line that reshuffles between reads looks like a
+  // different command.
+  //
+  // Only the VALUE is quoted, and the assignment is not re-quoted with the
+  // rest: `NAME='/two words'` already contains quotes, so passing it back
+  // through `quote` would wrap the whole thing and the shell would look for a
+  // command literally named `NAME=/two words`.
+  const assignments = Object.entries(env)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => `${name}=${quote(value)}`);
+  return [...assignments, ...[command, ...args].map(quote)].join(' ');
 }

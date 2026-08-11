@@ -237,9 +237,9 @@ export function AgentsPanel({
   /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
-   * Keyed by (CLI, plugin directory) rather than by node: several nodes
+   * Keyed by (CLI, config directory) rather than by node: several nodes
    * routinely share one pair and would get identical answers, but two nodes on
-   * the same CLI with DIFFERENT plugin directories do not — a plugin ships its
+   * the same CLI with DIFFERENT config directories do not — a profile carries its
    * own MCP servers. Keyed by CLI alone (as it was) the panel painted one
    * node's servers onto every card of that CLI, including nodes that load a
    * different set. Absent while the panel's owner has nothing to show.
@@ -408,7 +408,7 @@ export function AgentsPanel({
             const mcpScope =
               mcpKind === null
                 ? null
-                : mcpScopeKey({ agent: mcpKind, pluginDir: agent.pluginDir });
+                : mcpScopeKey({ agent: mcpKind, configDir: agent.configDir });
             // An agent whose only thread is its own conversation has nothing
             // to expand INTO — the card already is that conversation. Showing
             // a chevron over a one-row list (the 1:1 chat's whole shape) is

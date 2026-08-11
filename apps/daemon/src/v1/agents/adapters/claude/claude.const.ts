@@ -171,15 +171,22 @@ export const CLAUDE_CONTROL_REQUEST_ID_PREFIX = 'geniro-';
 export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
- * Loads a plugin for one invocation (`--plugin-dir <path>`, repeatable).
+ * Points claude at a different config directory — the folder holding its
+ * credentials, settings, installed plugins and session history, i.e. WHICH
+ * ACCOUNT the invocation runs as.
  *
- * A GLOBAL option, which is the whole reason this is a named constant used by
- * two very differently-shaped call sites: on a turn there is no subcommand so
- * it may sit anywhere in argv, but `claude mcp list --plugin-dir X` is
- * REJECTED as an unknown option — before the subcommand is the only placement
- * that works there (probe-verified on 2.1.220).
+ * ENV, not a flag: claude exposes no `--config-dir`, and this is the documented
+ * knob its own SDK guidance names. Probe-verified on 2.1.227 — pointed at an
+ * empty directory, a headless `claude -p` wrote `.claude.json`, `projects/` and
+ * `sessions/` into it and ended "Not logged in · Please run /login", which is
+ * the whole mechanism in one observation: a separate directory is a separate
+ * signed-in profile.
+ *
+ * Named here rather than written inline because two call sites spell it — a
+ * turn's `buildEnv` and the `mcp list` read, which must be taken under the SAME
+ * profile it describes.
  */
-export const CLAUDE_PLUGIN_DIR_FLAG = '--plugin-dir';
+export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 
 /**
  * Restricts a turn to `--mcp-config` servers only.

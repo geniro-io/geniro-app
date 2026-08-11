@@ -729,11 +729,11 @@ describe('GraphExecutorService', () => {
     expect(runDao.runs.size).toBe(0);
   });
 
-  it('hands a node turn the CANONICAL plugin directory, the way it hands it a canonical cwd', async () => {
-    // `AgentTurnInput.pluginDir` states its contract in its own doc block:
+  it('hands a node turn the CANONICAL config directory, the way it hands it a canonical cwd', async () => {
+    // `AgentTurnInput.configDir` states its contract in its own doc block:
     // "Already validated and canonicalized by the caller — an adapter puts it
     // straight into argv and must never be the thing that first checks it."
-    // `resolveValidPluginDir` returns that canonical form, so the executor is
+    // `resolveValidConfigDir` returns that canonical form, so the executor is
     // the one place it can be applied. A symlink is what tells the two apart:
     // both the raw and the resolved path pass validation, so only the value
     // that actually reaches argv can show which one the run spawns with — and
@@ -756,7 +756,7 @@ describe('GraphExecutorService', () => {
             kind: 'agent',
             agent: 'claude',
             approval: 'auto',
-            pluginDir: link,
+            configDir: link,
           },
         ],
         edges: [],
@@ -767,10 +767,10 @@ describe('GraphExecutorService', () => {
     await drain();
 
     expect(claude.starts).toHaveLength(1);
-    expect(claude.starts[0]!.input.pluginDir).toBe(realpathSync(target));
+    expect(claude.starts[0]!.input.configDir).toBe(realpathSync(target));
   });
 
-  it('REFUSES the whole run when a node names an unusable plugin directory', async () => {
+  it('REFUSES the whole run when a node names an unusable config directory', async () => {
     // The CLI would say nothing: an unusable --plugin-dir is ignored silently
     // (exit 0), so the node would run WITHOUT its plugin and report success —
     // "this node has no MCP servers", indistinguishable from the truth. Delete
@@ -789,7 +789,7 @@ describe('GraphExecutorService', () => {
               kind: 'agent',
               agent: 'claude',
               approval: 'auto',
-              pluginDir: join(dir, 'no-such-plugin'),
+              configDir: join(dir, 'no-such-plugin'),
             },
           ],
           edges: [],
@@ -801,14 +801,14 @@ describe('GraphExecutorService', () => {
       code = (err as BadRequestException).errorCode;
     }
 
-    expect(code).toBe('INVALID_PLUGIN_DIR');
+    expect(code).toBe('INVALID_CONFIG_DIR');
     // Refused BEFORE anything ran or was persisted — the point of validating
     // up front rather than per turn.
     expect(claude.starts).toHaveLength(0);
     expect(runDao.runs.size).toBe(0);
   });
 
-  it('leaves a cursor node’s plugin directory alone, never refusing over it', async () => {
+  it('leaves a cursor node’s config directory alone, never refusing over it', async () => {
     // cursor-agent declares no plugin mechanism, so geniro must not invent a
     // failure over a path that CLI would ignore anyway — nor pass it on as if
     // it meant something. Without the config check this run would be refused.
@@ -824,7 +824,7 @@ describe('GraphExecutorService', () => {
             kind: 'agent',
             agent: 'cursor-agent',
             approval: 'auto',
-            pluginDir: join(dir, 'no-such-plugin'),
+            configDir: join(dir, 'no-such-plugin'),
           },
         ],
         edges: [],
@@ -835,12 +835,12 @@ describe('GraphExecutorService', () => {
     await drain();
 
     expect(cursor.starts).toHaveLength(1);
-    expect(cursor.starts[0]!.input.pluginDir).toBeNull();
+    expect(cursor.starts[0]!.input.configDir).toBeNull();
   });
 
-  it('SAYS a plugin directory it dropped was dropped, and why', async () => {
+  it('SAYS a config directory it dropped was dropped, and why', async () => {
     // Not refusing is right; dropping in silence is not. A workflow imported
-    // as YAML can carry a `pluginDir` on a CLI that has no such mechanism —
+    // as YAML can carry a `configDir` on a CLI that has no such mechanism —
     // the builder never offered the field, so the user never saw it refused —
     // and the run would otherwise proceed as though the node had named none.
     // Deleting the notice leaves the previous spec green, which is why this
@@ -858,7 +858,7 @@ describe('GraphExecutorService', () => {
             agent: 'cursor-agent',
             approval: 'auto',
             name: 'Reviewer',
-            pluginDir: join(dir, 'no-such-plugin'),
+            configDir: join(dir, 'no-such-plugin'),
           },
         ],
         edges: [],
@@ -873,7 +873,7 @@ describe('GraphExecutorService', () => {
       .find(
         (item) =>
           item.kind === 'system' &&
-          String(JSON.parse(item.payload).message).includes('plugin directory'),
+          String(JSON.parse(item.payload).message).includes('config directory'),
       );
 
     expect(notice).toBeDefined();
@@ -881,7 +881,7 @@ describe('GraphExecutorService', () => {
     // The node the user has to go and fix, and the adapter's OWN reason —
     // a sentence composed here could not stay true as the config changes.
     expect(message).toContain('Reviewer');
-    expect(message).toContain(cursor.getConfig().plugin.unavailableReason);
+    expect(message).toContain(cursor.getConfig().configDir.unavailableReason);
   });
 
   it('runs a linear chain, feeding A output into B prompt', async () => {
@@ -1102,10 +1102,10 @@ describe('GraphExecutorService', () => {
   });
 
   it("harvests a node turn's mcp_servers under the node's CANONICAL plugin dir", async () => {
-    // The plugin directory belongs in the key because a plugin ships its own
+    // The config directory belongs in the key because a plugin ships its own
     // MCP servers: two nodes on one CLI in one folder pointed at different
     // ones genuinely load different sets. And it must be the CANONICAL form —
-    // `AgentMcpService` keys its own read by `resolveValidPluginDir`, so a raw
+    // `AgentMcpService` keys its own read by `resolveValidConfigDir`, so a raw
     // path here files the harvest where nothing ever looks it up.
     const target = join(dir, 'mcp-plugin-target');
     const link = join(dir, 'mcp-plugin-link');
@@ -1131,7 +1131,7 @@ describe('GraphExecutorService', () => {
             kind: 'agent',
             agent: 'claude',
             approval: 'auto',
-            pluginDir: link,
+            configDir: link,
           },
         ],
         edges: [],

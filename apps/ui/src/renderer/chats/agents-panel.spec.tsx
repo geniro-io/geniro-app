@@ -102,7 +102,7 @@ const agents: AgentDisplay[] = [
     id: 'orchestrator',
     name: 'Orchestrator',
     agent: 'claude',
-    pluginDir: null,
+    configDir: null,
     status: 'running',
     activeTurns: 1,
     contextTokens: 45_200,
@@ -115,7 +115,7 @@ const agents: AgentDisplay[] = [
     id: 'worker',
     name: 'Worker',
     agent: 'claude',
-    pluginDir: null,
+    configDir: null,
     status: 'running',
     activeTurns: 3,
     contextTokens: 12_000,
@@ -142,7 +142,7 @@ const agents: AgentDisplay[] = [
     id: 'reviewer',
     name: 'Reviewer',
     agent: 'cursor-agent',
-    pluginDir: null,
+    configDir: null,
     status: 'idle',
     activeTurns: 0,
     contextTokens: null,
@@ -153,8 +153,8 @@ const agents: AgentDisplay[] = [
 ];
 
 /** The panel keys its listings by scope; a plugin-less node's key is this. */
-function scope(agent: CliKind, pluginDir: string | null = null): string {
-  return mcpScopeKey({ agent, pluginDir });
+function scope(agent: CliKind, configDir: string | null = null): string {
+  return mcpScopeKey({ agent, configDir });
 }
 
 describe('AgentsPanel', () => {
@@ -334,7 +334,7 @@ describe('AgentsPanel', () => {
       id,
       name: id,
       agent: 'claude',
-      pluginDir: null,
+      configDir: null,
       status: 'completed',
       activeTurns: 0,
       contextTokens,
@@ -856,7 +856,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     };
   }
 
-  it('gives two nodes on ONE CLI their OWN servers when their plugins differ', () => {
+  it('gives two nodes on ONE CLI their OWN servers when their profiles differ', () => {
     // The defect this replaced: the listing map was keyed by CLI kind while
     // the panel renders per NODE, so both cards were painted with whichever
     // single answer that CLI had — and after the plugin directory became a
@@ -870,19 +870,19 @@ describe('AgentsPanel — per-node MCP scope', () => {
             ...agents[0]!,
             id: 'a',
             name: 'Reviewer',
-            pluginDir: '/plugins/review',
+            configDir: '/profiles/review',
           },
           {
             ...agents[0]!,
             id: 'b',
             name: 'Writer',
-            pluginDir: '/plugins/write',
+            configDir: '/profiles/write',
           },
         ]}
         mcpByScope={
           new Map([
-            [scope('claude', '/plugins/review'), oneServer('linear')],
-            [scope('claude', '/plugins/write'), oneServer('sentry')],
+            [scope('claude', '/profiles/review'), oneServer('linear')],
+            [scope('claude', '/profiles/write'), oneServer('sentry')],
           ])
         }
         onOpenThread={vi.fn()}
@@ -904,7 +904,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     const el = render(
       <AgentsPanel
         interactiveTerminalAgents={INTERACTIVE}
-        agents={[{ ...agents[0]!, id: 'a', pluginDir: '/plugins/review' }]}
+        agents={[{ ...agents[0]!, id: 'a', configDir: '/profiles/review' }]}
         mcpByScope={new Map([[scope('claude'), oneServer('only-plugin-less')]])}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}

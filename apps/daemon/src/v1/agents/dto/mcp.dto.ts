@@ -13,17 +13,17 @@ import { AgentMcpListingWireSchema } from '../chat.types';
  * `cwd` is OPTIONAL because the graph builder genuinely has no folder — a
  * workflow is edited long before it runs in one. Omitting it asks for the set
  * that does not depend on a folder (the user's global servers, plus whatever
- * `pluginDir` brings); the project-scope servers of whichever folder the run
+ * `configDir` brings); the project-scope servers of whichever folder the run
  * lands in are added by the CLI itself at run time.
  *
- * `pluginDir` is a node's own plugin directory (validated server-side by
- * `resolveValidPluginDir`). A plugin ships its own MCP servers, which is what
+ * `configDir` is a node's own agent config directory (validated server-side by
+ * `resolveValidConfigDir`). A profile carries its own MCP servers, which is what
  * makes two agent nodes' listings genuinely differ.
  */
 export const listMcpServersQuerySchema = z.object({
   agent: AgentKindSchema,
   cwd: z.string().min(1).optional(),
-  pluginDir: z.string().min(1).optional(),
+  configDir: z.string().min(1).optional(),
   refresh: z.stringbool().optional(),
 });
 export class ListMcpServersQueryDto extends createZodDto(

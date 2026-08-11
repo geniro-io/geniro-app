@@ -59,4 +59,18 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'string', nullable: true })
   effort: string | null = null;
+
+  /**
+   * Plugin directory a single-agent run's turns load, CANONICAL (the path
+   * `resolveValidConfigDir` returned when the chat was created); null = none,
+   * which is every row predating the chip and every CLI with no plugin
+   * mechanism. A graph run's plugin directories live per node in the workflow
+   * YAML instead.
+   *
+   * Part of the run's IDENTITY, like `cwd`, rather than a per-turn setting: it
+   * is chosen once when the chat is created and the settings PATCH does not
+   * carry it. TEXT so the `safe: true` schema sync adds it additively.
+   */
+  @Property({ type: 'string', nullable: true })
+  configDir: string | null = null;
 }

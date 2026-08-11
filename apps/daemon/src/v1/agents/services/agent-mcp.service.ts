@@ -14,8 +14,8 @@ import type {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentMcpListingWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
+import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
-import { resolveValidPluginDir } from '../utils/resolve-plugin-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
 import { McpHarvestStore } from './mcp-harvest.store';
@@ -56,7 +56,7 @@ const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
  *
  * The graph builder has no folder: a workflow is edited long before it is run
  * in one. What it can honestly show is the set that does NOT depend on a
- * folder — the user's global servers plus whatever the node's own plugin
+ * folder — the user's global servers plus whatever the node's own profile
  * directory brings — and the way to get that from the CLI is to ask it
  * somewhere with no project config of its own, because a project `.mcp.json`
  * is visible ONLY from its own folder (probe-verified on claude 2.1.220).
@@ -75,7 +75,7 @@ const FOLDERLESS_DIR_NAME = 'mcp-folderless';
  * - **agent** — the two CLIs read different config files entirely.
  * - **cwd** — the listing is folder-scoped (project `.mcp.json`, and
  *   local-scope servers keyed to that directory).
- * - **pluginDir** — a plugin ships its own MCP servers, so two nodes pointed
+ * - **configDir** — a profile carries its own MCP servers, so two nodes pointed
  *   at different directories genuinely have different sets. Sharing one cache
  *   entry between them is the exact failure this dimension exists to prevent.
  * - **version** — an upgraded binary can reword the output the parser reads,
@@ -87,10 +87,10 @@ const FOLDERLESS_DIR_NAME = 'mcp-folderless';
 function keyOf(
   agent: AgentKind,
   cwd: string,
-  pluginDir: string | null,
+  configDir: string | null,
   version: string | null,
 ): string {
-  return `${agent}\u0000${cwd}\u0000${pluginDir ?? ''}\u0000${version ?? ''}`;
+  return `${agent}\u0000${cwd}\u0000${configDir ?? ''}\u0000${version ?? ''}`;
 }
 
 /**
@@ -244,7 +244,7 @@ export class AgentMcpService {
   async list(
     agent: AgentKind,
     cwd: string | null,
-    options: { pluginDir?: string | null; refresh?: boolean } = {},
+    options: { configDir?: string | null; refresh?: boolean } = {},
   ): Promise<AgentMcpListingWire> {
     const { projectDir, adapter, result, pending } = await this.readServers(
       agent,
@@ -277,7 +277,7 @@ export class AgentMcpService {
     agent: AgentKind,
     cwd: string | null,
     options: {
-      pluginDir?: string | null;
+      configDir?: string | null;
       refresh?: boolean;
       blocking?: boolean;
     } = {},
@@ -288,7 +288,7 @@ export class AgentMcpService {
     /** A dial is running; `result` is not the answer yet. */
     pending: boolean;
   }> {
-    const { pluginDir = null, refresh = false, blocking = false } = options;
+    const { configDir = null, refresh = false, blocking = false } = options;
     // Validated FIRST, so a bad path is a bad request whichever adapter
     // answers — never a 400 for one CLI and a 200 for another. Ordering, not
     // just validation: placed BELOW an adapter's refusal, a folder's validity
@@ -300,7 +300,8 @@ export class AgentMcpService {
     // it is answered in geniro's own empty directory rather than refused.
     const projectDir =
       cwd === null ? this.folderlessDir() : resolveValidCwd(cwd);
-    const plugin = pluginDir === null ? null : resolveValidPluginDir(pluginDir);
+    const profile =
+      configDir === null ? null : resolveValidConfigDir(configDir);
     const adapter = this.adapters.for(agent);
     // The adapter's own sentence, carried through untouched. A CLI that cannot
     // be listed is not asked at all — spawning it to receive a guaranteed
@@ -325,7 +326,7 @@ export class AgentMcpService {
           childProcessHandle(child, spawnInfo),
         ),
     });
-    const key = keyOf(agent, projectDir, plugin, version);
+    const key = keyOf(agent, projectDir, profile, version);
     if (refresh) {
       this.cache.delete(key);
     }
@@ -359,7 +360,7 @@ export class AgentMcpService {
     this.deferredFailure.delete(key);
     // Nothing fresh to serve, and asking the CLI means a COLD DIAL of every
     // server. Before paying for that, take the answer a turn already gave us
-    // for this exact (agent, folder, plugin dir) — `system/init` names the
+    // for this exact (agent, folder, config dir) — `system/init` names the
     // servers the CLI loaded and the state each was in, at no cost, which is
     // why the CLI's own `/mcp` is instant while this route was not.
     //
@@ -374,7 +375,7 @@ export class AgentMcpService {
     // settles. Serving the harvest here would make that button inert.
     const harvested = refresh
       ? null
-      : this.harvest.get(agent, projectDir, plugin);
+      : this.harvest.get(agent, projectDir, profile);
     if (harvested !== null) {
       return {
         projectDir,
@@ -392,7 +393,7 @@ export class AgentMcpService {
     const ask = Promise.resolve()
       .then(() =>
         adapter.listMcpServers(
-          { cwd: projectDir, pluginDir: plugin },
+          { cwd: projectDir, configDir: profile },
           {
             onSpawn: (child, spawnInfo) =>
               this.processes.register(

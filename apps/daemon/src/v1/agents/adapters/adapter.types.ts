@@ -212,7 +212,7 @@ type AgentEventBody =
        * The MCP servers the CLI had loaded for this turn, with the connection
        * status each was in when the turn began (claude's `system/init`
        * `mcp_servers` — verified live on 2.1.222). Captured into the
-       * MCP-harvest store keyed by the turn's cwd and plugin directory — never
+       * MCP-harvest store keyed by the turn's cwd and config directory — never
        * a transcript item.
        *
        * Reported because the ALTERNATIVE is a cold re-dial: asking a CLI for
@@ -463,10 +463,15 @@ export interface AgentMcpServersInput {
    */
   cwd: string;
   /**
-   * A plugin directory whose own MCP servers should be included, already
-   * validated and canonicalized. Absent: list without one.
+   * The agent config directory this listing is about, already validated and
+   * canonicalized. Absent: list under the CLI's default profile.
+   *
+   * Part of the question, not a decoration: a CLI keeps its configured MCP
+   * servers in that directory, so two profiles in one folder genuinely load
+   * different sets — and a listing taken under the wrong one describes servers
+   * the turn will never start.
    */
-  pluginDir?: string | null;
+  configDir?: string | null;
 }
 
 /**
@@ -578,6 +583,16 @@ export interface AgentCommandOptions {
    * `spawnInfo.processGroup`, so a registration site cannot pair them wrongly.
    */
   processGroup?: boolean;
+  /**
+   * Extra env for THIS command's child, merged over `buildChildEnv()`.
+   *
+   * A utility command can be as profile-scoped as a turn is: `claude mcp list`
+   * reads the servers configured in whatever config directory it runs under,
+   * so asked without the run's own it confidently answers about a different
+   * account. The same stripping applies either way — this only ADDS, it never
+   * reinstates a key `buildChildEnv` removed on purpose.
+   */
+  env?: Record<string, string>;
   /**
    * Written to the child's stdin verbatim, in order, immediately after the
    * spawn — framing included, so a JSON-RPC caller passes `encodeRequest`
@@ -770,15 +785,24 @@ export interface AgentTurnInput {
    */
   isolateMcpServers?: boolean;
   /**
-   * A plugin directory this turn loads, and no other turn's.
+   * The directory this turn's CLI keeps its OWN state in — credentials,
+   * settings, installed plugins, session history. Absent: the CLI's default
+   * profile (`~/.claude`).
    *
-   * Already validated and canonicalized by the caller — an adapter puts it
-   * straight into argv and must never be the thing that first checks it.
-   * Session-scoped: nothing is installed and no user config is written.
+   * This is how one run talks to a different ACCOUNT (a different
+   * subscription) with a different toolbelt, without touching the user's
+   * default profile: it is one directory, and everything the CLI reads about
+   * itself is inside it.
    *
-   * A CLI with no plugin mechanism simply ignores the field.
+   * Already validated and canonicalized by the caller — an adapter hands it
+   * straight to its CLI and must never be the thing that first checks it. It
+   * travels as ENV, not argv (claude reads `CLAUDE_CONFIG_DIR`), which is why
+   * an adapter maps it in `buildEnv` rather than in `buildArgs`.
+   *
+   * A CLI with no such mechanism declares that in
+   * `AdapterConfig.configDir.unavailableReason` and simply ignores the field.
    */
-  pluginDir?: string | null;
+  configDir?: string | null;
   /**
    * Loopback MCP endpoint granting this turn the agent-call tools
    * (call_agent / await_agent / answer_agent). Delivery is adapter-specific —
@@ -827,7 +851,7 @@ export interface AgentSession {
    * Open a turn on this process. Null when this session cannot serve it: the
    * process is gone, a turn is already in flight, this CLI hosts one turn per
    * process, or the input would need different argv than the process was
-   * spawned with (a changed model, folder or plugin directory).
+   * spawned with (a changed model, folder or config directory).
    */
   startTurn(
     input: AgentTurnInput,
@@ -958,6 +982,15 @@ export interface HandoffInput {
   sessionId: string | null;
   /** The model the run is chatting as, or null for the CLI's own default. */
   model: string | null;
+  /**
+   * The agent config directory the run's turns use, or null/omitted for the
+   * CLI's default profile.
+   *
+   * Optional because most askers have none to give: the capability probe asks
+   * only whether this CLI can resume AT ALL, and a run that never chose a
+   * profile has nothing to pass.
+   */
+  configDir?: string | null;
 }
 
 /**
@@ -973,7 +1006,23 @@ export interface HandoffInput {
  * HTTP, and the owning module decides how to say it.
  */
 export type HandoffResult =
-  | { ok: true; kind: 'command'; command: string; args: string[] }
+  | {
+      ok: true;
+      kind: 'command';
+      command: string;
+      args: string[];
+      /**
+       * Environment the invocation needs, when a fact about the run cannot be
+       * expressed in argv. Empty for most handoffs.
+       *
+       * It exists because the run's config directory — which ACCOUNT the
+       * conversation belongs to — travels only as env (`CLAUDE_CONFIG_DIR`).
+       * Dropping it would hand the user a `--resume` against their DEFAULT
+       * profile, where that session id does not exist, and the CLI would open
+       * an unrelated conversation rather than say so.
+       */
+      env: Record<string, string>;
+    }
   | { ok: false; reason: 'unsupported' | 'no-session' };
 
 /**
@@ -1267,16 +1316,28 @@ export interface AdapterConfig {
     readonly expiredMarkers: readonly string[];
   };
 
-  // ── Plugin directory ────────────────────────────────────────────────────
-  /** Whether this CLI can load a plugin directory for one invocation. */
-  readonly plugin: {
+  // ── Config directory (which profile / account the CLI runs as) ──────────
+  /**
+   * Whether this CLI can be pointed at a different config directory for one
+   * invocation — the directory holding its credentials, settings and plugins,
+   * and therefore which ACCOUNT the turn runs under.
+   */
+  readonly configDir: {
     /**
-     * Why this CLI cannot load a plugin directory, or `null` when it can.
+     * The env var that carries it to this CLI (`CLAUDE_CONFIG_DIR`), or null
+     * when the CLI has no such mechanism. Named here rather than spelled in
+     * `buildEnv` because it is the same kind of per-CLI VALUE as a flag name,
+     * and the adapter rules put those in config.
+     */
+    readonly envVar: string | null;
+    /**
+     * Why this CLI cannot be given one, or `null` when it can.
      *
      * Non-null is the "this CLI has no such thing" answer, and it is what
-     * stops a node's `pluginDir` being validated, refused, or spawned for an
+     * stops a run's `configDir` being validated, refused, or spawned for an
      * agent that would ignore it — geniro becoming the silent one is exactly
-     * the failure the field exists to prevent.
+     * the failure the field exists to prevent. MUST agree with `envVar`: a
+     * null reason promises a var to carry it.
      */
     readonly unavailableReason: string | null;
   };

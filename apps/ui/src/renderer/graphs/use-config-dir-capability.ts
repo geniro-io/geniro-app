@@ -18,18 +18,20 @@ import { useCapabilities } from '../use-capabilities';
  * rendering before the answer lands is nothing at all, the same way the panel
  * shows no MCP rows before its own read returns.
  */
-export interface PluginCapabilityState {
+export interface ConfigDirCapabilityState {
   /** Why this CLI cannot load a plugin directory, `null` when it can. */
   unavailableReasonFor: (agent: AgentKind) => string | null | undefined;
   loading: boolean;
 }
 
-export function usePluginCapability(
+export function useConfigDirCapability(
   capabilitiesApi: DaemonApis['capabilities'] | null,
-): PluginCapabilityState {
+): ConfigDirCapabilityState {
   const capabilities = useCapabilities(capabilitiesApi);
   const byAgent = capabilities
-    ? new Map(capabilities.plugins.map((p) => [p.agent, p.unavailableReason]))
+    ? new Map(
+        capabilities.configDirs.map((p) => [p.agent, p.unavailableReason]),
+      )
     : null;
 
   return {

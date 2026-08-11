@@ -37,6 +37,7 @@ import {
 } from '../utils/approval-answer';
 import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
+import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
 import { writeRunStatus } from '../utils/run-status';
@@ -279,10 +280,18 @@ export class ChatService {
     title?: string;
     approval?: ChatApprovalMode;
     effort?: string;
+    configDir?: string;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
     this.assertEffortSupported(input.agentKind, input.effort ?? null);
+    // Canonicalized HERE, at the one moment the value is chosen, so the row
+    // holds the path that was actually checked — the same contract `cwd` above
+    // has. Each turn re-resolves it anyway (a directory can be deleted between
+    // creation and a turn), which is what keeps a vanished profile from
+    // reaching the child, where claude would CREATE it and report a login
+    // failure about a directory nobody meant to name.
+    const configDir = this.resolveConfigDir(input.agentKind, input.configDir);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -292,6 +301,7 @@ export class ChatService {
         cwd,
         model: input.model ?? null,
         effort: input.effort ?? null,
+        configDir,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -499,6 +509,37 @@ export class ChatService {
         `${agentKind} does not accept the reasoning effort '${effort}'`,
       );
     }
+  }
+
+  /**
+   * The canonical form of a chat's chosen config directory, or null when none
+   * was chosen.
+   *
+   * REFUSES a CLI that has no such mechanism, rather than stripping the
+   * field the way the graph executor does for a workflow node. The two differ
+   * because the choice does: a workflow can be imported from YAML naming a
+   * config directory on a CLI the builder never offered the field for, so
+   * dropping it with a visible notice is the only way to run the graph at all;
+   * a chat's directory is picked interactively one control away from the agent
+   * picker, so the honest answer is "no" — the same reasoning as
+   * {@link assertApprovalSupported}.
+   *
+   * The adapter owns the verdict (`AdapterConfig.configDir.unavailableReason`),
+   * so no agent is named here.
+   */
+  private resolveConfigDir(
+    agentKind: AgentKind,
+    configDir: string | undefined,
+  ): string | null {
+    if (configDir === undefined) {
+      return null;
+    }
+    const reason =
+      this.adapterFor(agentKind).getConfig().configDir.unavailableReason;
+    if (reason !== null) {
+      throw new BadRequestException('CONFIG_DIR_UNSUPPORTED', reason);
+    }
+    return resolveValidConfigDir(configDir);
   }
 
   async listChats(): Promise<RunWire[]> {
@@ -745,6 +786,17 @@ export class ChatService {
         !isUserQuestion(adapter.getConfig().questionToolName, toolName);
       const model = settings.model ?? undefined;
       const effort = settings.effort ?? undefined;
+      // Re-resolved per turn, exactly like `cwd` above: the row holds the
+      // canonical path as of creation, and a directory deleted (or a symlink
+      // re-pointed) since then would otherwise reach argv, where the CLI
+      // SILENTLY ignores it — probe-verified, and the reason
+      // `resolveValidConfigDir` exists. Refusing the send is the only thing
+      // that can tell the user; running the turn under a directory claude
+      // freshly created would fail as "Not logged in" against a profile the
+      // user never named.
+      const configDir = settings.configDir
+        ? resolveValidConfigDir(settings.configDir)
+        : undefined;
 
       // Store the bytes BEFORE persisting the item: the payload records only
       // the attachment rows, so an item written first would reference files
@@ -874,6 +926,7 @@ export class ChatService {
           cwd,
           model,
           effort,
+          configDir,
           resumeSessionId,
           approvalMode,
           // A human is watching a chat: let the agent ask, and stream its
@@ -978,7 +1031,7 @@ export class ChatService {
             if (event.type === 'mcp_servers') {
               // What this turn actually loaded here — feeds the MCP panel so
               // it need not re-dial every server to answer, never the
-              // transcript. A chat turn carries no plugin directory (only a
+              // transcript. A chat turn carries no config directory (only a
               // graph node does), which is the null.
               this.mcpHarvest.record(
                 adapter.getConfig().kind,

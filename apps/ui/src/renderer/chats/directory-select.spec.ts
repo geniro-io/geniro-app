@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { folderName, shortenPath } from './folder-select';
+import { folderName, shortenPath } from './directory-select';
 
 describe('folderName', () => {
   it('takes the trailing segment', () => {

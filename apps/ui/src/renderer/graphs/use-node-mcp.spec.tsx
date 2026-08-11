@@ -45,30 +45,30 @@ function listing(...names: string[]): AgentMcpListing {
 function mount(
   agentsApi: DaemonApis['agents'],
   agent: CliKind | null,
-  pluginDir: string | null,
+  configDir: string | null,
 ): {
   latest: () => NodeMcpState;
-  rerender: (agent: CliKind | null, pluginDir: string | null) => void;
+  rerender: (agent: CliKind | null, configDir: string | null) => void;
 } {
   let latest!: NodeMcpState;
   function Probe(props: {
     agent: CliKind | null;
-    pluginDir: string | null;
+    configDir: string | null;
   }): null {
-    latest = useNodeMcp(agentsApi, props.agent, props.pluginDir);
+    latest = useNodeMcp(agentsApi, props.agent, props.configDir);
     return null;
   }
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<Probe agent={agent} pluginDir={pluginDir} />);
+    root!.render(<Probe agent={agent} configDir={configDir} />);
   });
   return {
     latest: () => latest,
-    rerender: (nextAgent, nextPluginDir) => {
+    rerender: (nextAgent, nextConfigDir) => {
       act(() => {
-        root!.render(<Probe agent={nextAgent} pluginDir={nextPluginDir} />);
+        root!.render(<Probe agent={nextAgent} configDir={nextConfigDir} />);
       });
     },
   };
@@ -94,13 +94,13 @@ describe('useNodeMcp', () => {
     const arg = seen[0]!;
     expect(arg).toEqual({
       agent: 'claude',
-      pluginDir: '/opt/plugins/reviewer',
+      configDir: '/opt/plugins/reviewer',
     });
     expect('cwd' in arg).toBe(false);
     expect(latest().listing?.servers.map((s) => s.name)).toEqual(['a']);
   });
 
-  it('omits pluginDir entirely when the node names none', async () => {
+  it('omits configDir entirely when the node names none', async () => {
     const listAgentMcpServers = vi.fn(() => Promise.resolve(listing()));
     const api = { listAgentMcpServers } as unknown as DaemonApis['agents'];
 
@@ -134,8 +134,8 @@ describe('useNodeMcp', () => {
     // using plugin B. Without the scope pairing the inspector would sit there
     // naming A's servers as B's — wrong, not merely stale.
     let resolveA: ((value: AgentMcpListing) => void) | undefined;
-    const listAgentMcpServers = vi.fn((req: { pluginDir?: string }) =>
-      req.pluginDir === '/plugin-a'
+    const listAgentMcpServers = vi.fn((req: { configDir?: string }) =>
+      req.configDir === '/plugin-a'
         ? new Promise<AgentMcpListing>((resolve) => {
             resolveA = resolve;
           })
@@ -166,8 +166,8 @@ describe('useNodeMcp', () => {
     // the return keeps A's rows off B's inspector during the debounce+fetch
     // window. Break that comparison and this is the assertion that fails.
     let resolveB: ((value: AgentMcpListing) => void) | undefined;
-    const listAgentMcpServers = vi.fn((req: { pluginDir?: string }) =>
-      req.pluginDir === '/plugin-a'
+    const listAgentMcpServers = vi.fn((req: { configDir?: string }) =>
+      req.configDir === '/plugin-a'
         ? Promise.resolve(listing('from-a'))
         : new Promise<AgentMcpListing>((resolve) => {
             resolveB = resolve;
@@ -241,7 +241,7 @@ describe('useNodeMcp', () => {
     expect(listAgentMcpServers).toHaveBeenCalledWith(
       {
         agent: 'claude',
-        pluginDir: '/opt/plugins',
+        configDir: '/opt/plugins',
       },
       expect.objectContaining({ signal: expect.anything() }),
     );
@@ -266,7 +266,7 @@ describe('useNodeMcp', () => {
       await new Promise((r) => setTimeout(r, 600));
     });
 
-    expect(latest().invalidPluginDir).toContain('does not exist');
+    expect(latest().invalidConfigDir).toContain('does not exist');
   });
 
   it('does NOT blame the path for a dead CLI or an unreachable daemon', async () => {
@@ -287,12 +287,12 @@ describe('useNodeMcp', () => {
       await new Promise((r) => setTimeout(r, 600));
     });
 
-    expect(latest().invalidPluginDir).toBeNull();
+    expect(latest().invalidConfigDir).toBeNull();
     expect(latest().listing?.unavailableReason).toContain('claude not found');
   });
 
   it('never blames a path the node does not name', async () => {
-    // A refusal with no pluginDir in play cannot be about one.
+    // A refusal with no configDir in play cannot be about one.
     const api = {
       listAgentMcpServers: vi.fn(() =>
         Promise.reject(new Error('daemon GET /v1/agents/mcp failed (400): no')),
@@ -304,7 +304,7 @@ describe('useNodeMcp', () => {
       await new Promise((r) => setTimeout(r, 600));
     });
 
-    expect(latest().invalidPluginDir).toBeNull();
+    expect(latest().invalidConfigDir).toBeNull();
   });
 
   it('reads through the daemon’s cache until the user asks for a re-dial', async () => {

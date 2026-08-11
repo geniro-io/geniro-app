@@ -79,11 +79,11 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
         'Tool-approval mode (defaults to auto). acceptEdits auto-approves file edits and asks for the rest.',
     },
     {
-      key: 'pluginDir',
+      key: 'configDir',
       type: 'string',
       required: false,
       description:
-        "Absolute path to a plugin loaded for this node's turns only; a plugin can ship its own MCP servers. claude only.",
+        'Absolute path to the agent config directory this node runs under — its account, settings and plugins. claude only.',
     },
   ],
   trigger: [

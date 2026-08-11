@@ -36,7 +36,7 @@ function caps(
       probedAt: 1,
       reason: null,
     },
-    plugins: [{ agent: 'claude', unavailableReason: null }],
+    configDirs: [{ agent: 'claude', unavailableReason: null }],
   } as unknown as CapabilitiesDto;
 }
 

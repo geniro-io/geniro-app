@@ -327,6 +327,10 @@ describe('AgentAdapter.mcpLoginTarget', () => {
         kind: 'command',
         command: expect.any(String),
         args: [...(adapter.getConfig().mcp.loginArgs ?? []), 'probe-linear'],
+        // No profile was asked for, so none is stated — an empty env, never a
+        // var set to the CLI's default path, which would be this app inventing
+        // a profile the caller never chose.
+        env: {},
       });
     });
   }
@@ -369,6 +373,7 @@ describe('AgentAdapter.loginTarget', () => {
         ok: true,
         kind: 'command',
         ...EXPECTED_LOGIN[name],
+        env: {},
       });
     });
 

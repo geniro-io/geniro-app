@@ -1,9 +1,10 @@
-import { PanelRight, Workflow as WorkflowIcon } from 'lucide-react';
+import { IdCard, PanelRight, Workflow as WorkflowIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
 import { cn } from '../components/ui/utils';
+import { folderName as configDirName } from './directory-select';
 import { formatElapsed } from './live-row';
 import { formatRelativeTime } from './relative-time';
 import {
@@ -62,6 +63,7 @@ export function ChatHeader({
   label,
   isWorkflow,
   agentKind = null,
+  configDir = null,
   status,
   lastActivityAt,
   turnStartedAt = null,
@@ -77,6 +79,17 @@ export function ChatHeader({
    * run, whose agents are per node — the panel lists those.
    */
   agentKind?: string | null;
+  /**
+   * The agent config directory this run's turns use — which account/profile
+   * the CLI runs as — or null for the CLI's own default.
+   *
+   * HERE, beside the agent, for the same reason the agent is: it is fixed for
+   * the life of the run and it changes what the conversation IS — a different
+   * profile is a different subscription, different plugins, different history.
+   * A run on the default profile shows nothing, because "the usual one" is not
+   * news; only a run that departs from it earns a chip.
+   */
+  configDir?: string | null;
   /**
    * The DISPLAY status, not the daemon's row value — wider than `RunStatus`
    * because `needs-input` is derived in the renderer (`displayRunStatus`) and
@@ -112,6 +125,19 @@ export function ChatHeader({
           {label}
         </h2>
         {agentKind ? <Chip className="h-6 px-1.5">{agentKind}</Chip> : null}
+        {configDir ? (
+          // The LEAF, with the whole path on hover: a profile directory is
+          // usually deep (`~/Desktop/Projects/X/.claude-thing`) and the header
+          // is a one-line identity, not a place to read paths.
+          <Chip
+            className="h-6 min-w-0 px-1.5"
+            title={`Agent config directory (account / profile): ${configDir}`}>
+            <IdCard />
+            <span className="max-w-40 truncate">
+              {configDirName(configDir)}
+            </span>
+          </Chip>
+        ) : null}
         <span className="flex shrink-0 items-center gap-1 text-xs">
           <RunStatusIcon status={status} />
           <span className={RUN_STATUS_META[status].className}>

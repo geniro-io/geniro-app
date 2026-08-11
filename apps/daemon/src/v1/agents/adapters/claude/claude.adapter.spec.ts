@@ -28,10 +28,10 @@ import type {
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_BASE_ARGS,
+  CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
-  CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_RESUME_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
 } from './claude.const';
@@ -148,14 +148,17 @@ describe('ClaudeAdapter', () => {
     expect(without.captured.args).not.toContain('--effort');
   });
 
-  it('passes --plugin-dir on a turn only when the node names one', () => {
-    const withPlugin = fakeSpawn();
-    new ClaudeAdapter({ spawn: withPlugin.spawn }).start(
-      { prompt: 'go', cwd: '/proj', pluginDir: '/opt/plugins/reviewer' },
+  it('runs a turn under the run’s OWN config directory, via env', () => {
+    // ENV, not argv: claude has no `--config-dir`, and this directory is what
+    // decides which ACCOUNT the turn runs as. A spec asserting argv here would
+    // pass against a flag the CLI ignores.
+    const withConfig = fakeSpawn();
+    new ClaudeAdapter({ spawn: withConfig.spawn }).start(
+      { prompt: 'go', cwd: '/proj', configDir: '/profiles/work' },
       () => {},
     );
-    expect(withPlugin.captured.args).toEqual(
-      expect.arrayContaining([CLAUDE_PLUGIN_DIR_FLAG, '/opt/plugins/reviewer']),
+    expect(withConfig.captured.env?.[CLAUDE_CONFIG_DIR_ENV]).toBe(
+      '/profiles/work',
     );
 
     const without = fakeSpawn();
@@ -163,39 +166,38 @@ describe('ClaudeAdapter', () => {
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );
-    expect(without.captured.args).not.toContain(CLAUDE_PLUGIN_DIR_FLAG);
+    // ABSENT, never empty: an empty value would point claude at the process
+    // cwd's idea of "" rather than at its own default profile.
+    expect(without.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
   });
 
-  it('PREPENDS --plugin-dir before `mcp list`, never after it', async () => {
-    // `--plugin-dir` is a GLOBAL option: `claude mcp list --plugin-dir X` is
-    // rejected as an unknown option (probe-verified on 2.1.220), so appending
-    // it the way the turn path does would break every listing that carries
-    // one. Position IS the behaviour here, which is why this asserts on
-    // indices rather than mere membership.
+  it('reads `mcp list` under that same config directory', async () => {
+    // The listing describes the servers a TURN will load, and those are
+    // configured per profile — so a listing taken under the default profile
+    // would name servers this run never starts.
     const { groupSpawnFn, captured } = fakeListing(
       'No MCP servers configured\n',
     );
     await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({
       cwd: '/proj',
-      pluginDir: '/opt/plugins/reviewer',
+      configDir: '/profiles/work',
     });
 
-    const args = [...(captured.args ?? [])];
-    expect(args.slice(0, 2)).toEqual([
-      CLAUDE_PLUGIN_DIR_FLAG,
-      '/opt/plugins/reviewer',
-    ]);
-    expect(args.indexOf(CLAUDE_PLUGIN_DIR_FLAG)).toBeLessThan(
-      args.indexOf('mcp'),
-    );
+    expect(captured.args).toEqual(['mcp', 'list']);
+    expect(
+      (captured.options?.env as Record<string, string> | undefined)?.[
+        CLAUDE_CONFIG_DIR_ENV
+      ],
+    ).toBe('/profiles/work');
   });
 
-  it('omits --plugin-dir from a listing that names none', async () => {
+  it('leaves the config-dir env off a listing that names none', async () => {
     const { groupSpawnFn, captured } = fakeListing(
       'No MCP servers configured\n',
     );
     await new ClaudeAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' });
     expect(captured.args).toEqual(['mcp', 'list']);
+    expect(captured.options?.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
   });
 
   it('lists exactly the probe-verified effort vocabulary, ultracode included', () => {
@@ -1546,6 +1548,7 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
       kind: 'command',
       command: 'claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+      env: {},
     });
   });
 
@@ -1568,6 +1571,39 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
         CLAUDE_RESUME_FLAG,
         'sess-42',
       ],
+      env: {},
+    });
+  });
+
+  it('resumes INSIDE the run’s own config directory, via env', () => {
+    // The session being resumed lives in that profile's own store. Without the
+    // var the CLI opens the DEFAULT profile, where the id does not exist — and
+    // it does not say so, it shows an unrelated conversation.
+    expect(
+      new ClaudeAdapter().handoffTarget({
+        sessionId: 'sess-42',
+        model: null,
+        configDir: '/profiles/work',
+      }),
+    ).toEqual({
+      ok: true,
+      kind: 'command',
+      command: 'claude',
+      args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+      env: { [CLAUDE_CONFIG_DIR_ENV]: '/profiles/work' },
+    });
+  });
+
+  it('signs the CLI in to THAT profile, not the default one', () => {
+    // The failure this closes: a chat on a second subscription whose session
+    // expired: signing in under the default directory leaves that chat exactly
+    // as expired, with no error to explain it.
+    expect(new ClaudeAdapter().loginTarget('/profiles/work')).toEqual({
+      ok: true,
+      kind: 'command',
+      command: 'claude',
+      args: ['auth', 'login'],
+      env: { [CLAUDE_CONFIG_DIR_ENV]: '/profiles/work' },
     });
   });
 
@@ -1587,6 +1623,7 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
       kind: 'command',
       command: 'claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+      env: {},
     });
   });
 
@@ -1634,6 +1671,7 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
       kind: 'command',
       command: '/opt/tools/claude',
       args: [CLAUDE_RESUME_FLAG, 'sess-42'],
+      env: {},
     });
   });
 });
@@ -1855,6 +1893,7 @@ describe('ClaudeAdapter — signing in to an MCP server', () => {
       kind: 'command',
       command: 'claude',
       args: ['mcp', 'login', 'probe-linear'],
+      env: {},
     });
   });
 });

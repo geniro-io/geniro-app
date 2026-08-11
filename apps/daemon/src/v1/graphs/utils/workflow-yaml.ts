@@ -70,7 +70,7 @@ const AGENT_ONLY_FIELDS = [
   'description',
   'role',
   'approval',
-  'pluginDir',
+  'configDir',
 ] as const;
 
 /** Everything on an agent node except the shared envelope and the discriminant. */

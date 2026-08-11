@@ -4,8 +4,8 @@ import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.se
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type {
   AgentApprovalCapability,
+  AgentConfigDirCapability,
   AgentFollowUpCapability,
-  AgentPluginCapability,
   AgentTerminalCapability,
   CapabilitiesWire,
 } from '../graphs.types';
@@ -25,7 +25,7 @@ export class CapabilitiesService {
   capabilitiesWire(): CapabilitiesWire {
     return {
       claudeModes: this.claudeProbe.wireCapability(),
-      plugins: this.pluginCapabilities(),
+      configDirs: this.configDirCapabilities(),
       interactiveTerminals: this.terminalCapabilities(),
       approvals: this.approvalCapabilities(),
       followUps: this.followUpCapabilities(),
@@ -60,7 +60,7 @@ export class CapabilitiesService {
 
   /**
    * Every registered CLI's handoff answer, asked of its own
-   * adapter. Iterated, never listed — same rule as the plugin row above.
+   * adapter. Iterated, never listed — same rule as the config-dir row above.
    *
    * `handoffTarget` is asked with a placeholder session id because the
    * question here is "can this CLI reopen its conversations AT ALL", not "can
@@ -84,16 +84,16 @@ export class CapabilitiesService {
   }
 
   /**
-   * Every registered CLI's plugin-directory answer, read off its own config.
+   * Every registered CLI's config-directory answer, read off its own config.
    *
    * Composed by ITERATING the registry rather than naming the CLIs, so a third
    * adapter appears here the moment it is registered — a hand-written list is
    * how the renderer ends up allowlisting one agent again.
    */
-  private pluginCapabilities(): AgentPluginCapability[] {
+  private configDirCapabilities(): AgentConfigDirCapability[] {
     return [...this.adapters.all()].map(([agent, adapter]) => ({
       agent,
-      unavailableReason: adapter.getConfig().plugin.unavailableReason,
+      unavailableReason: adapter.getConfig().configDir.unavailableReason,
     }));
   }
 }

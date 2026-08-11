@@ -114,7 +114,7 @@ interface HarnessOptions {
 function harness(
   impl: (input: {
     cwd: string;
-    pluginDir?: string | null;
+    configDir?: string | null;
   }) => Promise<AgentMcpServer[]>,
   options: HarnessOptions = {},
 ): Harness {
@@ -127,7 +127,7 @@ function harness(
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
   const listMcpServers = vi.fn(
-    (input: { cwd: string; pluginDir?: string | null }) =>
+    (input: { cwd: string; configDir?: string | null }) =>
       impl(input).then((servers) => ({ ok: true as const, servers })),
   );
   // The adapter's OWN state, mutated by `setMcpServerEnabled` — the same
@@ -206,8 +206,8 @@ describe('AgentMcpService.list', () => {
     expect(listMcpServers).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT serve one plugin directory’s rows for another', async () => {
-    // The pluginDir half of the key, and the whole reason the dimension
+  it('does NOT serve one config directory’s rows for another', async () => {
+    // The configDir half of the key, and the whole reason the dimension
     // exists: two agent nodes pointed at different plugin directories are
     // MEANT to differ, so sharing a cache entry would show one node's tools
     // under the other's name — wrong, not merely stale.
@@ -216,15 +216,15 @@ describe('AgentMcpService.list', () => {
     const pluginB = realDir();
     const { service, listMcpServers } = harness((input) =>
       Promise.resolve([
-        server(input.pluginDir === pluginA ? 'from-a' : 'from-b'),
+        server(input.configDir === pluginA ? 'from-a' : 'from-b'),
       ]),
     );
 
     const a = await service.list(AgentKind.Claude, cwd, {
-      pluginDir: pluginA,
+      configDir: pluginA,
     });
     const b = await service.list(AgentKind.Claude, cwd, {
-      pluginDir: pluginB,
+      configDir: pluginB,
     });
 
     expect(a.servers.map((s) => s.name)).toEqual(['from-a']);
@@ -239,12 +239,12 @@ describe('AgentMcpService.list', () => {
     const cwd = realDir();
     const plugin = realDir();
     const { service, listMcpServers } = harness((input) =>
-      Promise.resolve([server(input.pluginDir ? 'with-plugin' : 'bare')]),
+      Promise.resolve([server(input.configDir ? 'with-plugin' : 'bare')]),
     );
 
     const bare = await service.list(AgentKind.Claude, cwd);
     const withPlugin = await service.list(AgentKind.Claude, cwd, {
-      pluginDir: plugin,
+      configDir: plugin,
     });
 
     expect(bare.servers.map((s) => s.name)).toEqual(['bare']);
@@ -252,7 +252,7 @@ describe('AgentMcpService.list', () => {
     expect(listMcpServers).toHaveBeenCalledTimes(2);
   });
 
-  it('REFUSES an unusable plugin directory instead of asking the CLI', async () => {
+  it('REFUSES an unusable config directory instead of asking the CLI', async () => {
     // The whole point of validating: the CLI ignores a bad --plugin-dir
     // silently (exit 0, "No MCP servers configured"), so passing it through
     // would render as "this node has no MCP servers" — indistinguishable from
@@ -263,21 +263,21 @@ describe('AgentMcpService.list', () => {
 
     await expect(
       service.list(AgentKind.Claude, realDir(), {
-        pluginDir: join(realDir(), 'no-such-plugin'),
+        configDir: join(realDir(), 'no-such-plugin'),
       }),
-    ).rejects.toMatchObject({ errorCode: 'INVALID_PLUGIN_DIR' });
+    ).rejects.toMatchObject({ errorCode: 'INVALID_CONFIG_DIR' });
     // ...and it never reached the CLI, so nothing was health-checked.
     expect(listMcpServers).not.toHaveBeenCalled();
   });
 
-  it('refuses a RELATIVE plugin directory', async () => {
+  it('refuses a RELATIVE config directory', async () => {
     const { service, listMcpServers } = harness(() =>
       Promise.resolve([server('a')]),
     );
 
     await expect(
-      service.list(AgentKind.Claude, realDir(), { pluginDir: 'plugins/x' }),
-    ).rejects.toMatchObject({ errorCode: 'INVALID_PLUGIN_DIR' });
+      service.list(AgentKind.Claude, realDir(), { configDir: 'plugins/x' }),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_CONFIG_DIR' });
     expect(listMcpServers).not.toHaveBeenCalled();
   });
 

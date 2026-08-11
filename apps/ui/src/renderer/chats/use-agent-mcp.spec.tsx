@@ -32,11 +32,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A plugin-less scope, which is what every pre-existing case describes. */
-const claudeScope: AgentMcpScope = { agent: 'claude', pluginDir: null };
-const cursorScope: AgentMcpScope = { agent: 'cursor-agent', pluginDir: null };
-const scopeKey = (agent: CliKind, pluginDir: string | null = null): string =>
-  mcpScopeKey({ agent, pluginDir });
+/** A default-profile scope, which is what every pre-existing case describes. */
+const claudeScope: AgentMcpScope = { agent: 'claude', configDir: null };
+const cursorScope: AgentMcpScope = { agent: 'cursor-agent', configDir: null };
+const scopeKey = (agent: CliKind, configDir: string | null = null): string =>
+  mcpScopeKey({ agent, configDir });
 
 /** Drive the hook and expose its latest value. */
 function mount(

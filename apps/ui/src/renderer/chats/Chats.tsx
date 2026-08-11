@@ -70,10 +70,11 @@ import { CliLoginContext } from './cli-login-context';
 import { ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
+import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
+import { folderName } from './directory-select';
 import { EffortSelect } from './effort-select';
-import { ModelEffortReadout } from './model-effort-readout';
-import { folderName, FolderSelect } from './folder-select';
+import { FolderSelect } from './folder-select';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   applyLiveText,
@@ -83,6 +84,7 @@ import {
 } from './live-text';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { ModelEffortReadout } from './model-effort-readout';
 import { ModelSelect } from './model-select';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
@@ -261,6 +263,12 @@ export function Chats({
   const [folder, setFolder] = useState<string | null>(null);
   // Recently used folders (persisted), surfaced as composer suggestion chips.
   const [recentFolders, setRecentFolders] = useState<string[]>([]);
+  // OPTIONAL config directory (profile / account) for the NEXT new chat — the
+  // CLI's own is the normal state,
+  // and like the folder above it is remembered only as the picker's default;
+  // the run records its own at creation and can never change it afterwards.
+  const [configDir, setConfigDir] = useState<string | null>(null);
+  const [recentConfigDirs, setRecentConfigDirs] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -750,6 +758,26 @@ export function Chats({
     () => (capabilities ? (approvalModesByAgent.get(agentKind) ?? []) : null),
     [capabilities, approvalModesByAgent, agentKind],
   );
+  /**
+   * Why the NEXT chat's CLI cannot take a config directory — null when it can,
+   * `undefined` while the answer is still unknown, which the chip renders as
+   * nothing rather than as a guess.
+   *
+   * Derived from the same capability read as the two slices above, for the same
+   * reason: `AdapterConfig.configDir.unavailableReason` is the fact, and a
+   * renderer that decided this by agent name would keep the chip hidden for the
+   * next CLI that gains one. (The builder's own
+   * `useConfigDirCapability` selector is not reused here — it opens a SECOND read
+   * of an endpoint this component already polls.)
+   */
+  const composerConfigDirUnavailableReason = useMemo(
+    () =>
+      capabilities
+        ? capabilities.configDirs.find((row) => row.agent === agentKind)
+            ?.unavailableReason
+        : undefined,
+    [capabilities, agentKind],
+  );
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
@@ -845,6 +873,8 @@ export function Chats({
     void window.geniro.getSettings().then((s) => {
       setFolder(s.projectFolder);
       setRecentFolders(s.recentFolders ?? []);
+      setConfigDir(s.configDir ?? null);
+      setRecentConfigDirs(s.recentConfigDirs ?? []);
       if (s.lastChatTarget) {
         setTarget(s.lastChatTarget);
       }
@@ -1126,6 +1156,45 @@ export function Chats({
     return chosen;
   }, [folder, chooseFolder]);
 
+  /**
+   * Same shape as {@link chooseFolder}, for the optional config directory —
+   * remembered as the next chat's default, and kept among the recents so
+   * switching between two accounts is one click rather than a dialog.
+   *
+   * `null` (the picker's "Default profile" row) clears the default without
+   * touching the recents: the user is saying THIS chat runs as the CLI's own
+   * account, not that they will never use that profile again.
+   */
+  const chooseConfigDir = useCallback(
+    (chosen: string | null): void => {
+      setConfigDir(chosen);
+      if (chosen === null) {
+        void window.geniro.updateSettings({ configDir: null });
+        return;
+      }
+      const next = [
+        chosen,
+        ...recentConfigDirs.filter((p) => p !== chosen),
+      ].slice(0, 5);
+      setRecentConfigDirs(next);
+      void window.geniro.updateSettings({
+        configDir: chosen,
+        recentConfigDirs: next,
+      });
+    },
+    [recentConfigDirs],
+  );
+
+  // The native dialog is the same directory picker the folder chip opens —
+  // there is no profile-specific browse in the main process, and a second IPC
+  // channel would only be a second name for `showOpenDialog({openDirectory})`.
+  const pickConfigDir = useCallback(async (): Promise<void> => {
+    const chosen = await window.geniro.pickProjectFolder();
+    if (chosen) {
+      chooseConfigDir(chosen);
+    }
+  }, [chooseConfigDir]);
+
   const createChatRun = useCallback(
     async (cwd: string) =>
       chatApi.createChat({
@@ -1144,13 +1213,32 @@ export function Chats({
           ...(composerApprovalModes?.includes(approvalMode)
             ? { approval: approvalMode }
             : {}),
+          // Sent only when this CLI can actually load one — the daemon REFUSES
+          // a config directory on a CLI without the mechanism (it is an
+          // interactive choice, not something to silently drop), so sending a
+          // directory left over from a claude chat would 400 every cursor run
+          // the user started next. The chip is hidden in exactly that case, so
+          // this guard and the chip read the same answer.
+          ...(configDir !== null && composerConfigDirUnavailableReason === null
+            ? { configDir }
+            : {}),
         },
       }),
     // `composerApprovalModes` belongs here: it starts null and only fills in
     // once capabilities load, so a callback that captured the first render's
     // value silently omitted the approval from every new run and every chat
     // opened on the daemon's default instead of the mode the chip displayed.
-    [agentKind, approvalMode, composerApprovalModes, models, efforts, chatApi],
+    // `composerConfigDirUnavailableReason` is in the list for that same reason.
+    [
+      agentKind,
+      approvalMode,
+      composerApprovalModes,
+      composerConfigDirUnavailableReason,
+      models,
+      efforts,
+      configDir,
+      chatApi,
+    ],
   );
 
   /**
@@ -2219,8 +2307,12 @@ export function Chats({
           id: CHAT_AGENT_KEY,
           name: activeRun.agentKind ?? 'agent',
           agent: activeRun.agentKind,
-          // A 1:1 chat has no node, so no plugin directory to carry.
-          pluginDir: null,
+          // The chat's OWN config directory (null on the chats that run as
+          // the CLI's default). A workflow node reads its from the graph; a
+          // chat reads its from the run row, and the MCP panel needs it either
+          // way — a profile carries its own servers, so two chats in one folder
+          // under different profiles genuinely load different sets.
+          configDir: activeRun.configDir,
           // The SAME badge rule the header uses. This used to be a second one,
           // built from `streaming` and the row alone, so it could never report
           // `needs-input` — a chat parked on a question read "needs more info"
@@ -2264,7 +2356,7 @@ export function Chats({
         id: node.id,
         name: node.name ?? node.id,
         agent: node.agent,
-        pluginDir: node.pluginDir ?? null,
+        configDir: node.configDir ?? null,
         status: displayStatus(nodeActivity),
         activeTurns: nodeActivity?.activeTurns ?? 0,
         contextTokens:
@@ -2288,8 +2380,8 @@ export function Chats({
         name: nodeId,
         agent: null,
         // The workflow no longer has this node, so nothing states what it ran
-        // with. Claiming a plugin directory here would be an invention.
-        pluginDir: null,
+        // with. Claiming a config directory here would be an invention.
+        configDir: null,
         status: displayStatus(nodeActivity),
         activeTurns: nodeActivity.activeTurns,
         contextTokens:
@@ -2355,6 +2447,10 @@ export function Chats({
           command: target.command,
           args: target.args,
           cwd: target.cwd,
+          // Carried, never composed here: a resume that dropped it would open
+          // the DEFAULT profile, where this session id does not exist, and the
+          // CLI would show an unrelated conversation instead of an error.
+          env: target.env,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -2419,11 +2515,20 @@ export function Chats({
         return;
       }
       await openResolvedTarget(
-        () => handoffApi.resolveMcpLogin({ agent: kind, cwd, server }),
+        () =>
+          handoffApi.resolveMcpLogin({
+            agent: kind,
+            cwd,
+            server,
+            // The run's PROFILE, when it has one: a server is authorized
+            // inside a config directory, so signing in under the default one
+            // leaves this run exactly as unauthenticated as it was.
+            ...(activeRun?.configDir ? { configDir: activeRun.configDir } : {}),
+          }),
         `${server} cannot be signed in to from here`,
       );
     },
-    [handoffApi, activeRun?.cwd],
+    [handoffApi, activeRun?.cwd, activeRun?.configDir],
   );
 
   /**
@@ -2439,11 +2544,21 @@ export function Chats({
    * daemon answers with is therefore the home directory it falls back to — a
    * sign-in does not care where it runs, and the IPC contract takes a validated
    * absolute path either way.
+   *
+   * The run's CONFIG DIRECTORY is passed, and it is the one thing here that is
+   * not machine-wide: credentials live in that folder, so a chat pointed at a
+   * second profile must be signed in THERE. Without it the user signs into
+   * their default account and watches the same turn fail again — which is
+   * exactly the failure this control exists to end.
    */
   const signInToCli = useCallback(
-    async (kind: CliKind) => {
+    async (kind: CliKind, configDir: string | null) => {
       await openResolvedTarget(
-        () => handoffApi.resolveCliLogin({ agent: kind }),
+        () =>
+          handoffApi.resolveCliLogin({
+            agent: kind,
+            ...(configDir ? { configDir } : {}),
+          }),
         `${kind} cannot be signed in from here`,
       );
     },
@@ -2458,8 +2573,9 @@ export function Chats({
    */
   const signInToActiveCli = useMemo(() => {
     const kind = activeRun?.agentKind;
-    return kind ? () => void signInToCli(kind) : null;
-  }, [activeRun?.agentKind, signInToCli]);
+    const configDir = activeRun?.configDir ?? null;
+    return kind ? () => void signInToCli(kind, configDir) : null;
+  }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
 
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
   /**
@@ -2475,7 +2591,7 @@ export function Chats({
     if (!showAgentsPanel) {
       return [];
     }
-    // DEDUPED by (CLI, plugin directory): several nodes routinely share one
+    // DEDUPED by (CLI, config directory): several nodes routinely share one
     // pair, and each distinct pair costs a health check — which launches the
     // user's own MCP servers — so asking once per node would multiply that by
     // the width of the graph for answers that are identical.
@@ -2486,7 +2602,7 @@ export function Chats({
       }
       const scope: AgentMcpScope = {
         agent: agent.agent,
-        pluginDir: agent.pluginDir,
+        configDir: agent.configDir,
       };
       byKey.set(mcpScopeKey(scope), scope);
     }
@@ -2653,6 +2769,22 @@ export function Chats({
                         switching={git.switching}
                         onSwitch={(branch) => void git.switchTo(branch)}
                       />
+                      {!workflowSlug ? (
+                        // The optional config directory (account / profile)
+                        // this chat's CLI runs as.
+                        // Beside the folder because it is the same kind of
+                        // fact — WHERE the run reads from — and above the text
+                        // because, like the folder, it is fixed the moment the
+                        // chat is created. A workflow's nodes each name their
+                        // own in its YAML, so the chip is a chat's alone.
+                        <ConfigDirSelect
+                          configDir={configDir}
+                          recentConfigDirs={recentConfigDirs}
+                          unavailableReason={composerConfigDirUnavailableReason}
+                          onChange={chooseConfigDir}
+                          onBrowse={() => void pickConfigDir()}
+                        />
+                      ) : null}
                       {workflowSlug && triggers.length > 0 ? (
                         <Select
                           variant="ghost"
@@ -2799,6 +2931,9 @@ export function Chats({
                     label={runLabel(activeRun, workflowNames)}
                     isWorkflow={activeRun.workflowId != null}
                     agentKind={activeRun.agentKind}
+                    // Which profile/account this conversation belongs to, when
+                    // it is not the CLI's default.
+                    configDir={activeRun.configDir}
                     status={activeRunStatus}
                     lastActivityAt={activeRun.updatedAt}
                     turnStartedAt={turnStartedAt}
@@ -3088,6 +3223,12 @@ export function Chats({
                                 </span>
                               </Chip>
                             ) : null}
+                            {/* The run's config directory is NOT repeated here.
+                          It is in the header, beside the agent, because it is
+                          the same kind of fact — fixed for the run's life, and
+                          about what the conversation IS rather than where this
+                          message goes. Two chips for one fact only invited them
+                          to disagree. */}
                             {streaming ? (
                               <>
                                 {hasContent && activeRun?.workflowId == null ? (
@@ -3264,7 +3405,12 @@ export function Chats({
                 onRefreshMcp={mcp.refresh}
                 onSetMcpEnabled={mcp.setEnabled}
                 onSignInMcp={signInToMcpServer}
-                onSignInCli={(kind) => void signInToCli(kind)}
+                // The panel's sign-in is about the agent it lists, so it
+                // signs in to THAT agent's profile — the run's own config
+                // directory when it has one.
+                onSignInCli={(kind) =>
+                  void signInToCli(kind, activeRun?.configDir ?? null)
+                }
                 mcpToggleError={mcp.toggleError}
                 onDismissMcpToggleError={mcp.dismissToggleError}
                 onMcpOpenChange={(open) =>

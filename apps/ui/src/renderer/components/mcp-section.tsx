@@ -288,7 +288,7 @@ function McpGroup({
  * One MCP server listing, rendered as rows.
  *
  * Shared by the chat Agents panel (per CLI, per folder, with the toggle) and
- * the graph builder's node inspector (per node's plugin directory, read-only)
+ * the graph builder's node inspector (per node's config directory, read-only)
  * — the two surfaces show the same rows and must not drift, so this lives
  * here rather than inside either one.
  *

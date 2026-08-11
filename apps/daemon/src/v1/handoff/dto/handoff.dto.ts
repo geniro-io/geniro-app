@@ -39,6 +39,15 @@ export const McpLoginQuerySchema = z.object({
   agent: AgentKindSchema,
   cwd: z.string().trim().min(1),
   server: z.string().trim().min(1),
+  /**
+   * The profile to sign in UNDER — the run's own config directory, when it has
+   * one. Omitted = the CLI's default profile.
+   *
+   * A server is authorized inside a profile, so signing in under the wrong one
+   * leaves the run exactly as unauthenticated as it was, with no error to say
+   * why.
+   */
+  configDir: z.string().trim().min(1).optional(),
 });
 export class McpLoginQueryDto extends createZodDto(McpLoginQuerySchema) {}
 
@@ -56,5 +65,15 @@ export class McpLoginQueryDto extends createZodDto(McpLoginQuerySchema) {}
 export const CliLoginQuerySchema = z.object({
   agent: AgentKindSchema,
   cwd: z.string().trim().min(1).optional(),
+  /**
+   * The profile to sign in — the run's own config directory, when it has one.
+   * Omitted = the CLI's default.
+   *
+   * An account is machine-wide only WITHIN one config directory: credentials
+   * live in that folder, which is the whole point of pointing a run at a
+   * second one. Without this, a user whose second-subscription chat expired
+   * would sign in to their default account and watch the same turn fail again.
+   */
+  configDir: z.string().trim().min(1).optional(),
 });
 export class CliLoginQueryDto extends createZodDto(CliLoginQuerySchema) {}

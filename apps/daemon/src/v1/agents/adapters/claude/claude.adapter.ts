@@ -31,6 +31,7 @@ import {
   CLAUDE_AUTH_EXPIRED_MARKERS,
   CLAUDE_AUTH_LOGIN_ARGS,
   CLAUDE_BASE_ARGS,
+  CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
@@ -56,7 +57,6 @@ import {
   CLAUDE_PERMISSION_MODE_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
-  CLAUDE_PLUGIN_DIR_FLAG,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
@@ -259,8 +259,14 @@ export class ClaudeAdapter extends AgentAdapter {
         loginUnavailableReason: null,
         expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
       },
-      plugin: {
-        /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */
+      configDir: {
+        /**
+         * `CLAUDE_CONFIG_DIR` — probe-verified on 2.1.227: a headless turn
+         * pointed at an empty directory wrote its whole profile there and
+         * reported "Not logged in", which is what makes a second directory a
+         * second account.
+         */
+        envVar: CLAUDE_CONFIG_DIR_ENV,
         unavailableReason: null,
       },
       followUp: {
@@ -451,22 +457,20 @@ export class ClaudeAdapter extends AgentAdapter {
     input: AgentMcpServersInput,
     options: AgentCommandOptions = {},
   ): Promise<AgentMcpListingResult> {
-    // PREPENDED, not appended: `--plugin-dir` is a global option, and
-    // `claude mcp list --plugin-dir X` is rejected outright as an unknown
-    // option (probe-verified on 2.1.220). Before the subcommand is the only
-    // placement the CLI accepts here.
-    const pluginArgs = input.pluginDir
-      ? [CLAUDE_PLUGIN_DIR_FLAG, input.pluginDir]
-      : [];
-    const stdout = await this.runCommand(
-      [...pluginArgs, ...CLAUDE_MCP_LIST_ARGS],
-      {
-        ...options,
-        cwd: input.cwd,
-        processGroup: true,
-        timeoutMs: options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS,
-      },
-    );
+    // Taken under the SAME profile the turn will run as: a config directory is
+    // where claude keeps its configured MCP servers, so a listing read from
+    // the default profile would describe servers this run never loads. It
+    // rides the env for the same reason the turn's does — the CLI has no flag
+    // for it.
+    const stdout = await this.runCommand([...CLAUDE_MCP_LIST_ARGS], {
+      ...options,
+      cwd: input.cwd,
+      processGroup: true,
+      timeoutMs: options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS,
+      ...(input.configDir
+        ? { env: { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } }
+        : {}),
+    });
     if (stdout === null) {
       return { ok: false, reason: CLAUDE_MCP_LIST_FAILED_MESSAGE };
     }
@@ -604,13 +608,6 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.resumeSessionId) {
       args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
     }
-    if (input.pluginDir) {
-      // Session-scoped: the plugin is loaded for this invocation only, so two
-      // nodes of one graph can run with different tools without either
-      // installing anything. The caller has already refused an unusable path
-      // — the CLI would ignore one silently.
-      args.push(CLAUDE_PLUGIN_DIR_FLAG, input.pluginDir);
-    }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.
     // `isolateMcpServers` WITHHOLDS the config below, geniro's own call server
@@ -672,7 +669,17 @@ export class ClaudeAdapter extends AgentAdapter {
     // buildChildEnv strips the daemon's inherited Anthropic credentials from
     // every child; re-inject them for THIS child only (a cursor agent and its
     // tool grandchildren never see them). An explicit input.env wins.
-    const env = { ...claudeCredentialEnv(), ...input.env };
+    //
+    // The run's config directory rides here too, and ONLY here: it is what
+    // decides which account (which subscription) the turn runs as, plus the
+    // settings, plugins and history it sees. Set BEFORE `input.env` for the
+    // same reason the credentials are — an explicit per-call env stays the
+    // last word.
+    const env = {
+      ...claudeCredentialEnv(),
+      ...(input.configDir ? { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } : {}),
+      ...input.env,
+    };
     if (!input.mcpEndpoint) {
       return env;
     }

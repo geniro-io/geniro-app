@@ -30,7 +30,7 @@ export interface AgentsApiListAgentEffortsRequest {
 export interface AgentsApiListAgentMcpServersRequest {
     agent: AgentKind;
     cwd?: string;
-    pluginDir?: string;
+    configDir?: string;
     refresh?: string;
 }
 
@@ -121,8 +121,8 @@ export class AgentsApi extends runtime.BaseAPI {
             queryParameters['cwd'] = requestParameters['cwd'];
         }
 
-        if (requestParameters['pluginDir'] != null) {
-            queryParameters['pluginDir'] = requestParameters['pluginDir'];
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
         }
 
         if (requestParameters['refresh'] != null) {

@@ -8,7 +8,7 @@
  * helper surfaces the effort half the label omits.
  */
 export function parseModelEffort(modelId: string): string | null {
-  const match = /(?:^|[,\[])\s*effort=([^,\]]+)/.exec(modelId);
+  const match = /(?:^|[,[])\s*effort=([^,\]]+)/.exec(modelId);
   const effort = match?.[1]?.trim();
   return effort !== undefined && effort !== '' ? effort : null;
 }

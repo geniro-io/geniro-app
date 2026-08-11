@@ -796,7 +796,7 @@ describe('ChatService', () => {
     claude.finish();
     await drain();
 
-    // A chat carries no plugin directory — only a graph node does — and this
+    // A chat carries no config directory — only a graph node does — and this
     // null must match the key the panel's own read builds, or the harvest is
     // written somewhere nothing ever looks.
     expect(mcpHarvest.record).toHaveBeenCalledWith(
@@ -1024,6 +1024,81 @@ describe('ChatService', () => {
     await expect(
       service.createChat({ agentKind: 'claude', cwd: filePath }),
     ).rejects.toThrow();
+  });
+
+  it('createChat canonicalizes a config directory and refuses a bad one', async () => {
+    const { service } = setup();
+    const configDir = mkdtempSync(join(dir, 'plugins-'));
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir,
+    });
+    // Canonical, like `cwd`: what the turn spawns with must be what was
+    // checked, so a symlink re-pointed afterwards cannot smuggle another path.
+    expect(run.configDir).toBe(realpathSync(configDir));
+
+    await expect(
+      service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        configDir: join(dir, 'no-such-plugin-dir'),
+      }),
+    ).rejects.toThrow(/INVALID_CONFIG_DIR|Config directory/);
+  });
+
+  it('createChat refuses a config directory on a CLI that cannot load one', async () => {
+    const { service } = setup();
+    const configDir = mkdtempSync(join(dir, 'plugins-'));
+    // The refusal carries the ADAPTER's own sentence — the chat picks its
+    // directory interactively, so "no" beats a field that silently does
+    // nothing (the workflow executor strips instead, and says why).
+    await expect(
+      service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+        configDir,
+      }),
+    ).rejects.toThrow(/CONFIG_DIR_UNSUPPORTED|cursor/i);
+
+    // Same CLI, no config directory asked for: nothing to refuse.
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+    expect(run.configDir).toBeNull();
+  });
+
+  it('spawns the turn with the chat’s config directory, and refuses once it is gone', async () => {
+    const { service, claude } = setup();
+    const configDir = mkdtempSync(join(dir, 'plugins-'));
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir,
+    });
+
+    await service.sendMessage(run.id, 'go');
+    expect(claude.start.mock.calls[0]?.[0].configDir).toBe(
+      realpathSync(configDir),
+    );
+    claude.emit({
+      type: 'turn_complete',
+      finalText: 'done',
+      usage: null,
+      stopReason: null,
+    });
+    claude.finish();
+    await drain();
+
+    // Deleted between turns. The CLI SILENTLY ignores a missing --plugin-dir,
+    // so a turn that ran anyway would look like the plugins had nothing to
+    // offer; the send is refused instead.
+    rmSync(configDir, { recursive: true, force: true });
+    await expect(service.sendMessage(run.id, 'again')).rejects.toThrow(
+      /INVALID_CONFIG_DIR|Config directory/,
+    );
+    expect(claude.start).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles an orphaned running run to failed with a terminal item on boot', async () => {

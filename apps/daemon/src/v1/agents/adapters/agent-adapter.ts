@@ -9,6 +9,7 @@ import { buildChildEnv } from '../utils/child-env';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
 import {
+  type BetweenTurnApproval,
   type CliSession,
   runCliSession,
   type SessionLogger,
@@ -1146,7 +1147,11 @@ export abstract class AgentAdapter {
    */
   startSession(
     input: AgentTurnInput,
-    opts: { runScoped?: boolean } = {},
+    opts: {
+      runScoped?: boolean;
+      betweenTurnApproval?: BetweenTurnApproval | undefined;
+      onBetweenTurnEvent?: (event: AgentEvent) => void;
+    } = {},
   ): AgentSession {
     const runScoped = opts.runScoped === true && this.canHostSession(input);
     // Turn-scoped resources become SESSION-scoped once the process outlives
@@ -1186,6 +1191,12 @@ export abstract class AgentAdapter {
         spawn: this.options.spawn,
         logger: this.options.logger,
         questionToolName: this.getConfig().questionToolName,
+        // Passed straight through: what to answer between turns depends on the
+        // run's approval posture, which the CALLER holds — an adapter deciding
+        // it here would be a third copy of approval semantics that already
+        // live in the chat service and the graph executor.
+        betweenTurnApproval: opts.betweenTurnApproval,
+        onBetweenTurnEvent: opts.onBetweenTurnEvent,
       });
     } catch (err) {
       // A synchronous throw between prepareTurn and a live session (a bad

@@ -7,6 +7,7 @@ import type {
   AgentTurnInput,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import type { BetweenTurnApproval } from '../utils/spawn-cli';
 
 /**
  * How long a run's CLI process is kept after its last turn.
@@ -40,6 +41,19 @@ interface SessionEntry {
   /** When this run's last turn ended; drives both eviction and expiry. */
   lastUsedAt: number;
   timer: ReturnType<typeof setTimeout> | null;
+  /**
+   * The between-turn approval policy, in a holder the session reads THROUGH.
+   *
+   * The session is opened once and lives for the whole run, but the policy is
+   * built per turn (it closes over that turn's approval mode). Handing the
+   * spawn a bare closure therefore froze the posture at turn 1: a chat started
+   * in `auto` and switched to `ask` went on auto-approving between-turn
+   * permissions for the rest of the session, with no card — the same silent
+   * wrong verdict this whole change exists to end, inverted. The holder is
+   * what lets every later turn — including the ones served off the reuse path,
+   * which never reach a spawn at all — replace it.
+   */
+  policy: { current: BetweenTurnApproval | undefined };
 }
 
 /**
@@ -83,10 +97,30 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     adapter: AgentAdapter,
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
+    /**
+     * This turn's answer for a request that arrives after it settles — see
+     * {@link BetweenTurnApproval}.
+     *
+     * Supplied per TURN even though the session is per RUN, and installed on
+     * every call (spawn and reuse alike) so the posture a between-turn request
+     * is judged by is the one the user most recently chose.
+     */
+    betweenTurnApproval?: BetweenTurnApproval | undefined,
+    /**
+     * Where a NON-approval event arriving between turns goes — see
+     * `CliSessionOptions.onBetweenTurnEvent`. Bound at spawn and not per turn,
+     * because unlike the posture it carries no turn state: it files the event
+     * under the RUN, which is the same run for every turn on this session.
+     */
+    onBetweenTurnEvent?: (event: AgentEvent) => void,
   ): AgentTurnHandle {
     const existing = this.entries.get(runId);
     if (existing) {
       this.disarm(existing);
+      // Before the turn opens, not after: this turn's posture is what a
+      // request arriving after it settles must be judged by, and the reuse
+      // path is the ONLY path most turns take.
+      existing.policy.current = betweenTurnApproval;
       const handle = existing.session.startTurn(input, onEvent);
       if (handle) {
         return this.track(runId, existing, handle);
@@ -102,10 +136,24 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     // what did.
     this.evictIfFull();
 
+    const policy: SessionEntry['policy'] = { current: betweenTurnApproval };
     const session = adapter.startSession(input, {
       // A daemon that is shutting down must not keep a process alive past the
       // drain: `close()` would have to arrive from a hook that has already run.
       runScoped: !this.shuttingDown,
+      // Read THROUGH the holder on every request, so the posture is the one
+      // the most recent turn declared rather than the one this spawn saw.
+      // Only installed when this caller has a posture at all — a session with
+      // no policy must keep `spawn-cli`'s own default (hold a question, refuse
+      // a permission), which an always-present indirection would erase.
+      betweenTurnApproval:
+        betweenTurnApproval === undefined
+          ? undefined
+          : // A later turn that supplies none falls back to HOLDING rather
+            // than to the refuse default — between the two, the direction that
+            // cannot grant something unasked is the one to fail toward.
+            (request) => policy.current?.(request) ?? null,
+      onBetweenTurnEvent,
     });
     const handle = session.startTurn(input, onEvent);
     if (!handle) {
@@ -119,6 +167,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       session,
       lastUsedAt: Date.now(),
       timer: null,
+      policy,
     };
     this.entries.set(runId, entry);
     this.forgetWhenClosed(runId, entry);

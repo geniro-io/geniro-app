@@ -648,16 +648,19 @@ describe('an event arriving between turns', () => {
     // Nothing at all on stdin — not a denial, not anything.
     expect(child.stdin.written.slice(writtenBefore.length)).toBe('');
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
-      'left unanswered',
+      'held for the next turn to adopt',
     );
     expect(session.alive).toBe(true);
   });
 
-  it('REFUSES an orphaned approval_request instead of dropping it', async () => {
-    // Dropping is not neutral: the CLI is blocked on a verdict that, with no
-    // turn, nothing will ever send. Denying is the only answer correct in every
-    // approval mode — it cannot grant a permission nobody is there to approve,
-    // and it unblocks the CLI. The observable is the verdict ON STDIN.
+  it('refuses an orphaned permission when the owner supplies NO posture (the default)', async () => {
+    // The fallback for a caller with nothing to say about posture — not what
+    // the chat service does, which supplies one. It exists because dropping is
+    // not neutral: the CLI is blocked on a verdict that, with no turn, nothing
+    // will ever send, and a caller that cannot say "allow" at least unblocks
+    // it. An owner WITH a posture takes the paths below instead, where a
+    // refusal in the user's name is precisely what is avoided.
+    // The observable is the verdict ON STDIN.
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { session, child } = sessionAskingAfterSettle(logger);
 
@@ -678,12 +681,17 @@ describe('an event arriving between turns', () => {
     expect(session.alive).toBe(true);
   });
 
-  it('tells the NEXT turn about the parked question, once', async () => {
+  it('hands the NEXT turn the held question ITSELF, ahead of the notice, once', async () => {
     // A turn owns `onEvent`, so at the moment the question arrived there was
-    // nothing to show it to and it lived only in the daemon log. Parking does
-    // not unblock the CLI the way the refusal did, so the NEXT turn is the one
-    // that inherits a blocked process and falls silent — which makes it exactly
-    // where the sentence explaining the silence belongs.
+    // nothing to show it to and it lived only in the daemon log. Replaying the
+    // request into the next turn is what gives it a destination at all: it
+    // arrives as an ordinary `approval_request` and takes the same card path
+    // every in-turn request takes, so the user finally sees what was asked and
+    // their verdict reaches a live stdin.
+    //
+    // Order matters and is asserted, not incidental: the notice says the
+    // request is shown above, so a card arriving after its own explanation
+    // would make a liar of it.
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
 
@@ -699,20 +707,347 @@ describe('an event arriving between turns', () => {
     const events: AgentEvent[] = [];
     const second = session.startTurn({
       onEvent: (event) => events.push(event),
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
     });
     expect(events).toEqual([
+      expect.objectContaining({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+      }),
       expect.objectContaining({
         type: 'notice',
         message: expect.stringContaining('between turns'),
       }),
     ]);
 
-    // Drained, not copied — a turn after this one must not repeat it.
+    // Drained, not copied — once ANSWERED, no later turn repeats it. (An
+    // adopted request the turn never answers is deliberately re-held instead;
+    // that is its own case below.)
+    second?.respondApproval('q-1', true, undefined);
     line(child, { done: true });
     await second?.done;
     const later: AgentEvent[] = [];
     session.startTurn({ onEvent: (event) => later.push(event) });
     expect(later).toEqual([]);
+  });
+
+  it('re-holds an adopted request the turn settles without answering', async () => {
+    // Adoption empties the hold buffer, so a turn that ends before the user
+    // answers the card would otherwise drop the request for good — the CLI
+    // stays blocked, the notice is spent, and the chat goes quiet again. That
+    // is the same wedge, one turn later.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await first?.done;
+
+    line(child, { ask: 'q-1' });
+
+    // Turn 2 is shown the card and then ends with no verdict.
+    const second = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await second?.done;
+
+    // Turn 3 is offered it again, rather than inheriting a silently blocked CLI.
+    const third: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => third.push(event) });
+    expect(third[0]).toEqual(
+      expect.objectContaining({ type: 'approval_request', id: 'q-1' }),
+    );
+  });
+
+  it('re-holds a request raised INSIDE a turn that then ended without answering it', async () => {
+    // Same wedge, reached through the commoner door. A request the CLI raises
+    // while a turn IS open is delivered to that turn and never enters the hold
+    // buffer, so `adopted` — which only ever records what a turn ADOPTED — has
+    // nothing to give back when the turn settles unanswered.
+    //
+    // The turn here is given up on by the silence deadline, which deliberately
+    // leaves the process alive for the next turn: so the next turn inherits a
+    // CLI still parked on this question, with the request now unreachable from
+    // anywhere. The buffer already knows it is outstanding — `approvalSeenAt`
+    // holds it right up to the `clear()` on settle — so the information to
+    // re-hold it exists and is thrown away.
+    vi.useFakeTimers();
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { ask: 'q-1' });
+    // Nothing answers it, and the CLI says nothing more — the turn is given up
+    // on, the process is kept.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await first?.done;
+    expect(session.alive).toBe(true);
+
+    const second: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => second.push(event) });
+
+    expect(second).toContainEqual(
+      expect.objectContaining({ type: 'approval_request', id: 'q-1' }),
+    );
+  });
+
+  it('does NOT re-hold a request the turn actually answered', async () => {
+    // The other side of the same ledger: re-offering an answered request would
+    // show the user a card for a decision they already made, and hand the CLI
+    // a second verdict for one request.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await first?.done;
+
+    line(child, { ask: 'q-1' });
+
+    const second = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    second?.respondApproval('q-1', true, undefined);
+    line(child, { done: true });
+    await second?.done;
+
+    const third: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => third.push(event) });
+    expect(third).toEqual([]);
+  });
+
+  it('answers a between-turn permission with the run’s posture instead of refusing it', async () => {
+    // The bug this pins: under the `auto` chip every tool call arriving a
+    // moment after its turn settled was refused, and the refusal reached the
+    // agent as `{behavior:'deny', message:'Denied by the user in Geniro'}` for
+    // a card that was never rendered. The user watched their agent report it
+    // had lost write access to a worktree they had granted it.
+    //
+    // The observable is the verdict ON STDIN, and it must be the ALLOW the
+    // posture calls for — asserting merely that something was written would
+    // pass just as well with the deny restored.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: askOrDone,
+      spawn,
+      logger,
+      questionToolName: 'AskUserQuestion',
+      betweenTurnApproval: ({ toolName }) =>
+        toolName === 'AskUserQuestion' ? null : true,
+    });
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    line(child, { ask: 'req-1' });
+
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe(
+      'VERDICT req-1 true\n',
+    );
+    // Answered outright, so there is nothing left for a later turn to adopt.
+    const later: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => later.push(event) });
+    expect(later).toEqual([]);
+  });
+
+  it('hands a non-approval between-turn event to the owner instead of dropping it', async () => {
+    // A `tool_result` arriving after its turn settled used to be dropped, so
+    // the call it answers stayed unpaired on the transcript forever. The owner
+    // files it under the RUN — the events are turn-less, not run-less.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const seen: AgentEvent[] = [];
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: (obj) => {
+        const row = obj as { done?: boolean; result?: string };
+        if (row.done === true) {
+          return [COMPLETE];
+        }
+        return row.result === undefined
+          ? []
+          : [
+              {
+                type: 'tool_result',
+                id: row.result,
+                name: 'Bash',
+                result: 'ok',
+                isError: false,
+              },
+            ];
+      },
+      spawn,
+      logger,
+      onBetweenTurnEvent: (event) => seen.push(event),
+    });
+
+    const turn = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await turn?.done;
+
+    line(child, { result: 't1' });
+
+    expect(seen).toEqual([
+      expect.objectContaining({ type: 'tool_result', id: 't1' }),
+    ]);
+    // Handed over, NOT buffered — replaying it into the next turn would file
+    // one turn's output under another's.
+    const next: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => next.push(event) });
+    expect(next).toEqual([]);
+  });
+
+  it('bounds the hold buffer, and says which request it gave up on', async () => {
+    // Nothing else bounds this: a CLI asking repeatedly on a chat nobody
+    // returns to would hold one blocked tool call per request for the whole
+    // 30-minute session life. Dropping the oldest is the concession; doing it
+    // SILENTLY is not, because a dropped hold leaves a CLI blocked forever and
+    // the log line is the only trace of why.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await first?.done;
+
+    // One past the cap of 20.
+    for (let i = 0; i < 21; i += 1) {
+      line(child, { ask: `q-${i}` });
+    }
+
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => events.push(event) });
+    const adopted = events.filter((event) => event.type === 'approval_request');
+    expect(adopted).toHaveLength(20);
+    // The OLDEST went, not the newest.
+    expect(adopted.map((event) => (event as { id: string }).id)).not.toContain(
+      'q-0',
+    );
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'dropped held request',
+    );
+  });
+
+  it('says the between-turns thing ONCE however many requests are held', async () => {
+    // The notice explains a state, not each occurrence. Twenty verbatim copies
+    // of one sentence would bury the twenty cards it is pointing at.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
+
+    const first = session.startTurn({ onEvent: () => {} });
+    line(child, { done: true });
+    await first?.done;
+
+    line(child, { ask: 'q-1' });
+    line(child, { ask: 'q-2' });
+    line(child, { ask: 'q-3' });
+
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => events.push(event) });
+    expect(events.filter((event) => event.type === 'notice')).toHaveLength(1);
+    expect(
+      events.filter((event) => event.type === 'approval_request'),
+    ).toHaveLength(3);
+  });
+
+  it('will not let an owner posture auto-ANSWER the question tool', async () => {
+    // A floor the owner cannot lower. Today's only policy discriminates
+    // correctly, so this guards the next one: answering an AskUserQuestion
+    // from a posture speaks for the user, in their name, about something they
+    // never saw — the one outcome the whole between-turn seam refuses. The
+    // previous code could not get this wrong because it refused every question
+    // unconditionally; now that an owner decides, the floor has to be explicit.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: questionOrDone,
+      spawn,
+      logger,
+      questionToolName: 'AskUserQuestion',
+      // A careless policy: says "approve" for everything, questions included.
+      betweenTurnApproval: () => true,
+    });
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    line(child, { ask: 'q-1' });
+
+    // Nothing answered on the user's behalf…
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe('');
+    // …and it is held for them instead.
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => events.push(event) });
+    expect(events[0]).toEqual(
+      expect.objectContaining({ type: 'approval_request', id: 'q-1' }),
+    );
+  });
+
+  it('holds a between-turn permission the posture will not decide, rather than denying it', async () => {
+    // The other half of the same policy: an `ask` chat has no standing answer,
+    // so the request must reach a card — never a refusal in the user's name.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: askOrDone,
+      spawn,
+      logger,
+      questionToolName: 'AskUserQuestion',
+      betweenTurnApproval: () => null,
+    });
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    line(child, { ask: 'req-2' });
+
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe('');
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => events.push(event) });
+    expect(events[0]).toEqual(
+      expect.objectContaining({ type: 'approval_request', id: 'req-2' }),
+    );
   });
 
   it('names the tool and the request id, so the line can be joined to a transcript row', () => {
@@ -751,7 +1086,7 @@ describe('an event arriving between turns', () => {
     line(child, { ask: 'req-9' });
 
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
-      'could NOT be refused',
+      'could NOT be answered',
     );
     expect(child.stdin.written).toBe('');
   });

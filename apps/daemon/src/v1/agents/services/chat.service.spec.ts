@@ -214,7 +214,20 @@ function fakeAdapter(kind: AgentKind): {
     setApprovalMode: ReturnType<typeof vi.fn>;
   }[];
   /** Every session the service opened, and whether each was closed. */
-  sessions: { closed: boolean }[];
+  sessions: {
+    closed: boolean;
+    /**
+     * The between-turn approval policy the session was opened WITH — the one
+     * the live process actually calls for a request that arrives with no turn
+     * in flight. Recorded rather than reconstructed: the registry wraps the
+     * caller's closure in its own holder indirection, and only the wrapper is
+     * what the CLI reaches.
+     */
+    betweenTurnApproval?: (request: {
+      toolName: string;
+      requiresUserInteraction?: boolean;
+    }) => boolean | null;
+  }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
@@ -259,35 +272,54 @@ function fakeAdapter(kind: AgentKind): {
   // faked here too, at the same seam. Each turn still goes through `start`, so
   // every assertion counting spawns keeps counting turns; what the session adds
   // is the lifetime around them, which is the thing a delete has to end.
-  const sessions: { closed: boolean }[] = [];
-  const startSession = vi.fn(() => {
-    const record = { closed: false };
-    sessions.push(record);
-    let inFlight = 0;
-    return {
-      startTurn: (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
-        const handle = start(input, cb);
-        inFlight += 1;
-        void handle.done.then(() => {
-          inFlight -= 1;
-        });
-        return handle;
-      },
-      get idle() {
-        return inFlight === 0;
-      },
-      get alive() {
-        return !record.closed;
-      },
-      close: () => {
-        record.closed = true;
-      },
-      // Never resolves: nothing in the daemon awaits a session's death, and a
-      // promise that resolved on its own would model a process that reaps
-      // itself — which is exactly what a run-scoped one does not do.
-      closed: new Promise<void>(() => {}),
-    };
-  });
+  const sessions: {
+    closed: boolean;
+    betweenTurnApproval?: (request: {
+      toolName: string;
+      requiresUserInteraction?: boolean;
+    }) => boolean | null;
+  }[] = [];
+  const startSession = vi.fn(
+    (
+      _input: AgentTurnInput,
+      opts: {
+        betweenTurnApproval?: (request: {
+          toolName: string;
+          requiresUserInteraction?: boolean;
+        }) => boolean | null;
+      } = {},
+    ) => {
+      const record = {
+        closed: false,
+        betweenTurnApproval: opts.betweenTurnApproval,
+      };
+      sessions.push(record);
+      let inFlight = 0;
+      return {
+        startTurn: (input: AgentTurnInput, cb: (event: AgentEvent) => void) => {
+          const handle = start(input, cb);
+          inFlight += 1;
+          void handle.done.then(() => {
+            inFlight -= 1;
+          });
+          return handle;
+        },
+        get idle() {
+          return inFlight === 0;
+        },
+        get alive() {
+          return !record.closed;
+        },
+        close: () => {
+          record.closed = true;
+        },
+        // Never resolves: nothing in the daemon awaits a session's death, and a
+        // promise that resolved on its own would model a process that reaps
+        // itself — which is exactly what a run-scoped one does not do.
+        closed: new Promise<void>(() => {}),
+      };
+    },
+  );
 
   // Every CLI-fact declaration comes from the REAL adapter: the double fakes
   // the SPAWN, never the contract, so a policy this service leans on cannot
@@ -1279,6 +1311,43 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
     claude.finish();
     await drain();
+  });
+
+  it('judges a BETWEEN-turn request by the mode the user last chose, not the last turn’s', async () => {
+    // The between-turn policy is built per TURN and closes over that turn's
+    // own `approvalMode` variable, so nothing updates it once the turn has
+    // settled. Change the chip while no turn is running — the one moment the
+    // chip is freely changeable, since a claimed run refuses — and the run row
+    // and the chip both read `ask` while the live CLI's between-turn seam is
+    // still the `auto` closure turn 1 installed.
+    //
+    // The direction is the dangerous one: the user asked for a gate and every
+    // permission the kept process raises between turns is granted for them,
+    // with no card, no transcript row, and nothing said. That is the same
+    // silent wrong verdict the whole between-turn change exists to end.
+    //
+    // Read through the policy the SESSION was opened with, because that is the
+    // one the live process calls; asserting on anything else would prove
+    // nothing about what the CLI is told.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    await service.sendMessage(run.id, 'go');
+    const policy = claude.sessions[0]?.betweenTurnApproval;
+    expect(policy?.({ toolName: 'Bash' })).toBe(true);
+
+    claude.finish();
+    await drain();
+    const updated = await service.updateSettings(run.id, { approval: 'ask' });
+    expect(updated.approval).toBe('ask');
+
+    // `null` is HOLD — the request waits for the next turn to show it as a
+    // card. `true` here is a permission granted in the user's name under a
+    // posture they have already left.
+    expect(policy?.({ toolName: 'Bash' })).toBeNull();
   });
 
   it('REFUSES when the running turn has no permission gate to be told through', async () => {

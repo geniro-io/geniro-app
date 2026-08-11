@@ -493,6 +493,18 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
+  it('declares that it reports its background sub-agents', () => {
+    // Claude reports delegates via `parent_tool_use_id` on the stream. This
+    // field RECORDS that fact for a reader; it does not gate anything — the
+    // renderer keys on the id in the item payload, and nothing in the daemon
+    // reads this declaration today. Pinned as the documented value it is, with
+    // no claim that flipping it changes behaviour, because it would not.
+    expect(new ClaudeAdapter().getConfig().subagents).toEqual({
+      reports: true,
+      unavailableReason: null,
+    });
+  });
+
   it('degrades a PROVEN-unsupported acceptEdits to ask, and says so', () => {
     const resolved = new ClaudeAdapter().resolveApprovalMode('acceptEdits', {
       supported: { acceptEdits: false },

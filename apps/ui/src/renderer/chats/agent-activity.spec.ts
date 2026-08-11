@@ -6,8 +6,10 @@ import {
   computeAgentActivity,
   formatTokens,
   formatUsd,
+  subagentThreadsByAgent,
   threadsOf,
 } from './agent-activity';
+import type { SubagentBlockEntry } from './transcript-groups';
 
 let seq = 0;
 function item(
@@ -243,5 +245,81 @@ describe('formatTokens / formatUsd', () => {
     expect(formatUsd(0.236)).toBe('$0.24');
     expect(formatUsd(0.004)).toBe('<$0.01');
     expect(formatUsd(0)).toBe('$0.00');
+  });
+});
+
+describe('subagentThreadsByAgent', () => {
+  function block(over: Partial<SubagentBlockEntry> = {}): SubagentBlockEntry {
+    return {
+      type: 'subagent-block',
+      id: 'task-1',
+      createdAt: 'now',
+      nodeId: null,
+      kind: 'code-reviewer',
+      label: 'Review the diff',
+      prompt: null,
+      returned: false,
+      failed: false,
+      result: null,
+      closed: false,
+      entries: [],
+      ...over,
+    };
+  }
+
+  it('files each delegate under the agent that launched it', () => {
+    const byAgent = subagentThreadsByAgent(
+      [
+        block({ id: 'a', nodeId: null }),
+        block({ id: 'b', nodeId: 'coder' }),
+        block({ id: 'c', nodeId: 'coder' }),
+      ],
+      CHAT_AGENT_KEY,
+    );
+
+    expect([...byAgent.keys()]).toEqual([CHAT_AGENT_KEY, 'coder']);
+    expect(byAgent.get(CHAT_AGENT_KEY)?.map((t) => t.id)).toEqual(['a']);
+    expect(byAgent.get('coder')?.map((t) => t.id)).toEqual(['b', 'c']);
+  });
+
+  it('names a thread by the delegate description, then its type, then generically', () => {
+    const labelOf = (over: Partial<SubagentBlockEntry>): string | undefined =>
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY).get(
+        CHAT_AGENT_KEY,
+      )?.[0]?.label;
+
+    expect(labelOf({})).toBe('Review the diff');
+    expect(labelOf({ label: null })).toBe('code-reviewer');
+    expect(labelOf({ label: null, kind: null })).toBe('sub-agent');
+  });
+
+  it('translates each block state into the panel status vocabulary', () => {
+    const statusOf = (
+      over: Partial<SubagentBlockEntry>,
+      runSettled = false,
+    ): string | undefined =>
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY, runSettled).get(
+        CHAT_AGENT_KEY,
+      )?.[0]?.status;
+
+    expect(statusOf({})).toBe('running');
+    expect(statusOf({ returned: true })).toBe('completed');
+    expect(statusOf({ failed: true, returned: true })).toBe('failed');
+    // `stopped` has no word of its own in RunStatusKind — a delegate that
+    // stopped without completing is reported as `cancelled`, the nearest true
+    // term. Both routes into it are covered: its own turn ending, and the run.
+    expect(statusOf({ closed: true })).toBe('cancelled');
+    expect(statusOf({}, true)).toBe('cancelled');
+  });
+
+  it('never offers a resumable session for a delegate', () => {
+    // A sub-agent lives inside its parent's turn, so there is no CLI session
+    // for `--resume` to target — which is what withholds the panel's terminal
+    // handoff button on these rows.
+    const threads = subagentThreadsByAgent([block()], CHAT_AGENT_KEY).get(
+      CHAT_AGENT_KEY,
+    );
+    expect(threads?.[0]?.sessionId).toBeNull();
+    expect(threads?.[0]?.kind).toBe('subagent');
   });
 });

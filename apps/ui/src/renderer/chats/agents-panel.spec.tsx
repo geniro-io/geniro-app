@@ -1196,3 +1196,115 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
     expect(callButton(renderCaller('claude', new Set()))).toBeNull();
   });
 });
+
+describe('AgentsPanel — sub-agent threads', () => {
+  const subagent: AgentThread = {
+    id: 'task-1',
+    kind: 'subagent',
+    label: 'Review the diff',
+    status: 'running',
+    sessionId: null,
+  };
+  const delegator: AgentDisplay = {
+    id: 'orchestrator',
+    name: 'Orchestrator',
+    agent: 'claude',
+    configDir: null,
+    status: 'running',
+    activeTurns: 1,
+    contextTokens: null,
+    contextWindowTokens: null,
+    spentUsd: null,
+    threads: [{ ...mainThread, status: 'running' }, subagent],
+  };
+
+  function renderWithSubagent(
+    onOpenSubagent?: (id: string) => void,
+  ): HTMLDivElement {
+    const el = render(
+      <AgentsPanel
+        agents={[delegator]}
+        interactiveTerminalAgents={INTERACTIVE}
+        onOpenThread={() => undefined}
+        onOpenSubagent={onOpenSubagent}
+        onClose={() => undefined}
+      />,
+    );
+    // The card lists threads only once expanded.
+    click(cardFor(el, 'Orchestrator').querySelector('button[aria-expanded]'));
+    return el;
+  }
+
+  it('lists a sub-agent as a thread of the agent that launched it', () => {
+    const el = renderWithSubagent();
+    expect(el.textContent).toContain('Review the diff');
+    expect(el.textContent).toContain('2 threads');
+  });
+
+  it('offers NO terminal handoff on a sub-agent row', () => {
+    // A sub-agent lives inside its parent's turn and has no CLI session, so
+    // there is nothing for `--resume` to target. The CLI here IS resume-capable
+    // and the main thread does get a button — so this pins the sub-agent
+    // exclusion specifically, not a blanket "no buttons in this fixture".
+    const el = renderWithSubagent();
+    const rows = [...el.querySelectorAll('ul ul > li')];
+    const subagentRow = rows.find((row) =>
+      row.textContent?.includes('Review the diff'),
+    );
+    const mainRow = rows.find((row) =>
+      row.textContent?.includes('Main conversation'),
+    );
+    expect(
+      mainRow?.querySelector('button[aria-label^="Open terminal"]'),
+    ).not.toBeNull();
+    expect(
+      subagentRow?.querySelector('button[aria-label^="Open terminal"]'),
+    ).toBeNull();
+  });
+
+  it('opens the sub-agent detail when its row is pressed', () => {
+    const opened: string[] = [];
+    const el = renderWithSubagent((id) => opened.push(id));
+    const row = [...el.querySelectorAll('ul ul > li')].find((r) =>
+      r.textContent?.includes('Review the diff'),
+    );
+    click(row?.querySelector('button') ?? null);
+    expect(opened).toEqual(['task-1']);
+  });
+
+  it('says WHY a CLI lists no delegates, rather than showing an empty list', () => {
+    // An empty sub-agent list is indistinguishable from a bug. For a CLI whose
+    // transport carries no sub-agent signal, the emptiness is the permanent
+    // correct answer — so the daemon's own adapter sentence is shown.
+    const el = render(
+      <AgentsPanel
+        agents={[{ ...delegator, threads: [{ ...mainThread }] }]}
+        interactiveTerminalAgents={INTERACTIVE}
+        onOpenThread={() => undefined}
+        subagentUnavailableReason="cursor-agent reports no sub-agents over ACP"
+        onClose={() => undefined}
+      />,
+    );
+
+    // Read WITHOUT expanding anything: a card whose only thread is its own
+    // conversation never renders a thread list, so a note nested in one would
+    // be unreachable on exactly the CLI that needs it.
+    expect(el.textContent).toContain(
+      'cursor-agent reports no sub-agents over ACP',
+    );
+  });
+
+  it('says nothing extra for a CLI that does report them', () => {
+    const el = renderWithSubagent();
+    expect(el.textContent).not.toContain('reports no sub-agents');
+  });
+
+  it('leaves the row inert rather than falsely clickable with no handler', () => {
+    const el = renderWithSubagent();
+    const row = [...el.querySelectorAll('ul ul > li')].find((r) =>
+      r.textContent?.includes('Review the diff'),
+    );
+    expect(row?.querySelector('button')).toBeNull();
+    expect(row?.textContent).toContain('Review the diff');
+  });
+});

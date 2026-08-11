@@ -5856,3 +5856,227 @@ describe('Chats — a screenshot pasted into a question answer', () => {
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 });
+
+describe('Chats — background sub-agents', () => {
+  /** A row the CLI attributed to a delegate rather than to the main thread. */
+  function delegated(seq: number, text: string): ChatItem {
+    return {
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'message',
+      role: 'assistant',
+      payload: { text, parentToolUseId: 'task-1' },
+      createdAt: 'now',
+    };
+  }
+
+  /** The `Task` call that launched it. */
+  function taskCall(seq: number): ChatItem {
+    return {
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: {
+        id: 'task-1',
+        name: 'Task',
+        input: {
+          subagent_type: 'code-reviewer',
+          description: 'Review the diff',
+          prompt: 'Look for off-by-one errors.',
+        },
+      },
+      createdAt: 'now',
+    };
+  }
+
+  const sidebarRow = (container: HTMLElement): string =>
+    [...container.querySelectorAll('aside li')].find((el) =>
+      el.textContent?.includes('My chat'),
+    )?.textContent ?? '';
+
+  it('encloses a delegate and keeps the badge running while it is still out', async () => {
+    // The one seam every pure unit in this feature meets: the fold runs inside
+    // `durableEntries`, and its result feeds `displayRunStatus`. Both are
+    // deletable with the rest of the suite green, and both carry the reported
+    // defect — "the thread says completed while sub-agents are visibly
+    // working" — so they are pinned here, through a mounted Chats.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      taskCall(1),
+      delegated(2, 'reading the diff now'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The run ROW says completed; the delegate has not returned, so the badge
+    // must not.
+    expect(sidebarRow(container)).toContain('running');
+    expect(sidebarRow(container)).not.toContain('completed');
+
+    // And the delegate's work is enclosed and closed, not loose in the
+    // conversation. Asserted on the BLOCK rather than the whole container:
+    // the sidebar row legitimately previews the run's last message, which is
+    // the delegate's line here.
+    const block = container.querySelector('[data-role="subagent-block"]');
+    expect(block).not.toBeNull();
+    expect(block?.textContent).toContain('Review the diff');
+    expect(
+      block
+        ?.querySelector('button[aria-expanded]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(block?.textContent).not.toContain('reading the diff now');
+  });
+
+  it('settles the badge once the delegate returns', async () => {
+    // The other half — without it, "always running once a Task appears" would
+    // pass the test above just as well.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      taskCall(1),
+      delegated(2, 'reading the diff now'),
+      {
+        id: 'i3',
+        runId: 'r1',
+        nodeId: null,
+        seq: 3,
+        kind: 'tool_result',
+        role: 'tool',
+        payload: {
+          id: 'task-1',
+          name: null,
+          result: 'found it',
+          isError: false,
+        },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-role="subagent-block"]'),
+    ).not.toBeNull();
+    expect(sidebarRow(container)).toContain('completed');
+  });
+
+  it('lists the delegate as a thread of its agent in the agents panel', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      taskCall(1),
+      delegated(2, 'reading the diff now'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const openPanel = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open side panel"]',
+    );
+    await act(async () => {
+      openPanel?.click();
+    });
+
+    const panel = container.querySelector('aside[aria-label="Run agents"]');
+    expect(panel).not.toBeNull();
+    // The chat's agent now has TWO threads — its own conversation and the
+    // delegate — so the card is expandable and lists them behind the chevron.
+    const card = panel?.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    );
+    expect(card).not.toBeNull();
+    await act(async () => {
+      card?.click();
+    });
+
+    expect(panel?.textContent).toContain('Review the diff');
+  });
+
+  it("lists a cancelled run's unreturned delegate as cancelled, not running forever", async () => {
+    // The TRUE arm of `runRowStopped`. `displayRunStatus` independently
+    // refuses to override failed/cancelled, so without this the only
+    // observable loss is here — the panel listing a dead run's delegate as
+    // working, which is the stale-spinner bug one surface over.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'cancelled' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      taskCall(1),
+      delegated(2, 'reading the diff now'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Open side panel"]',
+        )
+        ?.click();
+    });
+    const panel = container.querySelector('aside[aria-label="Run agents"]');
+    await act(async () => {
+      panel?.querySelector<HTMLButtonElement>('button[aria-expanded]')?.click();
+    });
+
+    const row = [...(panel?.querySelectorAll('ul ul > li') ?? [])].find((el) =>
+      el.textContent?.includes('Review the diff'),
+    );
+    expect(row).not.toBeUndefined();
+    // A thread row carries its status as the RunStatusIcon's tone, not as
+    // text, so that is what is read here: `cancelled` is muted and static,
+    // `running` is accent-toned and spins (RUN_STATUS_META).
+    const icon = row?.querySelector('svg');
+    expect(icon?.getAttribute('class')).toContain('text-muted-foreground');
+    expect(icon?.getAttribute('class')).not.toContain('text-primary');
+    expect(icon?.getAttribute('class')).not.toContain('animate-spin');
+  });
+
+  it('opens the delegate detail dialog from the block, following the live fold', async () => {
+    // The detail wiring — dialog state, the `SubagentDetail` mount, and the
+    // decision to store an ID rather than the block so the panel follows the
+    // live fold instead of freezing the snapshot it opened from.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      taskCall(1),
+      delegated(2, 'reading the diff now'),
+    ]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Open Review the diff in a panel"]',
+        )
+        ?.click();
+    });
+
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain('Sub-agent · Review the diff');
+    expect(dialog?.textContent).toContain('Timeline');
+    expect(dialog?.textContent).toContain('reading the diff now');
+
+    // A later row from the same delegate must appear in the OPEN dialog —
+    // which only holds if it re-reads the fold by id each render.
+    await act(async () => {
+      emitItem(delegated(3, 'found the off-by-one'));
+    });
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+      'found the off-by-one',
+    );
+  });
+});

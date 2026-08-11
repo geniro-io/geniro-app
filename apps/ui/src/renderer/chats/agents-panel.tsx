@@ -229,6 +229,8 @@ export function AgentsPanel({
   onDismissMcpToggleError,
   onMcpOpenChange,
   onOpenThread,
+  onOpenSubagent,
+  subagentUnavailableReason = null,
   onResolveHandoff,
   interactiveTerminalAgents,
   onClose,
@@ -284,6 +286,22 @@ export function AgentsPanel({
   onMcpOpenChange?: (open: boolean) => void;
   /** Open a terminal mirroring one thread of one agent. */
   onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  /**
+   * Show one sub-agent's timeline and conversation, by the id of the tool call
+   * that launched it. Absent leaves sub-agent rows listed but inert — the
+   * panel never invents a surface it was not given, on the same rule as
+   * {@link onSetMcpEnabled}.
+   */
+  onOpenSubagent?: (subagentId: string) => void;
+  /**
+   * Why this run's CLI never lists sub-agents, or null when it reports them.
+   *
+   * Shown rather than swallowed: a panel with no delegate rows is otherwise
+   * indistinguishable from a broken one, and for a CLI whose transport carries
+   * no sub-agent signal that emptiness is the permanent, correct answer. The
+   * daemon's own adapter owns the sentence.
+   */
+  subagentUnavailableReason?: string | null;
   /**
    * Resolve the invocation that opens one thread in a terminal — used for the
    * hover hint only. Optional: without it the button still opens, it just has
@@ -393,6 +411,13 @@ export function AgentsPanel({
           message={mcpToggleError}
           onDismiss={onDismissMcpToggleError}
         />
+      ) : null}
+      {subagentUnavailableReason !== null ? (
+        // Panel-level, not per card: it is a fact about the CLI, and it must
+        // read whether or not any agent card happens to be expanded.
+        <p className="m-0 px-3 pb-1 text-[11px] text-muted-foreground">
+          {subagentUnavailableReason}
+        </p>
       ) : null}
       <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto p-3 pt-1">
         {agents.length === 0 ? (
@@ -570,22 +595,43 @@ export function AgentsPanel({
                         // else — the daemon resolves its session from
                         // `node_state`. A CALL thread is a sub-session, which
                         // can only be targeted once its own session id has been
-                        // recorded (present after the call settles).
+                        // recorded (present after the call settles). A SUB-AGENT
+                        // has no session at all — it lives inside its parent's
+                        // turn — so it is excluded outright rather than left to
+                        // fail the sessionId test by accident.
                         const canOpen =
                           agent.agent !== null &&
                           interactiveTerminalAgents?.has(agent.agent) ===
                             true &&
+                          thread.kind !== 'subagent' &&
                           (thread.kind === 'main' || thread.sessionId !== null);
+                        // What a sub-agent row offers INSTEAD: its own timeline
+                        // and conversation, in a panel. Absent the callback the
+                        // row is inert rather than falsely clickable.
+                        const openSubagent =
+                          thread.kind === 'subagent' && onOpenSubagent
+                            ? onOpenSubagent
+                            : null;
                         return (
                           <li
                             key={thread.id}
                             className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs">
                             <RunStatusIcon status={thread.status} />
-                            <span
-                              className="min-w-0 flex-1 truncate"
-                              title={thread.label}>
-                              {thread.label}
-                            </span>
+                            {openSubagent ? (
+                              <button
+                                type="button"
+                                className="min-w-0 flex-1 truncate rounded px-0.5 text-left transition-colors hover:text-foreground hover:underline"
+                                title={`Open ${thread.label}'s timeline and conversation`}
+                                onClick={() => openSubagent(thread.id)}>
+                                {thread.label}
+                              </button>
+                            ) : (
+                              <span
+                                className="min-w-0 flex-1 truncate"
+                                title={thread.label}>
+                                {thread.label}
+                              </span>
+                            )}
                             {canOpen ? (
                               <OpenInCliButton
                                 agent={agent}

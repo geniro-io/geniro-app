@@ -6,6 +6,7 @@ import type {
   AgentApprovalCapability,
   AgentConfigDirCapability,
   AgentFollowUpCapability,
+  AgentSubagentCapability,
   AgentTerminalCapability,
   CapabilitiesWire,
 } from '../graphs.types';
@@ -29,7 +30,22 @@ export class CapabilitiesService {
       interactiveTerminals: this.terminalCapabilities(),
       approvals: this.approvalCapabilities(),
       followUps: this.followUpCapabilities(),
+      subagents: this.subagentCapabilities(),
     };
+  }
+
+  /**
+   * Every registered CLI's sub-agent answer, read off its own config.
+   *
+   * Iterated, never listed — the same rule as the four below. It is what lets
+   * a chat on a CLI that reports no delegates SAY so, instead of showing an
+   * empty list a user cannot tell apart from a broken one.
+   */
+  private subagentCapabilities(): AgentSubagentCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      unavailableReason: adapter.getConfig().subagents.unavailableReason,
+    }));
   }
 
   /**

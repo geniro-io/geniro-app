@@ -93,10 +93,11 @@ export const RUN_STATUS_META: Record<
  *    daemon, so every other signal says `running` — but nothing will move until
  *    a human answers, and calling that "running" is what left the user watching
  *    a spinner that was in fact waiting on them.
- * 2. A live turn outranks a terminal row. `streaming` is cleared on activate
- *    and re-derived from the replayed transcript on reconnect, so it cannot go
- *    stale-true across a chat switch — which is what makes it safe to let it
- *    veto a `completed` that only a racing refetch asserted.
+ * 2. Work in flight outranks a terminal row — a live turn (`streaming`) or a
+ *    background sub-agent that has not reported back. `streaming` is cleared on
+ *    activate and re-derived from the replayed transcript on reconnect, so it
+ *    cannot go stale-true across a chat switch — which is what makes it safe to
+ *    let it veto a `completed` that only a racing refetch asserted.
  * 3. Otherwise the row is right.
  *
  * Pure and exported, so the badge rule is testable without mounting a chat.
@@ -105,6 +106,7 @@ export function displayRunStatus({
   status,
   streaming,
   awaitingAnswer,
+  subagentRunning = false,
 }: {
   /** The status on the run row, as the daemon last reported it. */
   status: RunStatusKind;
@@ -112,6 +114,20 @@ export function displayRunStatus({
   streaming: boolean;
   /** This run has an approval or question card still open. */
   awaitingAnswer: boolean;
+  /**
+   * At least one background sub-agent of this run is still working.
+   *
+   * Ranked with {@link streaming} rather than under it, because the two go out
+   * of step in exactly the case this exists for: the daemon deliberately drops
+   * a sub-agent's deltas from the live tail, so a delegating turn can have
+   * nothing streaming while several delegates are mid-flight. The run then read
+   * as its stale row — the reported "thread says completed while sub-agents are
+   * visibly working".
+   *
+   * Defaulted, so the many call sites that know nothing about sub-agents (a
+   * background row, a workflow node) are unaffected.
+   */
+  subagentRunning?: boolean;
 }): RunStatusKind {
   if (awaitingAnswer) {
     return 'needs-input';
@@ -119,8 +135,13 @@ export function displayRunStatus({
   // failed/cancelled are deliberately NOT overridden: both are settle paths
   // that can arrive while the live plane has yet to be torn down, and painting
   // a cancelled run as running would hide the very thing the user just asked
-  // for.
-  if (streaming && status !== 'failed' && status !== 'cancelled') {
+  // for. A still-running sub-agent does not earn an exception — a cancelled run
+  // is precisely where a delegate's last rows are still landing.
+  if (
+    (streaming || subagentRunning) &&
+    status !== 'failed' &&
+    status !== 'cancelled'
+  ) {
     return 'running';
   }
   return status;

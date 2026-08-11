@@ -11,36 +11,24 @@ import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import { toolInputBody, toolResultBody } from './tool-render';
+import {
+  payloadNumber,
+  payloadString,
+  type TranscriptNodeMeta,
+} from './transcript-payload';
 
-/** What the transcript knows about a workflow node (for display only). */
-export interface TranscriptNodeMeta {
-  name: string;
-  kind: 'agent' | 'trigger';
-}
-
-/** Read a string field out of an item's payload, defensively. */
-export function payloadString(payload: unknown, key: string): string | null {
-  if (payload && typeof payload === 'object' && key in payload) {
-    const value = (payload as Record<string, unknown>)[key];
-    if (typeof value === 'string') {
-      return value;
-    }
-  }
-  return null;
-}
-
-/** Read a numeric field out of an item's payload, defensively. */
-function payloadNumber(payload: unknown, key: string): number | null {
-  if (payload && typeof payload === 'object' && key in payload) {
-    const value = (payload as Record<string, unknown>)[key];
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-  }
-  return null;
-}
+/**
+ * Re-exported from the pure {@link ./transcript-payload} module, which is
+ * where they now live: `transcript-groups.ts` needs `payloadString`, and
+ * importing it from THIS component module closed a real import cycle
+ * (`agent-activity → transcript-groups → transcript-item → live-row →
+ * agent-activity`). Kept re-exported here so the dozen call sites that read
+ * them off the row module do not all have to churn.
+ */
+export { payloadString, type TranscriptNodeMeta } from './transcript-payload';
 
 /**
  * One transcript row, rendered by item kind. Memoized: items are immutable
@@ -58,6 +46,7 @@ export const TranscriptItem = memo(function TranscriptItem({
 }): React.JSX.Element | null {
   const cardBacked = useContext(CardBackedRequestsContext);
   const signIn = useContext(CliLoginContext);
+  const nested = useContext(NestedThreadContext);
   const nodeName = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
   // Workflow-run items carry the node that produced them; tag each row so
@@ -78,7 +67,12 @@ export const TranscriptItem = memo(function TranscriptItem({
           // The SenderRow frame names the AGENT, which is the same agent for a
           // sub-agent's prose as for its own — so without this a delegate's
           // report reads as the words of the agent the user is talking to.
-          role={subagentIdOf(item) === null ? undefined : tag('sub-agent')}>
+          // Withheld inside a sub-agent ENCLOSURE, whose header already names
+          // the delegate: the third of the three surfaces that used to say it
+          // independently, and the last one to stand down.
+          role={
+            subagentIdOf(item) === null || nested ? undefined : tag('sub-agent')
+          }>
           <MessageAttachments runId={item.runId} attachments={attachments} />
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
@@ -107,7 +101,9 @@ export const TranscriptItem = memo(function TranscriptItem({
         <MessageBubble
           variant="reasoning"
           role={
-            subagentIdOf(item) === null ? 'thinking' : tag('sub-agent thinking')
+            subagentIdOf(item) === null || nested
+              ? 'thinking'
+              : tag('sub-agent thinking')
           }>
           <div className="whitespace-pre-wrap italic break-words">
             {payloadString(item.payload, 'text') ?? ''}

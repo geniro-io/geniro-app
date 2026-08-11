@@ -508,6 +508,25 @@ export type AgentFollowUpCapability = z.infer<
   typeof AgentFollowUpCapabilitySchema
 >;
 
+/** Whether one CLI reports the background sub-agents it runs. */
+export const AgentSubagentCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * Why this CLI's delegates never appear, or null when it reports them.
+     *
+     * A sentence rather than a boolean because the renderer SHOWS it: a chat
+     * that lists no sub-agents is otherwise indistinguishable from a bug, and
+     * "cursor-agent reports no sub-agents over ACP" is the difference between
+     * a missing feature and a missing signal.
+     */
+    unavailableReason: z.string().nullable(),
+  })
+  .meta({ id: 'AgentSubagentCapability' });
+export type AgentSubagentCapability = z.infer<
+  typeof AgentSubagentCapabilitySchema
+>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
@@ -529,6 +548,11 @@ export const CapabilitiesWireSchema = z.object({
   followUps: z
     .array(AgentFollowUpCapabilitySchema)
     .describe('Per-CLI mid-turn follow-up support, one entry per known agent'),
+  subagents: z
+    .array(AgentSubagentCapabilitySchema)
+    .describe(
+      'Per-CLI background sub-agent reporting, one entry per known agent',
+    ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

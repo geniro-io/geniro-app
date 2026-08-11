@@ -120,6 +120,18 @@ export class ClaudeAdapter extends AgentAdapter {
        * that must be able to ask has to be moved off the bypass.
        */
       questionsCostAskPosture: true,
+      subagents: {
+        /**
+         * The Task tool's delegates ride the SAME stream-json stream as the
+         * main thread, each line carrying `parent_tool_use_id` — read in
+         * `utils/claude-message.utils.ts` and stamped onto the item payload by
+         * `utils/event-to-item.ts`. It is the id of the launching tool call,
+         * which is what lets the renderer nest a delegate's work under the row
+         * that started it rather than beside the conversation.
+         */
+        reports: true,
+        unavailableReason: null,
+      },
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */
         modes: ['auto', 'ask', 'acceptEdits', 'plan'],

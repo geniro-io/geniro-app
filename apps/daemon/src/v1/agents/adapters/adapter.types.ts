@@ -1078,6 +1078,41 @@ export interface AdapterConfig {
    */
   readonly questionsCostAskPosture: boolean;
 
+  // ── Background sub-agents ───────────────────────────────────────────────
+  /**
+   * Whether this CLI reports the background sub-agents it runs, so the
+   * renderer can enclose their work instead of spilling it into the
+   * conversation.
+   *
+   * The mechanism is already CLI-agnostic — an adapter reports one by setting
+   * {@link AgentEventOrigin.parentToolUseId} to the id of the tool call that
+   * started the delegate — so this field says only whether a given CLI HAS
+   * such a signal. Everything downstream (the transcript's sub-agent block,
+   * the agents panel's sub-agent rows, the run badge that reads `running`
+   * while one is out) keys on that id and never on which CLI produced it.
+   *
+   * A CLI that does not report one declares WHY, and the reason is a
+   * MEASUREMENT with its date and its bounds — not a permanent property. See
+   * `.claude/rules/agent-adapters.md`: write down what was checked, so the
+   * next reader knows what to re-check rather than trusting the absence.
+   *
+   * **Declarative only — nothing reads this yet.** It records what was
+   * measured about each CLI; it gates no behaviour, and flipping either value
+   * changes nothing at runtime. Said out loud so a reader does not go looking
+   * for the consumer. Giving it one (a `subagents[]` arm on
+   * `GET /v1/capabilities`, so a cursor chat could explain why it lists no
+   * delegates) is the obvious next step and deliberately not taken here.
+   */
+  readonly subagents: {
+    /** This CLI reports its delegates on the stream. */
+    readonly reports: boolean;
+    /**
+     * Why it does not, when it does not — the CLI's own sentence, naming what
+     * was checked. Null when {@link reports} is true.
+     */
+    readonly unavailableReason: string | null;
+  };
+
   // ── Approval policy ─────────────────────────────────────────────────────
   readonly approval: {
     /**

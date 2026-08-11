@@ -27,6 +27,21 @@ const REAL_PENDING_OUTPUT = [
 const REAL_EMPTY_OUTPUT =
   'No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)\n';
 
+/**
+ * Verbatim output on 2026-08-11 against 2026.08.04-aaa8809, from a
+ * `~/.cursor/mcp.json` with eleven servers — the listing that showed this CLI
+ * DOES report an authentication state, which nothing had observed before.
+ * Trimmed to the first four rows; the remaining seven all read
+ * `requires_authentication` too.
+ */
+const REAL_NEEDS_AUTH_OUTPUT = [
+  'playwright: ready',
+  'linear: requires_authentication',
+  'github: ready',
+  'vercel: requires_authentication',
+  '',
+].join('\n');
+
 describe('parseCursorMcpList', () => {
   it('reads a healthy server', () => {
     const [server] = parseCursorMcpList(REAL_MIXED_OUTPUT);
@@ -132,6 +147,24 @@ describe('parseCursorMcpList', () => {
         detail: null,
       },
     ]);
+  });
+
+  it('reads a server that needs authenticating, so the row can offer sign-in', () => {
+    // `needs_auth` is the status the panel draws a sign-in control for, and
+    // `cursor-agent mcp login <name>` is what that control runs. Before this
+    // wording was observed the row parsed as `unknown`, which renders a badge
+    // with nothing to do about it — on the majority of a real listing.
+    const servers = parseCursorMcpList(REAL_NEEDS_AUTH_OUTPUT);
+
+    expect(servers.map((s) => [s.name, s.status])).toEqual([
+      ['playwright', 'connected'],
+      ['linear', 'needs_auth'],
+      ['github', 'connected'],
+      ['vercel', 'needs_auth'],
+    ]);
+    // The marker is the whole status, so nothing is left over to show as a
+    // detail the user would have to interpret.
+    expect(servers[1]?.detail).toBeNull();
   });
 
   it('reads a server switched off with `mcp disable`', () => {

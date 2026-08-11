@@ -109,6 +109,29 @@ export const CURSOR_MCP_PENDING_MARKER = 'not loaded';
 export const CURSOR_MCP_DISABLED_MARKER = 'disabled';
 
 /**
+ * What a server the user has not authenticated to reports.
+ *
+ * OBSERVED on 2026.08.11 against 2026.08.04-aaa8809, on a machine whose
+ * `~/.cursor/mcp.json` configures eleven servers:
+ *
+ * ```
+ * $ cursor-agent mcp list
+ * playwright: ready
+ * linear: requires_authentication
+ * github: ready
+ * vercel: requires_authentication
+ * ```
+ *
+ * This is the wording the adapter's `mcp.loginArgs` block said it was waiting
+ * for. Until it was seen, no marker was invented for it — the note there
+ * records why — so the rows it covers parsed as `unknown` and rendered a badge
+ * with nothing to do about it. They are the majority of a real listing (eight
+ * of the eleven above), and `needs_auth` is the status the panel already draws
+ * a sign-in control for, which `cursor-agent mcp login <name>` can act on.
+ */
+export const CURSOR_MCP_NEEDS_AUTH_MARKER = 'requires_authentication';
+
+/**
  * Printed INSTEAD of any rows when neither `.cursor/mcp.json` nor
  * `~/.cursor/mcp.json` configures a server.
  *

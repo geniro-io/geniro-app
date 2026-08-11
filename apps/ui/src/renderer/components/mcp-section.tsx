@@ -418,7 +418,13 @@ export function McpSection({
           {loading ? 'Loading…' : 'Not checked'}
         </span>
       ) : servers.length === 0 ? (
-        <span className="text-xs text-muted-foreground">No servers</span>
+        // Empty rows are the daemon's placeholder for a cold read still
+        // dialling (`pending: true`), not a settled "this folder has none" —
+        // the same distinction the `servers === undefined` branch above
+        // already draws, just reached from the other side of it.
+        <span className="text-xs text-muted-foreground">
+          {loading ? 'Loading…' : 'No servers'}
+        </span>
       ) : (
         <>
           {rest.length > 0 ? (

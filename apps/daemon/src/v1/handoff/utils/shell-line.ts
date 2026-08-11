@@ -27,6 +27,15 @@ function quote(arg: string): string {
  * — a remote host, a tmux pane they already have open — is never stuck. Built
  * from the SAME command and args the button runs, so the two cannot describe
  * different things.
+ *
+ * TWIN PARSER: `apps/ui/src/main/open-terminal.ts` `openInTerminal` renders the
+ * same target as the `.command` script the button actually opens. The daemon and
+ * the Electron main process share no code, so a new field on `HandoffTarget`
+ * must be rendered in both or the copyable line and the button diverge. The two
+ * forms are NOT interchangeable: this one is a prefix assignment on a bare
+ * command, and the script's is an `export` ahead of an `exec` — pasting the
+ * prefix form after `exec` makes the shell look for a program named
+ * `NAME=value`, which is the bug that spec'd this twin.
  */
 export function shellLine(
   command: string,

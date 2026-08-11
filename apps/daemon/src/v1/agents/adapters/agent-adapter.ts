@@ -1374,6 +1374,13 @@ export abstract class AgentAdapter {
       get alive() {
         return session.alive;
       },
+      get retired() {
+        // Forwarded, not recomputed: the state lives in the process wrapper
+        // (a cancelled turn may still be printing), and the registry's eviction
+        // scan is the reader. A wrapper that dropped it would leave that scan
+        // treating an unusable process as the freshest reusable one.
+        return session.retired;
+      },
       close: () => session.close(),
       closed: session.closed,
     };

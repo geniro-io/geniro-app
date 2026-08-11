@@ -120,6 +120,18 @@ export const openTerminalSchema = z.strictObject({
    * Env for that one invocation (the run's config directory). Validated in
    * SHAPE only — the daemon composed it and owns which vars mean what — but
    * bounded, since these become assignments in a script this process writes.
+   *
+   * The NAME is held to a shell identifier, not merely to a length. It is the
+   * one field on this channel that reaches the generated script UNQUOTED (twice:
+   * `NAME=value` and `export NAME`), because quoting an assignment's left side
+   * would make the shell hunt for a command called `NAME=value`. A length bound
+   * alone admitted a newline, so `A=1\nrm -rf …` was a well-formed name — and
+   * the point of this schema is a renderer that has been tampered with.
    */
-  env: z.record(z.string().min(1).max(64), z.string().max(4096)).optional(),
+  env: z
+    .record(
+      z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/),
+      z.string().max(4096),
+    )
+    .optional(),
 });

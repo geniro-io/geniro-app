@@ -53,9 +53,11 @@ export interface ToolGroupEntry {
    * A turn ended after this group — so whatever result was coming has come.
    *
    * An unpaired call means "still running" only while its turn is open. Once
-   * the turn is over, a missing `tool_result` is a result that never arrived
-   * (the daemon drops one that lands between turns), and a spinner over it
-   * claims work that stopped long ago. That is the reported bug: a chat whose
+   * the turn is over, a missing `tool_result` is a result that never arrived,
+   * and a spinner over it claims work that stopped long ago. (A result that
+   * lands between turns IS persisted now, along with its call — but it takes a
+   * fresh seq, so it appears later in the transcript rather than inside this
+   * closed group.) That is the reported bug: a chat whose
    * header read `completed` with a sub-agent row working forever.
    *
    * Per-GROUP rather than per-run, and that distinction is the point: the run

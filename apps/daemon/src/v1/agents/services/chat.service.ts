@@ -645,17 +645,26 @@ export class ChatService {
    * Write an event the CLI produced with no turn in flight into the run's
    * transcript.
    *
-   * Only a `tool_result`, and the narrowness is the whole safety argument. It
-   * carries the id of the call it answers, so it lands on a row already on the
-   * transcript and cannot be attributed to the wrong work; anything else
-   * arriving here (a stray message, a delta) has no such anchor, and filing
-   * one turn's words under another's is worse than dropping them. That is why
-   * `spawn-cli` hands these over rather than replaying them into the next
-   * turn, and why this filters rather than persisting whatever it is given.
+   * Only the two halves of a tool call, and the narrowness is the whole safety
+   * argument. Each carries the id that pairs them, so neither can be attributed
+   * to the wrong work; anything else arriving here (a stray message, a delta)
+   * has no such anchor, and filing one turn's words under another's is worse
+   * than dropping them. That is why `spawn-cli` hands these over rather than
+   * replaying them into the next turn, and why this filters rather than
+   * persisting whatever it is given.
    *
    * Without it the row stayed unpaired forever: the renderer now stops
    * SPINNING over one (the group's turn has ended), but the result itself was
    * simply gone, so expanding the row showed a call with no answer.
+   *
+   * The `tool_call` half is needed because a call can arrive between turns too
+   * — a Stop leaves the CLI starting one more tool — and dropping it while
+   * keeping its result leaves the result unpairable. `transcript-groups` pairs
+   * in a single forward pass keyed on the call id, so a result whose call is
+   * absent renders as its own top-level row: the bare `RESULT` blocks a user
+   * reported as strange messages after a Stop, one holding a `tool_reference`
+   * payload and one holding raw `mcp list` output. Both halves arrive in order
+   * and take their seq in that order, so persisting both restores the pairing.
    *
    * Run-scoped by construction — its own `em` fork and the run's seq
    * allocator, nothing borrowed from a turn that has already settled. Failure
@@ -666,7 +675,7 @@ export class ChatService {
     runId: string,
     event: AgentEvent,
   ): Promise<void> {
-    if (event.type !== 'tool_result') {
+    if (event.type !== 'tool_result' && event.type !== 'tool_call') {
       this.logger.warn(
         `run ${runId} dropped a '${event.type}' event arriving between turns`,
       );

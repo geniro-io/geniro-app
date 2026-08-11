@@ -862,6 +862,18 @@ export interface AgentSession {
   /** The process has not been observed to end. */
   readonly alive: boolean;
   /**
+   * Alive and idle, but `startTurn` will refuse every further turn — the last
+   * turn was ended for the CLI rather than by it, so this process may still be
+   * printing that turn's tail and nothing can tell it apart from a new turn's
+   * output.
+   *
+   * Deliberately NOT folded into `idle`: every reader treats a non-idle session
+   * as BUSY, which would stop the idle reaper from ever closing this one while
+   * still counting it against the session ceiling. A holder must instead close a
+   * retired session on sight, the way it closes a dead one.
+   */
+  readonly retired: boolean;
+  /**
    * Terminate the process group — the CLI plus every tool/MCP grandchild.
    *
    * This is the ONLY thing that stops a run-scoped process, so whoever holds

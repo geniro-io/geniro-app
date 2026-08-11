@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import {
+  CliLoginQueryDto,
   HandoffQueryDto,
   HandoffTargetDto,
   McpLoginQueryDto,
@@ -45,5 +46,18 @@ export class HandoffController {
   @ZodResponse({ status: 200, type: HandoffTargetDto })
   resolveMcpLogin(@Query() query: McpLoginQueryDto): HandoffTarget {
     return this.handoff.mcpLoginTarget(query);
+  }
+
+  /**
+   * "How do I sign this CLI in myself" — the account, not one of its MCP
+   * servers. Separate from the route above because the two are different
+   * commands reached by different failures; an expired account session is not
+   * fixed by authenticating a server.
+   */
+  @Get('login')
+  @ApiOperation({ operationId: 'resolveCliLogin' })
+  @ZodResponse({ status: 200, type: HandoffTargetDto })
+  resolveCliLogin(@Query() query: CliLoginQueryDto): HandoffTarget {
+    return this.handoff.loginTarget(query);
   }
 }

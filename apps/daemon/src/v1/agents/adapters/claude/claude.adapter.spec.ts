@@ -258,6 +258,56 @@ describe('ClaudeAdapter', () => {
       },
     ]);
   });
+
+  it('marks an expired-session failure as curable by signing in', async () => {
+    // The reported failure, verbatim. Without this it reaches the user as a
+    // stack-trace row with nothing to do about it.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    child.stderr.emitData(
+      'Failed to authenticate: OAuth session expired and could not be refreshed',
+    );
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events).toEqual([
+      {
+        type: 'error',
+        message: expect.stringContaining('OAuth session expired'),
+        recovery: 'cli-login',
+      },
+    ]);
+  });
+
+  it.each([
+    ['an unrelated failure', 'ENOSPC: no space left on device'],
+    // The sharp one. The CLI uses this same prefix for an MCP SERVER it could
+    // not authenticate, so a marker of `'Failed to authenticate'` would offer
+    // `claude auth login` for a failure only `claude mcp login <server>` fixes
+    // — a wrong cure, which is worse than none. Delete the narrowing and this
+    // case goes green-to-red.
+    [
+      'an MCP server auth failure',
+      'Failed to authenticate with MCP server "linear"',
+    ],
+  ])('leaves %s with no cure to offer', async (_label, stderr) => {
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    child.stderr.emitData(stderr);
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events[0]).toMatchObject({ type: 'error' });
+    expect((events[0] as { recovery?: string }).recovery).toBeUndefined();
+  });
 });
 
 describe('ClaudeAdapter approval seam (ask mode)', () => {

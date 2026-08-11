@@ -23,6 +23,7 @@ export const ACP_AGENT_METHODS = {
   sessionNew: 'session/new',
   sessionLoad: 'session/load',
   sessionSetMode: 'session/set_mode',
+  sessionSetModel: 'session/set_model',
   sessionPrompt: 'session/prompt',
 } as const;
 
@@ -115,6 +116,33 @@ export interface AcpPromptParams {
 export interface AcpSetModeParams {
   sessionId: string;
   modeId: string;
+}
+
+/** `session/set_model` params. */
+export interface AcpSetModelParams {
+  sessionId: string;
+  modelId: string;
+}
+
+/**
+ * One entry of `session/new`'s `models.availableModels`.
+ *
+ * The identity key is `modelId`, NOT the `id` that `modes.availableModes` uses
+ * for the sibling block — the two are shaped alike and named differently, and
+ * reading a model entry's `id` yields undefined for every row rather than
+ * failing, which is a picker that silently lists nothing.
+ *
+ * These ids are the agent's OWN namespace and are not interchangeable with the
+ * ones `cursor-agent models` prints. Probed on cursor-agent 2026.08.04-aaa8809:
+ * `session/new` offers `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`
+ * while the subcommand prints `claude-opus-5-thinking-high` for the same model,
+ * and `session/set_model` answers the subcommand form with
+ * `-32602 Invalid model value`. So the handshake is the only usable source for
+ * a picker whose value the turn can actually apply.
+ */
+export interface AcpModel {
+  modelId: string;
+  name: string;
 }
 
 /**

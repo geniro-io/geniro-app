@@ -41,3 +41,20 @@ export const McpLoginQuerySchema = z.object({
   server: z.string().trim().min(1),
 });
 export class McpLoginQueryDto extends createZodDto(McpLoginQuerySchema) {}
+
+/**
+ * Which CLI to sign in, and optionally where from.
+ *
+ * `cwd` is OPTIONAL here, unlike {@link McpLoginQuerySchema}'s required one,
+ * and the difference is the question each answers: an MCP server name is
+ * resolved against a folder, so signing one in without a folder authenticates
+ * the wrong server or none. A CLI's own account is machine-wide — `claude auth
+ * login` signs in the same account from anywhere — so demanding a folder would
+ * refuse the case this exists for, an expired session hit from a screen that
+ * has no run open.
+ */
+export const CliLoginQuerySchema = z.object({
+  agent: AgentKindSchema,
+  cwd: z.string().trim().min(1).optional(),
+});
+export class CliLoginQueryDto extends createZodDto(CliLoginQuerySchema) {}

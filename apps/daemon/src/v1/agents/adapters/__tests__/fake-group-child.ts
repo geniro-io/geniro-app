@@ -44,6 +44,15 @@ export interface FakeGroupChild {
   fail(err?: Error): void;
   /** Direct-kill calls, so a spec can tell a group reap from a fallback. */
   readonly directKills: NodeJS.Signals[];
+  /**
+   * Everything written to the child's stdin, in order.
+   *
+   * A real group child has a stdin pipe and the collector writes the
+   * `stdinWrites` option into it. Modelling that as `null` would let a spec
+   * pass while the frames went nowhere — `child.stdin?.write(...)` is a no-op
+   * on null, so a conversational command would look correct and send nothing.
+   */
+  readonly stdinChunks: string[];
 }
 
 /** Build a fake group-spawned child. `pid` doubles as the process-group id. */
@@ -52,12 +61,15 @@ export function fakeGroupChild(pid = 4242): FakeGroupChild {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const directKills: NodeJS.Signals[] = [];
+  const stdinChunks: string[] = [];
+  const stdin = new PassThrough();
+  stdin.on('data', (chunk: Buffer) => void stdinChunks.push(chunk.toString()));
 
   const child = Object.assign(emitter, {
     pid,
     stdout,
     stderr,
-    stdin: null,
+    stdin,
     kill: (signal?: NodeJS.Signals): boolean => {
       directKills.push(signal ?? 'SIGTERM');
       return true;
@@ -67,6 +79,7 @@ export function fakeGroupChild(pid = 4242): FakeGroupChild {
   return {
     child,
     directKills,
+    stdinChunks,
     writeStdout: (chunk) => void stdout.write(chunk),
     writeStderr: (chunk) => void stderr.write(chunk),
     close: (code, signal = null) => {

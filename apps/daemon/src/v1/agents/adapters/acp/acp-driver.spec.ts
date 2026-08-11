@@ -147,13 +147,6 @@ describe('AcpTurnDriver handshake', () => {
     });
   });
 
-  it('emits adapter-supplied startup notices before the handshake', () => {
-    const h = harness({ startupNotices: ['model X was not applied'] });
-    expect(h.emitted).toEqual([
-      { type: 'notice', message: 'model X was not applied' },
-    ]);
-  });
-
   it('ignores a reply to an id it never sent', () => {
     const h = harness();
     expect(h.feed({ id: 999, result: {} })).toEqual([]);
@@ -455,6 +448,176 @@ describe('AcpTurnDriver session resume', () => {
         'agent does not support session/load — this turn starts a fresh session instead of resuming',
     });
     expect(h.sentMethod('session/new')).toBeDefined();
+  });
+});
+
+describe('AcpTurnDriver model selection', () => {
+  const WANTED = 'claude-opus-5[thinking=true]';
+  const wanting = { input: { ...BASE_INPUT, model: WANTED } };
+
+  function sessionWithModels(
+    current: string,
+    available: string[],
+  ): Record<string, unknown> {
+    return {
+      sessionId: 's-1',
+      models: {
+        currentModelId: current,
+        availableModels: available.map((modelId) => ({
+          modelId,
+          name: modelId,
+        })),
+      },
+    };
+  }
+
+  /** Frame order, so "before the prompt" can be asserted rather than assumed. */
+  function methodsOf(h: ReturnType<typeof harness>): string[] {
+    return h.sent
+      .map((frame) => frame.method)
+      .filter((method): method is string => typeof method === 'string');
+  }
+
+  /** Notices the driver RETURNED — `onMessage`'s value, not the emit channel. */
+  function noticesIn(events: AgentEvent[]): AgentEvent[] {
+    return events.filter((event) => event.type === 'notice');
+  }
+
+  it('sets an offered model BEFORE the prompt goes out', () => {
+    // Order is the whole mechanism: both frames ride one ordered stdio stream,
+    // so a set_model sent after the prompt would apply to the NEXT turn.
+    const h = harness(wanting);
+    h.feed(initializeReply(1));
+    const events = h.feed({
+      id: 2,
+      result: sessionWithModels('composer-2.5', [WANTED]),
+    });
+
+    expect(h.sentMethod('session/set_model')?.params).toEqual({
+      sessionId: 's-1',
+      modelId: WANTED,
+    });
+    const methods = methodsOf(h);
+    expect(methods.indexOf('session/set_model')).toBeLessThan(
+      methods.indexOf('session/prompt'),
+    );
+    expect(noticesIn(events)).toEqual([]);
+  });
+
+  it('spends no frame when the session is already on that model', () => {
+    const h = harness(wanting);
+    h.feed(initializeReply(1));
+    const events = h.feed({
+      id: 2,
+      result: sessionWithModels(WANTED, [WANTED]),
+    });
+
+    expect(h.sentMethod('session/set_model')).toBeUndefined();
+    expect(noticesIn(events)).toEqual([]);
+  });
+
+  it('says so, and sends nothing, when a FRESH session does not offer it', () => {
+    // The local refusal is worth it here because the reply genuinely lists
+    // what is on offer — asking anyway would spend a round-trip to be refused.
+    const h = harness(wanting);
+    h.feed(initializeReply(1));
+    const events = h.feed({
+      id: 2,
+      result: sessionWithModels('composer-2.5', ['gpt-5.2']),
+    });
+
+    expect(h.sentMethod('session/set_model')).toBeUndefined();
+    expect(events).toContainEqual({
+      type: 'notice',
+      message: `agent does not offer the model '${WANTED}' — this turn runs on the agent's current model instead`,
+    });
+  });
+
+  it('still asks on a RESUMED session, whose reply lists no models', () => {
+    // The regression this pins: gating a resumed turn on the offers check
+    // refuses locally on EVERY turn after a chat's first — cursor cannot keep
+    // its process, so they all resume — leaving the model unapplied for the
+    // whole conversation and landing a degrade row per turn.
+    const h = harness({
+      input: { ...BASE_INPUT, model: WANTED, resumeSessionId: 'prior-7' },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+    const events = h.feed({ id: 2, result: {} });
+
+    expect(h.sentMethod('session/set_model')?.params).toEqual({
+      sessionId: 'prior-7',
+      modelId: WANTED,
+    });
+    expect(noticesIn(events)).toEqual([]);
+  });
+
+  it('reports the agent’s OWN refusal rather than assuming one', () => {
+    const h = harness({
+      input: { ...BASE_INPUT, model: WANTED, resumeSessionId: 'prior-7' },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed({ id: 2, result: {} });
+    const setModelId = h.sent.find(
+      (frame) => frame.method === 'session/set_model',
+    )?.id;
+
+    const events = h.feed({
+      id: setModelId,
+      error: { code: -32602, message: 'Invalid model value' },
+    });
+
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        message: `agent declined model '${WANTED}': Invalid model value — this turn runs on the agent's current model`,
+      },
+    ]);
+  });
+
+  it('leaves a turn that named no model alone', () => {
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionWithModels('composer-2.5', [WANTED]) });
+
+    expect(h.sentMethod('session/set_model')).toBeUndefined();
+  });
+
+  describe('when the reply enumerates nothing', () => {
+    // Silence is not a refusal. `readAcpModels`' own contract says an empty
+    // result means "the agent said nothing", and that EVERY caller must read it
+    // as unknown — so refusing locally here would run the turn on a model the
+    // user did not pick while asserting something the agent never said.
+    const refused = {
+      type: 'notice',
+      message: `agent does not offer the model '${WANTED}' — this turn runs on the agent's current model instead`,
+    };
+
+    function fresh(result: Record<string, unknown>): {
+      sent: Record<string, unknown> | undefined;
+      events: AgentEvent[];
+    } {
+      const h = harness(wanting);
+      h.feed(initializeReply(1));
+      const events = h.feed({ id: 2, result });
+      return { sent: h.sentMethod('session/set_model'), events };
+    }
+
+    it('asks anyway when a fresh reply carries no models block', () => {
+      const { sent, events } = fresh({ sessionId: 's-1' });
+
+      expect(sent?.params).toEqual({ sessionId: 's-1', modelId: WANTED });
+      expect(events).not.toContainEqual(refused);
+    });
+
+    it('asks anyway when the block names a current model but no list', () => {
+      const { sent, events } = fresh({
+        sessionId: 's-1',
+        models: { currentModelId: 'composer-2.5' },
+      });
+
+      expect(sent?.params).toEqual({ sessionId: 's-1', modelId: WANTED });
+      expect(events).not.toContainEqual(refused);
+    });
   });
 });
 

@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -203,6 +205,115 @@ function buildLogin(
   );
   return { service, mcpLoginTarget };
 }
+
+/** The CLI-account sign-in counterpart of {@link buildLogin}. */
+function buildCliLogin(
+  overrides: {
+    target?: HandoffResult;
+    loginUnavailableReason?: string | null;
+  } = {},
+) {
+  const loginTarget = vi.fn(
+    (): HandoffResult =>
+      overrides.target ?? {
+        ok: true,
+        kind: 'command',
+        command: 'claude',
+        args: ['auth', 'login'],
+      },
+  );
+  const adapter = {
+    loginTarget,
+    getConfig: () => ({
+      auth: {
+        loginUnavailableReason: overrides.loginUnavailableReason ?? null,
+      },
+    }),
+  };
+  const poisoned = {
+    getById: () => Promise.reject(new Error('a sign-in must not read a run')),
+    getByRunNode: () =>
+      Promise.reject(new Error('a sign-in must not read node state')),
+    get: () => Promise.reject(new Error('a sign-in must not read a workflow')),
+  };
+  const service = new HandoffService(
+    { fork: () => ({}) } as never,
+    poisoned as never,
+    poisoned as never,
+    poisoned as never,
+    { for: () => adapter } as never,
+  );
+  return { service, loginTarget };
+}
+
+describe('HandoffService — signing the CLI itself in', () => {
+  it('answers with the CLI’s own account sign-in command', () => {
+    const { service, loginTarget } = buildCliLogin();
+
+    const target = service.loginTarget({ agent: AgentKind.Claude });
+
+    expect(target).toMatchObject({
+      kind: 'command',
+      command: 'claude',
+      args: ['auth', 'login'],
+      unavailableReason: null,
+    });
+    expect(loginTarget).toHaveBeenCalled();
+  });
+
+  it('falls back to the home directory when given no folder', () => {
+    // The case this exists for is an expired session hit from a screen with no
+    // run open, so requiring a cwd would refuse exactly that. It still answers
+    // with a real absolute path: the Electron side writes `cd <cwd> || exit 1`
+    // into the script it opens, so "nowhere in particular" cannot be expressed
+    // there — and an account sign-in does not care which folder it runs in.
+    const { service } = buildCliLogin();
+
+    expect(service.loginTarget({ agent: AgentKind.Claude }).cwd).toBe(
+      homedir(),
+    );
+  });
+
+  it('runs in a folder when given one', () => {
+    const { service } = buildCliLogin();
+
+    expect(
+      service.loginTarget({ agent: AgentKind.Claude, cwd: process.cwd() }).cwd,
+    ).toBe(process.cwd());
+  });
+
+  it('refuses a folder that does not resolve, rather than opening a terminal that dies', () => {
+    const { service } = buildCliLogin();
+
+    expect(() =>
+      service.loginTarget({
+        agent: AgentKind.Claude,
+        cwd: '/nonexistent-folder-xyz-geniro',
+      }),
+    ).toThrow();
+  });
+
+  it('offers a pasteable line for a terminal geniro cannot launch', () => {
+    const { service } = buildCliLogin();
+
+    const target = service.loginTarget({ agent: AgentKind.Claude });
+
+    expect(target.display).toBe([target.command, ...target.args].join(' '));
+  });
+
+  it('reports the CLI’s OWN reason when it has no sign-in command', () => {
+    const { service } = buildCliLogin({
+      target: { ok: false, reason: 'unsupported' },
+      loginUnavailableReason: 'this CLI has no account sign-in',
+    });
+
+    expect(service.loginTarget({ agent: AgentKind.Claude })).toMatchObject({
+      kind: 'unavailable',
+      command: null,
+      unavailableReason: 'this CLI has no account sign-in',
+    });
+  });
+});
 
 describe('HandoffService — signing in to an MCP server', () => {
   it('answers with the CLI’s sign-in command, run in the server’s own folder', () => {

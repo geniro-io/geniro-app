@@ -1,6 +1,7 @@
-import { ChevronRight, TriangleAlert } from 'lucide-react';
+import { ChevronRight, LogIn, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 
+import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 
 /**
@@ -13,10 +14,26 @@ import { cn } from '../components/ui/utils';
 export function AlertRow({
   caption,
   message,
+  onSignIn,
 }: {
   /** Row caption, e.g. "flaky · error". */
   caption: string;
   message: string;
+  /**
+   * Sign the failing CLI back in, when the daemon recognised this failure as a
+   * lapsed account session.
+   *
+   * On the row rather than off in the chrome because this is where the user
+   * meets the problem: an expired session rendered as a stack trace, with the
+   * fix two screens away, is the gap this closes. Omitted for every failure
+   * with no known cure, which is nearly all of them.
+   *
+   * Named for the ONE recovery that exists rather than taken as a generic
+   * `{label, icon, onClick}` action: the row renders a sign-in glyph, so a
+   * general seam would let a future non-login cure render under it. Widen this
+   * when a second recovery is real, and let its icon arrive with it.
+   */
+  onSignIn?: () => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const firstLine = message.split('\n', 1)[0] ?? '';
@@ -51,6 +68,23 @@ export function AlertRow({
         <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-all px-3 pb-2.5 font-mono text-xs">
           {message}
         </pre>
+      ) : null}
+      {onSignIn ? (
+        // A SIBLING of the expand button, never inside it: a button nested in a
+        // button is invalid, and the click would toggle the row on its way out.
+        // Shown collapsed as well as expanded — the cure is the point of the
+        // row, and hiding it behind a disclosure is where it was already.
+        <div className="flex px-3 pb-2.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            title="Open this agent’s CLI sign-in in your terminal, then send the message again"
+            onClick={onSignIn}>
+            <LogIn aria-hidden="true" className="size-3.5 shrink-0" />
+            Sign in
+          </Button>
+        </div>
       ) : null}
     </div>
   );

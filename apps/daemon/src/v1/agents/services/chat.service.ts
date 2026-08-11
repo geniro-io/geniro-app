@@ -896,9 +896,25 @@ export class ChatService {
             if (!mapped) {
               return;
             }
-            if (event.type === 'tool_call') {
+            if (
+              event.type === 'tool_call' &&
+              event.parentToolUseId === undefined
+            ) {
               // What "running" actually means right now, for a badge the user
               // is not looking at.
+              //
+              // MAIN THREAD ONLY. A sub-agent's tool calls arrive on this same
+              // stream, and announcing them renamed the parent run's activity
+              // after work that is not the parent's — measured on a real
+              // delegating turn, eight consecutive `running Bash` announces
+              // that all belonged to two sub-agents. The transcript already
+              // keeps their rows in their own blocks; this is the one channel
+              // that still leaked them upward.
+              //
+              // What the badge shows instead is the `running Agent` this same
+              // branch announced when the delegating tool call started, which
+              // stands until the parent itself does something else — and
+              // "running Agent" is the truth for the whole delegation.
               this.announceActivity(runId, `running ${event.name}`);
             }
             if (event.type === 'approval_request') {

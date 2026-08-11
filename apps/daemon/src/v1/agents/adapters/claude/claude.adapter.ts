@@ -28,6 +28,8 @@ import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
+  CLAUDE_AUTH_EXPIRED_MARKERS,
+  CLAUDE_AUTH_LOGIN_ARGS,
   CLAUDE_BASE_ARGS,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
@@ -241,6 +243,12 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */
         loginArgs: CLAUDE_MCP_LOGIN_ARGS,
         loginUnavailableReason: null,
+      },
+      auth: {
+        /** `claude auth login` — read from `claude auth --help` on 2.1.227. */
+        loginArgs: CLAUDE_AUTH_LOGIN_ARGS,
+        loginUnavailableReason: null,
+        expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
       },
       plugin: {
         /** `--plugin-dir` — repeatable, session-only (verified on 2.1.220). */

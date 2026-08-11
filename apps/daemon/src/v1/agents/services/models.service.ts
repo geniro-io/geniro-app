@@ -42,6 +42,15 @@ const DEFAULT_TTL_MS = 10 * 60_000;
 export class ModelsService {
   private readonly logger = new Logger(ModelsService.name);
   private readonly cache = new Map<AgentKind, CacheEntry>();
+  /**
+   * Cold reads already running, keyed by agent — the same single-flight
+   * `AgentMcpService` keeps, needed here now for the same reason: listing
+   * cursor's models SPAWNS a CLI process group, so two chat panes mounting
+   * their model chip at once would otherwise launch two of them for one
+   * account-level answer. Omitting it was safe only while every adapter
+   * answered from memory or a file.
+   */
+  private readonly inFlight = new Map<AgentKind, Promise<AgentModelWire[]>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -71,6 +80,25 @@ export class ModelsService {
     ) {
       return cached.models;
     }
+    // Joined AFTER the cache check, so a fresh answer still costs nothing.
+    const running = this.inFlight.get(kind);
+    if (running) {
+      return running;
+    }
+    const pending = this.fetch(kind, version, cached);
+    this.inFlight.set(kind, pending);
+    try {
+      return await pending;
+    } finally {
+      this.inFlight.delete(kind);
+    }
+  }
+
+  private async fetch(
+    kind: AgentKind,
+    version: string | null,
+    cached: CacheEntry | undefined,
+  ): Promise<AgentModelWire[]> {
     const adapter: AgentAdapter = this.adapters.for(kind);
     let models: AgentModelWire[];
     try {

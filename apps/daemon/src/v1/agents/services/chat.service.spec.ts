@@ -2442,6 +2442,46 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
   });
 
+  it('does NOT rename the run’s activity after a SUB-AGENT’s tool call', async () => {
+    // Measured on a real delegating turn before the fix: two sub-agents running
+    // four Bash commands each produced eight consecutive `running Bash`
+    // announces on the PARENT run, none of them the parent's own work. The
+    // transcript already split their rows into their own blocks; this channel
+    // was the one that still carried them upward.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    // The delegation itself IS the parent's work, and is announced.
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Agent', input: {} });
+    // What the delegate then does is not.
+    claude.emit({
+      type: 'tool_call',
+      id: 't2',
+      name: 'Bash',
+      input: {},
+      parentToolUseId: 't1',
+    });
+    await drain();
+
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      activity: 'running Agent',
+    });
+    expect(statuses).not.toContainEqual({
+      runId: run.id,
+      status: null,
+      activity: 'running Bash',
+    });
+    claude.finish();
+    await drain();
+  });
+
   it('announces that the conversation was compacted, and words it by trigger', async () => {
     // C1's ONLY user-visible half. The two shipped specs pin the parse and the
     // not-a-transcript-row drop; delete this announcement entirely and both

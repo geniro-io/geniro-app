@@ -56,4 +56,58 @@ describe('AlertRow', () => {
     });
     expect(container.textContent).not.toContain('full stderr line 2');
   });
+
+  describe('the recovery action', () => {
+    const TITLE =
+      'Open this agent’s CLI sign-in in your terminal, then send the message again';
+    const signInButton = (): HTMLButtonElement =>
+      container.querySelector<HTMLButtonElement>(`button[title="${TITLE}"]`)!;
+    const expanded = (): string | null =>
+      container
+        .querySelector('button[aria-expanded]')!
+        .getAttribute('aria-expanded');
+
+    it('is absent unless the failure has a known cure', () => {
+      act(() => root.render(<AlertRow caption="error" message={MESSAGE} />));
+
+      expect(container.querySelector(`button[title="${TITLE}"]`)).toBeNull();
+    });
+
+    it('is offered COLLAPSED, not hidden behind the disclosure', () => {
+      // The cure is the point of the row. Behind a disclosure it sits roughly
+      // where it already was — invisible to a user who does not know it exists.
+      act(() =>
+        root.render(
+          <AlertRow caption="error" message={MESSAGE} onSignIn={() => {}} />,
+        ),
+      );
+
+      expect(expanded()).toBe('false');
+      expect(signInButton().textContent).toContain('Sign in');
+    });
+
+    it('fires its own handler without also toggling the row', () => {
+      // A button nested INSIDE the expand button would do both — and is invalid
+      // DOM besides. This is what pins it as a sibling.
+      let fired = 0;
+      act(() =>
+        root.render(
+          <AlertRow
+            caption="error"
+            message={MESSAGE}
+            onSignIn={() => void (fired += 1)}
+          />,
+        ),
+      );
+
+      act(() => {
+        signInButton().dispatchEvent(
+          new MouseEvent('click', { bubbles: true }),
+        );
+      });
+
+      expect(fired).toBe(1);
+      expect(expanded()).toBe('false');
+    });
+  });
 });

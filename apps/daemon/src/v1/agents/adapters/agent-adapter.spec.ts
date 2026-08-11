@@ -343,6 +343,65 @@ describe('AgentAdapter.mcpLoginTarget', () => {
   });
 });
 
+describe('AgentAdapter.loginTarget', () => {
+  /** A CLI with no account sign-in — the shape neither shipped adapter has. */
+  class NoAuthAdapter extends ClaudeAdapter {
+    override getConfig(): AdapterConfig {
+      const base = super.getConfig();
+      return { ...base, auth: { ...base.auth, loginArgs: null } };
+    }
+  }
+
+  // The LITERAL argv each CLI's sign-in is, probe-read from its own `--help`
+  // (claude 2.1.227 `claude auth --help`; cursor-agent 2026.08.04-aaa8809
+  // `--help`). Spelled here ON PURPOSE, unlike the mcp-login spec above which
+  // composes from config: both sides reading `getConfig().auth.loginArgs` means
+  // only a wrong FIELD is caught, and a wrong probe-derived VALUE — the thing
+  // that actually sends the user to a command that does not exist — ships green.
+  const EXPECTED_LOGIN: Record<string, { command: string; args: string[] }> = {
+    claude: { command: 'claude', args: ['auth', 'login'] },
+    'cursor-agent': { command: 'cursor-agent', args: ['login'] },
+  };
+
+  for (const { name, adapter } of ADAPTERS) {
+    it(`builds ${name}'s own account sign-in invocation`, () => {
+      expect(adapter.loginTarget()).toEqual({
+        ok: true,
+        kind: 'command',
+        ...EXPECTED_LOGIN[name],
+      });
+    });
+
+    it(`signs ${name} in to the CLI, not to one of its MCP servers`, () => {
+      // The two commands are different and are reached by different failures.
+      // An `auth` block that merely aliased the MCP one would send a user whose
+      // ACCOUNT session expired to a command that cannot fix it.
+      //
+      // Compared as a PREFIX, not with `not.toEqual`: `mcpLoginTarget` appends
+      // a server name, so its argv is always one element longer and the two
+      // results can never be deep-equal — which left the aliasing this test is
+      // named for passing. `['mcp','login']` in `auth.loginArgs` fails here.
+      const mcpArgs = adapter.mcpLoginTarget('probe-linear');
+      const loginArgs = adapter.loginTarget();
+      expect(mcpArgs.ok && loginArgs.ok).toBe(true);
+      if (!mcpArgs.ok || !loginArgs.ok) {
+        return;
+      }
+      expect(loginArgs.args.slice(0, 2)).not.toEqual(mcpArgs.args.slice(0, 2));
+    });
+  }
+
+  it('refuses for a CLI that declares no account sign-in', () => {
+    // The defensive arm, entered deliberately: a `loginArgs: null` that spread
+    // an empty argv instead would compose a bare `claude`, opening a terminal
+    // on an ordinary interactive session rather than on a sign-in.
+    expect(new NoAuthAdapter().loginTarget()).toEqual({
+      ok: false,
+      reason: 'unsupported',
+    });
+  });
+});
+
 describe('AgentAdapter question channel', () => {
   /** Claude's AskUserQuestion shape — the only question payload that ships. */
   const QUESTION_INPUT = {

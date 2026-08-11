@@ -1,7 +1,10 @@
+import { homedir } from 'node:os';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
+import type { HandoffResult } from '../../agents/adapters/adapter.types';
 import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -83,14 +86,7 @@ export class HandoffService {
       );
     }
     const cwd = resolveValidCwd(run.cwd);
-    return {
-      kind: 'command',
-      command: target.command,
-      args: target.args,
-      cwd,
-      display: shellLine(target.command, target.args),
-      unavailableReason: null,
-    };
+    return this.command(target, cwd);
   }
 
   /**
@@ -129,14 +125,48 @@ export class HandoffService {
     // path that does not resolve here must fail as a bad request rather than as
     // a terminal window that opens and immediately dies.
     const cwd = resolveValidCwd(input.cwd);
-    return {
-      kind: 'command',
-      command: target.command,
-      args: target.args,
-      cwd,
-      display: shellLine(target.command, target.args),
-      unavailableReason: null,
-    };
+    return this.command(target, cwd);
+  }
+
+  /**
+   * How the user signs the CLI ITSELF in, or why they cannot.
+   *
+   * The sibling of {@link mcpLoginTarget} one level up, and reached by a
+   * different failure: that one fixes a server the CLI could not authenticate,
+   * this one fixes the CLI's own expired account session — the turn that ends
+   * "Failed to authenticate: OAuth session expired and could not be refreshed".
+   * Offering the MCP one there would send the user to a command that cannot fix
+   * what they hit.
+   *
+   * Here for the same reason its sibling is: the answer is a handoff. A sign-in
+   * is an interactive browser flow wanting a TTY, so the daemon resolves the
+   * invocation and the user's own terminal runs it.
+   *
+   * Takes no run — an account is machine-wide, and the screen that offers this
+   * may have no run open at all.
+   */
+  loginTarget(input: { agent: AgentKind; cwd?: string }): HandoffTarget {
+    const adapter = this.adapters.for(input.agent);
+    const target = adapter.loginTarget();
+    if (!target.ok) {
+      return this.unavailable(
+        adapter.getConfig().auth.loginUnavailableReason ??
+          `${input.agent} has no sign-in command`,
+      );
+    }
+    // Validated when given, for the reason the MCP sibling validates its own:
+    // this becomes the cwd of a process the USER's terminal spawns, and a path
+    // that does not resolve must fail as a bad request rather than as a window
+    // that opens and immediately dies.
+    //
+    // Falls back to the home directory rather than to null, even though a
+    // sign-in genuinely does not care where it runs: the Electron side takes a
+    // validated ABSOLUTE path and writes `cd <cwd> || exit 1` into the script
+    // it opens, so "nowhere in particular" has no representation there. Home is
+    // the one folder that always exists and can surprise nobody.
+    const cwd =
+      input.cwd === undefined ? homedir() : resolveValidCwd(input.cwd);
+    return this.command(target, cwd);
   }
 
   /**
@@ -148,6 +178,30 @@ export class HandoffService {
     return handoff.kind === 'unavailable'
       ? handoff.reason
       : `${agentKind} cannot reopen this conversation`;
+  }
+
+  /**
+   * The success half of the wire shape, once — the mirror of
+   * {@link unavailable}.
+   *
+   * Both halves of one contract, maintained the same way: the refusal was
+   * already a helper while the success was copy-pasted at each of the three
+   * resolve methods, which is how the `display` line (the pasteable fallback a
+   * terminal geniro cannot launch depends on) could go missing from one of them
+   * without anything noticing.
+   */
+  private command(
+    target: Extract<HandoffResult, { ok: true }>,
+    cwd: string,
+  ): HandoffTarget {
+    return {
+      kind: 'command',
+      command: target.command,
+      args: target.args,
+      cwd,
+      display: shellLine(target.command, target.args),
+      unavailableReason: null,
+    };
   }
 
   private unavailable(reason: string): HandoffTarget {

@@ -1,3 +1,43 @@
+// ── `cursor-agent acp` ────────────────────────────────────────────────────
+
+/**
+ * Argv for the ACP server. Named because two callers now spell it: the turn
+ * path's `buildArgs`, and the model listing, which spawns the same server for
+ * a handshake and nothing else.
+ */
+export const CURSOR_ACP_ARGS: readonly string[] = ['acp'];
+
+/** `clientInfo.name` this client introduces itself with over ACP. */
+export const CURSOR_ACP_CLIENT_NAME = 'geniro';
+
+/**
+ * Deadline for the model handshake.
+ *
+ * Far below the MCP listing's 20s because nothing is dialled: the probe writes
+ * two frames and reads one reply, which took under a second against
+ * 2026.08.04-aaa8809. What it must still absorb is a cold CLI start and an
+ * auth check. The read cannot end on its own — `cursor-agent acp` does NOT
+ * exit when its stdin closes (probed on the same build) — so this deadline is
+ * the only backstop behind `acpModelProbeSettled`, and a listing that reached
+ * it reports an unknown vocabulary rather than an empty one.
+ *
+ * 15s is HEADROOM over a measured cold read, not an expectation. Measured
+ * end-to-end through `GET /v1/agents/models` on 2026.08.04-aaa8809: **7.0s
+ * cold** (a fresh daemon, so the `--version` probe and the CLI's own start and
+ * auth check are all in it), **0.009s warm**. An earlier revision cut this to
+ * 8s to bound the wait and was wrong to: at ~1s of margin over the observed
+ * cold path, a slower machine or a slower auth check turns a listing that works
+ * into an empty picker, and "no models" is indistinguishable from "this account
+ * has none".
+ *
+ * What actually bounds the user-visible cost is the cache and the
+ * single-flight, not this number: 7s is paid once per CLI version per 10-minute
+ * TTL, and concurrent asks join one probe instead of spawning their own. Still
+ * under the renderer's own 30s request budget, so even the worst case surfaces
+ * as "default model only" rather than as a transport error.
+ */
+export const CURSOR_MODEL_PROBE_TIMEOUT_MS = 15_000;
+
 // ── `cursor-agent mcp list` ───────────────────────────────────────────────
 //
 // This adapter deliberately carried NO const file until now: every static fact

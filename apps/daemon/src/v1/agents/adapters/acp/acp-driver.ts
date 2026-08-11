@@ -902,9 +902,12 @@ export class AcpTurnDriver implements TurnDriver {
     const question = this.options.question;
     if (question !== undefined && method === question.method) {
       // The agent is asking the USER something. Declining this one is not a
-      // neutral refusal like the others below: the agent stops on a question
-      // the user was never shown, and it is a BLOCKING request, so the turn
-      // stalls on it. Park it as a card instead.
+      // neutral refusal like the others below: an agent that has a fallback
+      // takes it, and the fallback cannot carry a question — cursor's replays
+      // each one as a bare permission request whose Approve silently means
+      // "the first option" (measured; see CURSOR_ASK_QUESTION_METHOD). So the
+      // cost of refusing is a fabricated answer, not a stall. Park it as a
+      // card instead, where the user sees what they are choosing between.
       if (question.accepts(params)) {
         return this.onQuestionRequest(id, params, question);
       }

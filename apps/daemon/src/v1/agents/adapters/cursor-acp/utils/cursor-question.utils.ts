@@ -111,7 +111,7 @@ export function withCursorAnswer(params: unknown, answer: string): unknown {
  * one is the ordinary case. Matching the id too costs nothing and covers a
  * caller agent answering with what it read off the envelope.
  */
-function selectOption(
+function matchOption(
   question: CursorQuestion,
   answer: string,
 ): CursorQuestionOption | null {
@@ -124,6 +124,58 @@ function selectOption(
     question.options.find((option) => option.id.toLowerCase() === wanted) ??
     null
   );
+}
+
+/** How the card joins several picks into the one answer string it submits. */
+const ANSWER_SEPARATOR = ',';
+
+/**
+ * Every option a verdict's answer names, or null when it names something that
+ * is not on offer.
+ *
+ * The whole string is tried FIRST, so a label containing a comma still matches
+ * itself. Only then, and only for a question the agent marked
+ * `allowMultiple`, is the answer split the way the card joined it. Keeping the
+ * split off single-select questions is deliberate: "Red, Blue" answered to a
+ * pick-one question is not a pick of Red, and silently reading it as one would
+ * report a choice the user did not make.
+ *
+ * Answering multi-select at all is a capability of THIS channel specifically.
+ * Cursor's own `-32601` fallback filters `allowMultiple` questions out and
+ * never asks them, because a permission request can carry only one selected
+ * option — so before this channel there was no way to answer one.
+ */
+function matchOptions(
+  question: CursorQuestion,
+  answer: string,
+): CursorQuestionOption[] | null {
+  const whole = matchOption(question, answer);
+  if (whole !== null) {
+    return [whole];
+  }
+  if (!question.allowMultiple) {
+    return null;
+  }
+  const parts = answer
+    .split(ANSWER_SEPARATOR)
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  if (parts.length < 2) {
+    return null;
+  }
+  const picked: CursorQuestionOption[] = [];
+  for (const part of parts) {
+    const option = matchOption(question, part);
+    // All or nothing: a partial read would drop a choice the user made while
+    // reporting the rest as their complete answer.
+    if (option === null) {
+      return null;
+    }
+    if (!picked.some((already) => already.id === option.id)) {
+      picked.push(option);
+    }
+  }
+  return picked;
 }
 
 /**
@@ -160,13 +212,16 @@ export function encodeCursorQuestionReply(
   }
   const answers: { questionId: string; selectedOptionIds: string[] }[] = [];
   for (const question of questions) {
-    const option = selectOption(question, answer);
-    if (option === null) {
+    const options = matchOptions(question, answer);
+    if (options === null) {
       return {
         outcome: { outcome: CURSOR_QUESTION_OUTCOME_SKIPPED, reason: answer },
       };
     }
-    answers.push({ questionId: question.id, selectedOptionIds: [option.id] });
+    answers.push({
+      questionId: question.id,
+      selectedOptionIds: options.map((option) => option.id),
+    });
   }
   return { outcome: { outcome: CURSOR_QUESTION_OUTCOME_ANSWERED, answers } };
 }

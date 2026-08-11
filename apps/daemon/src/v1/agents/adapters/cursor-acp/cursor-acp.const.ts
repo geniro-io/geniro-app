@@ -152,25 +152,43 @@ export const CURSOR_MCP_LIST_UNREADABLE_MESSAGE =
 
 // ── Asking the user a question (`cursor/ask_question`) ────────────────────
 //
-// WHERE THIS SHAPE CAME FROM, and how much to trust it. Baseline ACP has no
-// agent→client call for asking the user something open-ended — permissions
-// are the only round-trip it defines — so Cursor added one as a vendor
-// extension. The request/response shapes below are transcribed from
-// `cursor.com/docs/cli/acp`, NOT observed on the wire: driving
-// cursor-agent 2026.08.04-aaa8809 into asking a multiple-choice question
-// (directly, and through its own `/multi-model-review` command, which
-// advertises "structured question or inline") produced the question as plain
-// markdown in an `agent_message_chunk` both times, and no `cursor/*` request
-// at all.
+// WHERE THIS SHAPE CAME FROM. Baseline ACP has no agent→client call for
+// asking the user something open-ended — permissions are the only round-trip
+// it defines — so Cursor added one as a vendor extension.
 //
-// That is why every reader below is defensive and why the driver's
-// `accepts()` gate exists: an unparseable payload is DECLINED exactly as it
-// was before this channel was implemented, so a doc that has drifted costs
-// nothing. What is not acceptable is the old behaviour on a payload we CAN
-// read — a blocking request refused in-protocol, which stalls the turn on a
-// question the user was never shown.
+// Read out of the CLI'S OWN SOURCE, not its docs. cursor-agent ships as plain
+// bundled JavaScript, and its handler is legible:
 //
-// Re-probe and pin this against a live sighting when one occurs.
+//   ~/.local/share/cursor-agent/versions/<v>/8869.index.js
+//   → "./src/acp/interaction-handlers/ask-question-handler.ts"
+//
+// on 2026.08.04-aaa8809, which is where the request fields
+// (`toolCallId`/`title`/`questions[].id`/`prompt`/`options[].id`/`label`/
+// `allowMultiple`) and the three response outcomes below are transcribed
+// from. That is a stronger source than the published docs AND than a wire
+// capture: it is what the binary will actually send and accept. It still
+// expires — a release can rewrite it — so re-read that handler rather than
+// trusting this block on a new cursor series.
+//
+// It has NOT been seen on the wire. Driving 2026.08.04 into asking a
+// multiple-choice question (directly, and through its own
+// `/multi-model-review` command, which advertises "structured question or
+// inline") produced plain markdown in an `agent_message_chunk` both times.
+// So the readers below stay defensive and the driver keeps its `accepts()`
+// gate: an unparseable payload is declined exactly as before.
+//
+// WHAT DECLINING ACTUALLY COST, measured rather than assumed. The same
+// handler catches an Unimplemented/-32601 reply and FALLS BACK to one
+// `session/request_permission` per single-select question, each option
+// becoming an `allow_once` option beside a synthetic `__ask_question_skip__`
+// rejection. So the old behaviour did not stall the turn — it was worse than
+// that. Replayed against the pre-fix build: geniro rendered a generic
+// permission card titled with the ask's `title` and NO arguments, whose
+// Approve picks the FIRST allow_once option; and under `auto` the daemon
+// auto-approved it, answering the user's question with option #1 and no
+// human involved at all. The fallback also drops every `allowMultiple`
+// question on the floor, which is why answering one is a capability of this
+// channel specifically.
 
 /** The vendor method carrying a question for the user. */
 export const CURSOR_ASK_QUESTION_METHOD = 'cursor/ask_question';

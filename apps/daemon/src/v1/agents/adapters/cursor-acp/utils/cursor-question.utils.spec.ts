@@ -174,6 +174,104 @@ describe('encodeCursorQuestionReply', () => {
     });
   });
 
+  it('answers a multi-select question with every option the card joined', () => {
+    // The card submits several picks as one comma-joined string, and this is
+    // the only channel that can carry them: cursor's own -32601 fallback
+    // filters `allowMultiple` questions out and never asks them at all.
+    const multi = askParams({
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Which layers?',
+          allowMultiple: true,
+          options: [
+            { id: 'daemon', label: 'The daemon' },
+            { id: 'renderer', label: 'The renderer' },
+            { id: 'adapters', label: 'The adapters' },
+          ],
+        },
+      ],
+    });
+    expect(
+      encodeCursorQuestionReply(
+        multi,
+        true,
+        withCursorAnswer(multi, 'The daemon, The adapters'),
+      ),
+    ).toEqual({
+      outcome: {
+        outcome: 'answered',
+        answers: [
+          { questionId: 'q1', selectedOptionIds: ['daemon', 'adapters'] },
+        ],
+      },
+    });
+  });
+
+  it('does NOT split a single-select answer that happens to contain a comma', () => {
+    // "Red, Blue" to a pick-one question is not a pick of Red. Reading it as
+    // one would report a choice the user did not make.
+    expect(
+      encodeCursorQuestionReply(
+        params,
+        true,
+        withCursorAnswer(params, 'Red, Blue'),
+      ),
+    ).toEqual({ outcome: { outcome: 'skipped', reason: 'Red, Blue' } });
+  });
+
+  it('prefers a whole-string match, so a label with a comma still matches', () => {
+    const commas = askParams({
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Which?',
+          allowMultiple: true,
+          options: [
+            { id: 'both', label: 'Red, then blue' },
+            { id: 'red', label: 'Red' },
+          ],
+        },
+      ],
+    });
+    expect(
+      encodeCursorQuestionReply(
+        commas,
+        true,
+        withCursorAnswer(commas, 'Red, then blue'),
+      ),
+    ).toEqual({
+      outcome: {
+        outcome: 'answered',
+        answers: [{ questionId: 'q1', selectedOptionIds: ['both'] }],
+      },
+    });
+  });
+
+  it('skips a multi-select answer naming anything not on offer', () => {
+    // All or nothing: a partial read would drop a choice the user made while
+    // reporting the rest as their complete answer.
+    const multi = askParams({
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Which layers?',
+          allowMultiple: true,
+          options: [{ id: 'daemon', label: 'The daemon' }],
+        },
+      ],
+    });
+    expect(
+      encodeCursorQuestionReply(
+        multi,
+        true,
+        withCursorAnswer(multi, 'The daemon, The moon'),
+      ),
+    ).toEqual({
+      outcome: { outcome: 'skipped', reason: 'The daemon, The moon' },
+    });
+  });
+
   it('answers every question of a multi-question ask, or none of them', () => {
     const multi = askParams({
       questions: [

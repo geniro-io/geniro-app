@@ -133,7 +133,11 @@ describe('detectClis', () => {
     fakeBinary(pathDir, 'claude');
     const override = fakeBinary(sandboxDir('override'), 'my-claude');
     vi.stubEnv('PATH', pathDir);
-    stubExec(() => ({ stdout: '1.2.3 (Claude Code)\nrelease notes noise\n' }));
+    stubExec((_file, args) =>
+      args[0] === '--version'
+        ? { stdout: '1.2.3 (Claude Code)\nrelease notes noise\n' }
+        : { stdout: '{"loggedIn":true,"authMethod":"claude.ai"}' },
+    );
 
     const [claude, cursor] = await detectClis(
       settingsWith({ claude: override }),
@@ -145,9 +149,7 @@ describe('detectClis', () => {
       path: override,
       // First stdout line only, trimmed — trailing noise never leaks into it.
       version: '1.2.3 (Claude Code)',
-      // claude has no LOGIN_PROBES entry — its credentials travel as env vars
-      // the daemon manages, so there is no equivalent question to ask it.
-      loggedIn: null,
+      loggedIn: true,
     });
     expect(mocks.execFile).toHaveBeenCalledWith(
       override,
@@ -163,7 +165,10 @@ describe('detectClis', () => {
       version: null,
       loggedIn: null,
     });
-    expect(mocks.execFile).toHaveBeenCalledTimes(1);
+    // Two calls for the ONE found binary — version and sign-in status. It was
+    // one before claude gained a `LOGIN_PROBES` entry, so this number is what
+    // catches the entry being dropped again.
+    expect(mocks.execFile).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to the PATH scan when the override is missing or not executable', async () => {
@@ -230,6 +235,61 @@ describe('detectClis', () => {
       path: claudePath,
       version: null,
       loggedIn: null,
+    });
+  });
+
+  describe('sign-in status (claude)', () => {
+    /** Version on `--version`, the given auth JSON on `auth status`. */
+    function stubClaude(authStdout: string): void {
+      stubExec((_file, args) =>
+        args[0] === 'auth'
+          ? { stdout: authStdout }
+          : { stdout: '2.1.227 (Claude Code)\n' },
+      );
+    }
+
+    it.each([
+      { stdout: '{"loggedIn":true,"authMethod":"claude.ai"}', expected: true },
+      { stdout: '{"loggedIn":false,"authMethod":"none"}', expected: false },
+    ])(
+      'reads loggedIn=$expected from the CLI’s own JSON',
+      async ({ stdout, expected }) => {
+        // This CLI used to be deliberately absent from `LOGIN_PROBES`, on the
+        // belief that it had no such command. It has: both payloads here are
+        // verbatim-shaped from real `claude auth status --json` output on
+        // 2.1.227 (the second under an empty `CLAUDE_CONFIG_DIR`). The cost of
+        // the old reading was that the card could never say "not signed in", so
+        // the account control had no state to reflect.
+        const binDir = sandboxDir('bin');
+        fakeBinary(binDir, 'claude');
+        vi.stubEnv('PATH', binDir);
+        stubClaude(stdout);
+
+        const [claude] = await detectClis(settingsWith({}));
+
+        expect(claude?.loggedIn).toBe(expected);
+      },
+    );
+
+    it('asks with `auth status --json`, not the bare status the sibling CLI uses', async () => {
+      // The two CLIs spell this differently — `claude auth status --json` vs
+      // `cursor-agent status --format json` — and the table is what keeps them
+      // apart. A copy of cursor's entry would exit non-zero here and report
+      // `null`, which reads as ready: signed-out would go unsaid.
+      const binDir = sandboxDir('bin');
+      fakeBinary(binDir, 'claude');
+      vi.stubEnv('PATH', binDir);
+      stubClaude('{"loggedIn":true}');
+
+      await detectClis(settingsWith({}));
+
+      expect(
+        mocks.calls.some(
+          (c) =>
+            c.path.endsWith('claude') &&
+            c.args.join(' ') === 'auth status --json',
+        ),
+      ).toBe(true);
     });
   });
 

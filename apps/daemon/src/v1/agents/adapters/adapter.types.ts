@@ -1415,6 +1415,25 @@ export interface AdapterConfig {
     /** Why this CLI cannot be signed in to from here, or null when it can. */
     readonly loginUnavailableReason: string | null;
     /**
+     * Argv that signs this CLI OUT — `['auth', 'logout']` for claude 2.1.227,
+     * `['logout']` for cursor-agent, both read from the binaries' own `--help`.
+     * Null when the CLI has no such command, and then
+     * {@link logoutUnavailableReason} says so.
+     *
+     * It exists so a card can offer the action that MATCHES the state it is
+     * reporting. Before it, the only account action was Sign in, offered to
+     * every detected CLI including ones the probe had just confirmed signed in —
+     * which reads as an unfinished setup step rather than as an option, and was
+     * reported as exactly that.
+     *
+     * Resolved and never run, like every other invocation in this block: a
+     * sign-out is quick and non-interactive, but it is still the user's account
+     * and belongs in a terminal they can see, beside the sign-in that undoes it.
+     */
+    readonly logoutArgs: readonly string[] | null;
+    /** Why this CLI cannot be signed out from here, or null when it can. */
+    readonly logoutUnavailableReason: string | null;
+    /**
      * Substrings that mark a failed turn as "your account session is no longer
      * valid" — matched case-insensitively against the turn's error message, and
      * the reason an error row can offer Sign in instead of only a stack trace.

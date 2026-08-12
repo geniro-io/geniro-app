@@ -33,6 +33,7 @@ import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_AUTH_EXPIRED_MARKERS,
   CLAUDE_AUTH_LOGIN_ARGS,
+  CLAUDE_AUTH_LOGOUT_ARGS,
   CLAUDE_BASE_ARGS,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_CONFIG_LOCK_RETRIES,
@@ -272,6 +273,9 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude auth login` — read from `claude auth --help` on 2.1.227. */
         loginArgs: CLAUDE_AUTH_LOGIN_ARGS,
         loginUnavailableReason: null,
+        /** `claude auth logout` — read from `claude auth --help` on 2.1.227. */
+        logoutArgs: CLAUDE_AUTH_LOGOUT_ARGS,
+        logoutUnavailableReason: null,
         expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
         /**
          * The Anthropic credentials `buildChildEnv` strips from every child, so

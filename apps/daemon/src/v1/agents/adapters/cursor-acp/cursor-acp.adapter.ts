@@ -305,6 +305,13 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         loginArgs: ['login'],
         loginUnavailableReason: null,
+        /**
+         * `cursor-agent logout` — "Sign out and clear stored authentication",
+         * read from `cursor-agent logout --help` on 2026.08.04-aaa8809. Inline
+         * for the reason `loginArgs` above is: `getConfig()` is its only reader.
+         */
+        logoutArgs: ['logout'],
+        logoutUnavailableReason: null,
         /*
          * There is an ELECTRON-SIDE twin of these facts: `LOGIN_PROBES` in
          * `apps/ui/src/main/cli-detect.ts`, which asks this CLI whether it is

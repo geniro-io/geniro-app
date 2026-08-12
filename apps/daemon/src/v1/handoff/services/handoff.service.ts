@@ -157,16 +157,58 @@ export class HandoffService {
     cwd?: string;
     configDir?: string;
   }): HandoffTarget {
+    return this.accountTarget(input, 'login');
+  }
+
+  /**
+   * How the user signs the CLI ITSELF out, or why they cannot.
+   *
+   * The exact counterpart of {@link loginTarget}, and it exists because the
+   * card that offers one has to be able to offer the other: an account action
+   * shown to a CLI the probe just confirmed signed in was Sign in, which reads
+   * as an unfinished setup step rather than as a choice.
+   *
+   * A sign-out needs no TTY the way a sign-in does, so it is worth saying why
+   * it is a handoff too rather than something the daemon runs. Two reasons. It
+   * is the user's own account, and a control that silently clears credentials
+   * from inside an app gives them nothing to see and no chance to stop; and it
+   * lands the user in the same terminal the sign-in that undoes it runs in.
+   */
+  logoutTarget(input: {
+    agent: AgentKind;
+    cwd?: string;
+    configDir?: string;
+  }): HandoffTarget {
+    return this.accountTarget(input, 'logout');
+  }
+
+  /**
+   * The shared body of the two account handoffs above — extracted rather than
+   * copied, because everything that makes them correct is identical: the
+   * config-directory resolution, the fall back to home, and the refusal that is
+   * a 200 carrying the adapter's own sentence. Only the adapter method and the
+   * reason field differ, and both are selected by the one `action` word.
+   */
+  private accountTarget(
+    input: { agent: AgentKind; cwd?: string; configDir?: string },
+    action: 'login' | 'logout',
+  ): HandoffTarget {
     const adapter = this.adapters.for(input.agent);
-    const target = adapter.loginTarget(
+    const configDir =
       input.configDir === undefined
         ? null
-        : resolveValidConfigDir(input.configDir),
-    );
+        : resolveValidConfigDir(input.configDir);
+    const target =
+      action === 'login'
+        ? adapter.loginTarget(configDir)
+        : adapter.logoutTarget(configDir);
     if (!target.ok) {
+      const { auth } = adapter.getConfig();
       return this.unavailable(
-        adapter.getConfig().auth.loginUnavailableReason ??
-          `${input.agent} has no sign-in command`,
+        (action === 'login'
+          ? auth.loginUnavailableReason
+          : auth.logoutUnavailableReason) ??
+          `${input.agent} has no sign-${action === 'login' ? 'in' : 'out'} command`,
       );
     }
     // Validated when given, for the reason the MCP sibling validates its own:
@@ -174,11 +216,11 @@ export class HandoffService {
     // that does not resolve must fail as a bad request rather than as a window
     // that opens and immediately dies.
     //
-    // Falls back to the home directory rather than to null, even though a
-    // sign-in genuinely does not care where it runs: the Electron side takes a
-    // validated ABSOLUTE path and writes `cd <cwd> || exit 1` into the script
-    // it opens, so "nowhere in particular" has no representation there. Home is
-    // the one folder that always exists and can surprise nobody.
+    // Falls back to the home directory rather than to null, even though an
+    // account command genuinely does not care where it runs: the Electron side
+    // takes a validated ABSOLUTE path and writes `cd <cwd> || exit 1` into the
+    // script it opens, so "nowhere in particular" has no representation there.
+    // Home is the one folder that always exists and can surprise nobody.
     const cwd =
       input.cwd === undefined ? homedir() : resolveValidCwd(input.cwd);
     return this.command(target, cwd);

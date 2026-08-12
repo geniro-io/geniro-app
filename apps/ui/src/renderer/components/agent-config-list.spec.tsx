@@ -28,10 +28,11 @@ const noneFound: CliDetection[] = [
 ];
 
 describe('statusFor', () => {
-  // claude has no status command to ask (its credentials are handled another
-  // way), so it always carries `loggedIn: null` in practice — but the rule
-  // itself is generic over the FIELD, not the CLI name: any found agent whose
-  // own answer is not explicitly `false` reads ready.
+  // The rule is generic over the FIELD, not the CLI name: any found agent whose
+  // own answer is not explicitly `false` reads ready. (This used to note that
+  // claude could never answer at all. It can — `claude auth status --json` —
+  // and `LOGIN_PROBES` now asks it; the rule below is unchanged either way,
+  // which is the point of keying on the field.)
   it.each([null, true] as (boolean | null)[])(
     'found claude with loggedIn=%s is ready',
     (loggedIn) => {
@@ -40,7 +41,7 @@ describe('statusFor', () => {
     },
   );
 
-  // cursor-agent is the one CLI whose own answer can flip this.
+  // Either CLI's own answer can flip this — asserted through cursor-agent.
   it.each([
     { loggedIn: true, tone: 'ok' },
     { loggedIn: false, tone: 'warn' },
@@ -191,5 +192,131 @@ describe('AgentConfigList — CLI sign-in control', () => {
       buttons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(onSignIn).toHaveBeenCalledWith('claude');
+  });
+});
+
+describe('AgentConfigList — the account control matches the reported state', () => {
+  const baseProps = {
+    open: { claude: true, 'cursor-agent': true },
+    onToggle: vi.fn(),
+    binaryPaths: {},
+    onBinaryPathChange: vi.fn(),
+    onBrowse: vi.fn(),
+  };
+
+  /** Every account button on screen, as `label → the kind it acts on`. */
+  function accountButtons(
+    el: HTMLElement,
+  ): { label: string; button: HTMLButtonElement }[] {
+    return [...el.querySelectorAll('button')]
+      .filter(
+        (b) =>
+          b.textContent?.includes('Sign in') === true ||
+          b.textContent?.includes('Sign out') === true,
+      )
+      .map((button) => ({
+        label: button.textContent?.includes('Sign out')
+          ? 'Sign out'
+          : 'Sign in',
+        button: button as HTMLButtonElement,
+      }));
+  }
+
+  it('offers SIGN OUT, not sign in, to a CLI that reports itself signed in', () => {
+    // THE REPORTED DEFECT. The card offered Sign in to every detected CLI,
+    // including one the probe had just confirmed signed in — an action the user
+    // cannot need, on the screen they check to see whether setup is done.
+    const onSignIn = vi.fn();
+    const onSignOut = vi.fn();
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', { loggedIn: true }),
+          det('cursor-agent', { loggedIn: true }),
+        ]}
+        onSignIn={onSignIn}
+        onSignOut={onSignOut}
+      />,
+    );
+
+    const found = accountButtons(el);
+    expect(found.map((f) => f.label)).toEqual(['Sign out', 'Sign out']);
+
+    act(() => {
+      found[1]!.button.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    // The kind is what localizes it: two Sign out buttons would also pass a
+    // count-only assertion with both wired to the first card.
+    expect(onSignOut).toHaveBeenCalledWith('cursor-agent');
+    expect(onSignIn).not.toHaveBeenCalled();
+  });
+
+  it('offers SIGN IN to a CLI that reports itself signed out', () => {
+    const onSignIn = vi.fn();
+    const onSignOut = vi.fn();
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', { loggedIn: false }),
+          det('cursor-agent', { loggedIn: true }),
+        ]}
+        onSignIn={onSignIn}
+        onSignOut={onSignOut}
+      />,
+    );
+
+    // One of each, and on the right cards — a component that keyed the label off
+    // anything but this field would put them the wrong way round and still show
+    // one of each.
+    expect(accountButtons(el).map((f) => f.label)).toEqual([
+      'Sign in',
+      'Sign out',
+    ]);
+    act(() => {
+      accountButtons(el)[0]!.button.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(onSignIn).toHaveBeenCalledWith('claude');
+    expect(onSignOut).not.toHaveBeenCalled();
+  });
+
+  it('offers SIGN IN when the state is unknown — never sign out on a guess', () => {
+    // The asymmetry is the safety property. A probe that failed reports `null`;
+    // offering Sign out there could destroy a working session on nothing more
+    // than a timeout, while an unnecessary Sign in costs a re-auth the user can
+    // cancel. Flip the component's default arm and this fails.
+    const onSignOut = vi.fn();
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude', { loggedIn: null })]}
+        onSignIn={vi.fn()}
+        onSignOut={onSignOut}
+      />,
+    );
+
+    expect(accountButtons(el).map((f) => f.label)).toEqual(['Sign in']);
+    expect(onSignOut).not.toHaveBeenCalled();
+  });
+
+  it('renders NO control rather than the wrong verb when its handler is absent', () => {
+    // Onboarding's shape, now that the state can call for either action: a
+    // signed-in card with no `onSignOut` must show nothing, not fall through to
+    // Sign in. Falling through would put the one action the user cannot need on
+    // the one screen with no way to reach the right one.
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude', { loggedIn: true })]}
+        onSignIn={vi.fn()}
+      />,
+    );
+
+    expect(accountButtons(el)).toHaveLength(0);
   });
 });

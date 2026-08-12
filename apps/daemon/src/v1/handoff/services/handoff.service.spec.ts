@@ -212,13 +212,28 @@ function buildLogin(
   return { service, mcpLoginTarget };
 }
 
-/** The CLI-account sign-in counterpart of {@link buildLogin}. */
+/**
+ * The CLI-account counterpart of {@link buildLogin} — sign-in AND sign-out, from
+ * one double.
+ *
+ * One builder for both because the service resolves them through one shared
+ * body: a double that answered only one of them would let the other's spec pass
+ * against a method that no longer exists. `auth` is a single object, so
+ * `getConfig()` and the two target methods cannot report different facts about
+ * the same adapter (the drift a hand-rolled double invited once already).
+ */
 function buildCliLogin(
   overrides: {
     target?: HandoffResult;
     loginUnavailableReason?: string | null;
+    logoutTarget?: HandoffResult;
+    logoutUnavailableReason?: string | null;
   } = {},
 ) {
+  const auth = {
+    loginUnavailableReason: overrides.loginUnavailableReason ?? null,
+    logoutUnavailableReason: overrides.logoutUnavailableReason ?? null,
+  };
   const loginTarget = vi.fn(
     (): HandoffResult =>
       overrides.target ?? {
@@ -229,13 +244,20 @@ function buildCliLogin(
         env: {},
       },
   );
+  const logoutTarget = vi.fn(
+    (): HandoffResult =>
+      overrides.logoutTarget ?? {
+        ok: true,
+        kind: 'command',
+        command: 'claude',
+        args: ['auth', 'logout'],
+        env: {},
+      },
+  );
   const adapter = {
     loginTarget,
-    getConfig: () => ({
-      auth: {
-        loginUnavailableReason: overrides.loginUnavailableReason ?? null,
-      },
-    }),
+    logoutTarget,
+    getConfig: () => ({ auth }),
   };
   const poisoned = {
     getById: () => Promise.reject(new Error('a sign-in must not read a run')),
@@ -250,7 +272,7 @@ function buildCliLogin(
     poisoned as never,
     { for: () => adapter } as never,
   );
-  return { service, loginTarget };
+  return { service, loginTarget, logoutTarget };
 }
 
 describe('HandoffService — signing the CLI itself in', () => {
@@ -319,6 +341,57 @@ describe('HandoffService — signing the CLI itself in', () => {
       command: null,
       unavailableReason: 'this CLI has no account sign-in',
     });
+  });
+});
+
+describe('HandoffService — signing the CLI itself out', () => {
+  it('answers with the CLI’s own sign-out command, not its sign-in one', () => {
+    // The two share one private body, so the thing worth pinning is that the
+    // `action` word still selects the right adapter method. Asserting only the
+    // shape would pass with both arms calling `loginTarget`.
+    const { service, loginTarget, logoutTarget } = buildCliLogin();
+
+    const target = service.logoutTarget({ agent: AgentKind.Claude });
+
+    expect(target).toMatchObject({
+      kind: 'command',
+      command: 'claude',
+      args: ['auth', 'logout'],
+      unavailableReason: null,
+    });
+    expect(logoutTarget).toHaveBeenCalled();
+    expect(loginTarget).not.toHaveBeenCalled();
+  });
+
+  it('reports the CLI’s OWN sign-out reason, never the sign-in one', () => {
+    // Both reasons are set to different sentences on purpose: reading
+    // `loginUnavailableReason` on the logout path would still produce a
+    // plausible refusal, and only a differing pair catches it.
+    const { service } = buildCliLogin({
+      logoutTarget: { ok: false, reason: 'unsupported' },
+      loginUnavailableReason: 'this CLI has no account sign-in',
+      logoutUnavailableReason: 'this CLI cannot be signed out from here',
+    });
+
+    expect(service.logoutTarget({ agent: AgentKind.Claude })).toMatchObject({
+      kind: 'unavailable',
+      command: null,
+      unavailableReason: 'this CLI cannot be signed out from here',
+    });
+  });
+
+  it('shares the sign-in’s folder handling — home by default, validated when given', () => {
+    const { service } = buildCliLogin();
+
+    expect(service.logoutTarget({ agent: AgentKind.Claude }).cwd).toBe(
+      homedir(),
+    );
+    expect(() =>
+      service.logoutTarget({
+        agent: AgentKind.Claude,
+        cwd: '/nonexistent-folder-xyz-geniro',
+      }),
+    ).toThrow();
   });
 });
 

@@ -198,6 +198,32 @@ export function Settings({
     setClis(await window.geniro.detectClis());
   }, []);
 
+  /**
+   * Re-probe when this window regains focus.
+   *
+   * The account controls hand the work to the user's own TERMINAL, so the app is
+   * never told when a sign-in or sign-out finished — and a card still offering
+   * "Sign out" after the user signed out is the same defect as the one this
+   * change fixes, arrived at from the other side. Focus-return is exactly the
+   * moment the answer may have changed: leaving for a terminal and coming back
+   * is the whole shape of the interaction.
+   *
+   * Not scoped to the account buttons: a binary installed or a `PATH` edited
+   * while the window was in the background changes detection too, and the probe
+   * is two `execFile`s with a 5s ceiling.
+   *
+   * Deliberately does NOT clear `clis` first, unlike {@link refreshClis} — a
+   * flash of "Checking…" on every window focus would be noise, and the stale
+   * reading it briefly keeps is the one already on screen.
+   */
+  useEffect(() => {
+    const onFocus = (): void => {
+      void window.geniro.detectClis().then(setClis);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
   const browse = useCallback(
     async (kind: CliKind): Promise<void> => {
       const chosen = await window.geniro.pickAgentBinary();
@@ -225,6 +251,26 @@ export function Settings({
       await openResolvedHandoff(
         () => apis.handoff.resolveCliLogin({ agent: kind }),
         `${kind} cannot be signed in from here`,
+        setError,
+      );
+    },
+    [apis],
+  );
+
+  /**
+   * Sign one CLI itself out, in the user's own terminal — the exact counterpart
+   * of {@link signInToCli}, down to resolving through the daemon rather than
+   * running anything here. No config directory, for the same reason: Settings
+   * configures the CLI itself, so this is always the default profile.
+   */
+  const signOutFromCli = useCallback(
+    async (kind: CliKind): Promise<void> => {
+      if (!apis) {
+        return;
+      }
+      await openResolvedHandoff(
+        () => apis.handoff.resolveCliLogout({ agent: kind }),
+        `${kind} cannot be signed out from here`,
         setError,
       );
     },
@@ -321,6 +367,7 @@ export function Settings({
           // and report nothing — `signInToCli` cannot even set an error,
           // because it has no transport to fail on.
           onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
+          onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
         />
       </section>
 

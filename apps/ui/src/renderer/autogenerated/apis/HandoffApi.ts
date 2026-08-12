@@ -25,6 +25,12 @@ export interface HandoffApiResolveCliLoginRequest {
     configDir?: string;
 }
 
+export interface HandoffApiResolveCliLogoutRequest {
+    agent: AgentKind;
+    cwd?: string;
+    configDir?: string;
+}
+
 export interface HandoffApiResolveHandoffRequest {
     runId: string;
     nodeId?: string;
@@ -96,6 +102,62 @@ export class HandoffApi extends runtime.BaseAPI {
      */
     async resolveCliLogin(requestParameters: HandoffApiResolveCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
         const response = await this.resolveCliLoginRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async resolveCliLogoutRaw(requestParameters: HandoffApiResolveCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HandoffTargetDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling resolveCliLogout().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['cwd'] != null) {
+            queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/handoff/logout`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async resolveCliLogout(requestParameters: HandoffApiResolveCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
+        const response = await this.resolveCliLogoutRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

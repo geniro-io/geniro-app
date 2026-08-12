@@ -82,15 +82,29 @@ async function probeVersion(
  *
  * A TABLE rather than a branch, so a third CLI is one entry and not another
  * `if`. A kind absent from it has no way to be asked and reports `loggedIn:
- * null` — claude is deliberately absent: its credentials travel as env vars the
- * daemon manages, so there is no equivalent question to put to the binary.
+ * null`.
  *
  * THE DAEMON HAS ITS OWN HOME for this CLI's auth facts —
- * `AdapterConfig.auth` (`loginArgs`, `expiredMarkers`) in that CLI's adapter.
- * This table is the Electron-side twin, and it exists here rather than there
- * because its one reader is `detectClis` over IPC, which Onboarding calls before
- * any `DaemonHandle` exists. A CLI added to `AdapterConfig.auth` and NOT to this
- * table reports `loggedIn: null` — ready — even when signed out, silently.
+ * `AdapterConfig.auth` (`loginArgs`, `logoutArgs`, `expiredMarkers`) in that
+ * CLI's adapter. This table is the Electron-side twin, and it exists here rather
+ * than there because its one reader is `detectClis` over IPC, which Onboarding
+ * calls before any `DaemonHandle` exists. A CLI added to `AdapterConfig.auth`
+ * and NOT to this table reports `loggedIn: null` — ready — even when signed out,
+ * silently.
+ *
+ * **claude's entry is a CORRECTED measurement, not a new feature.** This table
+ * used to name it as deliberately absent, on the reasoning that its credentials
+ * travel as env vars the daemon manages and so there was no question to put to
+ * the binary. That was wrong when written and is measurably wrong now: `claude
+ * auth status --json` answers `{"loggedIn": true, "authMethod": "claude.ai", …}`
+ * and, under an empty `CLAUDE_CONFIG_DIR`, `{"loggedIn": false, "authMethod":
+ * "none", …}` — probe-verified on 2.1.227, exit 0 for BOTH answers, and it
+ * honours the config directory. The cost of the wrong reading was not
+ * cosmetic: claude's card could never say "not signed in", so the account
+ * control had no state to reflect and offered Sign in to an account that was
+ * already signed in. `--json` is passed explicitly although the CLI documents it
+ * as the default, so a future default flip cannot silently hand this parser
+ * prose.
  *
  * **Ask for the CLI's STRUCTURED answer, never its prose.** `cursor-agent
  * status --format json` returns `{"status":…,"isAuthenticated":bool,…}`
@@ -112,6 +126,10 @@ const LOGIN_PROBES: Partial<
   'cursor-agent': {
     args: ['status', '--format', 'json'],
     booleanField: 'isAuthenticated',
+  },
+  claude: {
+    args: ['auth', 'status', '--json'],
+    booleanField: 'loggedIn',
   },
 };
 

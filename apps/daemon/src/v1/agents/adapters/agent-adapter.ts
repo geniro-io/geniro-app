@@ -413,6 +413,29 @@ export abstract class AgentAdapter {
     };
   }
 
+  /**
+   * How the user signs OUT of this CLI, or that they cannot from here.
+   *
+   * The exact mirror of {@link loginTarget}, down to the single `unsupported`
+   * refusal and the config-directory env — a sign-out is about one profile for
+   * the same reason a sign-in is, and one that dropped the directory would clear
+   * the DEFAULT account's credentials while the user was looking at a card for
+   * a different profile.
+   */
+  logoutTarget(configDir?: string | null): HandoffResult {
+    const { logoutArgs } = this.getConfig().auth;
+    if (logoutArgs === null) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    return {
+      ok: true,
+      kind: 'command',
+      command: this.command,
+      args: [...logoutArgs],
+      env: this.configDirEnv(configDir),
+    };
+  }
+
   constructor(protected readonly options: AgentAdapterOptions = {}) {}
 
   /** Build the argv for one turn (model/resume flags, prompt when positional). */

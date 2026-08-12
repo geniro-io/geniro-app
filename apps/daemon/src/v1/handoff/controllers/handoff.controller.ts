@@ -60,4 +60,16 @@ export class HandoffController {
   resolveCliLogin(@Query() query: CliLoginQueryDto): HandoffTarget {
     return this.handoff.loginTarget(query);
   }
+
+  /**
+   * "How do I sign this CLI out myself" — the counterpart of the route above,
+   * and still a GET: this resolves an invocation and changes nothing. The
+   * credentials are cleared by the CLI the user runs, in their own terminal.
+   */
+  @Get('logout')
+  @ApiOperation({ operationId: 'resolveCliLogout' })
+  @ZodResponse({ status: 200, type: HandoffTargetDto })
+  resolveCliLogout(@Query() query: CliLoginQueryDto): HandoffTarget {
+    return this.handoff.logoutTarget(query);
+  }
 }

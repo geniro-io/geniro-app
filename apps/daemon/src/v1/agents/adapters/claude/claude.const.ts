@@ -446,6 +446,21 @@ export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
 export const CLAUDE_AUTH_LOGIN_ARGS: readonly string[] = ['auth', 'login'];
 
 /**
+ * Argv that signs the CLI ITSELF out — the counterpart to
+ * {@link CLAUDE_AUTH_LOGIN_ARGS}.
+ *
+ * `claude auth logout` ("Log out from your Anthropic account"), read from
+ * `claude auth --help` on 2.1.227. It exists so the Settings card can offer the
+ * action that matches the state it is reporting: a CLI the probe found SIGNED
+ * IN has nothing to sign in to, and offering it anyway reads as an unfinished
+ * setup step.
+ *
+ * Named for the same reason as its login sibling: `getConfig()` spells it and
+ * the adapter's spec asserts on it.
+ */
+export const CLAUDE_AUTH_LOGOUT_ARGS: readonly string[] = ['auth', 'logout'];
+
+/**
  * Wording that marks a turn as having failed on the ACCOUNT, not on the work.
  *
  * Observed verbatim in a failed run's own error row:

@@ -1619,6 +1619,20 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
     });
   });
 
+  it('signs the CLI OUT with its own command, in THAT profile', () => {
+    // `claude auth logout`, from `claude auth --help` on 2.1.227. The config
+    // directory matters more here than on the sign-in path, not less: a logout
+    // that dropped it would clear the DEFAULT account's credentials while the
+    // user was acting on a card for a different profile.
+    expect(new ClaudeAdapter().logoutTarget('/profiles/work')).toEqual({
+      ok: true,
+      kind: 'command',
+      command: 'claude',
+      args: ['auth', 'logout'],
+      env: { [CLAUDE_CONFIG_DIR_ENV]: '/profiles/work' },
+    });
+  });
+
   it('omits the model flag for a run on the CLI’s default', () => {
     // `--model ''` is not the same request as no flag at all.
     expect(

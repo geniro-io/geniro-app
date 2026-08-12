@@ -407,6 +407,75 @@ describe('AgentAdapter.loginTarget', () => {
   });
 });
 
+describe('AgentAdapter.logoutTarget', () => {
+  /** A CLI with no account sign-out — the shape neither shipped adapter has. */
+  class NoLogoutAdapter extends ClaudeAdapter {
+    override getConfig(): AdapterConfig {
+      const base = super.getConfig();
+      return { ...base, auth: { ...base.auth, logoutArgs: null } };
+    }
+  }
+
+  // The LITERAL argv each CLI's sign-out is, probe-read from its own `--help`
+  // (claude 2.1.227 `claude auth --help`; cursor-agent 2026.08.04-aaa8809
+  // `cursor-agent logout --help` — "Sign out and clear stored authentication").
+  // Spelled here for the reason its login sibling above is: both sides reading
+  // the same config field would catch only a wrong FIELD, and a wrong
+  // probe-derived VALUE is what actually sends the user to a subcommand the
+  // binary does not have.
+  const EXPECTED_LOGOUT: Record<string, { command: string; args: string[] }> = {
+    claude: { command: 'claude', args: ['auth', 'logout'] },
+    'cursor-agent': { command: 'cursor-agent', args: ['logout'] },
+  };
+
+  for (const { name, adapter } of ADAPTERS) {
+    it(`builds ${name}'s own account sign-out invocation`, () => {
+      expect(adapter.logoutTarget()).toEqual({
+        ok: true,
+        kind: 'command',
+        ...EXPECTED_LOGOUT[name],
+        env: {},
+      });
+    });
+
+    it(`does not sign ${name} out with its SIGN-IN command`, () => {
+      // The two are one config field apart and are composed by two methods that
+      // differ in one word. A `logoutArgs` that copied `loginArgs` — or a
+      // `logoutTarget` reading the wrong field — returns `ok` either way and
+      // opens a terminal that signs the user back IN, which is the opposite of
+      // what the button they pressed said.
+      const login = adapter.loginTarget();
+      const logout = adapter.logoutTarget();
+      expect(login.ok && logout.ok).toBe(true);
+      if (!login.ok || !logout.ok) {
+        return;
+      }
+      expect(logout.args).not.toEqual(login.args);
+    });
+  }
+
+  it('carries the config directory, so it signs out of THAT profile', () => {
+    // A sign-out that dropped the directory would clear the DEFAULT account's
+    // credentials — destructive, and aimed at an account the user was not
+    // looking at. Asserted on the base rather than per adapter: `configDirEnv`
+    // is the shared mechanism, and a CLI that has no env var for it declares
+    // that in its own config.
+    const target = new ClaudeAdapter().logoutTarget('/profiles/work');
+    expect(target.ok && Object.keys(target.env).length).toBeGreaterThan(0);
+  });
+
+  it('refuses for a CLI that declares no account sign-out', () => {
+    // The defensive arm, entered deliberately — and it is the arm that matters
+    // most in this pair: a `logoutArgs: null` that spread an empty argv would
+    // compose a bare `claude`, so a button labelled "Sign out" would open an
+    // ordinary interactive session and leave the user signed in.
+    expect(new NoLogoutAdapter().logoutTarget()).toEqual({
+      ok: false,
+      reason: 'unsupported',
+    });
+  });
+});
+
 describe('AgentAdapter question channel', () => {
   /**
    * One question payload per CLI — each in ITS OWN wire shape, because the

@@ -102,6 +102,12 @@ export function DisclosureRow({
         title={open ? 'Hide details' : 'Show full details'}
         className={cn(
           'flex w-full items-center gap-1.5 text-left',
+          // CENTRED, so opening the row does not move its own header. Expanded,
+          // the body takes the full column width and the container grows with it
+          // — a left-aligned header then slid from the middle of the transcript
+          // to its left edge, and the line the user pressed was no longer under
+          // the pointer that pressed it.
+          quiet && 'justify-center',
           quiet
             ? // No padding, no fill, no italic — a system line, indistinguishable
               // from the plain notes around it until you point at it. Hover moves
@@ -124,8 +130,8 @@ export function DisclosureRow({
           className={cn(
             'shrink-0',
             // The advisory's caption is a LABEL on a panel; the quiet row's is
-            // the sentence itself, and small-caps prose beside an italic clock
-            // read as two different kinds of row.
+            // the sentence itself, and uppercase small-caps beside the plain
+            // notes around it read as a different kind of row.
             quiet
               ? null
               : 'text-[11px] font-medium uppercase tracking-wide opacity-70',
@@ -151,9 +157,9 @@ export function DisclosureRow({
           aria-hidden="true"
           className={cn(
             'size-3.5 shrink-0 transition-transform',
-            // The quiet row is only as wide as its own words, so the chevron
-            // sits beside them; the panel's spans take the slack instead.
-            quiet && 'ml-auto',
+            // NOT pushed to the far edge on the quiet row: it belongs beside the
+            // words, and expanded — where the row is as wide as the transcript —
+            // `ml-auto` would leave it stranded a column away from them.
             open && 'rotate-90',
           )}
         />

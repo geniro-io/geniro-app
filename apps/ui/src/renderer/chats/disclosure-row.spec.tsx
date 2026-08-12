@@ -99,6 +99,17 @@ describe('DisclosureRow', () => {
       // (jsdom loads no stylesheet, so the class is the only observable here.)
       expect(toggle?.classList.contains('text-xs')).toBe(true);
       expect(toggle?.classList.contains('font-normal')).toBe(true);
+      // Opening the row must not MOVE its header. Expanded, the body takes the
+      // full column and the container grows with it, so a left-aligned header
+      // slid from the middle of the transcript to its left edge — out from under
+      // the pointer that had just pressed it. (jsdom does no layout; the centring
+      // class is the observable.)
+      expect(toggle?.classList.contains('justify-center')).toBe(true);
+      expect(
+        container
+          .querySelector('svg.lucide-chevron-right')
+          ?.classList.contains('ml-auto'),
+      ).toBe(false);
     });
 
     it('shows `detail` INSTEAD of the message preview while collapsed', () => {

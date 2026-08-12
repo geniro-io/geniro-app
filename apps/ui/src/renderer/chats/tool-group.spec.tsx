@@ -74,6 +74,19 @@ function rowStatuses(): (string | null)[] {
   ].map((icon) => icon.getAttribute('data-status'));
 }
 
+/**
+ * The OPERATION glyphs on screen — what each settled row says it did.
+ *
+ * A settled row spends its leading glyph on the operation rather than on a
+ * status, so `rowStatuses` above deliberately returns nothing for one: the two
+ * helpers read two different marks, and a row carries exactly one of them.
+ */
+function rowOperations(): (string | null)[] {
+  return [
+    ...container.querySelectorAll('button[aria-expanded] [data-operation]'),
+  ].map((icon) => icon.getAttribute('data-operation'));
+}
+
 function click(el: Element | null): void {
   act(() => {
     el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -160,22 +173,7 @@ describe('ToolGroup', () => {
     expect(container.textContent).not.toContain('"old_string"');
   });
 
-  it('marks a still-running tool (no result yet) with the running glyph', () => {
-    render(
-      makeGroup([
-        toolItem('tool_call', {
-          id: 't1',
-          name: 'Bash',
-          input: { command: 'sleep 5' },
-        }),
-      ]),
-    );
-
-    click(container.querySelector('button[aria-expanded]'));
-    expect(rowStatuses()).toEqual(['running']);
-  });
-
-  it('marks a finished tool done, and a failed one as an error', () => {
+  it('spends a finished row’s glyph on WHAT it did, and keeps the error mark', () => {
     render(
       makeGroup([
         toolItem('tool_call', { id: 't1', name: 'Bash', input: {} }),
@@ -191,7 +189,67 @@ describe('ToolGroup', () => {
     );
 
     click(container.querySelector('button[aria-expanded]'));
-    expect(rowStatuses()).toEqual(['completed', 'failed']);
+    // Every settled row used to wear the same green check — a column of
+    // identical ticks saying only "these happened", which the reader could see
+    // already. The done row now names its operation instead.
+    expect(rowOperations()).toEqual(['execute']);
+    // And the failure keeps its own mark: a failed read must not be able to look
+    // like a successful one.
+    expect(rowStatuses()).toEqual(['failed']);
+  });
+
+  it('leaves a row still in flight on its status glyph, not on an operation', () => {
+    // The operation is not the news while the call is running — whether it has
+    // come back is. Classify unconditionally and a running Bash row would show a
+    // terminal glyph, indistinguishable from one that had finished.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 't1',
+          name: 'Bash',
+          input: { command: 'sleep 5' },
+        }),
+      ]),
+    );
+
+    click(container.querySelector('button[aria-expanded]'));
+    expect(rowStatuses()).toEqual(['running']);
+    expect(rowOperations()).toEqual([]);
+  });
+
+  it('falls back to the status glyph for a tool it cannot classify', () => {
+    // An unknown tool would otherwise lose its only leading mark, and a blank is
+    // a worse answer than a check.
+    render(
+      makeGroup([
+        toolItem('tool_call', { id: 't1', name: 'Telepathy', input: {} }),
+        toolItem('tool_result', { id: 't1', name: null, result: 'ok' }),
+      ]),
+    );
+
+    click(container.querySelector('button[aria-expanded]'));
+    expect(rowOperations()).toEqual([]);
+    expect(rowStatuses()).toEqual(['completed']);
+  });
+
+  it('reads the AGENT’s own classification, so a cursor row is not "unknown"', () => {
+    // cursor titles its calls "Read File" / "Edit File" and matches no name
+    // bucket, so without `toolKind` every one of its rows would fall back to the
+    // check this change exists to replace.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 't1',
+          name: 'Edit File',
+          input: {},
+          toolKind: 'edit',
+        }),
+        toolItem('tool_result', { id: 't1', name: null, result: 'ok' }),
+      ]),
+    );
+
+    click(container.querySelector('button[aria-expanded]'));
+    expect(rowOperations()).toEqual(['edit']);
   });
 
   it('shows an MCP tool under its readable name, not its wire identifier', () => {

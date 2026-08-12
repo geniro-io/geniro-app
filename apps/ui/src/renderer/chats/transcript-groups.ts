@@ -5,7 +5,7 @@ import { subagentIdOf } from './subagent-payload';
 // re-exports these): reaching into the component module from here is what
 // closed the `agent-activity → transcript-groups → transcript-item →
 // live-row → agent-activity` import cycle.
-import { toolKindOf } from './tool-kind';
+import { AGENT_TOOLS, toolKindOf, toolOperationOf } from './tool-kind';
 import { resultDiffsOf, toolResultText } from './tool-render';
 import { payloadString } from './transcript-payload';
 
@@ -952,19 +952,6 @@ function diffPathOf(result: ChatItem | null): string | null {
   return first?.path ?? null;
 }
 
-/** File-touching tools, for the group summary's edit/create counts. */
-const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
-/** Tools that OPEN a named file — counted by distinct path, like the edits. */
-const READ_TOOLS = new Set(['Read', 'NotebookRead']);
-/** Tools that look through the tree without naming one file up front. */
-const SEARCH_TOOLS = new Set(['Grep', 'Glob']);
-/** Tools that leave the machine. */
-const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
-/** Tools that hand a slice of the work to another agent. */
-const AGENT_TOOLS = new Set(['Task', 'Agent']);
-/** Every MCP tool a CLI exposes is named `mcp__<server>__<tool>`. */
-const MCP_TOOL_PREFIX = 'mcp__';
-
 /**
  * The collapsed group's one-line summary, Claude/Cursor-style:
  * "Read 4 files · ran 3 commands · edited 1 file".
@@ -1000,75 +987,81 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   const edited = new Set<string>();
   const created = new Set<string>();
   for (const { call, result } of pairs) {
-    const name = payloadString(call.payload, 'name') ?? '';
     const input = (call.payload as { input?: unknown } | null)?.input;
     const file =
       input && typeof input === 'object' && 'file_path' in input
         ? String((input as { file_path: unknown }).file_path)
         : null;
-    // The agent's OWN classification, when it made one. It is consulted FIRST
-    // because the name buckets below are one CLI's vocabulary: cursor titles its
-    // calls "Read File", "Edit File", "grep" and discloses no arguments at all, so
-    // every one of them fell through to the "Used N tools" catch-all and a turn
-    // that read, edited and ran a command named nothing it had done.
-    const kind = toolKindOf(call.payload);
-    if (kind !== null) {
-      accounted += 1;
-      // A path when one is known — an edit's diff reports it even when the call
-      // did not — else the call itself is the unit. Counting distinct paths is
-      // what makes three edits of one file read as one edited file; with no path
-      // to distinguish them, each call is its own.
-      const target = file ?? diffPathOf(result) ?? `#${accounted}`;
-      switch (kind) {
-        case 'read':
-          opened.add(target);
-          break;
-        case 'edit':
-          edited.add(target);
-          break;
-        case 'search':
-          searches += 1;
-          break;
-        case 'execute':
-          commands += 1;
-          break;
-        case 'fetch':
-          fetches += 1;
-          break;
-        case 'delete':
-        case 'move':
-          // Accounted but not SPOKEN: neither has a phrase here, and inventing
-          // one ("moved 1 file") for a kind never yet seen on the wire would be
-          // guessing at wording no measurement supports.
-          break;
+    // What the call DID, from the ONE classifier — the agent's own answer when it
+    // made one, else its tool name. The name buckets are one CLI's vocabulary:
+    // cursor titles its calls "Read File", "Edit File", "grep" and discloses no
+    // arguments at all, so before the agent's own answer was consulted a turn
+    // that read, edited and ran a command summarised as "Used 2 tools" and named
+    // nothing it had done.
+    const operation = toolOperationOf(call.payload);
+    // Whether the AGENT classified this call itself, which is a different
+    // question and decides how a call with no path is counted. An agent-declared
+    // kind is trusted with no target (cursor discloses none, so every one of its
+    // calls would otherwise go unaccounted); a name-matched file tool is not —
+    // it would be reported as an edit of nothing, and the "Used N tools" total is
+    // the honest answer for a call this cannot describe.
+    const selfDeclared = toolKindOf(call.payload) !== null;
+    // A path when one is known — an edit's diff reports it even when the call did
+    // not. Counting DISTINCT paths is what makes three edits of one file read as
+    // one edited file.
+    const path = file ?? diffPathOf(result);
+    /** Count this call against a file bucket, or leave it unaccounted. */
+    const addPath = (bucket: Set<string>): void => {
+      if (path !== null) {
+        bucket.add(path);
+        accounted += 1;
+      } else if (selfDeclared) {
+        // No path to tell it apart, so the CALL is the unit. Keyed off the count
+        // so two such calls never collapse into one.
+        accounted += 1;
+        bucket.add(`#${accounted}`);
       }
-      continue;
-    }
-    if (name === 'Bash') {
-      commands += 1;
-      accounted += 1;
-    } else if (READ_TOOLS.has(name) && file) {
-      opened.add(file);
-      accounted += 1;
-    } else if (EDIT_TOOLS.has(name) && file) {
-      edited.add(file);
-      accounted += 1;
-    } else if (name === 'Write' && file) {
-      created.add(file);
-      accounted += 1;
-    } else if (SEARCH_TOOLS.has(name)) {
-      searches += 1;
-      accounted += 1;
-    } else if (WEB_TOOLS.has(name)) {
-      fetches += 1;
-      accounted += 1;
-    } else if (AGENT_TOOLS.has(name)) {
-      // Accounted but never SPOKEN — see the note where the other phrases are
-      // assembled below.
-      accounted += 1;
-    } else if (name.startsWith(MCP_TOOL_PREFIX)) {
-      mcpCalls += 1;
-      accounted += 1;
+    };
+    switch (operation) {
+      case 'read':
+        addPath(opened);
+        break;
+      case 'edit':
+        addPath(edited);
+        break;
+      case 'create':
+        addPath(created);
+        break;
+      case 'search':
+        searches += 1;
+        accounted += 1;
+        break;
+      case 'execute':
+        commands += 1;
+        accounted += 1;
+        break;
+      case 'fetch':
+        fetches += 1;
+        accounted += 1;
+        break;
+      case 'mcp':
+        mcpCalls += 1;
+        accounted += 1;
+        break;
+      case 'delegate':
+        // Accounted but never SPOKEN — see the note where the other phrases are
+        // assembled below.
+        accounted += 1;
+        break;
+      case 'delete':
+      case 'move':
+        // Accounted but not SPOKEN either: neither has a phrase here, and
+        // inventing one ("moved 1 file") for a kind never yet seen on the wire
+        // would be guessing at wording no measurement supports.
+        accounted += 1;
+        break;
+      case null:
+        break;
     }
   }
   const count = (n: number, noun: string): string =>

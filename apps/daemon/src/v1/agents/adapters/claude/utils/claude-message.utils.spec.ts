@@ -795,6 +795,7 @@ describe('mapClaudeMessage — context compaction', () => {
     ).toEqual([
       {
         type: 'context_compacted',
+        phase: 'finished',
         trigger: 'auto',
         preTokens: 180_000,
         postTokens: 32_000,
@@ -810,6 +811,7 @@ describe('mapClaudeMessage — context compaction', () => {
     ).toEqual([
       {
         type: 'context_compacted',
+        phase: 'finished',
         trigger: null,
         preTokens: null,
         postTokens: null,
@@ -824,11 +826,218 @@ describe('mapClaudeMessage — context compaction', () => {
     ).toEqual([
       {
         type: 'context_compacted',
+        phase: 'finished',
         trigger: 'manual',
         preTokens: null,
         postTokens: null,
       },
     ]);
+  });
+
+  it('reads the LIVE status line the CLI emits when compaction starts', () => {
+    // Captured verbatim on 2.1.227 from a persistent stream-json session (see
+    // CLAUDE_STATUS_SUBTYPE). Before this arm existed the line fell through the
+    // subtype checks and returned [], so a 46-second compaction was announced as
+    // nothing at all — the reported defect.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'status',
+        status: 'compacting',
+        session_id: 's1',
+      }),
+    ).toEqual([
+      {
+        type: 'context_compacted',
+        phase: 'started',
+        // No counts: nothing has been dropped yet, and this line carries no
+        // `compact_metadata` to invent them from.
+        trigger: null,
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+  });
+
+  it('says out loud when a compaction FAILED, with the reason the CLI gave', () => {
+    // The terminating status line, captured verbatim. A silent failure leaves
+    // the user waiting on a compaction that never happened, still at full
+    // context — so unlike the success path this one earns a durable row.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'status',
+        status: null,
+        compact_result: 'failed',
+        compact_error: 'Not enough messages to compact.',
+        session_id: 's1',
+      }),
+    ).toEqual([
+      {
+        type: 'notice',
+        message:
+          'the conversation was not compacted — Not enough messages to compact.',
+      },
+      // The second event is what takes down the present-tense phrase `started`
+      // put up. Drop it and the live row keeps saying "compacting the
+      // conversation" after the CLI has already refused — only the SUCCESS path
+      // emits a boundary to supersede it.
+      {
+        type: 'context_compacted',
+        phase: 'failed',
+        trigger: null,
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+  });
+
+  it('states the failure without a reason when the CLI gave none', () => {
+    // The defensive branch: `compact_result:'failed'` with no `compact_error`.
+    // Unpinned, a later "always append the reason" tidy-up ships a dangling
+    // " — " or the word "undefined" in a user-facing notice.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'status',
+        status: null,
+        compact_result: 'failed',
+        session_id: 's1',
+      }),
+    ).toEqual([
+      { type: 'notice', message: 'the conversation was not compacted' },
+      {
+        type: 'context_compacted',
+        phase: 'failed',
+        trigger: null,
+        preTokens: null,
+        postTokens: null,
+      },
+    ]);
+  });
+
+  it('says nothing on the SUCCESS status line — the boundary and summary speak', () => {
+    // Asserted because the obvious implementation announces both ends of the
+    // status pair; a success notice would duplicate the boundary event AND the
+    // summary row, giving three lines for one compaction.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'status',
+        status: null,
+        compact_result: 'success',
+        session_id: 's1',
+      }),
+    ).toEqual([]);
+  });
+
+  it('surfaces the CLI’s own compaction summary as a system row', () => {
+    // Item 2. Captured verbatim: the summary arrives as a `user` line whose
+    // `content` is a plain STRING, and the block loop that arm runs sees nothing
+    // in a string — which is why the summary never reached the transcript.
+    expect(
+      mapClaudeMessage({
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            'This session is being continued from a previous conversation…\n\nSummary: the user asked for numbers.',
+        },
+        isReplay: false,
+        isSynthetic: true,
+        session_id: 's1',
+      }),
+    ).toEqual([
+      {
+        type: 'notice',
+        message:
+          'This session is being continued from a previous conversation…\n\nSummary: the user asked for numbers.',
+        // The CLI wrote this, not the daemon. Without the marker the renderer
+        // paints it in the failure chrome every other notice earns, so a relayed
+        // summary reads as geniro reporting an error — and untrusted text could
+        // then impersonate an application-level advisory.
+        origin: 'cli',
+      },
+    ]);
+  });
+
+  it('leaves the daemon’s OWN notices unmarked, so their rows do not change', () => {
+    // The other side of the `origin` contract: only CLI-authored text carries it.
+    // A daemon advisory must stay exactly the shape it was, or every existing
+    // notice's transcript row changes appearance with this diff.
+    const events = mapClaudeMessage({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 't1',
+            content:
+              'Tool permission request failed: AbortError: Stream closed',
+          },
+        ],
+      },
+      session_id: 's1',
+    });
+    const notice = events.find((event) => event.type === 'notice');
+    expect(notice).toBeDefined();
+    expect(notice && 'origin' in notice).toBe(false);
+  });
+
+  it('ignores a REPLAYED synthetic line, so a resume cannot re-persist the summary', () => {
+    // This fixture is deliberately `isSynthetic: true` AND `isReplay: true` —
+    // the only shape that the replay half of the guard actually decides. With
+    // `isSynthetic` omitted the test would pass with `!asBoolean(root.isReplay)`
+    // deleted from production, since the synthetic check alone already fails it:
+    // a false pin, and the duplicate of the real-user-message test below.
+    //
+    // What it protects: a resumed session replays the preserved segment, so
+    // without the replay guard the summary would be lifted again and persisted
+    // once more on every resume.
+    expect(
+      mapClaudeMessage({
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            'This session is being continued from a previous conversation…',
+        },
+        isReplay: true,
+        isSynthetic: true,
+        session_id: 's1',
+      }),
+    ).toEqual([]);
+  });
+
+  it('ignores the replayed `<local-command-stdout>` line beside the summary', () => {
+    // The other half of the captured burst, verbatim. Distinct from the case
+    // above: this one is a replay that carries NO `isSynthetic`, so it is barred
+    // twice over — worth keeping as the shape actually observed on the wire.
+    expect(
+      mapClaudeMessage({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '<local-command-stdout>Compacted </local-command-stdout>',
+        },
+        isReplay: true,
+        session_id: 's1',
+      }),
+    ).toEqual([]);
+  });
+
+  it('never lifts a REAL user message into a system row', () => {
+    // The guard that keeps this from surfacing the user's own words back at
+    // them: a genuine user line is not synthetic. Drop the isSynthetic check and
+    // this fails.
+    expect(
+      mapClaudeMessage({
+        type: 'user',
+        message: { role: 'user', content: 'please fix the login bug' },
+        session_id: 's1',
+      }),
+    ).toEqual([]);
   });
 
   it('leaves the other system subtypes alone', () => {

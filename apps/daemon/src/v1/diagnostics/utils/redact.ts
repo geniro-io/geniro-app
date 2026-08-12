@@ -16,6 +16,15 @@
  * exactly — it minted them. Values are registered at boot and replaced by
  * fixed labels, so a reader can still see that a token was present and tell
  * two different ones apart without learning either.
+ *
+ * REGISTER AT THE MINT SITE, not at boot, for anything minted later. The two
+ * launch-time credentials are registered in `main.ts`; a call token is minted
+ * per caller node while a run starts, long after boot, so `CallTokenRegistry`
+ * registers each one as it issues it. That is not a stylistic choice — this
+ * block claimed coverage of the call token for a full release while nothing
+ * registered it, and the gap was invisible precisely because the claim read as
+ * a guarantee. A new credential added later must register itself at the one
+ * place it comes into existence.
  */
 
 /** What a redacted value is replaced with, by the label it was registered as. */

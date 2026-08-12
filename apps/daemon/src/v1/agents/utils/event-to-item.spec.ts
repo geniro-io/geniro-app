@@ -39,9 +39,26 @@ describe('mapEventToItem', () => {
     expect(
       mapEventToItem({
         type: 'context_compacted',
+        phase: 'finished',
         trigger: 'auto',
         preTokens: 180_000,
         postTokens: 32_000,
+      }),
+    ).toBeNull();
+  });
+
+  it('drops the START of a compaction too — both ends are momentary', () => {
+    // The `started` phase is newer than the arm's original decision, so it needs
+    // its own assertion: an in-progress marker is even less of a transcript line
+    // than the finished one, and it must not become a row that then sits there
+    // claiming a compaction is still running.
+    expect(
+      mapEventToItem({
+        type: 'context_compacted',
+        phase: 'started',
+        trigger: null,
+        preTokens: null,
+        postTokens: null,
       }),
     ).toBeNull();
   });
@@ -193,7 +210,29 @@ describe('mapEventToItem', () => {
     ).toEqual({
       kind: 'system',
       role: null,
+      // No `origin` key AT ALL for a daemon-authored notice — asserted with
+      // toEqual rather than toMatchObject precisely so an unconditional
+      // `origin: undefined` would fail. Every pre-existing notice must keep the
+      // byte-identical payload it had before `origin` existed.
       payload: { message: 'agent calls disabled' },
+    });
+  });
+
+  it('stamps `origin` on a notice the CLI authored, so the row can attribute it', () => {
+    // The renderer reads this key back (`chats/system-payload.ts`) to decide
+    // whether the row is the daemon speaking or the CLI being relayed. Drop the
+    // stamp and a relayed compaction summary renders in the daemon's own failure
+    // chrome — red, captioned "system" — as though geniro were reporting a fault.
+    expect(
+      mapEventToItem({
+        type: 'notice',
+        message: 'This session is being continued…',
+        origin: 'cli',
+      }),
+    ).toEqual({
+      kind: 'system',
+      role: null,
+      payload: { message: 'This session is being continued…', origin: 'cli' },
     });
   });
 });

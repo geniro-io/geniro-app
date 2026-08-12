@@ -13,9 +13,13 @@ import type {
 } from '../../adapter.types';
 import {
   CLAUDE_COMPACT_BOUNDARY_SUBTYPE,
+  CLAUDE_COMPACT_FAILED_NOTICE,
+  CLAUDE_COMPACT_RESULT_FAILED,
+  CLAUDE_COMPACTING_STATUS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_RUN_FAILED_MESSAGE,
+  CLAUDE_STATUS_SUBTYPE,
 } from '../claude.const';
 import {
   readClaudeAssistantContext,
@@ -246,11 +250,62 @@ function mapClaudeLine(
         return [
           {
             type: 'context_compacted',
+            phase: 'finished',
             trigger: meta ? asString(meta.trigger) : null,
             preTokens: meta ? asNumber(meta.pre_tokens) : null,
             postTokens: meta ? asNumber(meta.post_tokens) : null,
           },
         ];
+      }
+      if (asString(root.subtype) === CLAUDE_STATUS_SUBTYPE) {
+        // Two lines share this subtype and they are told apart by `status`: a
+        // named status opens the state, and a null one closes it while carrying
+        // the verdict. See CLAUDE_STATUS_SUBTYPE for the captured pair.
+        const status = asString(root.status);
+        if (status === CLAUDE_COMPACTING_STATUS) {
+          return [
+            {
+              type: 'context_compacted',
+              phase: 'started',
+              trigger: null,
+              preTokens: null,
+              postTokens: null,
+            },
+          ];
+        }
+        if (asString(root.compact_result) === CLAUDE_COMPACT_RESULT_FAILED) {
+          // A compaction that did NOT happen is the one outcome that earns a
+          // durable row. The success path needs none — its own boundary and the
+          // summary line below both speak for it — but a silent failure leaves
+          // the user at full context waiting on a compaction that never came.
+          //
+          // BOTH events, and the second is not optional: `started` announced a
+          // present-tense "compacting the conversation", and only a terminal
+          // phase takes that phrase back down. The success path is
+          // self-correcting because it emits a boundary; this path emits none,
+          // so without the `failed` event the row would keep claiming a
+          // compaction was running after the CLI had declined it.
+          const reason = asString(root.compact_error);
+          return [
+            {
+              type: 'notice',
+              message:
+                reason === null
+                  ? CLAUDE_COMPACT_FAILED_NOTICE
+                  : `${CLAUDE_COMPACT_FAILED_NOTICE} — ${reason}`,
+            },
+            {
+              type: 'context_compacted',
+              phase: 'failed',
+              trigger: null,
+              preTokens: null,
+              postTokens: null,
+            },
+          ];
+        }
+        // Any other status is a state this daemon does not model. Dropped, not
+        // guessed at.
+        return [];
       }
       if (asString(root.subtype) === 'init') {
         const events: AgentEvent[] = [];
@@ -352,6 +407,39 @@ function mapClaudeLine(
       const message = asRecord(root.message);
       if (!message) {
         return [];
+      }
+      // A `user` line the USER did not write. After a compaction the CLI injects
+      // its summary as one of these — `content` a plain STRING rather than the
+      // block array every real user message carries, which is exactly why the
+      // block loop below could never see it: `asArray` of a string is empty, so
+      // the summary was skipped wholesale and never reached the transcript.
+      //
+      // Captured on 2.1.227 (see CLAUDE_STATUS_SUBTYPE for the full sequence):
+      //   {"type":"user","message":{"role":"user","content":"This session is
+      //    being continued…Summary:…"},"isReplay":false,"isSynthetic":true}
+      //   {"type":"user","message":{"role":"user","content":"<local-command-stdout>
+      //    Compacted </local-command-stdout>"},"isReplay":true}
+      //
+      // Both arrive in the same burst, and the two flags are what separate them:
+      // the summary is synthetic and NOT a replay; the second is a replay of a
+      // preserved line and carries no `isSynthetic`. Requiring synthetic keeps a
+      // real user message out; requiring not-replay keeps the post-compaction
+      // replay of the preserved segment from persisting the summary twice. The
+      // TEXT is deliberately not pattern-matched — a CLI that rewords its
+      // preamble would silently stop being surfaced again.
+      const injectedText = asString(message.content);
+      if (
+        injectedText !== null &&
+        injectedText.length > 0 &&
+        asBoolean(root.isSynthetic) &&
+        !asBoolean(root.isReplay)
+      ) {
+        // `origin: 'cli'` because the CLI wrote this, not the daemon. Without it
+        // the renderer paints it in the failure chrome every other `notice`
+        // earns, so a summary read as geniro reporting an error — and a summary
+        // OF the conversation is untrusted content, which must not be able to
+        // look like an application-level advisory.
+        return [{ type: 'notice', message: injectedText, origin: 'cli' }];
       }
       const events: AgentEvent[] = [];
       for (const block of asArray(message.content)) {

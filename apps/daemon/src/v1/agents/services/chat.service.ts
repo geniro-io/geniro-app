@@ -1051,18 +1051,40 @@ export class ChatService {
               return;
             }
             if (event.type === 'context_compacted') {
-              // Says it HAPPENED, never that it is happening: the CLI reports
-              // only its post-compaction boundary (see
-              // `CLAUDE_COMPACT_BOUNDARY_SUBTYPE`). Announced rather than
-              // persisted because the thing it explains is momentary — the
-              // context meter dropping by most of the window between one
-              // request and the next, which with nothing said reads as the
-              // meter being broken. The next tool call replaces this phrase.
+              // Announced rather than persisted, at every phase, because what
+              // each explains is momentary: first a long pause with nothing
+              // happening on screen, then the context meter dropping by most of
+              // the window between one request and the next. The next tool call
+              // replaces whichever phrase is standing.
+              //
+              // The `started` phrase is the one the user actually asked for. A
+              // compaction measured 46s in the probe behind
+              // `CLAUDE_COMPACTING_STATUS`, and for that whole time the row said
+              // only "Working…" with a climbing timer — the reported defect.
+              //
+              // `failed` announces NULL, which is what takes the present-tense
+              // phrase back down. Saying nothing is right here rather than
+              // saying "compaction failed": the durable `system` row already
+              // carries the CLI's own reason, and the activity channel describes
+              // what the run is DOING — after a refusal it is back to whatever
+              // it was doing before.
+              //
+              // MAIN THREAD ONLY, like the `tool_call` announce below and for
+              // the same measured reason: a sub-agent's events arrive on this
+              // same stream, and letting one rename the parent's activity was
+              // already fixed once there.
+              if (event.parentToolUseId !== undefined) {
+                return;
+              }
               this.announceActivity(
                 runId,
-                event.trigger === 'manual'
-                  ? 'compacted the conversation'
-                  : 'compacted the conversation to free up context',
+                event.phase === 'failed'
+                  ? null
+                  : event.phase === 'started'
+                    ? 'compacting the conversation'
+                    : event.trigger === 'manual'
+                      ? 'compacted the conversation'
+                      : 'compacted the conversation to free up context',
               );
               return;
             }

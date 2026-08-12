@@ -78,10 +78,44 @@ function commandOf(input: unknown): string | null {
 }
 
 /**
+ * Whether a tool call disclosed any arguments at all.
+ *
+ * TWIN PARSER: `disclosedInput` in
+ * `apps/daemon/src/v1/agents/adapters/acp/acp-driver.ts` makes the same
+ * judgement on the daemon side, normalizing an agent-sent empty bag to null
+ * before it is persisted. A tool payload never passes through a typed daemon
+ * response — every item kind carries a different shape, so the payload is
+ * `z.unknown()` on the wire BY DESIGN and no generated type spans the two sides.
+ * Both readings must agree: widen one and the other must widen with it.
+ *
+ * Kept here rather than inlined at each call site because BOTH renderer surfaces
+ * that show a call's arguments — the transcript row and the approval card — have
+ * to answer it the same way. They did not, briefly: the daemon started sending
+ * null and the card rendered the word `null` where it used to render `{}`.
+ */
+export function disclosesInput(input: unknown): boolean {
+  if (input === null || input === undefined) {
+    return false;
+  }
+  const record = asRecord(input);
+  return record === null || Object.keys(record).length > 0;
+}
+
+/**
  * How to render a tool CALL's input: a diff for an edit, the command for a
  * shell tool, the contents for a write, else the payload as JSON.
+ *
+ * Null when the call disclosed no arguments at all, so the caller renders NO
+ * body rather than a body whose whole content is `{}` or `null`. An ACP agent
+ * may name a call and withhold its arguments (measured on cursor-agent for its
+ * read/search/edit calls — see `disclosedInput` in the daemon's `acp-driver.ts`),
+ * and printing the empty bag stated those as the arguments; the row's header
+ * already carries the tool's name, which is the part that is actually known.
  */
-export function toolInputBody(toolName: string, input: unknown): ToolBody {
+export function toolInputBody(
+  toolName: string,
+  input: unknown,
+): ToolBody | null {
   // Reuse the existing edit detection rather than re-deriving it — DiffView is
   // already the shared rendering for Edit/Write on the tool row AND the
   // approval card.
@@ -115,12 +149,19 @@ export function toolInputBody(toolName: string, input: unknown): ToolBody {
       caption: path,
     };
   }
+  // Nothing was disclosed: no diff, no command, no contents, no target, and no
+  // remaining payload to show. `prettyJson` would render this as the literal
+  // `{}` or `null` — a body that asserts the arguments were empty rather than
+  // absent. There is no body.
+  if (!disclosesInput(input)) {
+    return null;
+  }
   // A read/glob/grep-shaped call has nothing but its target — the header line
   // already says the tool name, so show the path as the body's caption and let
   // the rest be the payload.
   return {
     kind: 'code',
-    code: prettyJson(input ?? null),
+    code: prettyJson(input),
     language: JSON_LANGUAGE,
     caption: path,
   };

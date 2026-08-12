@@ -497,20 +497,60 @@ export const CLAUDE_MCP_LIST_UNREADABLE_MESSAGE =
 /**
  * The `system` subtype announcing that the CLI compacted the conversation.
  *
- * POST-HOC BY CONSTRUCTION — this is the one fact to keep in mind when reading
- * anything built on it. Binary evidence on 2.1.226: the CLI's own TUI drives
- * its "Compacting conversation…" spinner from internal `compact_start` /
- * `compact_progress` / `compact_end` events, and NONE of those is serialized
- * to the stream — only this boundary is, and it carries `session_id` the way
- * every other emitted system line does. It marks the start of the new,
- * compacted segment, so by the time we see it the work is finished and the
- * turn is about to continue.
+ * It marks the START of the new, compacted segment, so by the time it arrives
+ * the work is finished — it is the FINISHED end of the compaction, and it
+ * carries the token counts (`compact_metadata`).
  *
- * So a live "compacting…" state is NOT obtainable from the headless stream. Do
- * not add one on a timer or on a silence heuristic: the honest signal is that
- * it HAPPENED, which is what explains the context meter suddenly dropping.
+ * This block used to say a live "compacting…" state was unobtainable from the
+ * headless stream, on 2.1.226 binary evidence that the TUI's internal
+ * `compact_start` / `compact_progress` / `compact_end` events are never
+ * serialized. That is still true of those three events, and STILL no reason to
+ * infer a label from a timer or a silence heuristic — but it is no longer the
+ * whole picture: 2.1.227 serializes a plain status line instead. See
+ * {@link CLAUDE_COMPACTING_STATUS}.
  */
 export const CLAUDE_COMPACT_BOUNDARY_SUBTYPE = 'compact_boundary';
+
+/**
+ * The `system` subtype carrying a coarse turn status, of which compaction is
+ * the one this daemon reads.
+ *
+ * Probed on 2.1.227 by driving ONE persistent
+ * `-p --output-format stream-json --input-format stream-json` process — the
+ * same shape `AgentSessionRegistry` keeps between turns — for 8 turns and then
+ * sending `/compact` on its still-open stdin:
+ *
+ * ```
+ * {"type":"system","subtype":"status","status":"compacting","session_id":…}
+ * {"type":"system","subtype":"status","status":null,"compact_result":"success"}
+ * {"type":"system","subtype":"compact_boundary","compact_metadata":{…,"duration_ms":46594}}
+ * ```
+ *
+ * A FAILED compaction replaces the second line's result with
+ * `"compact_result":"failed","compact_error":"Not enough messages to compact."`.
+ *
+ * Note for anyone re-probing: a ONE-SHOT `claude -p --resume <id> "/compact"`
+ * can never succeed — measured refusing at 2 turns, at 10 turns, and on a
+ * single 117 000-character turn, always "Not enough messages to compact.". Only
+ * the persistent-stdin session compacts, so the one-shot form makes a working
+ * feature look broken.
+ */
+export const CLAUDE_STATUS_SUBTYPE = 'status';
+
+/** The {@link CLAUDE_STATUS_SUBTYPE} value meaning "compacting right now". */
+export const CLAUDE_COMPACTING_STATUS = 'compacting';
+
+/** The terminating status line's `compact_result` value meaning it did not happen. */
+export const CLAUDE_COMPACT_RESULT_FAILED = 'failed';
+
+/**
+ * Said out loud when a compaction the user asked for did not happen. The CLI
+ * reports the reason on the same line (`compact_error`), and without this the
+ * turn simply carries on at full context with nothing on screen — the user
+ * waited for a compaction that silently never occurred.
+ */
+export const CLAUDE_COMPACT_FAILED_NOTICE =
+  'the conversation was not compacted';
 
 // ── Messages ──────────────────────────────────────────────────────────────
 

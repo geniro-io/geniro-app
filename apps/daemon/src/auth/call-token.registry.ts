@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
+import { registerSecret } from '../v1/diagnostics/utils/redact';
+
 /**
  * Per-caller-node MCP call tokens. The graph executor mints one token per
  * claude caller node of a run; the loopback guard accepts it ONLY on that
@@ -16,8 +18,22 @@ import { Injectable } from '@nestjs/common';
 export class CallTokenRegistry {
   private readonly byRun = new Map<string, Map<string, string>>();
 
-  /** Store `token` as the credential for `nodeId`'s MCP route in `runId`. */
+  /**
+   * Store `token` as the credential for `nodeId`'s MCP route in `runId`.
+   *
+   * Registered for redaction HERE, at the one place every call token passes
+   * through, so no caller has to remember to. `utils/redact.ts` already states
+   * that a call token "may not leave the process in plain text" and the
+   * diagnostics report already promises "it carries no secrets" — but only the
+   * launch token and the cursor key were ever registered, so both claims were
+   * false for this credential. With `agent-stdio` recording enabled the cursor
+   * `session/new` frame carries `Authorization: Bearer <token>` straight into
+   * `<userData>/logs/*.jsonl` and into the report tail the user is invited to
+   * paste into a bug report. The registry is idempotent per (value, label), so
+   * re-issuing the same token costs nothing.
+   */
   issue(runId: string, nodeId: string, token: string): void {
+    registerSecret(token, 'call token');
     let nodes = this.byRun.get(runId);
     if (!nodes) {
       nodes = new Map();

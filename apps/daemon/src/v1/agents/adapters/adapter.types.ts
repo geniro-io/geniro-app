@@ -188,13 +188,33 @@ type AgentEventBody =
   | { type: 'session'; sessionId: string }
   | {
       /**
-       * An adapter-level notice about THIS turn — a capability the CLI did not
-       * grant, a request that degraded. Persisted as a `system` transcript item
-       * so a degrade is visible to the user rather than silent. NOT terminal:
-       * the turn continues after one.
+       * A notice about THIS turn, persisted as a `system` transcript item so it
+       * is visible to the user rather than silent. NOT terminal: the turn
+       * continues after one.
+       *
+       * Two kinds of text arrive here, and {@link origin} is what tells them
+       * apart. The default is an ADAPTER-level advisory the daemon itself wrote
+       * — a capability the CLI did not grant, a request that degraded — which
+       * the renderer is right to surface like an error. The other is text the
+       * CLI produced, which is not an advisory at all and must not be dressed as
+       * one.
        */
       type: 'notice';
       message: string;
+      /**
+       * Who wrote {@link message}. Absent means the daemon did, which is the
+       * historical case and the one every existing producer means.
+       *
+       * `cli` marks text the AGENT produced and geniro is only relaying —
+       * claude's own compaction summary is the first. It matters for two
+       * reasons. Presentationally, that text is informational prose, and
+       * rendering it in the daemon's failure chrome told the user geniro was
+       * reporting a problem when it was relaying a summary. And as a trust
+       * boundary: the summary describes a conversation that can contain file
+       * contents, command output and web pages, so it is UNTRUSTED content
+       * which must not be able to impersonate an application-level advisory.
+       */
+      origin?: 'cli';
     }
   | {
       /**
@@ -247,25 +267,45 @@ type AgentEventBody =
     }
   | {
       /**
-       * The CLI compacted the conversation — it summarised the history and
-       * carried on with a much smaller context.
+       * The CLI is compacting the conversation, or has finished doing so — it
+       * summarises the history and carries on with a much smaller context.
        *
-       * REPORTS THE PAST, NOT THE PRESENT. The CLI serialises only its
-       * post-compaction boundary; the events driving its own
-       * "Compacting conversation…" spinner stay internal (see
-       * `CLAUDE_COMPACT_BOUNDARY_SUBTYPE` for the binary evidence). So this
-       * says "it happened", never "it is happening", and no consumer may
-       * render it as an in-progress state.
+       * REPORTS BOTH ENDS, which it did not always. This arm used to say "the
+       * past, never the present", on 2.1.226 evidence that only the
+       * post-compaction boundary is serialised. On 2.1.227 that is no longer
+       * true: the CLI emits `{"type":"system","subtype":"status",
+       * "status":"compacting"}` when the work STARTS (see
+       * `CLAUDE_COMPACTING_STATUS`). A compaction measured 46s in that probe,
+       * so the interval this now names is exactly the one a user spent watching
+       * an unexplained "Working…".
        *
-       * Worth reporting anyway because the alternative is a mystery: the
-       * context meter drops by most of the window between one request and the
-       * next, and with nothing to explain it that reads as a bug in the meter.
+       * Worth reporting at both ends because the alternative is a mystery: a
+       * long unexplained pause, and then the context meter dropping by most of
+       * the window between one request and the next.
        *
-       * EPHEMERAL — never a transcript row. A `system` item saying "compacted"
-       * is housekeeping the user did not ask for, in the middle of the
-       * conversation they did.
+       * EPHEMERAL — never a transcript row, at either phase. A `system` item
+       * saying "compacted" is housekeeping the user did not ask for in the
+       * middle of the conversation they did. What DOES earn a row is the CLI's
+       * own summary text and a compaction that FAILED, and both arrive as their
+       * own lines rather than on this arm.
        */
       type: 'context_compacted';
+      /**
+       * Which end of the compaction this is, and how it ended.
+       *
+       * `started` and `failed` carry no token counts — nothing was dropped in
+       * either case — so a consumer that renders numbers must read this first.
+       * Required rather than optional: a consumer that ignored it would announce
+       * a finished compaction the moment one began.
+       *
+       * `failed` exists because `started` puts up a PRESENT-TENSE state that
+       * something has to take down. Only the success path emits a boundary, so
+       * without a failure arm the phrase "compacting the conversation" outlived
+       * a compaction the CLI had already declined — and a refusal is the common
+       * case, since a short conversation answers `/compact` with "Not enough
+       * messages to compact.".
+       */
+      phase: 'started' | 'finished' | 'failed';
       /** `auto` (the window filled) or `manual` (`/compact`); null if unstated. */
       trigger: string | null;
       /** Context size before the compaction, when the CLI reports it. */

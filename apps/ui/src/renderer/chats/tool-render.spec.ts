@@ -60,7 +60,7 @@ describe('toolInputBody', () => {
   it('falls back to highlighted JSON for a tool it does not recognize', () => {
     const body = toolInputBody('SomeFutureTool', { alpha: 1, beta: [2] });
     expect(body).toMatchObject({ kind: 'code', language: 'json' });
-    expect(body.kind === 'code' && body.code).toContain('"alpha": 1');
+    expect(body?.kind === 'code' && body.code).toContain('"alpha": 1');
   });
 
   it('captions a path-only call with the path it targets', () => {
@@ -74,6 +74,22 @@ describe('toolInputBody', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(() => toolInputBody('X', cyclic)).not.toThrow();
+  });
+
+  it('renders NO body for a call that disclosed no arguments', () => {
+    // The reported defect: cursor names a read/search/edit call and sends an
+    // EMPTY argument bag, which this function used to render as the literal
+    // `{}` — stating the arguments were empty rather than absent. The row's
+    // header already carries the tool name, which is the part that is known.
+    expect(toolInputBody('Read File', {})).toBeNull();
+  });
+
+  it('renders NO body when there are no arguments at all', () => {
+    // The daemon normalizes an empty bag to null before it ever reaches here
+    // (`disclosedInput` in acp-driver.ts), so null is the shape this actually
+    // receives in production — and `prettyJson` would have printed `null`.
+    expect(toolInputBody('Read File', null)).toBeNull();
+    expect(toolInputBody('Read File', undefined)).toBeNull();
   });
 });
 

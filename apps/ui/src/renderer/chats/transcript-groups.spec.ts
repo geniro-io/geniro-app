@@ -545,6 +545,19 @@ describe('toolCallSummary', () => {
   it('falls back to compact JSON for unknown input shapes', () => {
     expect(toolCallSummary(call('Custom', 't', { foo: 1 }))).toBe('{"foo":1}');
   });
+
+  it('previews NOTHING for a call that disclosed no arguments', () => {
+    // The reported defect, on the line visible while the row is COLLAPSED: a
+    // cursor read/search/edit call arrives with an empty argument bag, and the
+    // JSON fallback above rendered it as the literal `{}`. The row header already
+    // names the tool.
+    //
+    // This is the sibling of the same guard in `tool-render.ts`, and it is the
+    // half that still matters after the daemon started normalizing `{}` to null:
+    // rows PERSISTED before that change still hold `input: {}`, so replaying an
+    // older cursor chat depends on this one.
+    expect(toolCallSummary(call('Read File', 't', {}))).toBe('');
+  });
 });
 
 describe('groupTranscript — closing a group whose turn ended', () => {

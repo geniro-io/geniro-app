@@ -44,6 +44,7 @@ import {
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_HOME_SETTINGS_FILE,
   CLAUDE_INTERRUPT_SUBTYPE,
+  CLAUDE_LOGIN_CODE_PROMPT_MARKERS,
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_EMPTY_MARKER,
@@ -276,6 +277,24 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude auth logout` — read from `claude auth --help` on 2.1.227. */
         logoutArgs: CLAUDE_AUTH_LOGOUT_ARGS,
         logoutUnavailableReason: null,
+        /**
+         * OBSERVED verbatim on 2.1.228, running `claude auth login` with stdin
+         * closed and no TTY:
+         *
+         * ```
+         * Opening browser to sign in…
+         * If the browser didn't open, visit: https://claude.com/cai/oauth/…
+         * Paste code here if prompted >
+         * ```
+         *
+         * Note what this does NOT assume. The same run also opened a listener on
+         * 127.0.0.1 (observed via lsof), so the browser round-trip may well
+         * complete without any paste — the prompt says "if prompted" for that
+         * reason. So this marker is not "claude needs a code", it is "claude has
+         * reached the point where a code WOULD be accepted", which is exactly
+         * when a field for one becomes useful and never before.
+         */
+        loginCodePromptMarkers: CLAUDE_LOGIN_CODE_PROMPT_MARKERS,
         expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
         /**
          * The Anthropic credentials `buildChildEnv` strips from every child, so

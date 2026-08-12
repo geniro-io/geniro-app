@@ -30,6 +30,7 @@ import type {
   AgentSession,
   AgentSkillEntry,
   AgentSkillsInput,
+  AgentSpawnInfo,
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
@@ -434,6 +435,94 @@ export abstract class AgentAdapter {
       args: [...logoutArgs],
       env: this.configDirEnv(configDir),
     };
+  }
+
+  /**
+   * RUN this CLI's sign-in, headlessly, as a managed child — as opposed to
+   * {@link loginTarget}, which only says what the invocation would be.
+   *
+   * Both exist on purpose. The resolve-only path is the fallback and the escape
+   * hatch: it hands the user a real terminal when this one cannot finish, and it
+   * is the only path for anything a daemon-owned child cannot do. This one is
+   * what keeps a terminal window from opening for the common case.
+   *
+   * Why it is allowed at all, given the block on `loginArgs` saying the daemon
+   * resolves and never runs: that block generalised a probe of `mcp login`,
+   * which refuses a non-TTY stdin outright. Re-probed on claude 2.1.228 and
+   * cursor-agent 2026.08.11: the ACCOUNT login does not refuse. Both print a
+   * usable URL, both open the browser themselves, and cursor polls to
+   * completion with stdin closed.
+   *
+   * `processGroup` is forced, not optional. A sign-in spawns a browser opener of
+   * its own, so the thing that must die on cancel or shutdown is the GROUP —
+   * `runCommand`'s execFile path would leave it behind, and that path also has
+   * no writable stdin, which the code prompt needs.
+   *
+   * Resolves with the child's stdout when it exited cleanly, or `null` on a
+   * failure or the deadline. It deliberately does NOT decide whether the user is
+   * now signed in: only the CLI's own status probe can answer that, so the
+   * caller re-asks rather than trusting an exit code.
+   */
+  runLogin(options: {
+    configDir?: string | null;
+    timeoutMs: number;
+    onSpawn: (child: ChildProcess, spawnInfo: AgentSpawnInfo) => void;
+  }): Promise<string | null> {
+    const { loginArgs } = this.getConfig().auth;
+    if (loginArgs === null) {
+      return Promise.resolve(null);
+    }
+    return this.runCommand([...loginArgs], {
+      processGroup: true,
+      timeoutMs: options.timeoutMs,
+      env: this.configDirEnv(options.configDir),
+      onSpawn: options.onSpawn,
+    });
+  }
+
+  /**
+   * RUN this CLI's sign-out, headlessly.
+   *
+   * Unlike its sign-in sibling this needs no browser and no input at all —
+   * probe-verified on claude 2.1.228 with stdin closed and no TTY: exit 0,
+   * "Successfully logged out from your Anthropic account." So there is nothing a
+   * terminal window would add except a window.
+   *
+   * The plain execFile path, deliberately: clearing stored credentials forks
+   * nothing, so there is no group to reap, and node's own deadline is the whole
+   * story. Resolves `true` when the CLI exited cleanly.
+   */
+  async runLogout(options: {
+    configDir?: string | null;
+    timeoutMs?: number;
+    onSpawn?: (child: ChildProcess, spawnInfo: AgentSpawnInfo) => void;
+  }): Promise<boolean> {
+    const { logoutArgs } = this.getConfig().auth;
+    if (logoutArgs === null) {
+      return false;
+    }
+    const out = await this.runCommand([...logoutArgs], {
+      ...(options.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.timeoutMs }),
+      env: this.configDirEnv(options.configDir),
+      ...(options.onSpawn === undefined ? {} : { onSpawn: options.onSpawn }),
+    });
+    return out !== null;
+  }
+
+  /**
+   * Whether this CLI's sign-in output is asking for a code on stdin.
+   *
+   * Concrete over `auth.loginCodePromptMarkers`, so the service driving a login
+   * never learns which CLI prompts and which polls — a CLI that needs nothing
+   * declares an empty list and this is permanently false for it.
+   */
+  loginWantsCode(output: string): boolean {
+    const haystack = output.toLowerCase();
+    return this.getConfig().auth.loginCodePromptMarkers.some(
+      (marker) => marker !== '' && haystack.includes(marker.toLowerCase()),
+    );
   }
 
   constructor(protected readonly options: AgentAdapterOptions = {}) {}

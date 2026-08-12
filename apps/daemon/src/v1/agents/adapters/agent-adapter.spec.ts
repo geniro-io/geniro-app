@@ -464,6 +464,30 @@ describe('AgentAdapter.logoutTarget', () => {
     expect(target.ok && Object.keys(target.env).length).toBeGreaterThan(0);
   });
 
+  it('reads each CLI’s OWN code-prompt answer, which is not the same answer', () => {
+    // The measured split this exists for: claude prints `Paste code here if
+    // prompted >` and cursor polls to completion needing nothing. Both directions
+    // are asserted, because a shared default of either value would look correct
+    // for one CLI and put a dead input field (or none at all) in front of the
+    // other.
+    const claude = new ClaudeAdapter();
+    const cursor = new CursorAcpAdapter();
+
+    expect(claude.loginWantsCode('Paste code here if prompted > ')).toBe(true);
+    // Case- and punctuation-insensitive, since the words are the stable part.
+    expect(claude.loginWantsCode('PASTE CODE HERE >')).toBe(true);
+    expect(claude.loginWantsCode('Waiting for browser authentication...')).toBe(
+      false,
+    );
+    // cursor's real output, verbatim — it must never ask for a code.
+    expect(
+      cursor.loginWantsCode(
+        'Starting login process...\nWaiting for browser authentication...\nOpen a browser and navigate to this link: https://cursor.com/login\n',
+      ),
+    ).toBe(false);
+    expect(cursor.loginWantsCode('Paste code here if prompted > ')).toBe(false);
+  });
+
   it('refuses for a CLI that declares no account sign-out', () => {
     // The defensive arm, entered deliberately — and it is the arm that matters
     // most in this pair: a `logoutArgs: null` that spread an empty argv would

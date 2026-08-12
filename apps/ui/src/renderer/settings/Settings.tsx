@@ -18,7 +18,7 @@ import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 import { createDaemonApis } from '../daemon-api';
 import { useConfigDirCapability } from '../graphs/use-config-dir-capability';
-import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
+import { useCliLogin } from './use-cli-login';
 
 function normalizedCliPaths(
   paths: Partial<Record<CliKind, string>>,
@@ -202,12 +202,12 @@ export function Settings({
   /**
    * Re-probe when this window regains focus.
    *
-   * The account controls hand the work to the user's own TERMINAL, so the app is
-   * never told when a sign-in or sign-out finished — and a card still offering
-   * "Sign out" after the user signed out is the same defect as the one this
-   * change fixes, arrived at from the other side. Focus-return is exactly the
-   * moment the answer may have changed: leaving for a terminal and coming back
-   * is the whole shape of the interaction.
+   * The in-app flows re-probe themselves when they settle, so this is not their
+   * mechanism — it is the backstop for every account change that happens where
+   * this app cannot see it: the terminal fallback, a `claude auth login` the user
+   * ran in their own shell, a token that expired while the window was in the
+   * background. Focus-return is exactly when the answer may have changed, since
+   * leaving and coming back is the shape of all three.
    *
    * Not scoped to the account buttons: a binary installed or a `PATH` edited
    * while the window was in the background changes detection too, and the probe
@@ -253,6 +253,13 @@ export function Settings({
    * reported the lapsed session (`Chats.signInToCli`, which passes the run's
    * `configDir`). This label is what keeps the two from being confused.
    */
+  /**
+   * The in-place sign-in. `refreshClis` is its settle handler: the daemon only
+   * reports that the command completed, so the authoritative answer comes from
+   * re-asking the CLI — the same probe the card's status line already reads.
+   */
+  const login = useCliLogin(apis, () => void refreshClis());
+
   const configDirCapability = useConfigDirCapability(
     apis?.capabilities ?? null,
   );
@@ -269,45 +276,46 @@ export function Settings({
   );
 
   /**
-   * Sign one CLI itself back in, in the user's own terminal — the account,
-   * not one of its MCP servers. Mirrors the transcript row's own sign-in
-   * (`Chats.signInToCli`): resolve the invocation through the daemon, then
-   * hand it to the user's terminal via the same IPC channel. No config
-   * directory is passed — Settings configures the CLI itself, not any one
-   * chat's profile, so this always signs in to the default one.
+   * Sign one CLI in, IN PLACE — the daemon runs it and this screen shows the
+   * progress, so no terminal window opens.
+   *
+   * The resolve-and-hand-to-a-terminal path it replaced is still there and still
+   * reachable: it is what the chat surface uses for a run on another profile, and
+   * what the sign-in panel's own failure text points at. No config directory is
+   * passed — Settings configures the CLI itself, so this is the default profile.
    */
   const signInToCli = useCallback(
     async (kind: CliKind): Promise<void> => {
-      if (!apis) {
-        return;
-      }
-      await openResolvedHandoff(
-        () => apis.handoff.resolveCliLogin({ agent: kind }),
-        `${kind} cannot be signed in from here`,
-        setError,
-      );
+      await login.start(kind);
     },
-    [apis],
+    [login],
   );
 
   /**
-   * Sign one CLI itself out, in the user's own terminal — the exact counterpart
-   * of {@link signInToCli}, down to resolving through the daemon rather than
-   * running anything here. No config directory, for the same reason: Settings
-   * configures the CLI itself, so this is always the default profile.
+   * Sign one CLI out, in place.
+   *
+   * No progress panel and no window, because there is nothing to watch: probed on
+   * claude 2.1.228 with stdin closed and no TTY, `auth logout` exits 0 in well
+   * under a second. What the user sees is the card's own status line changing,
+   * which is the answer they actually wanted — and it comes from re-probing the
+   * CLI rather than from trusting the exit code.
    */
   const signOutFromCli = useCallback(
     async (kind: CliKind): Promise<void> => {
       if (!apis) {
         return;
       }
-      await openResolvedHandoff(
-        () => apis.handoff.resolveCliLogout({ agent: kind }),
-        `${kind} cannot be signed out from here`,
-        setError,
-      );
+      try {
+        const result = await apis.cliAuth.cliLogout({ agent: kind as never });
+        if (!result.ok) {
+          setError(result.unavailableReason);
+        }
+      } catch (err) {
+        setError(String(err));
+      }
+      await refreshClis();
     },
-    [apis],
+    [apis, refreshClis],
   );
 
   const onToggleUpdates = useCallback(
@@ -371,7 +379,14 @@ export function Settings({
         </p>
       </header>
 
-      {error ? <ErrorText>{error}</ErrorText> : null}
+      {/* The sign-in's own error lives in its progress panel — but a sign-in that
+          failed to START has no panel to live in, and would otherwise be a
+          button press with no visible outcome. It falls through to here. */}
+      {(error ?? (login.login === null ? login.error : null)) ? (
+        <ErrorText>
+          {error ?? (login.login === null ? login.error : null)}
+        </ErrorText>
+      ) : null}
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
@@ -402,6 +417,18 @@ export function Settings({
           onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
           onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
           profileScopedKinds={profileScopedKinds}
+          login={
+            login.login
+              ? {
+                  kind: login.login.kind,
+                  session: login.login.session,
+                  error: login.error,
+                  onSubmitCode: (code) => void login.submitCode(code),
+                  onCancel: () => void login.cancel(),
+                  onDismiss: login.dismiss,
+                }
+              : null
+          }
         />
       </section>
 

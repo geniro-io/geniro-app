@@ -3,6 +3,7 @@ import {
   AgentsApi,
   CapabilitiesApi,
   ChatsApi,
+  CliAuthApi,
   Configuration,
   DiagnosticsApi,
   HandoffApi,
@@ -192,6 +193,12 @@ export interface DaemonApis {
   workflows: WorkflowsApi;
   capabilities: CapabilitiesApi;
   handoff: HandoffApi;
+  /**
+   * Signing a CLI in and out in place (`/v1/auth`), as opposed to `handoff`,
+   * which only resolves what the user would type. Separate client for the same
+   * reason they are separate controllers: one runs commands, the other never does.
+   */
+  cliAuth: CliAuthApi;
   diagnostics: DiagnosticsApi;
 }
 
@@ -226,6 +233,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     workflows: new WorkflowsApi(config),
     capabilities: new CapabilitiesApi(config),
     handoff: new HandoffApi(config),
+    cliAuth: new CliAuthApi(config),
     diagnostics: new DiagnosticsApi(config),
   };
 }

@@ -461,6 +461,19 @@ export const CLAUDE_AUTH_LOGIN_ARGS: readonly string[] = ['auth', 'login'];
 export const CLAUDE_AUTH_LOGOUT_ARGS: readonly string[] = ['auth', 'logout'];
 
 /**
+ * Output that means `claude auth login` has reached the point where a pasted
+ * code would be accepted.
+ *
+ * Named rather than inline because it has the second reader that earns a name:
+ * `getConfig()` spells it and the adapter's spec asserts on it. Matched
+ * case-insensitively and as a SUBSTRING, so the trailing `>` and any
+ * re-punctuation of the sentence do not break it — the words are the stable part.
+ */
+export const CLAUDE_LOGIN_CODE_PROMPT_MARKERS: readonly string[] = [
+  'paste code here',
+];
+
+/**
  * Wording that marks a turn as having failed on the ACCOUNT, not on the work.
  *
  * Observed verbatim in a failed run's own error row:

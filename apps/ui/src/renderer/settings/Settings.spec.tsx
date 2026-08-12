@@ -35,13 +35,30 @@ const geniro = {
   openInTerminal: vi.fn(),
 };
 
-// The daemon client is mocked so Settings never issues a real fetch for its
-// one route (`resolveCliLogin`) — `createDaemonApis` hands back one object
-// per launch handle, so a single factory mock covers it.
+// The daemon client is mocked so Settings never issues a real fetch —
+// `createDaemonApis` hands back one object per launch handle, so a single factory
+// mock covers every client on it.
 const handoffApi = vi.hoisted(() => ({ resolveCliLogin: vi.fn() }));
+const cliAuthApi = vi.hoisted(() => ({
+  cliLogout: vi.fn(),
+  startCliLogin: vi.fn(),
+  getCliLogin: vi.fn(),
+  submitCliLoginCode: vi.fn(),
+  cancelCliLogin: vi.fn(),
+}));
+// `capabilities` is read by `useConfigDirCapability` for the account row's
+// profile qualifier; rejecting is the honest "not answered" and leaves the row
+// unqualified, which is what these specs assert against.
+const capabilitiesApi = vi.hoisted(() => ({
+  getCapabilities: vi.fn(() => Promise.reject(new Error('not in this spec'))),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
-  createDaemonApis: vi.fn(() => ({ handoff: handoffApi })),
+  createDaemonApis: vi.fn(() => ({
+    handoff: handoffApi,
+    cliAuth: cliAuthApi,
+    capabilities: capabilitiesApi,
+  })),
 }));
 
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
@@ -91,6 +108,15 @@ beforeEach(() => {
     message: null,
   });
   handoffApi.resolveCliLogin.mockReset();
+  cliAuthApi.cliLogout.mockReset().mockResolvedValue({
+    agent: 'cursor-agent',
+    ok: true,
+    unavailableReason: null,
+  });
+  cliAuthApi.startCliLogin.mockReset();
+  cliAuthApi.getCliLogin.mockReset();
+  cliAuthApi.submitCliLoginCode.mockReset();
+  cliAuthApi.cancelCliLogin.mockReset();
   (window as unknown as { geniro: Partial<GeniroApi> }).geniro =
     geniro as unknown as Partial<GeniroApi>;
 });
@@ -296,20 +322,22 @@ describe('Settings — CLI sign-in', () => {
     ).find((b) => b.textContent?.includes('Sign in'));
   }
 
-  it('resolves the CLI’s own login and opens it in the user’s terminal', async () => {
-    // This is the placement decided for the control: Settings offers it, the
-    // agents panel no longer does (agents-panel.spec.tsx pins the removal).
+  it('runs the sign-in IN the app — no terminal window opens', async () => {
+    // THE REPORTED COMPLAINT. This used to resolve an invocation and hand it to
+    // the user's terminal; a window opening for an ordinary sign-in was the thing
+    // being fixed. `openInTerminal` staying untouched is the assertion that
+    // matters — reverting to the handoff path fails here rather than merely
+    // changing which call was made.
     geniro.detectClis.mockResolvedValue([
       det('claude'),
       det('cursor-agent', { loggedIn: false }),
     ]);
-    handoffApi.resolveCliLogin.mockResolvedValue({
-      kind: 'command',
-      command: 'cursor-agent',
-      args: ['login'],
-      cwd: '/home/me',
-      display: 'cursor-agent login',
-      unavailableReason: null,
+    cliAuthApi.startCliLogin.mockResolvedValue({
+      id: 'login-1',
+      agent: 'cursor-agent',
+      status: 'waiting',
+      url: 'https://cursor.com/login?uuid=1',
+      message: 'Waiting for browser authentication...',
     });
     await mount();
     await expandCursorRow();
@@ -320,32 +348,78 @@ describe('Settings — CLI sign-in', () => {
       button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    // No config directory: Settings signs in to the CLI's default profile,
-    // not any one chat's.
-    expect(handoffApi.resolveCliLogin).toHaveBeenCalledWith({
+    // No config directory: Settings signs in to the CLI's default profile, not
+    // any one chat's.
+    expect(cliAuthApi.startCliLogin).toHaveBeenCalledWith({
       agent: 'cursor-agent',
     });
-    expect(geniro.openInTerminal).toHaveBeenCalledWith({
-      command: 'cursor-agent',
-      args: ['login'],
-      cwd: '/home/me',
-      env: undefined,
-    });
+    expect(geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(handoffApi.resolveCliLogin).not.toHaveBeenCalled();
+    // And the user is told what is happening, since the terminal used to be the
+    // progress display.
+    expect(container.textContent).toContain('Waiting for you to finish');
   });
 
-  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
+  it('runs the sign-out in place and re-probes, instead of opening a window', async () => {
+    // Probe-verified headless (claude 2.1.228, stdin closed, exit 0), so there is
+    // nothing a window would add. The re-probe is the part the user sees: it is
+    // what flips the card's own status line.
+    geniro.detectClis.mockResolvedValue([
+      det('claude'),
+      det('cursor-agent', { loggedIn: true }),
+    ]);
+    await mount();
+    await expandCursorRow();
+    const before = geniro.detectClis.mock.calls.length;
+
+    const signOut = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).find((b) => b.textContent?.includes('Sign out'));
+    expect(signOut).toBeDefined();
+    await act(async () => {
+      signOut!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(cliAuthApi.cliLogout).toHaveBeenCalledWith({
+      agent: 'cursor-agent',
+    });
+    expect(geniro.openInTerminal).not.toHaveBeenCalled();
+    // Re-asked the CLI rather than assuming the exit code meant signed-out.
+    expect(geniro.detectClis.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('surfaces a refused sign-out rather than silently doing nothing', async () => {
+    geniro.detectClis.mockResolvedValue([
+      det('claude'),
+      det('cursor-agent', { loggedIn: true }),
+    ]);
+    cliAuthApi.cliLogout.mockResolvedValue({
+      agent: 'cursor-agent',
+      ok: false,
+      unavailableReason: 'this CLI has no sign-out command',
+    });
+    await mount();
+    await expandCursorRow();
+
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((b) => b.textContent?.includes('Sign out'))!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('this CLI has no sign-out command');
+  });
+
+  it('reports a sign-in the daemon refuses, without a window either way', async () => {
     geniro.detectClis.mockResolvedValue([
       det('claude'),
       det('cursor-agent', { loggedIn: false }),
     ]);
-    handoffApi.resolveCliLogin.mockResolvedValue({
-      kind: 'unavailable',
-      command: null,
-      args: [],
-      cwd: null,
-      display: null,
-      unavailableReason: 'this CLI has no account sign-in',
-    });
+    cliAuthApi.startCliLogin.mockRejectedValue(
+      new Error(
+        'daemon POST /v1/auth/login failed (400): CLI_LOGIN_UNSUPPORTED',
+      ),
+    );
     await mount();
     await expandCursorRow();
 
@@ -354,35 +428,7 @@ describe('Settings — CLI sign-in', () => {
     });
 
     expect(geniro.openInTerminal).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('this CLI has no account sign-in');
-  });
-
-  it('falls back to its own sentence when the daemon refuses without one', async () => {
-    // `handoff-open.ts` does `target.unavailableReason ?? fallback`, and every
-    // other caller's spec supplies a reason — so the fallback arm was never
-    // entered and could be deleted with nothing going red, leaving the user a
-    // refusal with no message at all.
-    geniro.detectClis.mockResolvedValue([
-      det('claude'),
-      det('cursor-agent', { loggedIn: false }),
-    ]);
-    handoffApi.resolveCliLogin.mockResolvedValue({
-      kind: 'unavailable',
-      command: null,
-      args: [],
-      cwd: null,
-      display: null,
-      unavailableReason: null,
-    });
-    await mount();
-    await expandCursorRow();
-
-    await act(async () => {
-      signInButton()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(geniro.openInTerminal).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('cannot be signed in from here');
+    expect(container.textContent).toContain('CLI_LOGIN_UNSUPPORTED');
   });
 });
 

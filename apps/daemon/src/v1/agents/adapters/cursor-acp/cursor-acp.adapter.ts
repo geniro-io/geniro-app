@@ -312,6 +312,24 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         logoutArgs: ['logout'],
         logoutUnavailableReason: null,
+        /**
+         * EMPTY, and measured rather than assumed. Probed 2026-08-12 on
+         * 2026.08.11-e8db854, `NO_OPEN_BROWSER=1 cursor-agent login` with stdin
+         * CLOSED:
+         *
+         * ```
+         * Starting login process...
+         * Authenticating with Cursor...
+         * Waiting for browser authentication...
+         * Open a browser and navigate to this link: https://cursor.com/login…
+         * ```
+         *
+         * It then waits on the browser and completes by itself — no code is ever
+         * asked for, which is why a daemon-run sign-in needs no input field for
+         * this CLI. A marker invented here would fire on nothing and put a dead
+         * field in front of the user.
+         */
+        loginCodePromptMarkers: [],
         /*
          * There is an ELECTRON-SIDE twin of these facts: `LOGIN_PROBES` in
          * `apps/ui/src/main/cli-detect.ts`, which asks this CLI whether it is

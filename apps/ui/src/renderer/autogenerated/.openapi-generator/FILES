@@ -2,6 +2,7 @@
 apis/AgentsApi.ts
 apis/CapabilitiesApi.ts
 apis/ChatsApi.ts
+apis/CliAuthApi.ts
 apis/DiagnosticsApi.ts
 apis/HandoffApi.ts
 apis/WorkflowsApi.ts

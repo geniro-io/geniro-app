@@ -1434,6 +1434,31 @@ export interface AdapterConfig {
     /** Why this CLI cannot be signed out from here, or null when it can. */
     readonly logoutUnavailableReason: string | null;
     /**
+     * Output substrings that mean "this CLI is now waiting for a code pasted on
+     * stdin" during a sign-in the DAEMON is running.
+     *
+     * The reason it exists: `loginArgs` can be run headlessly — the two CLIs
+     * print a URL and open the browser themselves — but they then finish in two
+     * different ways, and a caller cannot tell them apart without asking. cursor
+     * POLLS to completion and needs nothing ("Waiting for browser
+     * authentication…", probed 2026-08-12 on 2026.08.11-e8db854 with stdin
+     * closed, so its list is empty). claude prints `Paste code here if prompted
+     * >`, and its browser round-trip may or may not complete over the localhost
+     * listener it also opens — so its marker is what turns a hung child into a
+     * field the user can paste into.
+     *
+     * EVIDENCE-GATED like {@link expiredMarkers}, and empty is a real answer: an
+     * invented marker either never fires or fires on unrelated output and asks
+     * the user for a code no CLI wants.
+     *
+     * NOTE the deliberate narrowing this contradicts nothing in: `mcp login`
+     * genuinely REFUSES a non-TTY stdin (probe-verified, claude 2.1.223), and
+     * that measurement was generalised to the ACCOUNT login without re-checking.
+     * Re-probed on 2.1.228: `claude auth login` with stdin closed does not
+     * refuse — it prints a usable URL and waits. The two commands differ.
+     */
+    readonly loginCodePromptMarkers: readonly string[];
+    /**
      * Substrings that mark a failed turn as "your account session is no longer
      * valid" — matched case-insensitively against the turn's error message, and
      * the reason an error row can offer Sign in instead of only a stack trace.

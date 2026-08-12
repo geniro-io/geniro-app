@@ -1146,6 +1146,97 @@ export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 /**
  * 
  * @export
+ * @interface LoginCodeBodyDto
+ */
+export interface LoginCodeBodyDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof LoginCodeBodyDto
+     */
+    code: string;
+}
+/**
+ * 
+ * @export
+ * @interface LoginSession
+ */
+export interface LoginSession {
+    /**
+     * 
+     * @type {string}
+     * @memberof LoginSession
+     */
+    id: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof LoginSession
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof LoginSession
+     */
+    status: LoginSessionStatusEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof LoginSession
+     */
+    url: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof LoginSession
+     */
+    message: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const LoginSessionStatusEnum = {
+    Waiting: 'waiting',
+    NeedsCode: 'needs_code',
+    Succeeded: 'succeeded',
+    Failed: 'failed',
+    Cancelled: 'cancelled'
+} as const;
+export type LoginSessionStatusEnum = typeof LoginSessionStatusEnum[keyof typeof LoginSessionStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface LogoutResult
+ */
+export interface LogoutResult {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof LogoutResult
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LogoutResult
+     */
+    ok: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof LogoutResult
+     */
+    unavailableReason: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface NodePosition
  */
 export interface NodePosition {

@@ -10,6 +10,7 @@ import { InstanceLockLifecycle } from './utils/instance-lock.lifecycle';
 import { PidfileLifecycle } from './utils/pidfile.lifecycle';
 import { AgentsModule } from './v1/agents/agents.module';
 import { ProcessRegistry } from './v1/agents/services/process-registry';
+import { AuthModule } from './v1/auth/auth.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
@@ -45,6 +46,7 @@ export class AppModule {
         DiagnosticsModule,
         NotificationsModule,
         HandoffModule,
+        AuthModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

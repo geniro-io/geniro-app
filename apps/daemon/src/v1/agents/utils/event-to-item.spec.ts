@@ -96,6 +96,30 @@ describe('mapEventToItem', () => {
     });
   });
 
+  it("stamps an agent's own classification as `toolKind`, and omits it otherwise", () => {
+    // `toolKind`, not `kind`: the row's own item kind already owns that word one
+    // object away, and a reader bucketing tool calls by the string 'tool_call' is
+    // the mistake the rename prevents. Omitted for a CLI that classifies nothing,
+    // which keeps every claude row byte-identical.
+    expect(
+      mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'Edit File',
+        input: null,
+        kind: 'edit',
+      }),
+    ).toEqual({
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: { id: 't1', name: 'Edit File', input: null, toolKind: 'edit' },
+    });
+    expect(
+      mapEventToItem({ type: 'tool_call', id: 't2', name: 'Read', input: null })
+        ?.payload,
+    ).not.toHaveProperty('toolKind');
+  });
+
   it('maps tool_result keeping id, name, result, and isError intact', () => {
     expect(
       mapEventToItem({

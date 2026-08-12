@@ -1,20 +1,19 @@
 import { ChevronRight } from 'lucide-react';
 import { memo, useContext, useState } from 'react';
 
-import { CodeBlock } from '../components/ui/code-block';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
-import { type BlockStatus, BlockStatusIcon } from './block-shell';
-import { DiffView } from './diff-view';
+import { type BlockStatus } from './block-shell';
 import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
+import { ToolBodyView } from './tool-body-view';
+import { ToolCallIcon } from './tool-icon';
 import { formatToolName, toolInputBody, toolResultBody } from './tool-render';
 import {
   toolCallSummary,
   type ToolGroupEntry,
   toolGroupSummary,
   type ToolPair,
-  toolResultText,
 } from './transcript-groups';
 import { payloadString } from './transcript-item';
 
@@ -53,16 +52,25 @@ function ToolRow({
   settled: boolean;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  const name = payloadString(pair.call.payload, 'name') ?? 'tool';
+  // Annotated `unknown` rather than inheriting the generated DTO's `any`: the
+  // payload is untyped on the wire BY DESIGN (each item kind carries a different
+  // shape), and every reader below is written to narrow it defensively. Without
+  // the annotation, handing it to a prop is an unsafe-assignment lint error.
+  const payload: unknown = pair.call.payload;
+  const name = payloadString(payload, 'name') ?? 'tool';
   const summary = toolCallSummary(pair.call);
-  const input = (pair.call.payload as { input?: unknown } | null)?.input;
+  const input = (payload as { input?: unknown } | null)?.input;
   const body = toolInputBody(name, input);
   const result = pair.result
     ? ((pair.result.payload as { result?: unknown } | null)?.result ?? null)
     : null;
   // The CALL's input decides how its result reads (a file's contents have no
   // hint of their own language; command output must not be painted as shell).
-  const resultBody = toolResultBody(input, toolResultText(result));
+  //
+  // The RAW result, not its text: a diff the agent reported cannot be recognised
+  // once it has been stringified, and pre-stringifying here is exactly why an
+  // edit's diff used to render as a wall of escaped JSON.
+  const resultBody = toolResultBody(input, result);
   const status = toolPairStatus(pair, settled);
   return (
     <div className="flex flex-col">
@@ -83,7 +91,7 @@ function ToolRow({
             open && 'rotate-90',
           )}
         />
-        <BlockStatusIcon status={status} className="size-3.5" />
+        <ToolCallIcon payload={payload} status={status} className="size-3.5" />
         <span
           className={cn(
             'shrink-0 font-mono',
@@ -97,31 +105,13 @@ function ToolRow({
       </button>
       {open ? (
         <div className="flex flex-col gap-1.5 py-1 pl-6 pr-1.5">
-          {body === null ? null : body.kind === 'diff' ? (
-            <>
-              {body.caption ? (
-                <div className="font-mono text-xs text-muted-foreground">
-                  {body.caption}
-                </div>
-              ) : null}
-              <DiffView oldText={body.oldText} newText={body.newText} />
-            </>
-          ) : (
-            <CodeBlock
-              code={body.code}
-              language={body.language}
-              caption={body.caption}
-            />
-          )}
+          {body === null ? null : <ToolBodyView body={body} />}
           {pair.result !== null ? (
             <div className="flex flex-col gap-0.5">
               <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 result
               </span>
-              <CodeBlock
-                code={resultBody.code}
-                language={resultBody.language}
-              />
+              <ToolBodyView body={resultBody} />
             </div>
           ) : null}
         </div>

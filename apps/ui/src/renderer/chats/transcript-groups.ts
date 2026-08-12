@@ -5,6 +5,8 @@ import { subagentIdOf } from './subagent-payload';
 // re-exports these): reaching into the component module from here is what
 // closed the `agent-activity → transcript-groups → transcript-item →
 // live-row → agent-activity` import cycle.
+import { AGENT_TOOLS, toolKindOf, toolOperationOf } from './tool-kind';
+import { resultDiffsOf, toolResultText } from './tool-render';
 import { payloadString } from './transcript-payload';
 
 /**
@@ -932,18 +934,23 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
   };
 }
 
-/** File-touching tools, for the group summary's edit/create counts. */
-const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
-/** Tools that OPEN a named file — counted by distinct path, like the edits. */
-const READ_TOOLS = new Set(['Read', 'NotebookRead']);
-/** Tools that look through the tree without naming one file up front. */
-const SEARCH_TOOLS = new Set(['Grep', 'Glob']);
-/** Tools that leave the machine. */
-const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
-/** Tools that hand a slice of the work to another agent. */
-const AGENT_TOOLS = new Set(['Task', 'Agent']);
-/** Every MCP tool a CLI exposes is named `mcp__<server>__<tool>`. */
-const MCP_TOOL_PREFIX = 'mcp__';
+/**
+ * The file a tool RESULT names, when the call itself named none.
+ *
+ * An agent may disclose nothing about an edit up front and then report the whole
+ * diff, path included, on completion (measured on cursor-agent — see
+ * `resultDiffsOf`). That path is the only way to tell two edits of the same file
+ * from edits of two files, which is the difference between "edited 1 file" and
+ * "edited 2 files".
+ */
+function diffPathOf(result: ChatItem | null): string | null {
+  if (result === null) {
+    return null;
+  }
+  const payload = result.payload as { result?: unknown } | null;
+  const [first] = resultDiffsOf(payload?.result ?? null);
+  return first?.path ?? null;
+}
 
 /**
  * The collapsed group's one-line summary, Claude/Cursor-style:
@@ -979,38 +986,82 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   const opened = new Set<string>();
   const edited = new Set<string>();
   const created = new Set<string>();
-  for (const { call } of pairs) {
-    const name = payloadString(call.payload, 'name') ?? '';
+  for (const { call, result } of pairs) {
     const input = (call.payload as { input?: unknown } | null)?.input;
     const file =
       input && typeof input === 'object' && 'file_path' in input
         ? String((input as { file_path: unknown }).file_path)
         : null;
-    if (name === 'Bash') {
-      commands += 1;
-      accounted += 1;
-    } else if (READ_TOOLS.has(name) && file) {
-      opened.add(file);
-      accounted += 1;
-    } else if (EDIT_TOOLS.has(name) && file) {
-      edited.add(file);
-      accounted += 1;
-    } else if (name === 'Write' && file) {
-      created.add(file);
-      accounted += 1;
-    } else if (SEARCH_TOOLS.has(name)) {
-      searches += 1;
-      accounted += 1;
-    } else if (WEB_TOOLS.has(name)) {
-      fetches += 1;
-      accounted += 1;
-    } else if (AGENT_TOOLS.has(name)) {
-      // Accounted but never SPOKEN — see the note where the other phrases are
-      // assembled below.
-      accounted += 1;
-    } else if (name.startsWith(MCP_TOOL_PREFIX)) {
-      mcpCalls += 1;
-      accounted += 1;
+    // What the call DID, from the ONE classifier — the agent's own answer when it
+    // made one, else its tool name. The name buckets are one CLI's vocabulary:
+    // cursor titles its calls "Read File", "Edit File", "grep" and discloses no
+    // arguments at all, so before the agent's own answer was consulted a turn
+    // that read, edited and ran a command summarised as "Used 2 tools" and named
+    // nothing it had done.
+    const operation = toolOperationOf(call.payload);
+    // Whether the AGENT classified this call itself, which is a different
+    // question and decides how a call with no path is counted. An agent-declared
+    // kind is trusted with no target (cursor discloses none, so every one of its
+    // calls would otherwise go unaccounted); a name-matched file tool is not —
+    // it would be reported as an edit of nothing, and the "Used N tools" total is
+    // the honest answer for a call this cannot describe.
+    const selfDeclared = toolKindOf(call.payload) !== null;
+    // A path when one is known — an edit's diff reports it even when the call did
+    // not. Counting DISTINCT paths is what makes three edits of one file read as
+    // one edited file.
+    const path = file ?? diffPathOf(result);
+    /** Count this call against a file bucket, or leave it unaccounted. */
+    const addPath = (bucket: Set<string>): void => {
+      if (path !== null) {
+        bucket.add(path);
+        accounted += 1;
+      } else if (selfDeclared) {
+        // No path to tell it apart, so the CALL is the unit. Keyed off the count
+        // so two such calls never collapse into one.
+        accounted += 1;
+        bucket.add(`#${accounted}`);
+      }
+    };
+    switch (operation) {
+      case 'read':
+        addPath(opened);
+        break;
+      case 'edit':
+        addPath(edited);
+        break;
+      case 'create':
+        addPath(created);
+        break;
+      case 'search':
+        searches += 1;
+        accounted += 1;
+        break;
+      case 'execute':
+        commands += 1;
+        accounted += 1;
+        break;
+      case 'fetch':
+        fetches += 1;
+        accounted += 1;
+        break;
+      case 'mcp':
+        mcpCalls += 1;
+        accounted += 1;
+        break;
+      case 'delegate':
+        // Accounted but never SPOKEN — see the note where the other phrases are
+        // assembled below.
+        accounted += 1;
+        break;
+      case 'delete':
+      case 'move':
+        // Accounted but not SPOKEN either: neither has a phrase here, and
+        // inventing one ("moved 1 file") for a kind never yet seen on the wire
+        // would be guessing at wording no measurement supports.
+        accounted += 1;
+        break;
+      case null:
+        break;
     }
   }
   const count = (n: number, noun: string): string =>
@@ -1114,32 +1165,14 @@ function compactJson(value: unknown): string {
 }
 
 /**
- * Flatten a tool_result payload's `result` for display: strings pass
- * through, Claude's `[{type:'text',text}]` block arrays join their text,
- * anything else pretty-prints as JSON.
+ * Flatten a tool_result payload's `result` for display.
+ *
+ * MOVED to `tool-render.ts`, which had to normalize the result itself — a diff an
+ * agent reported cannot be recognised once it has been stringified. Re-exported
+ * here because this module's own callers (and its spec) already read it from this
+ * name.
  */
-export function toolResultText(result: unknown): string {
-  if (typeof result === 'string') {
-    return result;
-  }
-  if (Array.isArray(result)) {
-    const texts = result
-      .map((block) =>
-        block && typeof block === 'object' && 'text' in block
-          ? String((block as { text: unknown }).text)
-          : null,
-      )
-      .filter((text): text is string => text !== null);
-    if (texts.length > 0 && texts.length === result.length) {
-      return texts.join('\n');
-    }
-  }
-  try {
-    return JSON.stringify(result, null, 2) ?? '';
-  } catch {
-    return String(result);
-  }
-}
+export { toolResultText } from './tool-render';
 
 /**
  * Marks the synthetic entry carrying an agent's not-yet-durable words, so a

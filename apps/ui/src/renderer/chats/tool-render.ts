@@ -168,13 +168,131 @@ export function toolInputBody(
 }
 
 /**
- * How to render a tool RESULT. The CALL'S INPUT decides the language — a
- * file's contents come back as bare text with no hint of what they are, so
- * only the path that was read can say. (Which is why the input is a parameter
- * here at all: the result alone is not enough to render it well.)
+ * The diffs an agent reported as a call's RESULT, or an empty list.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/acp/acp-driver.ts` normalizes
+ * ACP's `{type:'diff', path, oldText, newText}` content blocks into this
+ * `{diffs}` shape. A tool payload never passes through a typed daemon response —
+ * every item kind carries a different shape, so it is `z.unknown()` on the wire
+ * BY DESIGN and no generated type spans the two sides. Rename the key there and
+ * this reader must change with it.
+ *
+ * This is the ONLY thing a cursor edit discloses about itself: its arguments
+ * arrive empty and never fill in, while the completing update carries the whole
+ * diff, path included. Rendered as JSON it was a wall of escaped newlines; read
+ * here it is the same red/green diff a claude `Edit` gets.
  */
-export function toolResultBody(input: unknown, result: unknown): ToolCodeBody {
-  const text = typeof result === 'string' ? result : prettyJson(result);
+export function resultDiffsOf(
+  result: unknown,
+): { path: string | null; oldText: string | null; newText: string }[] {
+  const record = asRecord(result);
+  if (!record || !Array.isArray(record.diffs)) {
+    return [];
+  }
+  const diffs: {
+    path: string | null;
+    oldText: string | null;
+    newText: string;
+  }[] = [];
+  for (const entry of record.diffs) {
+    const block = asRecord(entry);
+    const newText = block ? block.newText : null;
+    if (typeof newText !== 'string') {
+      continue;
+    }
+    diffs.push({
+      path: block ? asText(block.path) : null,
+      oldText:
+        block && typeof block.oldText === 'string' ? block.oldText : null,
+      newText,
+    });
+  }
+  return diffs;
+}
+
+/**
+ * A long absolute path shortened from the FRONT: `…/chat-cwd/notes.txt`.
+ *
+ * The end is the half that identifies the file, and CSS truncation cuts exactly
+ * that off — a row captioned
+ * `/private/tmp/claude-501/-Users-…-7d4eb474-…/scrat…` named a directory prefix
+ * and never reached the filename. Elided with a leading `…` so it is visible that
+ * something was dropped, and callers put the full path on the element's `title`.
+ *
+ * Short paths are returned verbatim: there is nothing to gain by eliding a path
+ * that already fits, and the full one is always the better label.
+ */
+export function shortenPath(path: string, maxLength = 52): string {
+  if (path.length <= maxLength) {
+    return path;
+  }
+  const segments = path.split('/').filter((segment) => segment !== '');
+  const tail: string[] = [];
+  for (const segment of [...segments].reverse()) {
+    // Keep taking segments from the end while the result still fits — so a deep
+    // path shows as much CONTEXT as it can rather than the filename alone.
+    const candidate = [segment, ...tail].join('/');
+    if (candidate.length + 2 > maxLength && tail.length > 0) {
+      break;
+    }
+    tail.unshift(segment);
+  }
+  return `…/${tail.join('/')}`;
+}
+
+/**
+ * A tool result as ONE string: a plain string as it stands, a CLI's
+ * content-block array collapsed to its texts, anything else as pretty JSON.
+ *
+ * Lives here rather than in `transcript-groups` (which re-exports it for its
+ * existing importers) because `toolResultBody` has to normalize the result
+ * ITSELF: a diff cannot survive being stringified before the body is chosen, and
+ * a caller passing the text in was the reason it could not be.
+ */
+export function toolResultText(result: unknown): string {
+  if (typeof result === 'string') {
+    return result;
+  }
+  if (Array.isArray(result)) {
+    const texts = result
+      .map((block) =>
+        block && typeof block === 'object' && 'text' in block
+          ? String((block as { text: unknown }).text)
+          : null,
+      )
+      .filter((text): text is string => text !== null);
+    if (texts.length > 0 && texts.length === result.length) {
+      return texts.join('\n');
+    }
+  }
+  return prettyJson(result);
+}
+
+/**
+ * How to render a tool RESULT: the diff the agent reported, else its text with
+ * the language the CALL'S INPUT implies — a file's contents come back bare, with
+ * no hint of what they are, so only the path that was read can say. (Which is why
+ * the input is a parameter here at all: the result alone is not enough.)
+ */
+export function toolResultBody(input: unknown, result: unknown): ToolBody {
+  const diffs = resultDiffsOf(result);
+  const [first, ...rest] = diffs;
+  if (first) {
+    // A body is ONE diff (a `ToolBody` has no list form, and no call site renders
+    // several), and every cursor edit call measured carries exactly one. A second
+    // is therefore not dropped quietly: the caption SAYS what is not on screen,
+    // rather than leaving a reader to believe they have seen the whole change.
+    return {
+      kind: 'diff',
+      oldText: first.oldText,
+      newText: first.newText,
+      caption:
+        rest.length === 0
+          ? first.path
+          : `${first.path ?? 'diff'} · ${rest.length} more file${rest.length === 1 ? '' : 's'} changed, not shown`,
+    };
+  }
+  const text = toolResultText(result);
   if (commandOf(input) !== null) {
     // Command OUTPUT is not shell source — highlighting it as bash would paint
     // arbitrary words as keywords. Plain, but still in the code surface.

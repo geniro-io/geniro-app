@@ -67,6 +67,14 @@ export interface AgentConfigListProps {
    */
   onSignIn?: (kind: CliKind) => void;
   /**
+   * The CLIs whose ACCOUNT is per-config-directory, so this card's row can say
+   * which profile it is reporting on. From the daemon's `configDirs[]`
+   * capability — see {@link accountRowText}. Absent (onboarding, or before
+   * capabilities answer) means no qualifier anywhere, which is the honest
+   * rendering rather than a guessed one.
+   */
+  profileScopedKinds?: ReadonlySet<string>;
+  /**
    * Sign one CLI itself OUT, in the user's own terminal. Settings-only, for the
    * reason its sibling is.
    *
@@ -143,6 +151,61 @@ function AccountButton({
 }
 
 /**
+ * What this card's account row is TALKING ABOUT, and the state it is in.
+ *
+ * The scope prefix is the fix for a real ambiguity: this row's probe and its
+ * button both run with no config directory, so they are about the CLI's DEFAULT
+ * profile — while a chat can run under a different one, on a different
+ * subscription. Unqualified, the row claimed to speak for an account it had
+ * never asked about: a user whose chats all run under `~/profiles/work` would
+ * read "not signed in" beside runs that were working perfectly.
+ *
+ * `profileScoped` is per CLI and comes from the daemon's own
+ * `configDirs[].unavailableReason`, never from a name: cursor-agent READS a
+ * config directory but keeps the account outside it (probed — a fresh
+ * `CURSOR_CONFIG_DIR` still reports the default account), so for that CLI there
+ * is exactly one account and "Default profile" would invent a distinction it
+ * does not have. Unknown — onboarding, or capabilities not yet answered — is
+ * treated as NOT scoped: at first run there are no profiles to distinguish, and
+ * a prefix is worse than none if it might be wrong.
+ *
+ * Composed from a scope and a clause rather than written out per combination:
+ * three states times two scopes times "is there a handler" is an eight-arm
+ * matrix, and the arms that had to agree are exactly the ones a reader would
+ * skim past.
+ */
+function accountRowText({
+  kind,
+  loggedIn,
+  profileScoped,
+  canSignIn,
+}: {
+  kind: CliKind;
+  loggedIn: boolean | null;
+  profileScoped: boolean;
+  canSignIn: boolean;
+}): string {
+  const clause =
+    loggedIn === false
+      ? // Signed out with no control is REACHABLE, not theoretical: the sign-in
+        // lives on Settings only, and Onboarding — which auto-expands a card
+        // that is not ready — passes no handler. Naming where the cure is keeps
+        // that screen from being a dead end without moving the control.
+        canSignIn
+        ? 'not signed in'
+        : 'not signed in — sign in from Settings once setup is done'
+      : loggedIn === true
+        ? `signed in through the ${kind} CLI`
+        : // No answer yet, or a CLI that cannot be asked. Says the one thing a
+          // user hunting for an API key field needs to know, which is why this
+          // wording survives from the row's first version.
+          `signs in through the ${kind} CLI itself — no key to enter here`;
+  return profileScoped
+    ? `Default profile · ${clause}`
+    : clause.charAt(0).toUpperCase() + clause.slice(1);
+}
+
+/**
  * The list of per-agent configuration cards — the single implementation shared
  * by onboarding and Settings, so both surfaces show detection state and
  * binary-path overrides identically. Fully controlled: the parent owns all
@@ -158,6 +221,7 @@ export function AgentConfigList({
   onBrowse,
   onSignIn,
   onSignOut,
+  profileScopedKinds,
 }: AgentConfigListProps): React.JSX.Element {
   return (
     <div className="flex flex-col gap-3">
@@ -228,18 +292,12 @@ export function AgentConfigList({
                     ? 'text-warning'
                     : 'text-muted-foreground',
                 )}>
-                {/* Signed out with no control is a REACHABLE state, not a
-                    theoretical one: the sign-in lives on Settings only, and
-                    Onboarding — which auto-expands a card that is not ready —
-                    passes no handler. Naming where the cure is keeps that
-                    screen from being a dead end without moving the control. */}
-                {detection?.loggedIn === false
-                  ? onSignIn
-                    ? `Not signed in to ${kind}.`
-                    : `Not signed in to ${kind} — sign in from Settings once setup is done.`
-                  : detection?.loggedIn === true
-                    ? `Signed in through the ${kind} CLI itself — no key to enter here.`
-                    : `Signs in through the ${kind} CLI itself — no key to enter here.`}
+                {accountRowText({
+                  kind,
+                  loggedIn: detection?.loggedIn ?? null,
+                  profileScoped: profileScopedKinds?.has(kind) === true,
+                  canSignIn: onSignIn !== undefined,
+                })}
               </span>
               {/* `found` matters as much as the handler: the daemon resolves an
                   account target from the bare CLI name without checking it

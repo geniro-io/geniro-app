@@ -17,6 +17,7 @@ import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 import { createDaemonApis } from '../daemon-api';
+import { useConfigDirCapability } from '../graphs/use-config-dir-capability';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 
 function normalizedCliPaths(
@@ -236,6 +237,38 @@ export function Settings({
   );
 
   /**
+   * The CLIs whose account is per-config-directory, so the account row can name
+   * WHICH profile it is reporting on.
+   *
+   * Asked of the daemon rather than decided here: it is the adapters that know
+   * whether pointing a run at a config directory changes the account
+   * (`configDirs[].unavailableReason`), and cursor-agent's answer is that it does
+   * NOT — it reads the directory but keeps the account outside it. A renderer
+   * that allowlisted claude by name would be a second copy of that rule, free to
+   * disagree with the one the executor enforces.
+   *
+   * The action itself is deliberately NOT scoped: Settings configures the CLI,
+   * so its sign-in and sign-out always act on the default profile. A run on
+   * another profile has its own, profile-correct sign-in on the error row that
+   * reported the lapsed session (`Chats.signInToCli`, which passes the run's
+   * `configDir`). This label is what keeps the two from being confused.
+   */
+  const configDirCapability = useConfigDirCapability(
+    apis?.capabilities ?? null,
+  );
+  const profileScopedKinds = useMemo(
+    () =>
+      new Set(
+        CLI_KINDS.filter(
+          (kind) => configDirCapability.unavailableReasonFor(kind) === null,
+        ),
+      ),
+    // A new predicate identity per render would rebuild this every time; the
+    // capability answer is what actually changes it.
+    [configDirCapability.unavailableReasonFor],
+  );
+
+  /**
    * Sign one CLI itself back in, in the user's own terminal — the account,
    * not one of its MCP servers. Mirrors the transcript row's own sign-in
    * (`Chats.signInToCli`): resolve the invocation through the daemon, then
@@ -368,6 +401,7 @@ export function Settings({
           // because it has no transport to fail on.
           onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
           onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
+          profileScopedKinds={profileScopedKinds}
         />
       </section>
 

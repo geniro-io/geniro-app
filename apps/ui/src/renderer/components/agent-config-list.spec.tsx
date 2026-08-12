@@ -304,6 +304,56 @@ describe('AgentConfigList — the account control matches the reported state', (
     expect(onSignOut).not.toHaveBeenCalled();
   });
 
+  it('names the PROFILE it is reporting on, for a CLI whose account is per-profile', () => {
+    // The ambiguity this closes: the row's probe and its button both run with no
+    // config directory, so they are about the DEFAULT profile — while a chat can
+    // run under another one, on another subscription. Unqualified, a user whose
+    // chats run under `~/profiles/work` reads "not signed in" beside runs that
+    // are working fine.
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', { loggedIn: true }),
+          det('cursor-agent', { loggedIn: true }),
+        ]}
+        onSignIn={vi.fn()}
+        onSignOut={vi.fn()}
+        // claude's account IS per-profile; cursor-agent's is not — it reads a
+        // config directory but keeps the account outside it, so a "Default
+        // profile" prefix there would invent a distinction it does not have.
+        profileScopedKinds={new Set(['claude'])}
+      />,
+    );
+
+    const text = el.textContent ?? '';
+    expect(text).toContain(
+      'Default profile · signed in through the claude CLI',
+    );
+    // And NOT on the CLI that has no profiles — the whole point of driving this
+    // from the daemon's capability rather than applying it to every card.
+    expect(text).toContain('Signed in through the cursor-agent CLI');
+    expect(text).not.toContain(
+      'Default profile · signed in through the cursor',
+    );
+  });
+
+  it('adds no profile qualifier when nothing says the account is per-profile', () => {
+    // Onboarding's shape, and the pre-capability moment on Settings. At first run
+    // there are no profiles to distinguish, and a prefix that might be wrong is
+    // worse than none.
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude', { loggedIn: false })]}
+        onSignIn={vi.fn()}
+      />,
+    );
+
+    expect(el.textContent).toContain('Not signed in');
+    expect(el.textContent).not.toContain('Default profile');
+  });
+
   it('renders NO control rather than the wrong verb when its handler is absent', () => {
     // Onboarding's shape, now that the state can call for either action: a
     // signed-in card with no `onSignOut` must show nothing, not fall through to

@@ -25,6 +25,18 @@ strength of "baseline ACP has no question call", and the vendor had added one
 (`cursor/ask_question`) that geniro was refusing in-protocol. Write down what
 was checked, so the next reader knows what to re-check.
 
+**A declared PRESENCE is a measurement too — a flag's existence is not
+evidence it does the job.** When an adapter fact rests on a CLI flag, env var
+or subcommand, run a throwaway invocation proving the EFFECT the feature needs
+(the setting actually changed what the CLI did) BEFORE writing code on it.
+Presence in `--help`, in `strings <binary>`, or in vendor docs is evidence the
+NAME exists, never that it achieves the stated purpose. When the task names a
+goal ("run under a different subscription") alongside a mechanism, the GOAL is
+what must be probed: `claude --plugin-dir` exists and silently ignores a config
+directory, so ~1000 lines were built on a flag that could never deliver what
+the ticket asked for — the answer was `CLAUDE_CONFIG_DIR`, and a two-command
+probe would have found it before any of it was written.
+
 Consumers **compose**, adapters **know**: a service decides WHEN to ask and what
 to do with several answers, never HOW to ask. Reference pair: `ModelsService` /
 `SkillsService` over `listModels` / `listSkills` / `listReportedCommands`.

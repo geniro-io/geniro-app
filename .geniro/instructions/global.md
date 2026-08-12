@@ -71,16 +71,24 @@ file at the start of each run and at every phase-boundary refresh via
   shadowed CSC_NAME/CSC_LINK — an "unsigned-safe" build would have shipped
   ad-hoc-signed WITH the auto-update feed.)
 
-- **A fix is not "verified" until you re-observed it on the new build.** `pnpm dev`
-  runs the daemon from `apps/daemon/dist/main.js`, and `DaemonSupervisor.startNow()`
-  ADOPTS an already-running healthy daemon whose `package.json` version matches
-  (`apps/ui/src/main/daemon-supervisor.ts:243-250`). That version string does not
-  change between rebuilds, so a same-version rebuild keeps serving the OLD `dist/`.
-  Rebuild, kill the pid in `<userData>/daemon.json`, relaunch, re-check — and state
-  which build you observed. When the remaining step is the user's, say
-  "waiting on <step>", never "fixed". Renderer-only edits hot-reload and are exempt.
-  (Three sessions hit this: "Why its still not sorted?", "But it still wasnt fixed",
-  "Still" — each after a fix was declared.)
+- **"Verified" means observed on the instance the USER runs.** The observation
+  must come from their launched app, the daemon their app is actually talking
+  to, the real renderer bundle — never a daemon you booted yourself, a temp
+  userData dir, or a spec you wrote to check with. Name the instance and how
+  you reached it. `pnpm dev` runs the daemon from `apps/daemon/dist/main.js`,
+  and `DaemonSupervisor.startNow()` ADOPTS an already-running healthy daemon
+  whose `package.json` version matches
+  (`apps/ui/src/main/daemon-supervisor.ts:243-250`). That version string does
+  not change between rebuilds, so a same-version rebuild keeps serving the OLD
+  `dist/`: rebuild, kill the pid in `<userData>/daemon.json`, relaunch,
+  re-check — and state which build you observed. A component spec is a proxy
+  too, so renderer edits are NOT exempt — drive the real bundle. When the
+  remaining step is the user's, say "waiting on <step>", never "fixed".
+  (Four sessions hit this: "Why its still not sorted?", "But it still wasnt
+  fixed", "Still", "But i still see samne error!" — each after a fix was
+  declared. The last was "verified" by booting a daemon and curling it, which
+  proved nothing about the one the app was talking to; the real cause was a
+  `dist/` five days stale.)
 
 ## Additional Steps
 

@@ -5990,16 +5990,21 @@ describe('Chats — background sub-agents', () => {
     const panel = container.querySelector('aside[aria-label="Run agents"]');
     expect(panel).not.toBeNull();
     // The chat's agent now has TWO threads — its own conversation and the
-    // delegate — so the card is expandable and lists them behind the chevron.
+    // delegate — so the card is expandable and lists them behind its control.
+    // Selected by LABEL: the context meter and the MCP control are both
+    // aria-expanded buttons in the same row and either would match first.
     const card = panel?.querySelector<HTMLButtonElement>(
-      'button[aria-expanded]',
+      'button[aria-label$=" threads"]',
     );
     expect(card).not.toBeNull();
     await act(async () => {
       card?.click();
     });
 
+    // The delegate is still working, so it is listed OUTRIGHT rather than
+    // counted behind the finished-sub-agents disclosure.
     expect(panel?.textContent).toContain('Review the diff');
+    expect(panel?.textContent).not.toContain('finished sub-agent');
   });
 
   it("lists a cancelled run's unreturned delegate as cancelled, not running forever", async () => {
@@ -6026,10 +6031,22 @@ describe('Chats — background sub-agents', () => {
     });
     const panel = container.querySelector('aside[aria-label="Run agents"]');
     await act(async () => {
-      panel?.querySelector<HTMLButtonElement>('button[aria-expanded]')?.click();
+      panel
+        ?.querySelector<HTMLButtonElement>('button[aria-label$=" threads"]')
+        ?.click();
     });
 
-    const row = [...(panel?.querySelectorAll('ul ul > li') ?? [])].find((el) =>
+    // A delegate the run stopped without is FINISHED work, so the list counts
+    // it rather than showing it — the split is only about which rows are on
+    // screen, never about what the row then says.
+    expect(panel?.textContent).toContain('1 finished sub-agent');
+    await act(async () => {
+      [...(panel?.querySelectorAll('button') ?? [])]
+        .find((el) => el.textContent?.includes('finished sub-agent'))
+        ?.click();
+    });
+
+    const row = [...(panel?.querySelectorAll('li') ?? [])].find((el) =>
       el.textContent?.includes('Review the diff'),
     );
     expect(row).not.toBeUndefined();

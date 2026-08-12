@@ -67,6 +67,13 @@ function spinning(): boolean {
   return container.querySelector('.animate-spin') !== null;
 }
 
+/** Each expanded tool row's status, in row order, off its own status glyph. */
+function rowStatuses(): (string | null)[] {
+  return [
+    ...container.querySelectorAll('button[aria-expanded] [data-status]'),
+  ].map((icon) => icon.getAttribute('data-status'));
+}
+
 function click(el: Element | null): void {
   act(() => {
     el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -153,7 +160,7 @@ describe('ToolGroup', () => {
     expect(container.textContent).not.toContain('"old_string"');
   });
 
-  it('marks a still-running tool (no result yet) with an ellipsis', () => {
+  it('marks a still-running tool (no result yet) with the running glyph', () => {
     render(
       makeGroup([
         toolItem('tool_call', {
@@ -165,7 +172,42 @@ describe('ToolGroup', () => {
     );
 
     click(container.querySelector('button[aria-expanded]'));
-    expect(container.textContent).toContain('…');
+    expect(rowStatuses()).toEqual(['running']);
+  });
+
+  it('marks a finished tool done, and a failed one as an error', () => {
+    render(
+      makeGroup([
+        toolItem('tool_call', { id: 't1', name: 'Bash', input: {} }),
+        toolItem('tool_result', { id: 't1', name: null, result: 'ok' }),
+        toolItem('tool_call', { id: 't2', name: 'Read', input: {} }),
+        toolItem('tool_result', {
+          id: 't2',
+          name: null,
+          result: 'ENOENT',
+          isError: true,
+        }),
+      ]),
+    );
+
+    click(container.querySelector('button[aria-expanded]'));
+    expect(rowStatuses()).toEqual(['completed', 'failed']);
+  });
+
+  it('shows an MCP tool under its readable name, not its wire identifier', () => {
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 't1',
+          name: 'mcp__linear__get_issue',
+          input: {},
+        }),
+      ]),
+    );
+
+    click(container.querySelector('button[aria-expanded]'));
+    expect(container.textContent).toContain('Linear: Get issue');
+    expect(container.textContent).not.toContain('mcp__linear__get_issue');
   });
 });
 
@@ -249,13 +291,14 @@ describe('ToolGroup — a run that has stopped', () => {
     expect(spinning()).toBe(false);
   });
 
-  it('still shows the per-row ellipsis, which reports the MISSING result', () => {
+  it('still marks the row as stopped, which reports the MISSING result', () => {
     // The two marks say different things and only one of them was wrong: the
-    // spinner claims work is happening, while the row's ellipsis records that
-    // this call has no result — which stays true on a settled run.
+    // spinner claims work is happening, while the row records that this call
+    // has no result — which stays true on a settled run. `cancelled` is the run
+    // vocabulary's word for it (see BlockStatusIcon): ended without finishing.
     render(unfinished(), true);
     click(container.querySelector('button[aria-expanded]'));
-    expect(container.textContent).toContain('…');
+    expect(rowStatuses()).toEqual(['cancelled']);
   });
 
   it('shows NO arguments for a call that disclosed none, collapsed or expanded', () => {

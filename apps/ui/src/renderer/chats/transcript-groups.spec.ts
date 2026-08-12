@@ -458,19 +458,31 @@ describe('toolGroupSummary', () => {
     expect(toolGroupSummary(group.pairs)).toBe('Read 1 file');
   });
 
-  it('names searches, web fetches, subagents and MCP calls', () => {
+  it('names searches, web fetches and MCP calls', () => {
     const group = groupTranscript([
       call('Grep', 't1', { pattern: 'x' }),
       call('Glob', 't2', { pattern: '*.ts' }),
       call('WebFetch', 't3', { url: 'https://example.com' }),
-      call('Task', 't4', { prompt: 'go' }),
       call('mcp__codegraph__codegraph_explore', 't5', { query: 'x' }),
       call('mcp__telegram__send_message', 't6', { text: 'hi' }),
     ])[0] as ToolGroupEntry;
 
     expect(toolGroupSummary(group.pairs)).toBe(
-      'Searched 2 times · fetched 1 page · delegated to 1 subagent · called 2 MCP tools',
+      'Searched 2 times · fetched 1 page · called 2 MCP tools',
     );
+  });
+
+  it('never names a delegation — the sub-agent block below already does', () => {
+    const group = groupTranscript([
+      call('Grep', 't1', { pattern: 'x' }),
+      call('Task', 't2', { prompt: 'go' }),
+    ])[0] as ToolGroupEntry;
+
+    const summary = toolGroupSummary(group.pairs);
+    expect(summary).not.toContain('subagent');
+    // And the Task is still ACCOUNTED for: were it not, the whole line would
+    // fall back to the "Used 2 tools" catch-all instead of the breakdown.
+    expect(summary).toBe('Searched 1 time');
   });
 
   it('does not count the same action twice when the breakdown covers it all', () => {
@@ -1015,6 +1027,68 @@ describe('buildSubagentBlocks', () => {
     // …and none survives at the top level, which is the whole fold.
     const topLevel = entries.filter((entry) => entry.type !== 'subagent-block');
     expect(JSON.stringify(topLevel)).not.toContain('reading the diff');
+  });
+
+  it('strips the launching Task pair out of the main tool group', () => {
+    // The block IS the delegation's rendering. Left in the group, the same
+    // fact was told twice — "Delegated to 1 subagent" directly above a card
+    // that already names the delegate, its ask and its result.
+    const entries = fold([
+      call('Grep', 'g1', { pattern: 'x' }),
+      call('Task', 'task-1', { description: 'Review the diff' }),
+      result('task-1', 'done'),
+      delegated('message', { text: 'reading' }, 'task-1'),
+    ]);
+
+    const groups = entries.filter(
+      (entry): entry is ToolGroupEntry => entry.type === 'tools',
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.pairs.map((pair) => pair.call.payload)).toEqual([
+      { id: 'g1', name: 'Grep', input: { pattern: 'x' } },
+    ]);
+    expect(toolGroupSummary(groups[0]!.pairs)).toBe('Searched 1 time');
+  });
+
+  it('drops a tool group that held nothing BUT delegations', () => {
+    const entries = fold([
+      call('Task', 'task-1', { description: 'Review the diff' }),
+      call('Task', 'task-2', { description: 'Write the tests' }),
+      delegated('message', { text: 'reading' }, 'task-1'),
+    ]);
+
+    expect(entries.some((entry) => entry.type === 'tools')).toBe(false);
+    expect(collectSubagentBlocks(entries).map((b) => b.id)).toEqual([
+      'task-1',
+      'task-2',
+    ]);
+  });
+
+  it('renders a delegation that has produced no rows yet, still running', () => {
+    // Before the block was anchored on its launching call it only existed once
+    // the delegate had spoken — so between the Task call and the delegate's
+    // first row the delegation was on screen NOWHERE, the group row that used
+    // to carry it having been stripped.
+    const block = onlyBlock(
+      fold([call('Task', 'task-1', { description: 'Review the diff' })]),
+    );
+    expect(block.entries).toEqual([]);
+    expect(block.label).toBe('Review the diff');
+    expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('does not read an EARLIER turn end as the end of a rowless delegation', () => {
+    // `maxSeqOf([])` is 0, so without the launch-seq anchor any prior
+    // turn_complete of the delegating node closed a block that had not started.
+    const block = onlyBlock(
+      fold([
+        item('turn_complete', {}),
+        item('message', { text: 'now delegate' }, null, 'user'),
+        call('Task', 'task-1', { description: 'Review the diff' }),
+      ]),
+    );
+    expect(block.closed).toBe(false);
+    expect(subagentBlockStatus(block)).toBe('running');
   });
 
   it('reports a delegate whose tool has not returned as running, mid-turn', () => {

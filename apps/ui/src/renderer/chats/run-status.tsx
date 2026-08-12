@@ -181,6 +181,12 @@ export function RunStatusIcon({
   return (
     <Icon
       aria-hidden="true"
+      // The glyph and its tone ARE the status here — nothing beside a tool row
+      // or a panel thread row spells it in words — so the status is also stated
+      // in the DOM. Otherwise the only thing a test (or anyone inspecting the
+      // page) can read it off is a lucide class name, which changes with the
+      // icon rather than with the meaning.
+      data-status={status}
       className={cn(
         'size-3 shrink-0',
         meta.className,

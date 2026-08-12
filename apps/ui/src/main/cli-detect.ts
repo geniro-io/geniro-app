@@ -10,6 +10,7 @@ import {
   type CliKind,
   type Settings,
 } from '../shared/contracts';
+import { probeEnv } from './probe-env';
 
 const execFileAsync = promisify(execFile);
 
@@ -61,10 +62,14 @@ function resolveBinary(kind: CliKind, override?: string): string | null {
   return null;
 }
 
-async function probeVersion(path: string): Promise<string | null> {
+async function probeVersion(
+  kind: CliKind,
+  path: string,
+): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(path, ['--version'], {
       timeout: 5000,
+      env: probeEnv(kind),
     });
     return stdout.trim().split('\n')[0] ?? null;
   } catch {
@@ -72,16 +77,102 @@ async function probeVersion(path: string): Promise<string | null> {
   }
 }
 
-/** Probe the host for each supported CLI agent (path + reported version). */
+/**
+ * How to ask one CLI whether it is signed in, for the CLIs that can be asked.
+ *
+ * A TABLE rather than a branch, so a third CLI is one entry and not another
+ * `if`. A kind absent from it has no way to be asked and reports `loggedIn:
+ * null` — claude is deliberately absent: its credentials travel as env vars the
+ * daemon manages, so there is no equivalent question to put to the binary.
+ *
+ * THE DAEMON HAS ITS OWN HOME for this CLI's auth facts —
+ * `AdapterConfig.auth` (`loginArgs`, `expiredMarkers`) in that CLI's adapter.
+ * This table is the Electron-side twin, and it exists here rather than there
+ * because its one reader is `detectClis` over IPC, which Onboarding calls before
+ * any `DaemonHandle` exists. A CLI added to `AdapterConfig.auth` and NOT to this
+ * table reports `loggedIn: null` — ready — even when signed out, silently.
+ *
+ * **Ask for the CLI's STRUCTURED answer, never its prose.** `cursor-agent
+ * status --format json` returns `{"status":…,"isAuthenticated":bool,…}`
+ * (verified on 2026.08.11-e8db854). Matching the human output instead was a real
+ * defect: that binary has a THIRD state, `partially-authenticated`, which prints
+ * `Partially authenticated (missing refresh token)` — neither "logged in as" nor
+ * "not logged in" — so a half-expired session read as UNKNOWN and the readiness
+ * chip rendered it ready, while turns failed with `Authentication required`. A
+ * boolean field cannot drift that way, and it survives a re-worded message.
+ *
+ * `booleanField` names the boolean to read, so a second CLI declares its own
+ * field rather than sharing cursor's spelling. A FLAT key, deliberately — it is
+ * not a path, and naming it one would invite `'auth.isAuthenticated'`, which
+ * would read `undefined` → `null` → a chip that says ready while signed out.
+ */
+const LOGIN_PROBES: Partial<
+  Record<CliKind, { args: string[]; booleanField: string }>
+> = {
+  'cursor-agent': {
+    args: ['status', '--format', 'json'],
+    booleanField: 'isAuthenticated',
+  },
+};
+
+/**
+ * Ask one CLI whether it is signed in. `null` on anything that is not a clear
+ * answer — no probe for this kind, the command failed, unparseable output, or a
+ * reply missing the boolean. Never guess `false`: the readiness chip would tell
+ * a signed-in user to sign in, and the control it offers would fix nothing.
+ *
+ * A non-zero exit is NOT read as signed-out, deliberately: this CLI exits 0 for
+ * both the authenticated and unauthenticated answers, so a throw here means the
+ * question failed rather than that the answer was no.
+ */
+async function probeLogin(
+  kind: CliKind,
+  path: string,
+): Promise<boolean | null> {
+  const probe = LOGIN_PROBES[kind];
+  if (!probe) {
+    return null;
+  }
+  try {
+    const { stdout } = await execFileAsync(path, probe.args, {
+      timeout: 5000,
+      env: probeEnv(kind),
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return null;
+    }
+    const value = (parsed as Record<string, unknown>)[probe.booleanField];
+    return typeof value === 'boolean' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Probe the host for each supported CLI agent (path, reported version, and
+ * whether it reports itself signed in).
+ */
 export async function detectClis(settings: Settings): Promise<CliDetection[]> {
   return Promise.all(
     CLI_KINDS.map(async (kind): Promise<CliDetection> => {
       const path = resolveBinary(kind, settings.cliPaths[kind]);
       if (!path) {
-        return { kind, found: false, path: null, version: null };
+        return {
+          kind,
+          found: false,
+          path: null,
+          version: null,
+          loggedIn: null,
+        };
       }
-      const version = await probeVersion(path);
-      return { kind, found: version !== null, path, version };
+      // Both probes are independent reads of the same binary, so they run
+      // together rather than adding a second serial 5s worst case to startup.
+      const [version, loggedIn] = await Promise.all([
+        probeVersion(kind, path),
+        probeLogin(kind, path),
+      ]);
+      return { kind, found: version !== null, path, version, loggedIn };
     }),
   );
 }

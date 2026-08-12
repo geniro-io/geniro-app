@@ -19,7 +19,6 @@ import { Onboarding } from './Onboarding';
 
 const geniro = {
   detectClis: vi.fn(),
-  hasSecret: vi.fn(),
   completeOnboarding: vi.fn(),
   pickAgentBinary: vi.fn(),
 };
@@ -47,6 +46,7 @@ function det(
     found: true,
     path: `/detected/${kind}`,
     version: '1.0.0',
+    loggedIn: null,
     ...overrides,
   };
 }
@@ -89,7 +89,6 @@ beforeEach(() => {
   geniro.detectClis
     .mockReset()
     .mockResolvedValue([det('claude'), det('cursor-agent')]);
-  geniro.hasSecret.mockReset().mockResolvedValue(false);
   geniro.completeOnboarding
     .mockReset()
     .mockResolvedValue({ ...DEFAULT_SETTINGS, onboardingComplete: true });
@@ -147,14 +146,17 @@ describe('Onboarding', () => {
 
   it('auto-expands non-ready agents once — an agent that degrades later stays closed', async () => {
     geniro.detectClis
-      .mockResolvedValueOnce([det('claude'), det('cursor-agent')])
+      .mockResolvedValueOnce([
+        det('claude'),
+        det('cursor-agent', { loggedIn: false }),
+      ])
       .mockResolvedValueOnce([
         det('claude', { found: false, path: null, version: null }),
-        det('cursor-agent'),
+        det('cursor-agent', { loggedIn: false }),
       ]);
     await mount();
 
-    // After detection + key probe settle: keyless cursor-agent (warn) is
+    // After detection settles: the signed-out cursor-agent (warn) is
     // auto-expanded, ready claude (ok) is not.
     expect(pathInput('cursor-agent')).not.toBeNull();
     expect(pathInput('claude')).toBeNull();
@@ -167,22 +169,20 @@ describe('Onboarding', () => {
     expect(pathInput('claude')).toBeNull();
   });
 
-  it('saves the trimmed Cursor key with the collected paths and completes onboarding', async () => {
+  it('completes onboarding with the collected binary paths alone', async () => {
     await mount();
-    // The keyless cursor-agent card auto-expanded, exposing the key field.
-    const keyInput =
-      container.querySelector<HTMLInputElement>('#cursor-api-key')!;
-    await typeInto(keyInput, '  sk-cursor-123  ');
+    await click(buttonByText('claude'));
+    const input = pathInput('claude')!;
+    await typeInto(input, '/typed/claude');
 
     await click(buttonByText('Get started'));
 
     expect(geniro.completeOnboarding).toHaveBeenCalledTimes(1);
     expect(geniro.completeOnboarding).toHaveBeenCalledWith({
       cliPaths: {
-        claude: '/detected/claude',
+        claude: '/typed/claude',
         'cursor-agent': '/detected/cursor-agent',
       },
-      cursorApiKey: 'sk-cursor-123',
     });
     expect(onDone).toHaveBeenCalledTimes(1);
   });

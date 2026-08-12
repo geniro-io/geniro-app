@@ -210,10 +210,20 @@ filename suffix, is what keeps it out of `dist/`.
   `AgentKind.CursorAgent` (`v1/runs/runs.types.ts`), which also drives
   `AgentKindSchema` — a bare `'claude'` string is a typo away from a branch
   that silently never matches.
-- **Env scoping.** `runHeadlessCli` strips every `GENIRO_`-prefixed var; an
-  adapter re-injects only the ONE secret its own CLI needs
-  (`CursorAcpAdapter.buildEnv` → `CURSOR_API_KEY`). No adapter leaks a
-  credential into another agent's child.
+- **Env scoping.** `runHeadlessCli` strips every `GENIRO_`-prefixed var, plus the
+  named credentials in `utils/child-env.ts`; an adapter re-injects only what its
+  own CLI is entitled to (`CursorAcpAdapter.buildEnv` → `CURSOR_API_KEY`;
+  `claudeCredentialEnv` → the Anthropic keys). No adapter leaks a credential into
+  another agent's child.
+  - **The value being the USER's rather than geniro's changes nothing here.**
+    geniro used to mint that Cursor key from the Keychain and pass it as
+    `GENIRO_CURSOR_API_KEY`; it stores no credential at all now, so the only key
+    that can appear is one the user exported in their own shell. It is still
+    stripped from every child and still re-injected for the cursor child alone —
+    because the rule protects against handing agent A's credential to agent B,
+    and an INHERITED credential is exactly as capable of that as a minted one.
+    Un-stripping a name because "we no longer set it" is the mistake this
+    sub-point exists to prevent.
 - **Per-agent state is keyed by agent**, never by the thing it is about.
   `SkillHarvestStore` keys by (agent, cwd): one folder is routinely used by both
   CLIs, and keying it loosely leaked claude's built-ins into a cursor listing.

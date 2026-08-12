@@ -64,14 +64,26 @@ describe('buildChildEnv', () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe('/runs/own-profile');
   });
 
-  it('merges extra over the stripped env (single-secret re-injection)', () => {
-    process.env.GENIRO_CURSOR_API_KEY = 'cursor-key';
+  it('strips an inherited CURSOR_API_KEY when nothing re-injects it', () => {
+    // The claude-side half of the isolation rule, pinned on its own rather than
+    // only via the re-injecting case below: a user's exported Cursor key must
+    // not reach a child that no adapter handed it to.
     process.env.CURSOR_API_KEY = 'inherited-key';
 
-    const env = buildChildEnv({ CURSOR_API_KEY: 'cursor-key' });
+    expect(buildChildEnv().CURSOR_API_KEY).toBeUndefined();
+  });
 
-    expect(env.GENIRO_CURSOR_API_KEY).toBeUndefined();
-    expect(env.CURSOR_API_KEY).toBe('cursor-key');
+  it('merges extra over the stripped env (single-secret re-injection)', () => {
+    // The strip is by PREFIX, so any GENIRO_ name exercises it. This used to
+    // assert on `GENIRO_CURSOR_API_KEY`, which nothing sets any more — pinning a
+    // retired variable proves nothing about the rule.
+    process.env.GENIRO_TEST_SECRET = 'should-not-reach-a-child';
+    process.env.CURSOR_API_KEY = 'inherited-key';
+
+    const env = buildChildEnv({ CURSOR_API_KEY: 'adapter-supplied' });
+
+    expect(env.GENIRO_TEST_SECRET).toBeUndefined();
+    expect(env.CURSOR_API_KEY).toBe('adapter-supplied');
   });
 
   it('lets extra override an inherited key', () => {

@@ -255,7 +255,7 @@ export function App(): React.JSX.Element {
           </div>
           {view === 'settings' ? (
             <div className="min-h-0 flex-1">
-              <Settings />
+              <Settings handle={handle} />
             </div>
           ) : null}
         </Suspense>

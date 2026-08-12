@@ -777,8 +777,14 @@ export interface AgentTurnInput {
    */
   approvalMode?: AgentApprovalMode;
   /**
-   * Extra environment merged over `process.env` for the child process — e.g.
-   * `CURSOR_API_KEY`. Secrets stay out of SQLite (Keychain-sourced upstream).
+   * Extra environment merged over `process.env` for the child process — e.g. a
+   * per-run `CLAUDE_CONFIG_DIR`, or the `CURSOR_API_KEY` that
+   * `CursorAcpAdapter.buildEnv` re-injects for its own child.
+   *
+   * Nothing here is sourced from a geniro-held secret any more: the app stores
+   * no credentials at all now that both CLIs authenticate from their own login
+   * state. A value that IS a credential is one the user exported in their own
+   * shell, and it reaches exactly the one child entitled to it — never SQLite.
    */
   env?: Record<string, string>;
   /**
@@ -1401,6 +1407,25 @@ export interface AdapterConfig {
      * reachable from the agents panel, which needs no failure to be pressed.
      */
     readonly expiredMarkers: readonly string[];
+    /**
+     * Env var names this CLI is entitled to inherit from the daemon's own
+     * environment — the credentials `utils/child-env.ts` strips from EVERY child
+     * so they cannot cross agents, re-injected for this one alone.
+     *
+     * A FIELD rather than a hook, and the reason is the bug it replaced: the
+     * entitlement used to live in `buildEnv`, which only the turn path calls, so
+     * a CLI's turns ran authenticated while its `runCommand` listings ran signed
+     * out — cursor's model picker collapsed to one row and its MCP panel
+     * reported nothing, both reading as facts about the user's setup rather than
+     * as a failure to ask. Two call paths were free to disagree about the same
+     * entitlement. One list read once on the base makes that unrepresentable.
+     *
+     * Empty is a real answer: a CLI whose credentials live on disk needs nothing
+     * here. Like {@link expiredMarkers} that is a MEASUREMENT, not an
+     * assumption — say what was checked, because "needs no env" and "we never
+     * tried without it" look identical from the outside.
+     */
+    readonly inheritedEnvKeys: readonly string[];
   };
 
   // ── Config directory (which profile / account the CLI runs as) ──────────

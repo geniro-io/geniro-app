@@ -305,18 +305,56 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         loginArgs: ['login'],
         loginUnavailableReason: null,
-        /**
-         * Empty, and not a gap: no auth-failure wording has been OBSERVED from
-         * this CLI. cursor-agent is not signed in on the machine this was built
-         * on, so what a lapsed session prints here is unknown, and a marker
-         * guessed from that either matches nothing or matches an unrelated
-         * failure and offers a cure for something else.
-         *
-         * The capability itself is real and declared above, so the agents panel
-         * still offers sign-in — that control needs no failure to be pressed.
-         * Fill this in from a real failed turn, not from the CLI's `--help`.
+        /*
+         * There is an ELECTRON-SIDE twin of these facts: `LOGIN_PROBES` in
+         * `apps/ui/src/main/cli-detect.ts`, which asks this CLI whether it is
+         * signed in for the readiness chip. It cannot read this block — it runs
+         * before any daemon handle exists — so a CLI gaining an entry here needs
+         * one there too, or its chip reads ready while signed out.
          */
-        expiredMarkers: [],
+        /**
+         * OBSERVED, on 2026-08-12 against 2026.08.04-aaa8809, by driving a real
+         * ACP handshake with the account logged out (`cursor-agent logout`):
+         *
+         * ```
+         * initialize   -> SUCCEEDS, advertises authMethods: [cursor_login]
+         * session/new  -> error { code: -32000,
+         *                         message: 'Authentication required',
+         *                         data: { message: "Authentication required.
+         *                           Please run 'agent login' first, then call
+         *                           authenticate() with methodId
+         *                           'cursor_login'." } }
+         * ```
+         *
+         * Two details a guess would have got wrong. The failure lands on
+         * `session/new`, NOT on the prompt — `initialize` completes cleanly — so
+         * a signed-out turn dies before a session exists. And the marker is
+         * matched against the driver's rendering of that reply,
+         * `acp session failed: Authentication required` (see
+         * {@link AcpTurnDriver.onErrorReply}), which is why the short `message`
+         * field and not the longer `data.message` is the string to carry.
+         *
+         * This became reachable only when geniro stopped injecting an API key:
+         * while it did, the CLI was always authenticated and no lapsed-session
+         * wording could occur. That is why the field sat empty for so long.
+         *
+         * RE-CHECK when a release changes the `session/new` refusal wording, or
+         * moves the auth failure onto `session/prompt` (which would make a turn
+         * fail after a session exists, a different shape than this).
+         */
+        expiredMarkers: ['acp session failed: authentication required'],
+        /**
+         * A key the USER exported in their own shell — geniro has none of its
+         * own to inject, since the Keychain entry and its `GENIRO_` hop went
+         * when `cursor-agent` was confirmed to authenticate from `~/.cursor`
+         * (probed 2026-08-12: `status` reports the account with no such variable
+         * in the environment).
+         *
+         * It is declared rather than simply left un-stripped because
+         * `buildChildEnv` strips it from EVERY child: un-stripping would hand
+         * the user's Cursor credential to the claude agent.
+         */
+        inheritedEnvKeys: ['CURSOR_API_KEY'],
       },
       configDir: {
         /**
@@ -324,22 +362,30 @@ export class CursorAcpAdapter extends AgentAdapter {
          * resolves it first, then `XDG_CONFIG_HOME/cursor`, then the default —
          * and probing it (2026.08.04-aaa8809) with a fresh empty directory
          * wrote `cli-config.json` and `statsig-cache.json` into it. So the
-         * mechanism exists.
+         * mechanism exists. That much is unchanged.
          *
-         * What it does NOT do is the thing this field is offered FOR. The same
-         * probe's `mcp list` still reported the DEFAULT profile's servers, so
-         * the toolbelt does not travel with the directory; and the account
-         * cannot either, because geniro hands this CLI its identity as
-         * `CURSOR_API_KEY` from the Keychain (`buildEnv`), not as a file in
-         * that directory. Offering the control here would promise a different
-         * subscription and deliver the same one.
+         * What it does NOT do is the thing this field is offered FOR: neither
+         * the toolbelt nor the ACCOUNT travels with the directory.
          *
-         * Re-probe those two things — a signed-in session inside the directory,
-         * and servers that follow it — before declaring it usable.
+         * - Toolbelt: the original probe's `mcp list` still reported the DEFAULT
+         *   profile's servers.
+         * - Account: re-measured 2026-08-12, because the reason this field used
+         *   to give ("geniro hands this CLI its identity as `CURSOR_API_KEY`")
+         *   stopped being true when that injection was removed. Pointed at a
+         *   fresh empty `CURSOR_CONFIG_DIR`, the CLI wrote a `cli-config.json`
+         *   carrying NO `authInfo` key — the real `~/.cursor/cli-config.json`
+         *   has one — and `cursor-agent status` run under that same directory
+         *   still reported the DEFAULT account. So the CLI writes its config
+         *   there while resolving the account from outside it.
+         *
+         * The verdict therefore stands on its own footing now: offering the
+         * control would promise a different subscription and deliver the same
+         * one. Re-probe both halves — an `authInfo` that lands inside the
+         * directory, and servers that follow it — before declaring it usable.
          */
         envVar: null,
         unavailableReason:
-          'cursor-agent takes its account from the API key geniro injects, not from a config directory — pointing a run at one would not change the subscription',
+          'cursor-agent reads a config directory but keeps the account outside it — a fresh one still resolves the same login, so pointing a run at one would not change the subscription',
       },
       followUp: {
         /**
@@ -594,17 +640,37 @@ export class CursorAcpAdapter extends AgentAdapter {
     return undefined;
   }
 
+  /**
+   * Re-inject the USER's own inherited `CURSOR_API_KEY` for this child only.
+   *
+   * geniro no longer has a key of its own to hand over — the Keychain entry,
+   * the `GENIRO_CURSOR_API_KEY` hop and the secret IPC surface were all removed
+   * once `cursor-agent` was confirmed to authenticate from its own `~/.cursor`
+   * login (probed 2026-08-12 on 2026.08.04-aaa8809: `status` reports the account
+   * with no such variable anywhere in the environment). So the ONLY key that can
+   * appear here is one the user exported in the shell that launched the app.
+   *
+   * It still has to be re-injected rather than simply left un-stripped, and that
+   * is the whole reason this override survived the removal: `buildChildEnv`
+   * strips the name from EVERY child, so leaving it out of the strip set would
+   * pass the user's Cursor credential to the claude agent too. Sourcing it here
+   * keeps "no spawned agent inherits another agent's credential" true while a
+   * user who authenticates by env var keeps working.
+   *
+   * `input.env` wins, so an explicit per-call override still governs. WHICH
+   * names are carried is `auth.inheritedEnvKeys`, read by the base — this
+   * override exists only to fold `input.env` over them for a turn.
+   *
+   * **One honest limit, which no plumbing here fixes.** A PACKAGED app launched
+   * from Finder inherits launchd's environment, not the user's shell, so an
+   * exported `CURSOR_API_KEY` never reaches this process at all — the daemon is
+   * spawned with a spread of `process.env` (`DaemonSupervisor.spawnDaemon`) and
+   * only `PATH` is resolved through a login shell. So env-var auth is a
+   * `pnpm dev` capability, and `cursor-agent login` is the supported route in a
+   * shipped build. Say that rather than implying otherwise.
+   */
   protected override buildEnv(input: AgentTurnInput): Record<string, string> {
-    // The daemon receives the Keychain-sourced Cursor key as
-    // GENIRO_CURSOR_API_KEY (a GENIRO_-prefixed var that spawn-cli strips from
-    // every child env). Re-inject it as CURSOR_API_KEY for THIS child only, so
-    // the key never reaches the claude agent. Honor an explicit per-call
-    // override in input.env if one is given.
-    const cursorApiKey = process.env.GENIRO_CURSOR_API_KEY;
-    return {
-      ...(cursorApiKey ? { CURSOR_API_KEY: cursorApiKey } : {}),
-      ...input.env,
-    };
+    return { ...this.inheritedEnv(), ...input.env };
   }
 
   /**

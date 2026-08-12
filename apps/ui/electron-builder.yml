@@ -34,10 +34,11 @@ extraResources:
 
 asar: true
 asarUnpack:
-  - '**/*.node' # native binaries (@napi-rs/keyring) must exist as real files
+  - '**/*.node' # native binaries (better-sqlite3) must exist as real files
 
-# Native deps are N-API prebuilds (keyring) or already Electron-ABI rebuilt by
-# the build script (better-sqlite3 in the daemon staging) — nothing to rebuild.
+# The one native dep left is better-sqlite3, already Electron-ABI rebuilt by the
+# build script in the daemon staging — nothing here to rebuild. (@napi-rs/keyring
+# used to be the other, and went with the Cursor API key it stored.)
 npmRebuild: false
 
 mac:

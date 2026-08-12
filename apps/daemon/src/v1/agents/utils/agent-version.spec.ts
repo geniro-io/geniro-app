@@ -50,7 +50,10 @@ describe('spawnAgentVersion', () => {
       cb(null, '1.0.0', '');
       return { pid: 7 } as ReturnType<typeof execFile>;
     }) as unknown as typeof execFile;
-    vi.stubEnv('GENIRO_CURSOR_API_KEY', 'must-not-leak');
+    // A GENIRO_ name the daemon really sets. `GENIRO_CURSOR_API_KEY` stood here
+    // until the Keychain hop was removed; stubbing a variable nothing sets would
+    // assert the strip against a value that could not leak anyway.
+    vi.stubEnv('GENIRO_USER_DATA', '/must-not-leak');
     vi.stubEnv('NORMAL_VAR', 'keep-me');
     try {
       await spawnAgentVersion('/usr/bin/cursor-agent', { execFileFn });
@@ -59,7 +62,7 @@ describe('spawnAgentVersion', () => {
     }
 
     expect(seen.env?.NORMAL_VAR).toBe('keep-me');
-    expect(seen.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
+    expect(seen.env?.GENIRO_USER_DATA).toBeUndefined();
   });
 
   it('hands the spawned child to onSpawn so the caller can register it', async () => {

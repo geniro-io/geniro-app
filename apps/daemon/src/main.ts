@@ -52,13 +52,20 @@ const token = mintToken();
 // launch goes wrong — the instance lock, the schema sync, the stranded-child
 // reap — are all emitted before the first injectable exists. And the launch
 // token is registered here, one statement after it is minted, so there is no
-// window in which it could be written to a file unredacted. The Cursor key
-// rides the env from the Electron shell and is registered on the same rule.
+// window in which it could be written to a file unredacted.
+//
+// The Cursor key is registered on the same rule, but it is no longer geniro's:
+// the Keychain entry and the `GENIRO_CURSOR_API_KEY` hop are gone, because
+// cursor-agent authenticates from its own `~/.cursor` login. What can still be
+// here is a key the USER exported in the shell that launched the app, which
+// `CursorAcpAdapter.buildEnv` hands to its child — so it is a live credential
+// this process holds and must not write out. Absent is the normal case, and
+// `registerSecret` ignores an undefined value.
 configureDebugSink({
   dir: join(environment.userDataDir, DEBUG_LOG_DIR_NAME),
 });
 registerSecret(token, 'launch token');
-registerSecret(process.env.GENIRO_CURSOR_API_KEY, 'cursor api key');
+registerSecret(process.env.CURSOR_API_KEY, 'cursor api key');
 
 // The daemon logs down TWO paths and only one of them was going anywhere. The
 // vendored pino logger is teed by `createPinoSinkStream` below; everything

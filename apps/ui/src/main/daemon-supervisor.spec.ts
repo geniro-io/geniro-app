@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
     getPath: vi.fn(() => '/tmp/geniro-supervisor-spec'),
     getAppPath: vi.fn(() => '/tmp/geniro-supervisor-spec/app'),
   },
-  getSecret: vi.fn((): string | null => null),
   loginShellPath: vi.fn(async () => null),
   readSettings: vi.fn((): Settings => ({
     // Spread the real defaults: only cliPaths matters to these specs, and
@@ -26,7 +25,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({ app: mocks.app }));
-vi.mock('./keychain', () => ({ getSecret: mocks.getSecret }));
 vi.mock('./login-shell-path', () => ({
   loginShellPath: mocks.loginShellPath,
 }));
@@ -150,7 +148,6 @@ beforeEach(() => {
   // reach the packaged branch would otherwise leak into every later spec —
   // silently changing whether the daemon spawns with an inspector.
   mocks.app.isPackaged = false;
-  mocks.getSecret.mockReturnValue(null);
   mocks.readSettings.mockReturnValue({
     ...DEFAULT_SETTINGS,
     onboardingComplete: true,
@@ -473,7 +470,7 @@ describe('DaemonSupervisor.start', () => {
 });
 
 describe('DaemonSupervisor.restart', () => {
-  it('replaces an adopted daemon and reloads Keychain and CLI settings', async () => {
+  it('replaces an adopted daemon and reloads CLI settings', async () => {
     vi.useFakeTimers();
     try {
       const h = harness({
@@ -481,7 +478,6 @@ describe('DaemonSupervisor.restart', () => {
         graceMs: 25,
       });
       await h.supervisor.start();
-      mocks.getSecret.mockReturnValue('new-cursor-key');
       mocks.readSettings.mockReturnValue({
         ...DEFAULT_SETTINGS,
         onboardingComplete: true,
@@ -497,7 +493,9 @@ describe('DaemonSupervisor.restart', () => {
         { pid: 1111, signal: 'SIGKILL' },
       ]);
       expect(h.spawned).toHaveLength(1);
-      expect(h.spawned[0]?.env?.GENIRO_CURSOR_API_KEY).toBe('new-cursor-key');
+      // The supervisor hands the daemon NO credential: cursor-agent carries its
+      // own login. Re-adding the Keychain read would put this name back.
+      expect(h.spawned[0]?.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
       expect(h.spawned[0]?.env?.GENIRO_CURSOR_BIN).toBe(
         '/opt/tools/cursor-agent',
       );

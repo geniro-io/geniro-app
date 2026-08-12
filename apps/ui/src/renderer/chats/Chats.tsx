@@ -51,6 +51,7 @@ import {
   isRunBusyError,
 } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
+import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useCapabilities } from '../use-capabilities';
 import {
   type AgentDisplay,
@@ -2527,45 +2528,12 @@ export function Chats({
     [handoffApi],
   );
 
-  /**
-   * The whole handoff contract, once: ask the daemon for an invocation, and
-   * either open it in the user's terminal or say why there isn't one.
-   *
-   * Three callers now resolve different things — a thread's conversation, an
-   * MCP server's sign-in, a CLI's own sign-in — and every one of them shares
-   * this shape. Hand-copied, a later fix (surfacing a rejected
-   * `openInTerminal`, or offering `target.display` to paste) would have to be
-   * made three times with nothing catching a miss.
-   *
-   * A refusal is the ANSWER, not a failure — cursor-agent genuinely cannot
-   * reopen one of its conversations — so the daemon's own sentence is what the
-   * user reads, and `fallback` covers only the case where it sent none.
-   */
+  /** Binds this screen's error slot to the shared handoff opener. */
   const openResolvedTarget = useCallback(
-    async (
+    (
       resolve: () => Promise<HandoffTargetDto>,
       fallback: string,
-    ): Promise<void> => {
-      try {
-        setError(null);
-        const target = await resolve();
-        if (target.kind !== 'command' || !target.command || !target.cwd) {
-          setError(target.unavailableReason ?? fallback);
-          return;
-        }
-        await window.geniro.openInTerminal({
-          command: target.command,
-          args: target.args,
-          cwd: target.cwd,
-          // Carried, never composed here: a resume that dropped it would open
-          // the DEFAULT profile, where this session id does not exist, and the
-          // CLI would show an unrelated conversation instead of an error.
-          env: target.env,
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
+    ): Promise<void> => openResolvedHandoff(resolve, fallback, setError),
     [],
   );
 
@@ -3520,12 +3488,6 @@ export function Chats({
                 onRefreshMcp={mcp.refresh}
                 onSetMcpEnabled={mcp.setEnabled}
                 onSignInMcp={signInToMcpServer}
-                // The panel's sign-in is about the agent it lists, so it
-                // signs in to THAT agent's profile — the run's own config
-                // directory when it has one.
-                onSignInCli={(kind) =>
-                  void signInToCli(kind, activeRun?.configDir ?? null)
-                }
                 mcpToggleError={mcp.toggleError}
                 onDismissMcpToggleError={mcp.dismissToggleError}
                 onMcpOpenChange={(open) =>

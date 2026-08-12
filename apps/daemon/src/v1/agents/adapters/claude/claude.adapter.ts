@@ -7,7 +7,10 @@ import { lock } from 'proper-lockfile';
 
 import { atomicWrite } from '../../../../utils/atomic-file';
 import { AgentKind } from '../../../runs/runs.types';
-import { claudeCredentialEnv } from '../../utils/child-env';
+import {
+  CLAUDE_CREDENTIAL_KEYS,
+  claudeCredentialEnv,
+} from '../../utils/child-env';
 import type {
   AdapterConfig,
   AdapterQuestion,
@@ -270,6 +273,21 @@ export class ClaudeAdapter extends AgentAdapter {
         loginArgs: CLAUDE_AUTH_LOGIN_ARGS,
         loginUnavailableReason: null,
         expiredMarkers: CLAUDE_AUTH_EXPIRED_MARKERS,
+        /**
+         * The Anthropic credentials `buildChildEnv` strips from every child, so
+         * they never reach the cursor agent. Declaring them here re-injects them
+         * for claude's own children — turns AND the `runCommand` listings.
+         *
+         * The listings are the part that was missing, and it was an assumption
+         * rather than a measurement: this adapter's `buildEnv` re-injected them
+         * on the turn path only, and the claim that its utility reads need
+         * nothing rested on the local machine authenticating by OAuth, where
+         * these variables are unset either way. For an account whose ONLY
+         * credential is an exported `ANTHROPIC_API_KEY`, `claude mcp list` ran
+         * with it stripped — the symmetric shape of the cursor bug this change
+         * was written to fix. Same list as the strip, so neither can drift.
+         */
+        inheritedEnvKeys: CLAUDE_CREDENTIAL_KEYS,
       },
       configDir: {
         /**

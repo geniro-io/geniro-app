@@ -756,7 +756,7 @@ export abstract class AgentAdapter {
             timeout: options.timeoutMs ?? UTILITY_COMMAND_TIMEOUT_MS,
             ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
             encoding: 'utf8',
-            env: buildChildEnv(options.env),
+            env: buildChildEnv({ ...this.inheritedEnv(), ...options.env }),
           },
           (err, stdout) => resolve(err ? null : String(stdout)),
         );
@@ -856,7 +856,7 @@ export abstract class AgentAdapter {
           ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
           detached: true,
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: buildChildEnv(options.env),
+          env: buildChildEnv({ ...this.inheritedEnv(), ...options.env }),
         });
       } catch {
         // A missing binary throws synchronously on some platforms.
@@ -981,6 +981,27 @@ export abstract class AgentAdapter {
     input: AgentTurnInput,
   ): Record<string, string> | undefined {
     return input.env;
+  }
+
+  /**
+   * Whichever of this CLI's {@link AdapterConfig.auth.inheritedEnvKeys} the
+   * daemon itself actually has — the credentials `buildChildEnv` strips from
+   * every child, put back for the one entitled to them.
+   *
+   * CONCRETE over config, with no overrides, because the entitlement is data and
+   * this is the ONE place that reads it. That is what keeps the turn path and the
+   * utility path from disagreeing again: they call this, not their own copies.
+   * See the field's own doc for the divergence it replaced.
+   */
+  protected inheritedEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const key of this.getConfig().auth.inheritedEnvKeys) {
+      const value = process.env[key];
+      if (value) {
+        env[key] = value;
+      }
+    }
+    return env;
   }
 
   /**

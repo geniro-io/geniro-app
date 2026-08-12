@@ -63,6 +63,9 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
 
 afterEach(() => {
   delete process.env.GENIRO_CURSOR_API_KEY;
+  // The adapter now sources the user's OWN inherited key, so a test that sets
+  // it would otherwise leak into every later case's child env.
+  delete process.env.CURSOR_API_KEY;
   delete process.env.GENIRO_CURSOR_BIN;
 });
 
@@ -76,17 +79,17 @@ function fakeListing(stdout: string | null): {
   groupSpawnFn: typeof spawn;
   captured: {
     args?: readonly string[];
-    opts?: { cwd?: string; detached?: boolean };
+    opts?: { cwd?: string; detached?: boolean; env?: NodeJS.ProcessEnv };
   };
 } {
   const captured: {
     args?: readonly string[];
-    opts?: { cwd?: string; detached?: boolean };
+    opts?: { cwd?: string; detached?: boolean; env?: NodeJS.ProcessEnv };
   } = {};
   const groupSpawnFn = ((
     _command: string,
     args: readonly string[],
-    opts: { cwd?: string; detached?: boolean },
+    opts: { cwd?: string; detached?: boolean; env?: NodeJS.ProcessEnv },
   ) => {
     captured.args = args;
     captured.opts = opts;
@@ -139,13 +142,74 @@ describe('CursorAcpAdapter spawn', () => {
     expect(captured.command).toBe('/opt/cursor-agent');
   });
 
-  it('re-injects the Cursor key for its own child only', () => {
+  it('does not re-introduce the Keychain hop it replaced', () => {
     const { spawn, captured } = fakeSpawn();
-    process.env.GENIRO_CURSOR_API_KEY = 'ck-live';
+    // The variable geniro used to mint from the Keychain. Nothing sources it
+    // now, so setting it must have no effect on the child.
+    process.env.GENIRO_CURSOR_API_KEY = 'ck-from-geniro';
+    delete process.env.CURSOR_API_KEY;
     new CursorAcpAdapter({ spawn }).start(BASE, () => {});
-    expect(captured.env?.CURSOR_API_KEY).toBe('ck-live');
-    // The GENIRO_-prefixed original is stripped from every child env.
+    expect(captured.env?.CURSOR_API_KEY).toBeUndefined();
     expect(captured.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
+  });
+
+  it("re-injects the USER's own inherited key for its own child", () => {
+    // `buildChildEnv` strips CURSOR_API_KEY from every child so it can never
+    // reach the claude agent; this override is what keeps env-var auth working
+    // for the one child entitled to it. Delete the override and this fails.
+    const { spawn, captured } = fakeSpawn();
+    process.env.CURSOR_API_KEY = 'ck-user-own';
+    new CursorAcpAdapter({ spawn }).start(BASE, () => {});
+    expect(captured.env?.CURSOR_API_KEY).toBe('ck-user-own');
+  });
+
+  it('lets a per-call env override win over the inherited key', () => {
+    const { spawn, captured } = fakeSpawn();
+    process.env.CURSOR_API_KEY = 'ck-user-own';
+    new CursorAcpAdapter({ spawn }).start(
+      { ...BASE, env: { CURSOR_API_KEY: 'ck-explicit' } },
+      () => {},
+    );
+    expect(captured.env?.CURSOR_API_KEY).toBe('ck-explicit');
+  });
+
+  it('offers sign-in on the failure a signed-out turn actually produces', () => {
+    // OBSERVED 2026-08-12 on 2026.08.04-aaa8809 with the account logged out:
+    // session/new answers -32000 'Authentication required', which the ACP
+    // driver renders as `acp session failed: <message>`. Empty the adapter's
+    // expiredMarkers and this returns null — no Sign-in control on the row.
+    const adapter = new CursorAcpAdapter({ spawn: fakeSpawn().spawn });
+    expect(
+      adapter.errorRecovery('acp session failed: Authentication required'),
+    ).toBe('cli-login');
+    expect(adapter.errorRecovery('acp prompt failed: rate limited')).toBeNull();
+  });
+
+  it('does not offer sign-in for someone else’s "Authentication required"', () => {
+    // The marker is matched against the WHOLE failure message, and a non-zero
+    // exit carries the child's stderr tail — where `cursor-agent acp`'s own MCP
+    // health-checks log. An HTTP server answering 401 must not send the user to
+    // re-authenticate an account that was never the problem, which is why the
+    // marker is anchored to the driver's own rendering. Widen it back to the
+    // bare phrase and this fails.
+    const adapter = new CursorAcpAdapter({ spawn: fakeSpawn().spawn });
+    expect(
+      adapter.errorRecovery(
+        'cursor-agent exited with code 1: mcp server foo: Authentication required',
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses a config directory without claiming geniro injects the account', () => {
+    // The old reason said cursor "takes its account from the API key geniro
+    // injects". That injection is gone, so the sentence would have been a
+    // falsehood shown to the user. The verdict stands on the re-probed reason.
+    const reason = new CursorAcpAdapter({
+      spawn: fakeSpawn().spawn,
+    }).getConfig().configDir.unavailableReason;
+    expect(reason).not.toBeNull();
+    expect(reason).not.toContain('geniro injects');
+    expect(reason).toContain('outside');
   });
 
   it('opens the handshake on stdin and holds stdin open for the dialogue', () => {
@@ -755,6 +819,22 @@ describe('CursorAcpAdapter misuse', () => {
       // The command health-checks, which launches the user's own stdio
       // servers as children — killing only the CLI would strand them.
       expect(captured.opts?.detached).toBe(true);
+    });
+
+    it("carries the user's inherited key, so the listing is not signed out", async () => {
+      // `buildEnv` is reached from start() alone, so utility reads used to run
+      // unauthenticated while turns worked: an env-var-only account saw an empty
+      // MCP panel, which reads as "this folder has no servers" rather than "we
+      // could not ask". `utilityEnv` is what closes that. Delete the override
+      // and this fails.
+      process.env.CURSOR_API_KEY = 'ck-user-own';
+      const { groupSpawnFn, captured } = fakeListing('probe: ready\n');
+
+      await new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
+        cwd: '/proj',
+      });
+
+      expect(captured.opts?.env?.CURSOR_API_KEY).toBe('ck-user-own');
     });
 
     it('reports the servers the CLI listed', async () => {

@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { DaemonHandle } from '../../shared/contracts';
 import {
   CLI_KINDS,
   type CliDetection,
@@ -15,6 +16,8 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
+import { createDaemonApis } from '../daemon-api';
+import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 
 function normalizedCliPaths(
   paths: Partial<Record<CliKind, string>>,
@@ -31,20 +34,27 @@ function normalizedCliPaths(
 
 /**
  * Post-onboarding configuration. Reuses the onboarding agent-config UI
- * (`AgentConfigList`) so binary paths and the Cursor key are edited the same way
- * everywhere. Everything is saved automatically — no Save button: the update
- * toggle persists on flip, binary-path edits persist debounced, and the Cursor
- * key (Keychain) persists on blur. Persists via updateSettings (paths) and the
- * Keychain (Cursor key) — never `completeOnboarding`, which is first-run only.
+ * (`AgentConfigList`) so binary paths are edited the same way everywhere, and
+ * adds the one control onboarding does not offer: signing a CLI itself back
+ * in, in the user's own terminal — the decided placement for that action.
+ * Everything is saved automatically — no Save button: the update toggle
+ * persists on flip, binary-path edits persist debounced. Persists via
+ * updateSettings — never `completeOnboarding`, which is first-run only.
  */
-export function Settings(): React.JSX.Element {
+export function Settings({
+  handle,
+}: {
+  handle: DaemonHandle | null;
+}): React.JSX.Element {
+  const apis = useMemo(
+    () => (handle ? createDaemonApis(handle) : null),
+    [handle],
+  );
   const [clis, setClis] = useState<CliDetection[] | null>(null);
   const [open, setOpen] = useState<Partial<Record<CliKind, boolean>>>({});
   const [binaryPaths, setBinaryPaths] = useState<
     Partial<Record<CliKind, string>>
   >({});
-  const [cursorKey, setCursorKey] = useState('');
-  const [hasStoredKey, setHasStoredKey] = useState<boolean | null>(null);
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
@@ -63,7 +73,6 @@ export function Settings(): React.JSX.Element {
     other: 0,
   });
 
-  const keyPresent = (hasStoredKey ?? false) || cursorKey.trim() !== '';
   // What the daemon was actually spawned with — the switch must report the
   // port's real state, not the stored `null`.
   const inspectEnabled = resolveDaemonInspect(storedInspect, isPackaged);
@@ -109,7 +118,6 @@ export function Settings(): React.JSX.Element {
     });
     void window.geniro.getStatus().then((s) => setIsPackaged(s.isPackaged));
     void window.geniro.detectClis().then(setClis);
-    void window.geniro.hasSecret('cursor.apiKey').then(setHasStoredKey);
   }, []);
 
   // Pre-fill each detected binary's resolved path into its (empty) field, so a
@@ -201,36 +209,27 @@ export function Settings(): React.JSX.Element {
     [schedulePathPersist],
   );
 
-  const saveCursorKey = useCallback(async (): Promise<void> => {
-    const trimmed = cursorKey.trim();
-    if (!trimmed) {
-      return;
-    }
-    setError(null);
-    try {
-      await window.geniro.saveSecret('cursor.apiKey', trimmed);
-      setHasStoredKey(true);
-      setCursorKey('');
-      flashSaved();
-    } catch (err) {
-      setError(String(err));
-    }
-  }, [cursorKey, flashSaved]);
-
-  const removeKey = useCallback(async (): Promise<void> => {
-    setError(null);
-    // Mirror saveCursorKey: the IPC call also restarts the daemon, which has
-    // real failure paths — a silent unhandled rejection would leave the UI
-    // claiming the key is gone with zero feedback.
-    try {
-      await window.geniro.deleteSecret('cursor.apiKey');
-      setHasStoredKey(false);
-      setCursorKey('');
-      flashSaved();
-    } catch (err) {
-      setError(String(err));
-    }
-  }, [flashSaved]);
+  /**
+   * Sign one CLI itself back in, in the user's own terminal — the account,
+   * not one of its MCP servers. Mirrors the transcript row's own sign-in
+   * (`Chats.signInToCli`): resolve the invocation through the daemon, then
+   * hand it to the user's terminal via the same IPC channel. No config
+   * directory is passed — Settings configures the CLI itself, not any one
+   * chat's profile, so this always signs in to the default one.
+   */
+  const signInToCli = useCallback(
+    async (kind: CliKind): Promise<void> => {
+      if (!apis) {
+        return;
+      }
+      await openResolvedHandoff(
+        () => apis.handoff.resolveCliLogin({ agent: kind }),
+        `${kind} cannot be signed in from here`,
+        setError,
+      );
+    },
+    [apis],
+  );
 
   const onToggleUpdates = useCallback(
     (next: boolean): void => {
@@ -316,12 +315,12 @@ export function Settings(): React.JSX.Element {
             schedulePathPersist();
           }}
           onBrowse={(kind) => void browse(kind)}
-          keyPresent={keyPresent}
-          cursorKey={cursorKey}
-          onCursorKeyChange={setCursorKey}
-          onCursorKeyBlur={() => void saveCursorKey()}
-          hasStoredKey={hasStoredKey}
-          onRemoveKey={() => void removeKey()}
+          // Withheld until the daemon answers: `AgentConfigList` renders no
+          // control for an absent handler, which is the honest state on a slow
+          // launch. Passed unconditionally, the button would resolve nothing
+          // and report nothing — `signInToCli` cannot even set an error,
+          // because it has no transport to fail on.
+          onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
         />
       </section>
 

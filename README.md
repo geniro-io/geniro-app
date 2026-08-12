@@ -88,7 +88,8 @@ the packages ship no `.d.ts` and type-checking runs as a separate `tsc --noEmit`
 (`pnpm check-types`).
 
 **Storage split:** graph definitions → YAML (M3); settings → `settings.json` in
-userData; secrets → macOS Keychain (`@napi-rs/keyring`) only; SQLite holds
+userData; secrets → there are none (both CLIs authenticate from their own login,
+so the Keychain-only rule stands as policy rather than live code); SQLite holds
 runtime/history only (`runs` / `items` / `node_state`).
 
 ## Develop

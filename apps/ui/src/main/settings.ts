@@ -16,8 +16,9 @@ import { settingsPatchSchema } from './ipc-schemas';
  * Non-secret app settings, persisted as a plain JSON file in Electron's
  * userData dir. We hand-roll this (atomic temp+rename writes) instead of
  * pulling in electron-store, whose current major is ESM-only and breaks
- * `require` from the CommonJS main process. Secrets never live here — see
- * keychain.ts.
+ * `require` from the CommonJS main process. Secrets never live here — and there
+ * are none to live anywhere: see the Secrets section of `shared/contracts.ts`
+ * for why the Keychain surface was removed and why the rule still stands.
  */
 function settingsPath(): string {
   return join(app.getPath('userData'), 'settings.json');

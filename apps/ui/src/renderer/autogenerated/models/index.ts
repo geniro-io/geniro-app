@@ -371,6 +371,27 @@ export interface AgentTerminalCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AgentUsageCapability
+ */
+export interface AgentUsageCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentUsageCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentUsageCapability
+     */
+    unavailableReason: string | null;
+}
+
+
 
 /**
  * 
@@ -478,6 +499,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     subagents: Array<AgentSubagentCapability>;
+    /**
+     * Per-CLI token/cost usage reporting, one entry per known agent
+     * @type {Array<AgentUsageCapability>}
+     * @memberof CapabilitiesDto
+     */
+    usage: Array<AgentUsageCapability>;
 }
 
 /**

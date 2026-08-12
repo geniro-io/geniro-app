@@ -742,6 +742,25 @@ export function Chats({
    * nothing on screen or on hover to say why. An agent missing from the map is
    * UNKNOWN (the report has not landed), which is not the same as refused.
    */
+  /**
+   * Per CLI: `null` if it reports what a turn cost, else the daemon's own
+   * sentence for why the context meter will always be empty.
+   *
+   * Derived like {@link terminalReasons} below and for the same reason —
+   * `AdapterConfig.usage` is the fact. It is what lets an empty meter answer
+   * "why don't I see context here?" instead of looking identical to a turn that
+   * has simply not reported anything yet.
+   */
+  const usageReasons = useMemo(
+    () =>
+      new Map<string, string | null>(
+        (capabilities?.usage ?? []).map((row) => [
+          row.agent,
+          row.unavailableReason,
+        ]),
+      ),
+    [capabilities],
+  );
   const terminalReasons = useMemo(
     () =>
       new Map<string, string | null>(
@@ -3447,6 +3466,17 @@ export function Chats({
                                   ? null
                                   : (agents[0]?.contextWindowTokens ?? null)
                               }
+                              // Why there will never be a figure, when that is the
+                              // case — so the empty spot answers for itself. Only
+                              // for a single-agent chat: a workflow run's agents
+                              // are per node and may not share one CLI.
+                              unavailableReason={
+                                activeRun.workflowId
+                                  ? null
+                                  : (usageReasons.get(
+                                      activeRun.agentKind ?? '',
+                                    ) ?? null)
+                              }
                               // Opens UPWARD. This row sits at the bottom of the
                               // composer, inside the app shell's
                               // `overflow-hidden` main — roughly 20px below a
@@ -3475,6 +3505,7 @@ export function Chats({
                 key={activeRun?.id ?? 'no-run'}
                 agents={agents}
                 terminalReasons={terminalReasons}
+                usageReasons={usageReasons}
                 // The HOVER half of the same resolution the button acts on.
                 // Never passed until now, so the hint it feeds — the invocation,
                 // selectable, with a copy control — could not open on this

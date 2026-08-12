@@ -527,6 +527,24 @@ export type AgentSubagentCapability = z.infer<
   typeof AgentSubagentCapabilitySchema
 >;
 
+/** Whether one CLI reports what a turn cost it in tokens and money. */
+export const AgentUsageCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * Why this CLI's context meter is always empty, or null when it reports
+     * usage.
+     *
+     * A sentence, and shown on the meter's own hover — because an empty spot
+     * where a ring sits on the chat beside it is a question the user WILL ask,
+     * and did. Unlike the sub-agent note this replaced the shape of, it has no
+     * standing footprint: the meter says nothing until it is pointed at.
+     */
+    unavailableReason: z.string().nullable(),
+  })
+  .meta({ id: 'AgentUsageCapability' });
+export type AgentUsageCapability = z.infer<typeof AgentUsageCapabilitySchema>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   claudeModes: ClaudeModesCapabilitySchema.describe(
@@ -553,6 +571,9 @@ export const CapabilitiesWireSchema = z.object({
     .describe(
       'Per-CLI background sub-agent reporting, one entry per known agent',
     ),
+  usage: z
+    .array(AgentUsageCapabilitySchema)
+    .describe('Per-CLI token/cost usage reporting, one entry per known agent'),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

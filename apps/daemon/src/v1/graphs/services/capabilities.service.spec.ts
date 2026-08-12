@@ -154,6 +154,42 @@ describe('CapabilitiesService — background sub-agents', () => {
   });
 });
 
+describe('CapabilitiesService — token and cost usage', () => {
+  const usage = (): Map<string, string | null> =>
+    new Map(
+      service()
+        .service.capabilitiesWire()
+        .usage.map((u) => [u.agent, u.unavailableReason]),
+    );
+
+  it('answers for EVERY registered CLI, so the meter never allowlists one', () => {
+    expect([...usage().keys()]).toEqual([...registry().all().keys()]);
+  });
+
+  it('carries each adapter’s OWN reason, verbatim', () => {
+    expect(usage().get('claude')).toBe(
+      new ClaudeAdapter().getConfig().usage.unavailableReason,
+    );
+    expect(usage().get('cursor-agent')).toBe(
+      new CursorAcpAdapter().getConfig().usage.unavailableReason,
+    );
+  });
+
+  it('states claude’s reporting as null and cursor’s absence as a real sentence', () => {
+    // This is the whole point of the row: an empty context meter looks exactly
+    // like a turn that has not finished, and the two mean opposite things. The
+    // sentence is what a user pointing at the empty spot gets — which is how
+    // this was reported ("why don't I see context here?").
+    expect(usage().get('claude')).toBeNull();
+    expect(usage().get('cursor-agent')).toEqual(expect.any(String));
+    expect(usage().get('cursor-agent')).not.toBe('');
+    // Measured, not asserted from the protocol: the capture showed no
+    // `usage_update` on the wire at all, which is the mechanism the sentence
+    // names so the next reader knows what to re-check.
+    expect(usage().get('cursor-agent')).toContain('usage_update');
+  });
+});
+
 describe('CapabilitiesService — the interactive terminal', () => {
   it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
     expect(

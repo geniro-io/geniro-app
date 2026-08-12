@@ -5091,9 +5091,12 @@ describe('Chats — the composer’s context readout', () => {
       meter!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const panel = container.querySelector('[role="dialog"]');
-    expect(panel?.className).toContain('bottom-full');
-    expect(panel?.className).not.toContain('top-full');
+    // The inline box, not a `bottom-full` utility: the readout is anchored to
+    // the viewport now, so which EDGE it is pinned by is the direction.
+    const panel = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(panel?.style.position).toBe('fixed');
+    expect(panel?.style.bottom).not.toBe('');
+    expect(panel?.style.top).toBe('');
   });
 });
 

@@ -160,9 +160,52 @@ describe('ContextMeter', () => {
     expect(tone(90)).toContain('text-destructive');
   });
 
-  it('renders nothing when there is nothing to say', () => {
+  it('renders nothing when there is nothing to say AND no reason for it', () => {
+    // A turn that has yet to report anything: a moment, not a fact, so there is
+    // nothing to explain and no spot to hold.
     render(<ContextMeter contextTokens={null} contextWindowTokens={null} />);
     expect(container.textContent).toBe('');
+  });
+
+  it('holds the spot and SAYS WHY when the CLI never reports usage', () => {
+    // This is the reported defect. cursor-agent sends no `usage_update` and its
+    // prompt reply carries no usage (measured 2026-08-12 on 2026.08.11-e8db854
+    // from a raw frame capture), so its meter is permanently empty — and it
+    // rendered as a blank gap beside a claude card with a ring, which is exactly
+    // the question the user asked: "why don't I see context here?"
+    const reason = 'cursor-agent reports no token or cost usage over ACP';
+    render(
+      <ContextMeter
+        contextTokens={null}
+        contextWindowTokens={null}
+        unavailableReason={reason}
+      />,
+    );
+
+    // Present, and the reason IS the control's accessible name — so it is
+    // reachable by keyboard and by screen reader, not by hover alone.
+    expect(meterLabel()).toBe(reason);
+    expect(ring()).not.toBeNull();
+    // An EMPTY ring: a fraction here would be a reading nobody reported.
+    expect(ring()?.getAttribute('aria-hidden')).toBe('true');
+
+    openMeter();
+    expect(container.textContent).toContain(reason);
+  });
+
+  it('shows the FIGURES, not the reason, once a CLI has reported any', () => {
+    // The reason is about a permanent absence. A CLI that reports usage can
+    // still be between turns, and printing "never reports usage" over a real
+    // reading would be false — so the figures win whenever they exist.
+    render(
+      <ContextMeter
+        contextTokens={50_000}
+        contextWindowTokens={200_000}
+        unavailableReason="this should not be reachable"
+      />,
+    );
+    expect(meterLabel()).toBe('Context 25% full — 50k of 200k');
+    expect(container.textContent).not.toContain('should not be reachable');
   });
 
   it('leaves the ring itself unlabelled, so the figure announces once', () => {
@@ -206,17 +249,23 @@ describe('where the meter lives', () => {
     render(<ContextMeter {...CONTEXT} side="top" />);
     openMeter();
 
-    const panel = container.querySelector('[role="dialog"]');
-    expect(panel?.className).toContain('bottom-full');
-    expect(panel?.className).not.toContain('top-full');
+    // Read off the INLINE box, not a `bottom-full` utility: the readout is
+    // anchored to the viewport now (both call sites sit in a clipping ancestor,
+    // which an absolutely-positioned panel cannot escape), so the direction is
+    // expressed as which edge the panel is pinned by.
+    const panel = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(panel?.style.position).toBe('fixed');
+    expect(panel?.style.bottom).not.toBe('');
+    expect(panel?.style.top).toBe('');
   });
 
   it('still opens downward where there IS room, so the panel call site is untouched', () => {
     render(<ContextMeter {...CONTEXT} />);
     openMeter();
 
-    const panel = container.querySelector('[role="dialog"]');
-    expect(panel?.className).toContain('top-full');
+    const panel = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(panel?.style.top).not.toBe('');
+    expect(panel?.style.bottom).toBe('');
   });
 
   it('still reads the same figures in the agents panel', () => {

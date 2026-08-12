@@ -352,6 +352,7 @@ export function AgentsPanel({
   onOpenSubagent,
   onResolveHandoff,
   terminalReasons,
+  usageReasons,
   onClose,
 }: {
   agents: AgentDisplay[];
@@ -445,6 +446,15 @@ export function AgentsPanel({
    * both rendered as silence.
    */
   terminalReasons?: ReadonlyMap<string, string | null>;
+  /**
+   * Per CLI kind: `null` if it reports what a turn cost, else the daemon's own
+   * sentence for why the card's context meter is empty.
+   *
+   * Same three-state reading as {@link terminalReasons}: absent from the map is
+   * "we have not been told", which must render as silence rather than as a
+   * refusal — a turn mid-flight has no figures either.
+   */
+  usageReasons?: ReadonlyMap<string, string | null>;
   onClose: () => void;
 }): React.JSX.Element {
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
@@ -648,6 +658,15 @@ export function AgentsPanel({
                       contextTokens={agent.contextTokens}
                       contextWindowTokens={agent.contextWindowTokens}
                       spentUsd={agent.spentUsd}
+                      // Why this card's meter is empty, when it always will be.
+                      // Null for an agent whose kind the panel does not know, and
+                      // for one whose report has not landed — both are "we have
+                      // not been told", which must not print as a refusal.
+                      unavailableReason={
+                        agent.agent === null
+                          ? null
+                          : (usageReasons?.get(agent.agent) ?? null)
+                      }
                     />
                     {soleThreadTerminal ? (
                       <OpenInCliButton

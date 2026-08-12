@@ -8,6 +8,7 @@ import type {
   AgentFollowUpCapability,
   AgentSubagentCapability,
   AgentTerminalCapability,
+  AgentUsageCapability,
   CapabilitiesWire,
 } from '../graphs.types';
 
@@ -31,7 +32,22 @@ export class CapabilitiesService {
       approvals: this.approvalCapabilities(),
       followUps: this.followUpCapabilities(),
       subagents: this.subagentCapabilities(),
+      usage: this.usageCapabilities(),
     };
+  }
+
+  /**
+   * Every registered CLI's usage answer, read off its own config.
+   *
+   * Iterated, never listed — the same rule as the five below. It is what lets an
+   * empty context meter SAY why it is empty, instead of leaving "a turn that has
+   * not finished" and "a CLI that never reports any" looking identical.
+   */
+  private usageCapabilities(): AgentUsageCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      unavailableReason: adapter.getConfig().usage.unavailableReason,
+    }));
   }
 
   /**

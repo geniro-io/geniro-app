@@ -401,6 +401,34 @@ export class CursorAcpAdapter extends AgentAdapter {
         unavailableReason:
           'cursor-agent takes one prompt per turn — ACP has no channel for a message mid-turn',
       },
+      usage: {
+        /**
+         * It reports NONE. Measured 2026-08-12 on 2026.08.11-e8db854, from a
+         * full raw frame capture of two real turns (a read/edit turn and a
+         * command turn) rather than from an empty field in the database:
+         *
+         * - The `session/update` variants sent across both turns were
+         *   `agent_message_chunk`, `agent_thought_chunk`, `tool_call`,
+         *   `tool_call_update`, `available_commands_update` and
+         *   `session_info_update`. There was NO `usage_update` — the ACP
+         *   notification this client reads (`AcpTurnDriver`'s `usage_update`
+         *   arm, which takes `used` and `cost`).
+         * - `session/prompt`'s reply was `{"stopReason":"end_turn"}` and nothing
+         *   else — no `usage` object, the other channel the driver reads.
+         * - `session_info_update`, the one variant the driver drops unread,
+         *   carries a `title` and nothing more.
+         * - Zero occurrences of any token/cost-shaped key anywhere in the
+         *   captured frames.
+         *
+         * So the reader is correct and there is nothing to read: no context
+         * used, no window, no spend. RE-CHECK by capturing a turn's frames again
+         * — a `usage_update` appearing is all it would take, since the driver
+         * already handles it and the meter would light up with no further change
+         * here.
+         */
+        unavailableReason:
+          'cursor-agent reports no token or cost usage over ACP — it sends no usage_update and its prompt reply carries no usage, so there is no context figure to show',
+      },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
        * plain no: `cursor-agent --resume <id>` ACCEPTS an ACP session id and

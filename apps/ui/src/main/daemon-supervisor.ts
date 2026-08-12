@@ -20,7 +20,6 @@ import {
   readDaemonInfo,
   stampEntry,
 } from './daemon-pidfile';
-import { getSecret } from './keychain';
 import { loginShellPath } from './login-shell-path';
 import { readSettings } from './settings';
 
@@ -590,14 +589,14 @@ export class DaemonSupervisor {
   }
 
   private async spawnDaemon(entry: string): Promise<DaemonHandle> {
-    // Source the Cursor API key from the Keychain and hand it to the daemon in
-    // memory (env only — never persisted to disk/SQLite) so its Cursor adapter
-    // can authenticate `cursor-agent`. Passed under the GENIRO_-prefixed name so
-    // the daemon strips it from every spawned agent's env and re-injects it as
-    // CURSOR_API_KEY for the Cursor child ONLY (never the claude child). Absent
-    // key → omit; a Cursor turn then surfaces an auth error rather than failing
-    // the daemon's start.
-    const cursorApiKey = getSecret('cursor.apiKey');
+    // No credential is sourced here any more. `cursor-agent` authenticates from
+    // its own `~/.cursor` login, so geniro stores no Cursor key and has none to
+    // hand over — the Keychain entry, this read, and the GENIRO_CURSOR_API_KEY
+    // hop below it are all gone. A key the USER exported in their own shell
+    // still reaches the daemon inside the `...process.env` spread below, and the
+    // daemon's Cursor adapter re-injects it for its own child; nothing in this
+    // process has to know about it.
+    //
     // A packaged app launched from Finder inherits launchd's minimal PATH,
     // which is missing the user's CLI bin dirs — resolve the login-shell PATH
     // so the daemon can find `claude` / `cursor-agent`. Dev launches already
@@ -641,7 +640,6 @@ export class DaemonSupervisor {
         // that a UI is the only client, which is true exactly of the daemons
         // this supervisor spawns.
         GENIRO_IDLE_EXIT_MS: String(DAEMON_IDLE_EXIT_MS),
-        ...(cursorApiKey ? { GENIRO_CURSOR_API_KEY: cursorApiKey } : {}),
         ...(claudeBin ? { GENIRO_CLAUDE_BIN: claudeBin } : {}),
         ...(cursorBin ? { GENIRO_CURSOR_BIN: cursorBin } : {}),
         // No GENIRO_PORT: the daemon owns its default port and records the

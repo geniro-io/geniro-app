@@ -1,10 +1,4 @@
-import {
-  ChevronRight,
-  LogIn,
-  Plug,
-  Terminal as TerminalIcon,
-  X,
-} from 'lucide-react';
+import { ChevronRight, Plug, Terminal as TerminalIcon, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
@@ -306,7 +300,6 @@ export function AgentsPanel({
   onRefreshMcp,
   onSetMcpEnabled,
   onSignInMcp,
-  onSignInCli,
   mcpToggleError = null,
   onDismissMcpToggleError,
   onMcpOpenChange,
@@ -347,12 +340,6 @@ export function AgentsPanel({
    * that — it hands over a CLI kind and a server name.
    */
   onSignInMcp?: (kind: CliKind, server: string) => void;
-  /**
-   * Sign the CLI ITSELF in — the account, not one of its MCP servers.
-   * Distinct from {@link onSignInMcp} because the two are different commands
-   * fixing different failures.
-   */
-  onSignInCli?: (kind: CliKind) => void;
   /**
    * Why the last toggle did not land. Shown as a strip rather than swallowed:
    * the daemon refuses a toggle it cannot honour, and its sentence explains
@@ -627,28 +614,6 @@ export function AgentsPanel({
                         onOpen={onOpenThread}
                         onResolve={onResolveHandoff}
                       />
-                    ) : null}
-                    {onSignInCli && mcpKind !== null ? (
-                      // Persistent, unlike the transcript row's Sign in, which
-                      // appears only once a turn has already failed on an
-                      // expired session. A user who knows their session has
-                      // lapsed should not have to burn a turn to be offered the
-                      // cure — and a CLI whose failure wording is not yet
-                      // recognised has no error-row button at all, so this is
-                      // the only way in for it.
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-6 shrink-0 text-muted-foreground"
-                        aria-label={`Sign in to ${mcpKind}`}
-                        title={`Open ${mcpKind}'s sign-in in your terminal`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onSignInCli(mcpKind);
-                        }}>
-                        <LogIn className="size-3.5 shrink-0" />
-                      </Button>
                     ) : null}
                     {mcpByScope && mcpKind !== null && mcpScope !== null ? (
                       <McpDisclosure

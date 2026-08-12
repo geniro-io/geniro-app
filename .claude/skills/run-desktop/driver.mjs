@@ -114,8 +114,12 @@ function stubScript(handle) {
     pickProjectFolder: async () => ${cwd}, pickAgentBinary: async () => null,
     getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false }),
     updateSettings: async (p) => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, ...p }),
-    detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected' }, { kind: 'cursor-agent', found: false, path: null, version: null }]),
-    saveSecret: async () => {}, hasSecret: async () => false, deleteSecret: async () => {}, completeOnboarding: async () => {},
+    detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected', loggedIn: null }, { kind: 'cursor-agent', found: false, path: null, version: null, loggedIn: null }]),
+    completeOnboarding: async () => {},
+    // Settings' CLI sign-in resolves through the daemon and then hands the
+    // invocation here. Without the stub the button throws instead of no-opping,
+    // which reads as a broken control rather than a stubbed one.
+    openInTerminal: async () => ({ ok: true }),
     pickWorkflowImport: async () => null, pickWorkflowExport: async () => null, checkForUpdates: async () => ({ status: 'dev', version: null, message: null }),
     // The composer's branch chip calls these on mount; without them the whole
     // app shell throws to its error boundary before any view renders.

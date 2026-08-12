@@ -20,18 +20,12 @@ export function Onboarding({
   const [binaryPaths, setBinaryPaths] = useState<
     Partial<Record<CliKind, string>>
   >({});
-  const [cursorKey, setCursorKey] = useState('');
-  // Whether a Cursor key is already saved in the Keychain (null = still loading).
-  const [hasStoredKey, setHasStoredKey] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const didAutoOpenRef = useRef(false);
 
-  const keyPresent = (hasStoredKey ?? false) || cursorKey.trim() !== '';
-
   useEffect(() => {
     void window.geniro.detectClis().then(setClis);
-    void window.geniro.hasSecret('cursor.apiKey').then(setHasStoredKey);
   }, []);
 
   // Pre-fill each detected binary's resolved path into its (empty) field, so a
@@ -55,22 +49,22 @@ export function Onboarding({
     });
   }, [clis]);
 
-  // Once, after the first detection + key probe settle, expand every agent that
-  // isn't ready — so the thing the user must fix (a missing binary path, a
-  // missing Cursor key) is visible without hunting for the disclosure.
+  // Once detection settles, expand every agent that isn't ready — so the
+  // thing the user must fix (a missing binary path) is visible without
+  // hunting for the disclosure.
   useEffect(() => {
-    if (didAutoOpenRef.current || clis === null || hasStoredKey === null) {
+    if (didAutoOpenRef.current || clis === null) {
       return;
     }
     didAutoOpenRef.current = true;
     const auto: Partial<Record<CliKind, boolean>> = {};
     for (const kind of CLI_KINDS) {
-      if (statusFor(clis, kind, keyPresent).tone !== 'ok') {
+      if (statusFor(clis, kind).tone !== 'ok') {
         auto[kind] = true;
       }
     }
     setOpen((prev) => ({ ...auto, ...prev }));
-  }, [clis, hasStoredKey, keyPresent]);
+  }, [clis]);
 
   const refreshClis = async (): Promise<void> => {
     setClis(null);
@@ -99,10 +93,7 @@ export function Onboarding({
           cliPaths[kind] = path;
         }
       }
-      await window.geniro.completeOnboarding({
-        cliPaths,
-        cursorApiKey: cursorKey.trim() || undefined,
-      });
+      await window.geniro.completeOnboarding({ cliPaths });
       onDone();
     } catch (err) {
       setError(String(err));
@@ -134,10 +125,6 @@ export function Onboarding({
           setBinaryPaths((prev) => ({ ...prev, [kind]: value }))
         }
         onBrowse={(kind) => void browse(kind)}
-        keyPresent={keyPresent}
-        cursorKey={cursorKey}
-        onCursorKeyChange={setCursorKey}
-        hasStoredKey={hasStoredKey}
       />
 
       <footer className="mt-auto flex items-center gap-3 pt-2">

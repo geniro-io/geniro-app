@@ -7,6 +7,7 @@ import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
+import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
 import { checkOnLaunch } from './updater';
 
@@ -177,6 +178,10 @@ function focusMainWindow(): void {
 }
 
 function main(): void {
+  // Unconditional, not gated behind whenReady or any settings flag — see
+  // purge-legacy-secret.ts for why that is both safe and the point.
+  purgeLegacySecret();
+
   // The app is the single owner of the daemon and its pidfile. A second launch
   // focuses the existing window instead of double-spawning the daemon and
   // clobbering the shared pidfile. macOS already enforces single-instance for

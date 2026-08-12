@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react';
+import { LogIn } from 'lucide-react';
 
 import {
   CLI_KINDS,
@@ -14,20 +14,20 @@ import { Input } from './ui/input';
 
 export type AgentStatus = { label: string; tone: StatusTone };
 
-/** Agents that can't run on the binary alone — they also need a saved secret. */
-export function needsApiKey(kind: CliKind): boolean {
-  return kind === 'cursor-agent';
-}
-
 /**
- * Readiness of one agent. "Ready" (green) means the app can actually drive it:
- * the binary was detected AND, for key-gated agents, a key is present. A
- * detected-but-keyless cursor-agent is amber, not green — it can't run yet.
+ * Readiness of one agent. "Ready" (green) means the binary was detected AND,
+ * for a CLI whose own status command was actually asked and answered, it did
+ * not say signed-out.
+ *
+ * `loggedIn === false` is the ONLY thing that renders warn: a CLI that said so
+ * itself. `null` — no status command to ask (claude today) or a probe that
+ * failed — reads as ready, same as `true`. Treating it as signed-out would
+ * tell an already-signed-in user to sign in again, for a fix that would not
+ * even address a probe failure.
  */
 export function statusFor(
   clis: CliDetection[] | null,
   kind: CliKind,
-  keyPresent: boolean,
 ): AgentStatus {
   if (clis === null) {
     return { label: 'Checking…', tone: 'unknown' };
@@ -37,8 +37,8 @@ export function statusFor(
     return { label: 'not found on PATH', tone: 'bad' };
   }
   const version = detection.version ? ` · ${detection.version}` : '';
-  if (needsApiKey(kind) && !keyPresent) {
-    return { label: `detected${version} · needs API key`, tone: 'warn' };
+  if (detection.loggedIn === false) {
+    return { label: `detected${version} · not signed in`, tone: 'warn' };
   }
   return { label: `ready${version}`, tone: 'ok' };
 }
@@ -60,24 +60,20 @@ export interface AgentConfigListProps {
   binaryPaths: Partial<Record<CliKind, string>>;
   onBinaryPathChange: (kind: CliKind, value: string) => void;
   onBrowse: (kind: CliKind) => void;
-  /** Whether a Cursor key is effectively present (saved OR typed this session). */
-  keyPresent: boolean;
-  cursorKey: string;
-  onCursorKeyChange: (value: string) => void;
-  /** Fired when the key field loses focus — Settings uses it to auto-save. */
-  onCursorKeyBlur?: () => void;
-  /** Whether a Cursor key is already saved in the Keychain (null = loading). */
-  hasStoredKey: boolean | null;
-  /** Settings-only: clear the saved Keychain key. Omitted in onboarding. */
-  onRemoveKey?: () => void;
+  /**
+   * Sign one CLI itself back in, in the user's own terminal. Settings-only —
+   * onboarding passes nothing, and a card renders no control without it: the
+   * decided placement for this action is Settings, not first-run setup.
+   */
+  onSignIn?: (kind: CliKind) => void;
 }
 
 /**
  * The list of per-agent configuration cards — the single implementation shared
- * by onboarding and Settings, so both surfaces show detection state, binary-path
- * overrides, and the Cursor API key identically. Fully controlled: the parent
- * owns all state and decides how a change is persisted (completeOnboarding vs.
- * updateSettings/saveSecret).
+ * by onboarding and Settings, so both surfaces show detection state and
+ * binary-path overrides identically. Fully controlled: the parent owns all
+ * state and decides how a change is persisted (completeOnboarding vs.
+ * updateSettings).
  */
 export function AgentConfigList({
   clis,
@@ -86,18 +82,13 @@ export function AgentConfigList({
   binaryPaths,
   onBinaryPathChange,
   onBrowse,
-  keyPresent,
-  cursorKey,
-  onCursorKeyChange,
-  onCursorKeyBlur,
-  hasStoredKey,
-  onRemoveKey,
+  onSignIn,
 }: AgentConfigListProps): React.JSX.Element {
   return (
     <div className="flex flex-col gap-3">
       {CLI_KINDS.map((kind) => {
         const detection = clis?.find((c) => c.kind === kind) ?? null;
-        const status = statusFor(clis, kind, keyPresent);
+        const status = statusFor(clis, kind);
         const isOpen = Boolean(open[kind]);
         const pathId = `agent-path-${kind}`;
         const found = Boolean(detection?.found);
@@ -140,44 +131,36 @@ export function AgentConfigList({
               </div>
             </Field>
 
-            {needsApiKey(kind) ? (
-              <Field
-                label="Cursor API key"
-                htmlFor="cursor-api-key"
-                hint={
-                  hasStoredKey
-                    ? 'A key is already saved in your Keychain — enter a new one to replace it.'
-                    : 'Required to run cursor-agent. Stored in your macOS Keychain — never written to disk.'
-                }>
-                <Input
-                  id="cursor-api-key"
-                  type="password"
-                  placeholder={
-                    hasStoredKey
-                      ? 'Saved — enter a new key to replace'
-                      : 'Cursor API key'
-                  }
-                  value={cursorKey}
-                  onChange={(event) => onCursorKeyChange(event.target.value)}
-                  onBlur={onCursorKeyBlur}
-                />
-                {hasStoredKey && onRemoveKey ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="self-start text-destructive hover:text-destructive"
-                    onClick={onRemoveKey}>
-                    <Trash2 />
-                    Remove saved key
-                  </Button>
-                ) : null}
-              </Field>
-            ) : (
-              <NoteBox>
-                Signs in through the {kind} CLI — no API key needed.
-              </NoteBox>
-            )}
+            <NoteBox className="flex items-center justify-between gap-3">
+              <span>
+                {/* Signed out with no control is a REACHABLE state, not a
+                    theoretical one: the sign-in lives on Settings only, and
+                    Onboarding — which auto-expands a card that is not ready —
+                    passes no handler. Naming where the cure is keeps that
+                    screen from being a dead end without moving the control. */}
+                {detection?.loggedIn === false
+                  ? onSignIn
+                    ? `Not signed in to ${kind}.`
+                    : `Not signed in to ${kind} — sign in from Settings once setup is done.`
+                  : `Signs in through the ${kind} CLI itself — no key to enter here.`}
+              </span>
+              {/* `found` matters as much as the handler: the daemon resolves a
+                  login target from the bare CLI name without checking it exists,
+                  so offering this on a card that already says "not found on
+                  PATH" opens a terminal that answers `command not found`, where
+                  no in-app error can reach the user. */}
+              {onSignIn && found ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => onSignIn(kind)}>
+                  <LogIn className="size-3.5" />
+                  Sign in
+                </Button>
+              ) : null}
+            </NoteBox>
           </CollapsibleCard>
         );
       })}

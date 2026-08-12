@@ -1,9 +1,24 @@
 /**
+ * TWIN PARSER: `apps/ui/src/main/probe-env.ts`.
+ *
+ * The Electron main process spawns CLI children of its own (`detectClis` runs
+ * `--version` and a login `status` on every binary) and shares no code with this
+ * app, so it carries its own copy of the same rule. A credential name added to
+ * the set below belongs there too, and the reverse — the two are the whole
+ * contract, since nothing type-checks across the boundary.
+ *
  * Env keys a spawned child must NEVER inherit, beyond the `GENIRO_` prefix:
  *
- * - `CURSOR_API_KEY` — natively inherited Cursor credential; the daemon
- *   receives it as `GENIRO_CURSOR_API_KEY` and the Cursor adapter re-injects
- *   it via `extra` for its own child ONLY.
+ * - `CURSOR_API_KEY` — a Cursor credential the USER exported in the shell the
+ *   app was launched from. geniro no longer has one of its own to inject: the
+ *   Keychain entry, the `GENIRO_CURSOR_API_KEY` hop and the whole secret
+ *   surface are gone, and `cursor-agent` authenticates from its own
+ *   `~/.cursor` login instead. The strip STAYS regardless, and the reason is
+ *   the one below it: an inherited key that reached every child would hand the
+ *   user's Cursor credential to the CLAUDE agent, which is the exact
+ *   cross-agent leak this set exists to prevent. `CursorAcpAdapter.buildEnv`
+ *   re-injects the inherited value for its OWN child only, so a user who
+ *   authenticates that way keeps working without the key crossing agents.
  * - `CLAUDE_CODE_SESSION_ID` — present when the APP itself was launched from
  *   inside a Claude Code session (e.g. `pnpm dev` in its terminal). It names
  *   the OUTER session's identity; a spawned agent's conversation is never
@@ -30,7 +45,12 @@
  *   definitionally-claude spawn paths (the Claude adapter's turns and probes)
  *   re-inject them via {@link claudeCredentialEnv}.
  */
-const CLAUDE_CREDENTIAL_KEYS = [
+/**
+ * Exported so `ClaudeAdapter` can declare it as that CLI's
+ * `auth.inheritedEnvKeys` — the same list drives the strip here AND the
+ * re-injection there, so the two cannot name different credentials.
+ */
+export const CLAUDE_CREDENTIAL_KEYS = [
   'ANTHROPIC_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
   // Both are Claude Code's own documented overrides for the SAME thing an API

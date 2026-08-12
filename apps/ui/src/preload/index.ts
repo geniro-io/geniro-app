@@ -38,18 +38,6 @@ const api: GeniroApi = {
     >,
   detectClis: () =>
     ipcRenderer.invoke(IPC.detectClis) as ReturnType<GeniroApi['detectClis']>,
-  saveSecret: (name, value) =>
-    ipcRenderer.invoke(IPC.saveSecret, name, value) as ReturnType<
-      GeniroApi['saveSecret']
-    >,
-  hasSecret: (name) =>
-    ipcRenderer.invoke(IPC.hasSecret, name) as ReturnType<
-      GeniroApi['hasSecret']
-    >,
-  deleteSecret: (name) =>
-    ipcRenderer.invoke(IPC.deleteSecret, name) as ReturnType<
-      GeniroApi['deleteSecret']
-    >,
   completeOnboarding: (input) =>
     ipcRenderer.invoke(IPC.completeOnboarding, input) as ReturnType<
       GeniroApi['completeOnboarding']

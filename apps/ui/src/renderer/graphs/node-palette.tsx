@@ -80,8 +80,8 @@ const AGENT_META: Record<CliKind, TileMeta> = {
     details: [
       'Runs one turn per node via `cursor-agent acp` (Agent Client Protocol).',
       'Tool approvals are per-node — set the node to auto, ask, or accept edits.',
-      'Runs on its configured model — ACP carries no per-session model choice.',
-      'Needs a Cursor API key (set it in Settings).',
+      'Model is chosen per node — ACP carries the choice in its session handshake.',
+      'Signs itself in — Settings offers the sign-in; no API key to enter.',
     ],
     icon: <SquareTerminal aria-hidden="true" className="size-4" />,
   },

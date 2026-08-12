@@ -397,6 +397,68 @@ describe('AgentsPanel', () => {
     );
     expect(el.textContent).toContain('No agents in this run');
   });
+
+  it('keeps the per-server MCP sign-in and drops the per-CLI one', () => {
+    // TWO controls said "Sign in" here, and only one moved to Settings
+    // (agent-config-list.spec.tsx / Settings.spec.tsx pin the new placement).
+    // So this asserts BOTH directions: a fixture that renders a `needs_auth`
+    // server row, proving the surviving MCP control is present, and no
+    // `Sign in to <cli>` button. Asserting only the absence — over an empty
+    // `mcpByScope`, which renders no server rows at all — would pass just as
+    // happily if the WRONG control had been deleted.
+    const el = render(
+      <AgentsPanel
+        interactiveTerminalAgents={INTERACTIVE}
+        agents={agents}
+        mcpByScope={
+          new Map([
+            [
+              scope('claude'),
+              {
+                unavailableReason: null,
+                pending: false,
+                interactiveOnlyNote: null,
+                servers: [
+                  {
+                    name: 'sentry',
+                    target: 'node x.js',
+                    transport: 'stdio' as const,
+                    status: 'needs_auth' as const,
+                    detail: null,
+                    scope: 'project' as const,
+                    disabled: false,
+                    toggleUnavailableReason: null,
+                    signInUnavailableReason: null,
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+        onSignInMcp={vi.fn()}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // The rows live behind the card's MCP disclosure; without opening it this
+    // fixture would render no server at all and the negative half below would
+    // be the only thing under test — the very weakness this replaces.
+    // Named, not the first card found: the listing above is keyed to claude's
+    // scope, and opening some other agent's disclosure would render no rows.
+    openMcpList(el, 'Orchestrator');
+
+    // The per-SERVER path is still wired: the card surfaces the server's
+    // needs-sign-in state, which it can only do from a listing it still renders.
+    expect(cardFor(el, 'Orchestrator').textContent).toContain('Needs sign-in');
+    // The per-CLI control — gone. Its `aria-label` was `Sign in to <cli>`.
+    expect(el.querySelector('button[aria-label^="Sign in to"]')).toBeNull();
+    // KNOWN LIMIT: this pins that the MCP path survives and the per-CLI button
+    // does not, but it does not click the per-SERVER button — that row sits
+    // behind a disclosure this fixture does not manage to expand. The
+    // per-server control's own behaviour is covered in
+    // `AgentsPanel — MCP servers`, which owns that setup.
+  });
 });
 
 /** The card of the agent whose name is given. */

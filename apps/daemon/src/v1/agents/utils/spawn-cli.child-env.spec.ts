@@ -57,8 +57,12 @@ describe('spawned-agent env scoping', () => {
     expect('GENIRO_SECRET' in (captured.env ?? {})).toBe(false);
   });
 
-  it('CursorAcpAdapter re-injects GENIRO_CURSOR_API_KEY as CURSOR_API_KEY for its child only', async () => {
-    process.env.GENIRO_CURSOR_API_KEY = 'sk-cursor';
+  it("CursorAcpAdapter re-injects the user's own inherited CURSOR_API_KEY", async () => {
+    // geniro no longer mints a key, so the only one that can appear is the
+    // user's own, exported in the shell that launched the app. `buildChildEnv`
+    // strips it from every child; the adapter's buildEnv puts it back for this
+    // one.
+    process.env.CURSOR_API_KEY = 'sk-user-own';
     const { spawn, child, captured } = fakeSpawn();
 
     const handle = new CursorAcpAdapter({ spawn }).start(
@@ -68,13 +72,16 @@ describe('spawned-agent env scoping', () => {
     child.emit('close', 0, null);
     await handle.done;
 
-    expect(captured.env?.CURSOR_API_KEY).toBe('sk-cursor');
-    // The raw GENIRO_-prefixed var is stripped — only the mapped name survives.
-    expect('GENIRO_CURSOR_API_KEY' in (captured.env ?? {})).toBe(false);
+    expect(captured.env?.CURSOR_API_KEY).toBe('sk-user-own');
   });
 
   it("ClaudeAdapter's child never receives the Cursor credential", async () => {
-    process.env.GENIRO_CURSOR_API_KEY = 'sk-cursor';
+    // Set the INHERITED name, which is the only live source now. Setting the
+    // retired GENIRO_ var here would make this pass with the strip deleted —
+    // nothing reads that name any more, so it could not leak in the first
+    // place. This is the assertion that keeps "no spawned agent inherits
+    // another agent's credential" true once the key is un-minted.
+    process.env.CURSOR_API_KEY = 'sk-user-own';
     const { spawn, child, captured } = fakeSpawn();
 
     const handle = new ClaudeAdapter({ spawn }).start(
@@ -85,6 +92,5 @@ describe('spawned-agent env scoping', () => {
     await handle.done;
 
     expect(captured.env?.CURSOR_API_KEY).toBeUndefined();
-    expect('GENIRO_CURSOR_API_KEY' in (captured.env ?? {})).toBe(false);
   });
 });

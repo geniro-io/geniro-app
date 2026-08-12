@@ -8,8 +8,8 @@ import { CLI_KINDS, type CliKind } from '../shared/contracts';
  * Runtime validation for IPC payloads. The renderer is the only caller today,
  * but IPC input is untrusted by default (a compromised renderer, a future
  * frame), and some of it reaches privileged sinks — `cliPaths[kind]` becomes an
- * `execFile` target in cli-detect.ts, `projectFolder` is persisted, secrets hit
- * the Keychain. These schemas are validated in the main process before any use.
+ * `execFile` target in cli-detect.ts, `projectFolder` is persisted. These
+ * schemas are validated in the main process before any use.
  *
  * Kept main-side (not in shared/contracts.ts) on purpose: contracts.ts is
  * imported by the preload, which must stay dependency-free so its sandboxed
@@ -92,18 +92,11 @@ export const branchNameSchema = z
   .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
   .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
 
-/** The only valid Keychain secret identifier. */
-export const secretNameSchema = z.enum(['cursor.apiKey']);
-
-/** A non-empty secret value. */
-export const secretValueSchema = z.string().min(1);
-
 /** Onboarding payload committed in a single IPC call. */
 export const onboardingInputSchema = z.strictObject({
   // Per-agent binary overrides; each becomes an `execFile` target in
   // cli-detect.ts, so it must be a validated absolute path.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
-  cursorApiKey: z.string().min(1).optional(),
 });
 
 /**

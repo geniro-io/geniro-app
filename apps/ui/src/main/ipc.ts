@@ -10,11 +10,8 @@ import {
   onboardingInputSchema,
   openTerminalSchema,
   revealPathSchema,
-  secretNameSchema,
-  secretValueSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
-import { deleteSecret, hasSecret, saveSecret } from './keychain';
 import { openInTerminal } from './open-terminal';
 import { revealPath } from './reveal-path';
 import { readSettings, updateSettings } from './settings';
@@ -76,23 +73,6 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
 
   ipcMain.handle(IPC.detectClis, () => detectClis(readSettings()));
 
-  ipcMain.handle(
-    IPC.saveSecret,
-    async (event, name: unknown, value: unknown) => {
-      saveSecret(secretNameSchema.parse(name), secretValueSchema.parse(value));
-      await restartAndNotify(event);
-    },
-  );
-
-  ipcMain.handle(IPC.hasSecret, (_event, name: unknown) =>
-    hasSecret(secretNameSchema.parse(name)),
-  );
-
-  ipcMain.handle(IPC.deleteSecret, async (event, name: unknown) => {
-    deleteSecret(secretNameSchema.parse(name));
-    await restartAndNotify(event);
-  });
-
   ipcMain.handle(IPC.pickWorkflowImport, async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -144,10 +124,7 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
   });
 
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {
-    const { cliPaths, cursorApiKey } = onboardingInputSchema.parse(input);
-    if (cursorApiKey) {
-      saveSecret('cursor.apiKey', cursorApiKey);
-    }
+    const { cliPaths } = onboardingInputSchema.parse(input);
     // Merge over existing overrides so a re-run of onboarding never clears a
     // previously-set agent path the user didn't touch this time.
     const current = readSettings();

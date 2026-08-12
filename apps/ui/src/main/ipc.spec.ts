@@ -35,8 +35,6 @@ const mocks = vi.hoisted(() => {
       ...settings,
       ...patch,
     })),
-    saveSecret: vi.fn(),
-    deleteSecret: vi.fn(),
   };
 });
 
@@ -48,11 +46,6 @@ vi.mock('electron', () => ({
   ipcMain: { handle: mocks.handle },
 }));
 vi.mock('./cli-detect', () => ({ detectClis: vi.fn(() => []) }));
-vi.mock('./keychain', () => ({
-  deleteSecret: mocks.deleteSecret,
-  hasSecret: vi.fn(() => false),
-  saveSecret: mocks.saveSecret,
-}));
 vi.mock('./settings', () => ({
   readSettings: mocks.readSettings,
   updateSettings: mocks.updateSettings,
@@ -148,32 +141,16 @@ describe('registerIpc daemon configuration refresh', () => {
     ).rejects.toThrow();
   });
 
-  it('restarts after saving or deleting the Cursor secret', async () => {
-    await handler(IPC.saveSecret)(event, 'cursor.apiKey', 'secret');
-    expect(mocks.saveSecret).toHaveBeenCalledWith('cursor.apiKey', 'secret');
-    expect(restart).toHaveBeenCalledOnce();
-
-    restart.mockClear();
-    await handler(IPC.deleteSecret)(event, 'cursor.apiKey');
-    expect(mocks.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
-    expect(restart).toHaveBeenCalledOnce();
-  });
-
-  it('restarts only after onboarding settings and Keychain writes complete', async () => {
+  it('restarts only after onboarding settings are committed', async () => {
     const result = await handler(IPC.completeOnboarding)(event, {
       cliPaths: { 'cursor-agent': '/opt/cursor-agent' },
-      cursorApiKey: 'secret',
     });
 
-    expect(mocks.saveSecret).toHaveBeenCalledWith('cursor.apiKey', 'secret');
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       onboardingComplete: true,
       cliPaths: { 'cursor-agent': '/opt/cursor-agent' },
     });
     expect(restart).toHaveBeenCalledOnce();
-    expect(mocks.saveSecret.mock.invocationCallOrder[0]).toBeLessThan(
-      restart.mock.invocationCallOrder[0]!,
-    );
     expect(mocks.updateSettings.mock.invocationCallOrder[0]).toBeLessThan(
       restart.mock.invocationCallOrder[0]!,
     );

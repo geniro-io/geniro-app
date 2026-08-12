@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  CliDetection,
+  CliKind,
   GeniroApi,
   Settings as SettingsShape,
 } from '../../shared/contracts';
@@ -28,12 +30,35 @@ const geniro = {
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   detectClis: vi.fn(),
-  hasSecret: vi.fn(),
-  saveSecret: vi.fn(),
-  deleteSecret: vi.fn(),
   pickAgentBinary: vi.fn(),
   checkForUpdates: vi.fn(),
+  openInTerminal: vi.fn(),
 };
+
+// The daemon client is mocked so Settings never issues a real fetch for its
+// one route (`resolveCliLogin`) — `createDaemonApis` hands back one object
+// per launch handle, so a single factory mock covers it.
+const handoffApi = vi.hoisted(() => ({ resolveCliLogin: vi.fn() }));
+vi.mock('../daemon-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../daemon-api')>()),
+  createDaemonApis: vi.fn(() => ({ handoff: handoffApi })),
+}));
+
+const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
+
+function det(
+  kind: CliKind,
+  overrides: Partial<CliDetection> = {},
+): CliDetection {
+  return {
+    kind,
+    found: true,
+    path: `/bin/${kind}`,
+    version: '1.2.3',
+    loggedIn: null,
+    ...overrides,
+  };
+}
 
 let container: HTMLDivElement;
 let root: Root | null;
@@ -44,7 +69,7 @@ async function mount(): Promise<void> {
   const mountedRoot = createRoot(container);
   root = mountedRoot;
   await act(async () => {
-    mountedRoot.render(<Settings />);
+    mountedRoot.render(<Settings handle={handle} />);
   });
 }
 
@@ -59,12 +84,13 @@ beforeEach(() => {
   geniro.getSettings.mockReset().mockResolvedValue(settings);
   geniro.updateSettings.mockReset().mockResolvedValue(settings);
   geniro.detectClis.mockReset().mockResolvedValue([]);
-  geniro.hasSecret.mockReset().mockResolvedValue(false);
+  geniro.openInTerminal.mockReset().mockResolvedValue(undefined);
   geniro.checkForUpdates.mockReset().mockResolvedValue({
     status: 'up-to-date',
     version: '0.1.0',
     message: null,
   });
+  handoffApi.resolveCliLogin.mockReset();
   (window as unknown as { geniro: Partial<GeniroApi> }).geniro =
     geniro as unknown as Partial<GeniroApi>;
 });
@@ -252,9 +278,9 @@ describe('Settings updates section', () => {
   });
 });
 
-describe('Settings key removal', () => {
-  /** The cursor row is collapsed at rest — its key field (and the Remove
-   *  button) render only once the row is expanded. */
+describe('Settings — CLI sign-in', () => {
+  /** The cursor row is collapsed at rest — its Sign in control renders only
+   *  once the row is expanded. */
   async function expandCursorRow(): Promise<void> {
     const toggle = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.includes('cursor-agent'),
@@ -264,48 +290,99 @@ describe('Settings key removal', () => {
     });
   }
 
-  function removeButton(): HTMLButtonElement | undefined {
+  function signInButton(): HTMLButtonElement | undefined {
     return Array.from(
       container.querySelectorAll<HTMLButtonElement>('button'),
-    ).find((b) => b.textContent?.includes('Remove saved key'));
+    ).find((b) => b.textContent?.includes('Sign in'));
   }
 
-  it('a failed key removal surfaces the error instead of silently claiming success', async () => {
-    // The IPC call also restarts the daemon, which has real failure paths —
-    // before the error branch, a rejection was unhandled with zero feedback
-    // while the sibling save path showed its error.
-    geniro.hasSecret.mockResolvedValue(true);
-    geniro.deleteSecret
-      .mockReset()
-      .mockRejectedValue(new Error('keychain locked'));
+  it('resolves the CLI’s own login and opens it in the user’s terminal', async () => {
+    // This is the placement decided for the control: Settings offers it, the
+    // agents panel no longer does (agents-panel.spec.tsx pins the removal).
+    geniro.detectClis.mockResolvedValue([
+      det('claude'),
+      det('cursor-agent', { loggedIn: false }),
+    ]);
+    handoffApi.resolveCliLogin.mockResolvedValue({
+      kind: 'command',
+      command: 'cursor-agent',
+      args: ['login'],
+      cwd: '/home/me',
+      display: 'cursor-agent login',
+      unavailableReason: null,
+    });
     await mount();
     await expandCursorRow();
 
-    const remove = removeButton();
-    expect(remove).toBeDefined();
+    const button = signInButton();
+    expect(button).toBeDefined();
     await act(async () => {
-      remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(container.textContent).toContain('keychain locked');
-    // The UI must not claim the key is gone when it is not.
-    expect(removeButton()).toBeDefined();
+    // No config directory: Settings signs in to the CLI's default profile,
+    // not any one chat's.
+    expect(handoffApi.resolveCliLogin).toHaveBeenCalledWith({
+      agent: 'cursor-agent',
+    });
+    expect(geniro.openInTerminal).toHaveBeenCalledWith({
+      command: 'cursor-agent',
+      args: ['login'],
+      cwd: '/home/me',
+      env: undefined,
+    });
   });
 
-  it('a successful removal clears the stored-key state', async () => {
-    geniro.hasSecret.mockResolvedValue(true);
-    geniro.deleteSecret.mockReset().mockResolvedValue(undefined);
+  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
+    geniro.detectClis.mockResolvedValue([
+      det('claude'),
+      det('cursor-agent', { loggedIn: false }),
+    ]);
+    handoffApi.resolveCliLogin.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      display: null,
+      unavailableReason: 'this CLI has no account sign-in',
+    });
     await mount();
     await expandCursorRow();
 
-    const remove = removeButton();
-    expect(remove).toBeDefined();
     await act(async () => {
-      remove!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      signInButton()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(geniro.deleteSecret).toHaveBeenCalledWith('cursor.apiKey');
-    expect(removeButton()).toBeUndefined();
+    expect(geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('this CLI has no account sign-in');
+  });
+
+  it('falls back to its own sentence when the daemon refuses without one', async () => {
+    // `handoff-open.ts` does `target.unavailableReason ?? fallback`, and every
+    // other caller's spec supplies a reason — so the fallback arm was never
+    // entered and could be deleted with nothing going red, leaving the user a
+    // refusal with no message at all.
+    geniro.detectClis.mockResolvedValue([
+      det('claude'),
+      det('cursor-agent', { loggedIn: false }),
+    ]);
+    handoffApi.resolveCliLogin.mockResolvedValue({
+      kind: 'unavailable',
+      command: null,
+      args: [],
+      cwd: null,
+      display: null,
+      unavailableReason: null,
+    });
+    await mount();
+    await expandCursorRow();
+
+    await act(async () => {
+      signInButton()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(geniro.openInTerminal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('cannot be signed in from here');
   });
 });
 

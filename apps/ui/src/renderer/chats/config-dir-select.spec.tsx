@@ -74,7 +74,7 @@ describe('ConfigDirSelect', () => {
       <ConfigDirSelect
         configDir={null}
         recentConfigDirs={RECENTS}
-        unavailableReason="cursor-agent takes its account from the API key geniro injects"
+        unavailableReason="cursor-agent reads a config directory but keeps the account outside it"
         onChange={() => {}}
         onBrowse={() => {}}
       />,

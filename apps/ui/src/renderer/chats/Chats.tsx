@@ -2295,22 +2295,6 @@ export function Chats({
    */
   const runRowStopped =
     activeRun?.status === 'failed' || activeRun?.status === 'cancelled';
-  /**
-   * Why THIS chat's CLI never lists delegates, or null when it reports them.
-   *
-   * A chat that shows no sub-agents is otherwise indistinguishable from a
-   * broken one, and for cursor-agent that is the permanent, correct state — its
-   * ACP transport carries no sub-agent signal at all. Read off the daemon's own
-   * per-adapter report rather than decided by agent name here, on the same rule
-   * as the interactive-terminal set above.
-   */
-  const subagentUnavailableReason = useMemo(() => {
-    const kind = activeRun?.agentKind;
-    return kind
-      ? (capabilities?.subagents?.find((row) => row.agent === kind)
-          ?.unavailableReason ?? null)
-      : null;
-  }, [capabilities, activeRun]);
   const subagentRunning = useMemo(
     () =>
       collectSubagentBlocks(durableEntries).some(
@@ -3522,7 +3506,6 @@ export function Chats({
                   void openThreadTerminal(agent, thread)
                 }
                 onOpenSubagent={setDetailSubagentId}
-                subagentUnavailableReason={subagentUnavailableReason}
                 onClose={() => setAgentsPanelOpen(false)}
               />
             ) : null}

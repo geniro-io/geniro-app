@@ -350,7 +350,6 @@ export function AgentsPanel({
   onMcpOpenChange,
   onOpenThread,
   onOpenSubagent,
-  subagentUnavailableReason = null,
   onResolveHandoff,
   terminalReasons,
   onClose,
@@ -407,15 +406,20 @@ export function AgentsPanel({
    * {@link onSetMcpEnabled}.
    */
   onOpenSubagent?: (subagentId: string) => void;
-  /**
-   * Why this run's CLI never lists sub-agents, or null when it reports them.
+  /*
+   * There was a `subagentUnavailableReason` here — a panel-level paragraph
+   * saying why a CLI lists no delegates. It has been removed: on cursor it was
+   * three lines of protocol detail ("no session/update variant this client reads
+   * carries a parent, task or sub-session id") standing permanently above every
+   * agent card, on EVERY cursor chat, explaining the absence of something most
+   * readers were not looking for. A caveat that never goes away stops being a
+   * caveat and becomes chrome.
    *
-   * Shown rather than swallowed: a panel with no delegate rows is otherwise
-   * indistinguishable from a broken one, and for a CLI whose transport carries
-   * no sub-agent signal that emptiness is the permanent, correct answer. The
-   * daemon's own adapter owns the sentence.
+   * The daemon still reports the fact (`GET /v1/capabilities` → `subagents[]`,
+   * from each adapter's own config) and the reason is still the adapter's to
+   * own — so if a place is ever found where a reader is actually asking the
+   * question, it can be answered there without re-deriving anything.
    */
-  subagentUnavailableReason?: string | null;
   /**
    * Resolve the invocation that opens one thread in a terminal — used for the
    * hover hint only. Optional: without it the button still opens, it just has
@@ -542,13 +546,6 @@ export function AgentsPanel({
           message={mcpToggleError}
           onDismiss={onDismissMcpToggleError}
         />
-      ) : null}
-      {subagentUnavailableReason !== null ? (
-        // Panel-level, not per card: it is a fact about the CLI, and it must
-        // read whether or not any agent card happens to be expanded.
-        <p className="m-0 px-3 pb-1 text-[11px] text-muted-foreground">
-          {subagentUnavailableReason}
-        </p>
       ) : null}
       <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto p-3 pt-1">
         {agents.length === 0 ? (

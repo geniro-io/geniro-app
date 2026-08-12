@@ -1385,31 +1385,25 @@ describe('AgentsPanel — sub-agent threads', () => {
     expect(opened).toEqual(['task-1']);
   });
 
-  it('says WHY a CLI lists no delegates, rather than showing an empty list', () => {
-    // An empty sub-agent list is indistinguishable from a bug. For a CLI whose
-    // transport carries no sub-agent signal, the emptiness is the permanent
-    // correct answer — so the daemon's own adapter sentence is shown.
+  it('states no standing caveat about delegates a CLI cannot report', () => {
+    // This used to be the opposite pin — the panel showed the daemon's sentence
+    // so an empty delegate list would not read as a bug. On cursor that put
+    // three lines of protocol detail permanently above every agent card of every
+    // chat, and a caveat that never goes away is chrome rather than information.
+    //
+    // Asserted on the CLI it actually appeared for: a card whose only thread is
+    // its own conversation, which is every 1:1 cursor chat.
     const el = render(
       <AgentsPanel
         agents={[{ ...delegator, threads: [{ ...mainThread }] }]}
         terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
-        subagentUnavailableReason="cursor-agent reports no sub-agents over ACP"
         onClose={() => undefined}
       />,
     );
 
-    // Read WITHOUT expanding anything: a card whose only thread is its own
-    // conversation never renders a thread list, so a note nested in one would
-    // be unreachable on exactly the CLI that needs it.
-    expect(el.textContent).toContain(
-      'cursor-agent reports no sub-agents over ACP',
-    );
-  });
-
-  it('says nothing extra for a CLI that does report them', () => {
-    const el = renderWithSubagent();
-    expect(el.textContent).not.toContain('reports no sub-agents');
+    expect(el.textContent).not.toContain('sub-agents');
+    expect(el.textContent).not.toContain('session/update');
   });
 
   it('leaves the row inert rather than falsely clickable with no handler', () => {

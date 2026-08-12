@@ -598,6 +598,35 @@ describe('CursorAcpAdapter — no mid-turn user message', () => {
   });
 });
 
+describe('CursorAcpAdapter — cannot reopen a conversation', () => {
+  it('refuses, and NAMES THE MECHANISM rather than merely declining', () => {
+    // Re-verified 2026-08-12 against 2026.08.11-e8db854 + Cursor 3.15.6: the
+    // ACP store (`~/.cursor/acp-sessions/<uuid>/`) and the store `--resume`
+    // reads (`~/.cursor/chats/<md5(cwd)>/`) are two hardcoded paths in the
+    // shipped bundle with nothing joining them, and the only `cursor://` route
+    // in the whole binary targets no thread.
+    //
+    // The sentence is what the panel renders on the inert control, so it has to
+    // say something the user can act on — this asserts the mechanism is in it,
+    // not just that some string exists. A generic "no interactive terminal
+    // session" (which the capability route used to compose) would pass a
+    // non-empty check and fail this one.
+    const reason = new CursorAcpAdapter().handoffUnavailableReason();
+
+    expect(reason).toEqual(expect.any(String));
+    expect(reason).toContain('chat store');
+    // And the refusal itself still holds for a real-looking session id — the
+    // danger being that `--resume` ACCEPTS an unknown one and silently opens an
+    // EMPTY chat, so a wired button would look like it worked.
+    expect(
+      new CursorAcpAdapter().handoffTarget({
+        sessionId: 'fa6e9302-6ae4-4ea7-ba35-536fc8cc1e29',
+        model: null,
+      }),
+    ).toEqual({ ok: false, reason: 'unsupported' });
+  });
+});
+
 describe('CursorAcpAdapter — no sub-agent signal', () => {
   it('declares that it reports none, with the reason beside it', () => {
     // A CLI with no answer declares that as a fact rather than leaving the

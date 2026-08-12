@@ -313,6 +313,14 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         unavailableReason: null,
       },
+      usage: {
+        /**
+         * Reports it in full. Every `result` line carries `usage` (input/output
+         * tokens, cache reads) and `total_cost_usd`, which `claude-usage.utils`
+         * maps — so the meter has a numerator, a denominator and a spend.
+         */
+        unavailableReason: null,
+      },
       handoff: {
         kind: 'resume-command',
         resumeFlag: CLAUDE_RESUME_FLAG,

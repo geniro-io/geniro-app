@@ -309,6 +309,30 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Why this CLI can never reopen one of its conversations, or `null` when it
+   * can — the PERMANENT half of {@link handoffTarget}'s two refusals, asked
+   * without a session to ask about.
+   *
+   * Its own method because two consumers need the answer and only one of them
+   * has a run: `HandoffService` explains a specific thread, while
+   * `CapabilitiesService` reports what each CLI can do at all, before any
+   * conversation exists. That one used to fake a session id
+   * (`sessionId: 'capability-probe'`) to reach this verdict through
+   * `handoffTarget`, then throw the adapter's sentence away and compose
+   * `"<agent> has no interactive terminal session"` of its own — so the run
+   * route and the capability route gave two different answers to one question,
+   * and the invented one was the only one the panel ever showed.
+   *
+   * A SENTENCE, like the other `unavailableReason` fields, because it is
+   * rendered on an inert control: "no button" with no cause is exactly what
+   * these fields exist to replace.
+   */
+  handoffUnavailableReason(): string | null {
+    const handoff = this.getConfig().handoff;
+    return handoff.kind === 'unavailable' ? handoff.reason : null;
+  }
+
+  /**
    * How the user signs this CLI in to ONE MCP server, or that it cannot.
    *
    * Shaped like {@link handoffTarget} and delivered the same way — resolved

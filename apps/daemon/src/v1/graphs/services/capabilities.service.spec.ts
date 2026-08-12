@@ -154,6 +154,42 @@ describe('CapabilitiesService — background sub-agents', () => {
   });
 });
 
+describe('CapabilitiesService — token and cost usage', () => {
+  const usage = (): Map<string, string | null> =>
+    new Map(
+      service()
+        .service.capabilitiesWire()
+        .usage.map((u) => [u.agent, u.unavailableReason]),
+    );
+
+  it('answers for EVERY registered CLI, so the meter never allowlists one', () => {
+    expect([...usage().keys()]).toEqual([...registry().all().keys()]);
+  });
+
+  it('carries each adapter’s OWN reason, verbatim', () => {
+    expect(usage().get('claude')).toBe(
+      new ClaudeAdapter().getConfig().usage.unavailableReason,
+    );
+    expect(usage().get('cursor-agent')).toBe(
+      new CursorAcpAdapter().getConfig().usage.unavailableReason,
+    );
+  });
+
+  it('states claude’s reporting as null and cursor’s absence as a real sentence', () => {
+    // This is the whole point of the row: an empty context meter looks exactly
+    // like a turn that has not finished, and the two mean opposite things. The
+    // sentence is what a user pointing at the empty spot gets — which is how
+    // this was reported ("why don't I see context here?").
+    expect(usage().get('claude')).toBeNull();
+    expect(usage().get('cursor-agent')).toEqual(expect.any(String));
+    expect(usage().get('cursor-agent')).not.toBe('');
+    // Measured, not asserted from the protocol: the capture showed no
+    // `usage_update` on the wire at all, which is the mechanism the sentence
+    // names so the next reader knows what to re-check.
+    expect(usage().get('cursor-agent')).toContain('usage_update');
+  });
+});
+
 describe('CapabilitiesService — the interactive terminal', () => {
   it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
     expect(
@@ -164,9 +200,9 @@ describe('CapabilitiesService — the interactive terminal', () => {
   });
 
   it('reports claude as available and cursor-agent as not', () => {
-    // The two live values, read through each adapter's own `terminalCommand`
-    // rather than restated here: cursor-acp's `terminal: null` IS the fact, and
-    // a CLI that gains a mirror must need no change in this file.
+    // The two live values, read through each adapter's own handoff config
+    // rather than restated here: cursor-acp's `handoff: { kind: 'unavailable' }`
+    // IS the fact, and a CLI that gains a mirror must need no change here.
     const byAgent = new Map(
       service()
         .service.capabilitiesWire()
@@ -178,14 +214,45 @@ describe('CapabilitiesService — the interactive terminal', () => {
     expect(byAgent.get('cursor-agent')).not.toBe('');
   });
 
+  it("passes the ADAPTER'S OWN sentence through, never one composed here", () => {
+    // This service used to build `"<agent> has no interactive terminal
+    // session"` of its own while `GET /v1/handoff` returned the adapter's real
+    // reason — two different answers to one question, and the invented one was
+    // the only one the panel ever showed. The renderer now renders this string
+    // on an inert control, so it has to be the CLI's own words: "no interactive
+    // terminal session" tells a user nothing they can act on, where "sessions
+    // started over ACP are not in its chat store" does.
+    //
+    // Compared against the adapter, not against a literal — a reworded config
+    // must not need this file edited, but a service that stops reading the
+    // config must fail here.
+    const reason = new Map(
+      service()
+        .service.capabilitiesWire()
+        .interactiveTerminals.map((t) => [t.agent, t.unavailableReason]),
+    ).get('cursor-agent');
+    const config = new CursorAcpAdapter().getConfig().handoff;
+
+    expect(config.kind).toBe('unavailable');
+    expect(reason).toBe(
+      config.kind === 'unavailable' ? config.reason : undefined,
+    );
+    // And it is genuinely a sentence about THIS CLI's mechanism, not the old
+    // template. Kept as a substring so a rewording stays free.
+    expect(reason).toContain('chat store');
+  });
+
   it('does not mistake "no session yet" for "no terminal support"', () => {
-    // `terminalCommand` refuses for two different reasons and only one is
-    // permanent. Probing with a placeholder session id is what keeps a claude
-    // node that has simply not run yet from being reported as having no
-    // interactive mirror at all — which would hide the picker forever.
+    // `handoffTarget` refuses for two different reasons and only one is
+    // permanent. The capability answers the permanent question directly
+    // (`handoffUnavailableReason`), which is what keeps a claude node that has
+    // simply not run yet from being reported as having no interactive mirror at
+    // all — that would hide the control forever. It used to fabricate a session
+    // id to reach the same verdict through `handoffTarget`.
     expect(
       new ClaudeAdapter().handoffTarget({ sessionId: null, model: null }),
     ).toEqual({ ok: false, reason: 'no-session' });
+    expect(new ClaudeAdapter().handoffUnavailableReason()).toBeNull();
 
     const byAgent = new Map(
       service()

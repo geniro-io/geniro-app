@@ -185,14 +185,23 @@ export class HandoffService {
   }
 
   /**
-   * The CLI's OWN words for why it cannot, read from its adapter config — so a
-   * new agent explains itself without this service learning its name.
+   * The CLI's OWN words for why it cannot, asked of its adapter — so a new
+   * agent explains itself without this service learning its name.
+   *
+   * Delegated rather than reading `getConfig().handoff` here, because
+   * `CapabilitiesService` needs the same answer for a CLI with no run in sight
+   * and previously invented its own sentence instead. One reader of the config
+   * field, two consumers of the reason.
+   *
+   * The fallback is unreachable by construction — this is only called on an
+   * `unsupported` refusal, which the adapter returns only for an `unavailable`
+   * handoff config — and stays as the total answer the signature promises.
    */
   private reasonFor(agentKind: AgentKind): string {
-    const handoff = this.adapters.for(agentKind).getConfig().handoff;
-    return handoff.kind === 'unavailable'
-      ? handoff.reason
-      : `${agentKind} cannot reopen this conversation`;
+    return (
+      this.adapters.for(agentKind).handoffUnavailableReason() ??
+      `${agentKind} cannot reopen this conversation`
+    );
   }
 
   /**

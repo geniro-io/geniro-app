@@ -118,10 +118,11 @@ function McpDisclosure({
  * fill, and spend. The chevron button in each card's control row opens its
  * thread list — the main conversation, every `call_agent` thread, and every
  * sub-agent still WORKING, with the finished delegates counted behind their
- * own disclosure. A conversation is openable in a terminal (claude only; a
- * call thread needs its recorded session id, so it opens once settled), while
- * a sub-agent opens its own timeline and thread instead, having no CLI session
- * to resume. Resizable like the builder's side panels.
+ * own disclosure. A conversation carries the "open it in a terminal" control —
+ * live where the CLI can resume one, inert with the daemon's reason where it
+ * cannot; a call thread needs its recorded session id, so it opens once
+ * settled — while a sub-agent opens its own timeline and thread instead, having
+ * no CLI session to resume. Resizable like the builder's side panels.
  */
 /**
  * "Carry this conversation on yourself": opens the agent's own CLI on this
@@ -143,12 +144,22 @@ function OpenInCliButton({
   agent,
   thread,
   label,
+  unavailableReason = null,
   onOpen,
   onResolve,
 }: {
   agent: AgentDisplay;
   thread: AgentThread;
   label: string;
+  /**
+   * Why this CLI can never reopen a conversation, or null when it can.
+   *
+   * Set means the control is PRESENT AND INERT rather than absent — the panel
+   * used to hide it for such a CLI, which left a cursor card showing one
+   * unlabelled glyph where a claude card shows two and no way to find out why.
+   * The daemon has always had a sentence for it; nothing rendered it.
+   */
+  unavailableReason?: string | null;
   onOpen: (agent: AgentDisplay, thread: AgentThread) => void;
   onResolve?: (
     agent: AgentDisplay,
@@ -158,9 +169,13 @@ function OpenInCliButton({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [hint, setHint] = useState<HandoffTargetDto | null>(null);
   const [showHint, setShowHint] = useState(false);
+  const inert = unavailableReason !== null;
   const reveal = (): void => {
     setShowHint(true);
-    if (hint || !onResolve) {
+    // Nothing to resolve when the CLI has already answered for every thread it
+    // will ever have: the reason is in hand, and asking would spend a request
+    // to be told the same thing a beat later.
+    if (inert || hint || !onResolve) {
       return;
     }
     void onResolve(agent, thread)
@@ -179,26 +194,45 @@ function OpenInCliButton({
         type="button"
         variant="ghost"
         size="icon"
-        className="size-6 shrink-0 text-muted-foreground"
+        className={cn(
+          'size-6 shrink-0 text-muted-foreground',
+          inert && 'opacity-50',
+        )}
         aria-label={label}
-        title="Continue this conversation in your terminal"
+        // `aria-disabled`, never `disabled`: a disabled button leaves the tab
+        // order, and the reason is only reachable by hovering it. The whole
+        // point of rendering it is that the explanation can be reached, so it
+        // stays focusable and the click simply does nothing.
+        aria-disabled={inert || undefined}
+        title={
+          unavailableReason ?? 'Continue this conversation in your terminal'
+        }
         onFocus={reveal}
         onBlur={() => setShowHint(false)}
         onClick={(event) => {
           event.stopPropagation();
+          if (inert) {
+            return;
+          }
           onOpen(agent, thread);
         }}>
         <TerminalIcon className="size-3.5 shrink-0" />
       </Button>
       <Popover
-        open={showHint && hint !== null}
+        open={showHint && (inert || hint !== null)}
         onClose={() => setShowHint(false)}
         triggerRef={triggerRef}
         side="bottom"
         align="end"
+        // The trigger lives inside the thread list, which SCROLLS — so an
+        // ancestor-positioned panel is cut at that list's left edge, and a
+        // 26rem one inside a 280px panel loses most of its text. Measured: 233
+        // of 390px clipped, which hid the first half of every sentence and of
+        // claude's copyable `--resume` line.
+        anchor="viewport"
         label="Command to continue in a terminal"
         className="w-[26rem] p-2">
-        {hint?.kind === 'command' && hint.display ? (
+        {!inert && hint?.kind === 'command' && hint.display ? (
           <div className="flex items-start gap-2">
             <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-foreground">
               {hint.display}
@@ -207,7 +241,8 @@ function OpenInCliButton({
           </div>
         ) : (
           <p className="text-[11px] text-muted-foreground">
-            {hint?.unavailableReason ??
+            {unavailableReason ??
+              hint?.unavailableReason ??
               'this conversation cannot be opened in a terminal'}
           </p>
         )}
@@ -228,14 +263,19 @@ function OpenInCliButton({
 function ThreadRow({
   agent,
   thread,
-  canOpenTerminal,
+  terminal,
   onOpenThread,
   onOpenSubagent,
   onResolveHandoff,
 }: {
   agent: AgentDisplay;
   thread: AgentThread;
-  canOpenTerminal: boolean;
+  /**
+   * This CLI's handoff answer, or null when there is none to render — an agent
+   * whose kind the panel does not know, or a capability report that has not
+   * landed yet. `reason` non-null means the control is shown inert.
+   */
+  terminal: { reason: string | null } | null;
   onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
   onOpenSubagent?: (subagentId: string) => void;
   onResolveHandoff?: (
@@ -243,15 +283,19 @@ function ThreadRow({
     thread: AgentThread,
   ) => Promise<HandoffTargetDto>;
 }): React.JSX.Element {
-  // Every mirror is a `--resume` of the agent's own CLI, so the CLI must have
-  // one. A MAIN thread needs nothing else — the daemon resolves its session
-  // from `node_state`. A CALL thread is a sub-session, which can only be
-  // targeted once its own session id has been recorded (present after the call
-  // settles). A SUB-AGENT has no session at all — it lives inside its parent's
-  // turn — so it is excluded outright rather than left to fail the sessionId
-  // test by accident.
+  // A MAIN thread needs nothing else — the daemon resolves its session from
+  // `node_state`. A CALL thread is a sub-session, which can only be targeted
+  // once its own session id has been recorded (present after the call settles).
+  // A SUB-AGENT has no session at all — it lives inside its parent's turn — so
+  // it is excluded outright rather than left to fail the sessionId test by
+  // accident.
+  //
+  // Note what is NOT in this test any more: whether the CLI can resume at all.
+  // That is `terminal.reason`, and it makes the control INERT rather than
+  // absent — the row still carries the explanation, where before it carried
+  // nothing.
   const canOpen =
-    canOpenTerminal &&
+    terminal !== null &&
     thread.kind !== 'subagent' &&
     (thread.kind === 'main' || thread.sessionId !== null);
   // What a sub-agent row offers INSTEAD: its own timeline and conversation, in
@@ -285,6 +329,7 @@ function ThreadRow({
           agent={agent}
           thread={thread}
           label={`Open terminal for ${agent.name} — ${thread.id}`}
+          unavailableReason={terminal?.reason ?? null}
           onOpen={onOpenThread}
           onResolve={onResolveHandoff}
         />
@@ -305,9 +350,9 @@ export function AgentsPanel({
   onMcpOpenChange,
   onOpenThread,
   onOpenSubagent,
-  subagentUnavailableReason = null,
   onResolveHandoff,
-  interactiveTerminalAgents,
+  terminalReasons,
+  usageReasons,
   onClose,
 }: {
   agents: AgentDisplay[];
@@ -362,15 +407,20 @@ export function AgentsPanel({
    * {@link onSetMcpEnabled}.
    */
   onOpenSubagent?: (subagentId: string) => void;
-  /**
-   * Why this run's CLI never lists sub-agents, or null when it reports them.
+  /*
+   * There was a `subagentUnavailableReason` here — a panel-level paragraph
+   * saying why a CLI lists no delegates. It has been removed: on cursor it was
+   * three lines of protocol detail ("no session/update variant this client reads
+   * carries a parent, task or sub-session id") standing permanently above every
+   * agent card, on EVERY cursor chat, explaining the absence of something most
+   * readers were not looking for. A caveat that never goes away stops being a
+   * caveat and becomes chrome.
    *
-   * Shown rather than swallowed: a panel with no delegate rows is otherwise
-   * indistinguishable from a broken one, and for a CLI whose transport carries
-   * no sub-agent signal that emptiness is the permanent, correct answer. The
-   * daemon's own adapter owns the sentence.
+   * The daemon still reports the fact (`GET /v1/capabilities` → `subagents[]`,
+   * from each adapter's own config) and the reason is still the adapter's to
+   * own — so if a place is ever found where a reader is actually asking the
+   * question, it can be answered there without re-deriving anything.
    */
-  subagentUnavailableReason?: string | null;
   /**
    * Resolve the invocation that opens one thread in a terminal — used for the
    * hover hint only. Optional: without it the button still opens, it just has
@@ -381,18 +431,30 @@ export function AgentsPanel({
     thread: AgentThread,
   ) => Promise<HandoffTargetDto>;
   /**
-   * Which CLI kinds can reopen a conversation INTERACTIVELY (`--resume`), per
-   * the daemon's own capability report. Only a CALL thread needs it: a call
-   * thread is a sub-session of the node, so only a CLI that can resume a
-   * specific session can be pointed at one.
+   * Per CLI kind: `null` if it can reopen a conversation INTERACTIVELY
+   * (`--resume`), else the daemon's own sentence for why it cannot.
    *
-   * Read rather than hardcoded, because "which CLI can" is the adapter
-   * layer's fact (`AdapterConfig.terminal`), and a list written here is how a
-   * second CLI gaining the ability silently keeps its threads unopenable.
-   * Absent (still loading) offers nothing, which errs toward not showing a
-   * control that would fail.
+   * Read rather than hardcoded, because "which CLI can" is the adapter layer's
+   * fact (`AdapterConfig.handoff`), and a list written here is how a second CLI
+   * gaining the ability silently keeps its threads unopenable.
+   *
+   * A kind that is ABSENT from the map is unknown — the report has not landed —
+   * and gets no control, which errs toward not showing one that would fail. A
+   * kind present with a reason gets the control INERT, carrying that sentence.
+   * The distinction matters: this replaced a set of capable kinds, under which
+   * "we have not been told" and "this CLI never can" were the same thing, and
+   * both rendered as silence.
    */
-  interactiveTerminalAgents?: ReadonlySet<string>;
+  terminalReasons?: ReadonlyMap<string, string | null>;
+  /**
+   * Per CLI kind: `null` if it reports what a turn cost, else the daemon's own
+   * sentence for why the card's context meter is empty.
+   *
+   * Same three-state reading as {@link terminalReasons}: absent from the map is
+   * "we have not been told", which must render as silence rather than as a
+   * refusal — a turn mid-flight has no figures either.
+   */
+  usageReasons?: ReadonlyMap<string, string | null>;
   onClose: () => void;
 }): React.JSX.Element {
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
@@ -495,13 +557,6 @@ export function AgentsPanel({
           onDismiss={onDismissMcpToggleError}
         />
       ) : null}
-      {subagentUnavailableReason !== null ? (
-        // Panel-level, not per card: it is a fact about the CLI, and it must
-        // read whether or not any agent card happens to be expanded.
-        <p className="m-0 px-3 pb-1 text-[11px] text-muted-foreground">
-          {subagentUnavailableReason}
-        </p>
-      ) : null}
       <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1.5 overflow-y-auto p-3 pt-1">
         {agents.length === 0 ? (
           <li className="px-2 py-1.5 text-sm text-muted-foreground">
@@ -526,19 +581,17 @@ export function AgentsPanel({
               agent.threads.length === 1 && agent.threads[0]?.kind === 'main'
                 ? agent.threads[0]
                 : null;
-            // Gated on the CLI: the ONE mirror left is that agent's own CLI
-            // resumed on this conversation, so an agent whose adapter has no
-            // such invocation (cursor-agent's `terminal: null`) gets no button
-            // at all rather than one that answers TERMINAL_UNSUPPORTED.
-            const soleThreadTerminal =
-              soleThread !== null &&
-              agent.agent !== null &&
-              interactiveTerminalAgents?.has(agent.agent) === true
-                ? soleThread
+            // This CLI's handoff answer, resolved once for the card and its
+            // thread rows. Null only when there is nothing to say — a workflow
+            // agent whose kind is unknown, or a capability report still in
+            // flight; a CLI that simply CANNOT resume is present here with its
+            // reason and gets an inert control, not silence.
+            const terminal =
+              agent.agent !== null && terminalReasons?.has(agent.agent) === true
+                ? { reason: terminalReasons.get(agent.agent) ?? null }
                 : null;
-            const canOpenTerminal =
-              agent.agent !== null &&
-              interactiveTerminalAgents?.has(agent.agent) === true;
+            const soleThreadTerminal =
+              soleThread !== null && terminal !== null ? soleThread : null;
             // Delegates split by whether they are still WORKING. Only the live
             // ones belong in the list: a run that spawns twenty read-only
             // analysts leaves twenty rows behind it, and the one thread the
@@ -605,12 +658,28 @@ export function AgentsPanel({
                       contextTokens={agent.contextTokens}
                       contextWindowTokens={agent.contextWindowTokens}
                       spentUsd={agent.spentUsd}
+                      // Why this card's meter is empty, when it always will be.
+                      // Null for an agent whose kind the panel does not know, and
+                      // for one whose report has not landed — both are "we have
+                      // not been told", which must not print as a refusal.
+                      unavailableReason={
+                        agent.agent === null
+                          ? null
+                          : (usageReasons?.get(agent.agent) ?? null)
+                      }
+                      // The same box as the two icon buttons beside it, so the
+                      // one `gap-0.5` produces one gap. The ring is 14px and
+                      // their glyphs are 14px inside a 24px button, so left as
+                      // content-width it sat 5px tighter against the terminal
+                      // control than that control sits against the plug.
+                      className="size-6 justify-center"
                     />
                     {soleThreadTerminal ? (
                       <OpenInCliButton
                         agent={agent}
                         thread={soleThreadTerminal}
                         label={`Open terminal for ${agent.name}`}
+                        unavailableReason={terminal?.reason ?? null}
                         onOpen={onOpenThread}
                         onResolve={onResolveHandoff}
                       />
@@ -679,7 +748,7 @@ export function AgentsPanel({
                         key={thread.id}
                         agent={agent}
                         thread={thread}
-                        canOpenTerminal={canOpenTerminal}
+                        terminal={terminal}
                         onOpenThread={onOpenThread}
                         onOpenSubagent={onOpenSubagent}
                         onResolveHandoff={onResolveHandoff}
@@ -719,7 +788,7 @@ export function AgentsPanel({
                                 key={thread.id}
                                 agent={agent}
                                 thread={thread}
-                                canOpenTerminal={canOpenTerminal}
+                                terminal={terminal}
                                 onOpenThread={onOpenThread}
                                 onOpenSubagent={onOpenSubagent}
                                 onResolveHandoff={onResolveHandoff}

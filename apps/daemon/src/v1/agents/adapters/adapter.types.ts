@@ -1500,6 +1500,25 @@ export interface AdapterConfig {
     readonly unavailableReason: string | null;
   };
 
+  // ── What a turn cost ───────────────────────────────────────────────────────
+  /**
+   * Whether this CLI reports the tokens and money a turn spent, or the reason
+   * its context meter will always be empty.
+   *
+   * Here rather than inferred from an absent figure, because the two look
+   * identical from outside and mean opposite things: a turn that has not
+   * finished yet has no usage, and a CLI that never sends any has none either.
+   * The renderer cannot tell them apart, and a blank ring answered the user's
+   * "why don't I see context here?" with silence.
+   */
+  readonly usage: {
+    /**
+     * Why usage never arrives, or `null` when it does. A SENTENCE, for the same
+     * reason as the fields above: it is what the meter says when pointed at.
+     */
+    readonly unavailableReason: string | null;
+  };
+
   // ── Handing the conversation to the user ────────────────────────────────
   /**
    * How this CLI reopens one of ITS OWN sessions interactively, so the user can

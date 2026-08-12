@@ -730,17 +730,44 @@ export function Chats({
 
   const capabilities = useCapabilities(capabilitiesApi);
   /**
-   * The CLI kinds that have an interactive (`--resume`) mirror, per the
-   * daemon's own report. Derived, never listed here: `AdapterConfig.terminal`
-   * is the fact, and a literal in the renderer is how a second CLI gaining one
-   * silently keeps its picker hidden.
+   * Per CLI: `null` if it can reopen a conversation interactively
+   * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
+   * never listed here — `AdapterConfig.handoff` is the fact, and a literal in
+   * the renderer is how a second CLI gaining the ability silently keeps its
+   * control hidden.
+   *
+   * A MAP, not the set of capable kinds it replaced. The set threw the reason
+   * away, so the panel could only hide the control — and a cursor chat then
+   * showed one lone unlabelled glyph where a claude chat showed two, with
+   * nothing on screen or on hover to say why. An agent missing from the map is
+   * UNKNOWN (the report has not landed), which is not the same as refused.
    */
-  const interactiveTerminalAgents = useMemo(
+  /**
+   * Per CLI: `null` if it reports what a turn cost, else the daemon's own
+   * sentence for why the context meter will always be empty.
+   *
+   * Derived like {@link terminalReasons} below and for the same reason —
+   * `AdapterConfig.usage` is the fact. It is what lets an empty meter answer
+   * "why don't I see context here?" instead of looking identical to a turn that
+   * has simply not reported anything yet.
+   */
+  const usageReasons = useMemo(
     () =>
-      new Set<string>(
-        (capabilities?.interactiveTerminals ?? [])
-          .filter((row) => row.unavailableReason === null)
-          .map((row) => row.agent),
+      new Map<string, string | null>(
+        (capabilities?.usage ?? []).map((row) => [
+          row.agent,
+          row.unavailableReason,
+        ]),
+      ),
+    [capabilities],
+  );
+  const terminalReasons = useMemo(
+    () =>
+      new Map<string, string | null>(
+        (capabilities?.interactiveTerminals ?? []).map((row) => [
+          row.agent,
+          row.unavailableReason,
+        ]),
       ),
     [capabilities],
   );
@@ -2287,22 +2314,6 @@ export function Chats({
    */
   const runRowStopped =
     activeRun?.status === 'failed' || activeRun?.status === 'cancelled';
-  /**
-   * Why THIS chat's CLI never lists delegates, or null when it reports them.
-   *
-   * A chat that shows no sub-agents is otherwise indistinguishable from a
-   * broken one, and for cursor-agent that is the permanent, correct state — its
-   * ACP transport carries no sub-agent signal at all. Read off the daemon's own
-   * per-adapter report rather than decided by agent name here, on the same rule
-   * as the interactive-terminal set above.
-   */
-  const subagentUnavailableReason = useMemo(() => {
-    const kind = activeRun?.agentKind;
-    return kind
-      ? (capabilities?.subagents?.find((row) => row.agent === kind)
-          ?.unavailableReason ?? null)
-      : null;
-  }, [capabilities, activeRun]);
   const subagentRunning = useMemo(
     () =>
       collectSubagentBlocks(durableEntries).some(
@@ -3455,6 +3466,17 @@ export function Chats({
                                   ? null
                                   : (agents[0]?.contextWindowTokens ?? null)
                               }
+                              // Why there will never be a figure, when that is the
+                              // case — so the empty spot answers for itself. Only
+                              // for a single-agent chat: a workflow run's agents
+                              // are per node and may not share one CLI.
+                              unavailableReason={
+                                activeRun.workflowId
+                                  ? null
+                                  : (usageReasons.get(
+                                      activeRun.agentKind ?? '',
+                                    ) ?? null)
+                              }
                               // Opens UPWARD. This row sits at the bottom of the
                               // composer, inside the app shell's
                               // `overflow-hidden` main — roughly 20px below a
@@ -3482,7 +3504,25 @@ export function Chats({
                 // to prevent, merely moved to the second chat.
                 key={activeRun?.id ?? 'no-run'}
                 agents={agents}
-                interactiveTerminalAgents={interactiveTerminalAgents}
+                terminalReasons={terminalReasons}
+                usageReasons={usageReasons}
+                // The HOVER half of the same resolution the button acts on.
+                // Never passed until now, so the hint it feeds — the invocation,
+                // selectable, with a copy control — could not open on this
+                // screen at all: `OpenInCliButton` treats a missing resolver as
+                // "nothing to show" and stays silent. That copyable line is the
+                // documented way out for anyone whose terminal geniro cannot
+                // launch (a remote host, an open tmux pane), and it was
+                // unreachable.
+                onResolveHandoff={resolveHandoff}
+                // The HOVER half of the same resolution the button acts on.
+                // Never passed until now, so the hint it feeds — the invocation,
+                // selectable, with a copy control — could not open on this
+                // screen at all: `OpenInCliButton` treats a missing resolver as
+                // "nothing to show" and stays silent. That copyable line is the
+                // documented way out for anyone whose terminal geniro cannot
+                // launch (a remote host, an open tmux pane), and it was
+                // unreachable.
                 mcpByScope={mcp.byScope}
                 mcpLoading={mcp.loading}
                 onRefreshMcp={mcp.refresh}
@@ -3497,7 +3537,6 @@ export function Chats({
                   void openThreadTerminal(agent, thread)
                 }
                 onOpenSubagent={setDetailSubagentId}
-                subagentUnavailableReason={subagentUnavailableReason}
                 onClose={() => setAgentsPanelOpen(false)}
               />
             ) : null}

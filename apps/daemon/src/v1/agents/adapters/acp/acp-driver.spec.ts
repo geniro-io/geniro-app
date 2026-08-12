@@ -905,6 +905,27 @@ describe('AcpTurnDriver session updates', () => {
     ]);
   });
 
+  it('reads an EMPTY argument bag as no arguments, not as empty arguments', () => {
+    // Measured on cursor-agent 2026.08.04-aaa8809: its read/search/edit calls
+    // send `rawInput: {}` on the initial `tool_call` and never send arguments on
+    // any later update. Carrying the `{}` through made the transcript render the
+    // arguments as `{}` — the reported defect. Null is the honest reading, and
+    // it is what lets the renderer omit the body entirely.
+    const h = harness();
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-empty',
+          title: 'Read File',
+          rawInput: {},
+        }),
+      ),
+    ).toEqual([
+      { type: 'tool_call', id: 't-empty', name: 'Read File', input: null },
+    ]);
+  });
+
   it('closes the pair only on a settled tool call', () => {
     const h = harness();
     expect(

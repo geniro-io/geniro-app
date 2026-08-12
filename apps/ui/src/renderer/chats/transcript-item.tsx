@@ -13,6 +13,7 @@ import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
+import { isCliAuthored } from './system-payload';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
   payloadNumber,
@@ -121,7 +122,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       );
       return (
         <MessageBubble variant="tool" role={tag(`🔧 ${name}`)}>
-          {body.kind === 'diff' ? (
+          {body === null ? null : body.kind === 'diff' ? (
             <DiffView oldText={body.oldText} newText={body.newText} />
           ) : (
             <CodeBlock
@@ -220,9 +221,21 @@ export const TranscriptItem = memo(function TranscriptItem({
     }
     case 'system': {
       const message = payloadString(item.payload, 'message');
-      // The daemon's system items are failure advisories (a degraded caller,
+      if (message === null) {
+        return null;
+      }
+      // Text the CLI wrote, which geniro is only relaying — its own compaction
+      // summary is the case this exists for. It is informational prose, so it
+      // gets the neutral note row rather than the failure chrome below; dressing
+      // a relayed summary in red told the user geniro was reporting a problem,
+      // and it would also let agent-authored text impersonate an app-level
+      // advisory beside the real ones.
+      if (isCliAuthored(item.payload)) {
+        return <MessageBubble variant="note">{message}</MessageBubble>;
+      }
+      // The DAEMON's own system items are failure advisories (a degraded caller,
       // a persistence problem) — surface them like errors: red, expandable.
-      return message ? <AlertRow caption="system" message={message} /> : null;
+      return <AlertRow caption="system" message={message} />;
     }
     case 'approval_verdict': {
       const allow = (item.payload as { allow?: unknown } | null)?.allow;

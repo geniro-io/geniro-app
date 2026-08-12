@@ -175,7 +175,37 @@ export class CursorAcpAdapter extends AgentAdapter {
         /** Nothing degrades: every mode above is honoured as asked. */
         soleModeDegradeReason: null,
       },
-      /** Effort rides the model id for this CLI (`sonnet-4-thinking`). */
+      /**
+       * Effort rides the model id for this CLI, and the id is an OPAQUE TOKEN —
+       * so effort is not independently selectable here, and this empty list is a
+       * measurement rather than an omission.
+       *
+       * `cursor-agent --help` says otherwise, which is the trap: it advertises
+       * "Parameterized models accept quoted bracket overrides, e.g.
+       * 'claude-opus-4-8[context=1m,effort=high,fast=false]'". Probed on
+       * 2026.08.04-aaa8809 over `cursor-agent acp` — a handshake, then
+       * `session/set_config_option {configId:'model'}` per candidate, against the
+       * account's own current id
+       * `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`:
+       *
+       *   effort=high   -> ACCEPTED   (byte-identical to the advertised id)
+       *   effort=low    -> -32602 Invalid params
+       *   effort=medium -> -32602 Invalid params
+       *   effort=xhigh  -> -32602 Invalid params
+       *   effort=max    -> -32602 Invalid params
+       *   adding effort= to an id that lacked one -> -32602 Invalid params
+       *
+       * `xhigh` is the decisive one: cursor itself ships
+       * `claude-opus-4-7[…,effort=xhigh,…]`, so the value is valid to the vendor
+       * and still rejected on another model. Only ids the agent enumerated are
+       * accepted, and it enumerates exactly ONE effort per model.
+       *
+       * So the model picker already offers every effort this CLI permits, and an
+       * effort chip could only ever produce a failed turn. RE-CHECK by re-running
+       * that probe if a release starts enumerating two ids for one model, or if
+       * `configOptions` gains a category other than `mode`/`model` — those are
+       * the two shapes that would make a real chip possible.
+       */
       efforts: [],
       /**
        * Empty because {@link CursorAcpAdapter.listModels} answers for real —

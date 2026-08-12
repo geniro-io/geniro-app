@@ -257,4 +257,30 @@ describe('ToolGroup — a run that has stopped', () => {
     click(container.querySelector('button[aria-expanded]'));
     expect(container.textContent).toContain('…');
   });
+
+  it('shows NO arguments for a call that disclosed none, collapsed or expanded', () => {
+    // The user-visible layer of the reported defect, and the one the pure-function
+    // specs could not reach: a cursor read/search/edit call arrives with an empty
+    // argument bag, and BOTH the collapsed summary line and the expanded body
+    // used to render the literal `{}`. Revert either guard —
+    // `toolCallSummary`'s empty-record check or `toolInputBody`'s null return —
+    // and this fails.
+    const group = makeGroup([
+      toolItem('tool_call', { id: 'e1', name: 'Read File', input: {} }),
+      toolItem('tool_result', { id: 'e1', name: 'Read File', result: 'ok' }),
+    ]);
+    render(group);
+    // First click opens the GROUP, revealing the row and its collapsed summary
+    // line; the second opens that ROW, revealing the arguments body.
+    click(container.querySelector('button[aria-expanded]'));
+    expect(container.textContent).toContain('Read File');
+    expect(container.textContent).not.toContain('{}');
+
+    const rowToggle = container.querySelectorAll('button[aria-expanded]')[1];
+    click(rowToggle ?? null);
+    expect(container.textContent).not.toContain('{}');
+    // The result still renders — withholding the ARGUMENTS must not withhold the
+    // output the call actually produced.
+    expect(container.textContent).toContain('ok');
+  });
 });

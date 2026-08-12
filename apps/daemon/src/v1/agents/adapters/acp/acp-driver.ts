@@ -131,6 +131,32 @@ function textOf(content: unknown): string | null {
   return text !== null && text.length > 0 ? text : null;
 }
 
+/**
+ * An argument bag the agent sent but left EMPTY reads as null, because that is
+ * what it means: the call was named and its arguments were not disclosed.
+ *
+ * `{}` is not a hypothetical. Probed on cursor-agent 2026.08.04-aaa8809 over
+ * `cursor-agent acp`: a shell call carries real arguments
+ * (`rawInput: {"command":"echo …"}`), while its `read`, `search` and `edit`
+ * calls all send `rawInput: {}` on the initial `tool_call` and then send NO
+ * `rawInput` on any later `tool_call_update` — so there is no fuller version
+ * arriving behind it to wait for, and `locations` is never populated either.
+ * Keeping the `{}` made every consumer state it as fact: the transcript row
+ * rendered the arguments as `{}`, which is what the user reported.
+ *
+ * Normalized HERE rather than at each reader so the permission card and the
+ * transcript row cannot disagree about whether arguments exist, and left
+ * agent-agnostic because "sent an empty bag" is a protocol shape, not one
+ * CLI's quirk — an ACP agent that discloses its arguments is unaffected.
+ */
+function disclosedInput(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const record = asRecord(value);
+  return record !== null && Object.keys(record).length === 0 ? null : value;
+}
+
 function readToolCall(source: Record<string, unknown>): AcpToolCall {
   return {
     toolCallId: asString(source.toolCallId) ?? '',
@@ -140,7 +166,7 @@ function readToolCall(source: Record<string, unknown>): AcpToolCall {
     name: asString(source.name) ?? asString(source.title) ?? '',
     status: (asString(source.status) as AcpToolCall['status']) ?? null,
     kind: asString(source.kind),
-    rawInput: source.rawInput ?? null,
+    rawInput: disclosedInput(source.rawInput),
     rawOutput: source.rawOutput ?? null,
   };
 }

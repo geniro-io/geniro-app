@@ -54,7 +54,7 @@ function ToolRow({ pair }: { pair: ToolPair }): React.JSX.Element {
       </button>
       {open ? (
         <div className="flex flex-col gap-1.5 py-1 pl-6 pr-1.5">
-          {body.kind === 'diff' ? (
+          {body === null ? null : body.kind === 'diff' ? (
             <>
               {body.caption ? (
                 <div className="font-mono text-xs text-muted-foreground">

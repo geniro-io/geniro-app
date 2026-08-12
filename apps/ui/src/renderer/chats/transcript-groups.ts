@@ -1003,6 +1003,17 @@ export function toolCallSummary(call: ChatItem): string {
     return '';
   }
   const record = input as Record<string, unknown>;
+  // An agent that named a call and disclosed no arguments has nothing to preview,
+  // and `compactJson({})` below would render the literal `{}` — the reported
+  // defect, on the line that is visible while the row is COLLAPSED. This is the
+  // sibling of the same guard in `tool-render.ts`; it is a separate check rather
+  // than a shared call because this function summarizes, it does not decide
+  // whether to draw a body. It also covers rows persisted BEFORE the daemon
+  // started normalizing the empty bag, which is why replaying an old cursor chat
+  // still needs it.
+  if (Object.keys(record).length === 0) {
+    return '';
+  }
   const first = (...keys: string[]): string | null => {
     for (const key of keys) {
       const value = record[key];

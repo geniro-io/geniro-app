@@ -50,11 +50,17 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     case 'unhandled_control':
       return null; // logged and dropped by AgentAdapter.start — a diagnostic, not a row
     case 'context_compacted':
-      // Deliberately NOT a `system` row. Compaction is the CLI's own
-      // housekeeping, and a permanent line about it wedged between the user's
-      // messages is noise in the conversation they actually came for. It rides
-      // the ephemeral activity channel instead, where it explains the context
-      // meter's drop at the moment that drop happens and then goes away.
+      // Deliberately NOT a `system` row, at EITHER phase. Compaction is the
+      // CLI's own housekeeping, and a permanent line saying it started and
+      // another saying it finished, wedged between the user's messages, is noise
+      // in the conversation they actually came for. It rides the ephemeral
+      // activity channel instead, where it names the pause while the pause is
+      // happening and explains the meter's drop as it drops, then goes away.
+      //
+      // What DOES earn a durable row is the part with content: the CLI's own
+      // summary of what it compacted, and a compaction that FAILED. Both arrive
+      // as `notice` events from the mapper, so they land as `system` rows below
+      // without this arm having to carry text it does not have.
       return null;
     case 'thinking_progress':
     case 'context_progress':
@@ -118,10 +124,21 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     case 'notice':
       // Same shape the graph executor persists its own degrade messages in, so
       // an adapter-level degrade renders identically to an executor-level one.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/system-payload.ts` reads the
+      // `origin` key back to decide whether the row is the daemon speaking or
+      // the CLI being relayed. An item payload is `z.unknown()` on the wire BY
+      // DESIGN — every kind carries a different shape — so no generated type
+      // spans the two sides. Rename the key here and that file must change too.
       return {
         kind: 'system',
         role: null,
-        payload: { message: event.message },
+        // Omitted entirely when the daemon wrote the message, so every existing
+        // notice's row stays byte-identical to what it was.
+        payload: {
+          message: event.message,
+          ...(event.origin ? { origin: event.origin } : {}),
+        },
       };
     case 'turn_cancelled':
       return { kind: 'turn_cancelled', role: null, payload: {} };

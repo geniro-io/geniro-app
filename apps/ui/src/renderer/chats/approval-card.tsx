@@ -10,6 +10,7 @@ import { Input } from '../components/ui/input';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { DiffView, editDiffOf } from './diff-view';
+import { disclosesInput } from './tool-render';
 import { useAttachments } from './use-attachments';
 
 /** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
@@ -768,6 +769,13 @@ function PermissionCard({
     input && typeof input === 'object' && 'file_path' in input
       ? String((input as { file_path: unknown }).file_path)
       : null;
+  // An agent may name a tool call and withhold its arguments — an ACP `read` or
+  // `edit` call does exactly that, and the daemon normalizes the empty bag it
+  // sends to null (`disclosedInput`). Rendering that as JSON printed the literal
+  // word `null` in the card, which reads as a value the agent supplied. The
+  // predicate is shared with the transcript row so the two surfaces cannot give
+  // different answers about whether arguments exist.
+  const showsInput = disclosesInput(input);
   let inputPreview: string;
   try {
     inputPreview = JSON.stringify(input, null, 2);
@@ -795,11 +803,11 @@ function PermissionCard({
             <DiffView oldText={diff.oldText} newText={diff.newText} />
           </div>
         </div>
-      ) : (
+      ) : showsInput ? (
         <pre className="m-0 max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
           {inputPreview}
         </pre>
-      )}
+      ) : null}
       {expired && verdict === null ? (
         <p className="text-xs text-muted-foreground">
           ⏱ expired — the turn ended before an answer

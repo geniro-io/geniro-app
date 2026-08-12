@@ -2726,6 +2726,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
 
     claude.emit({
       type: 'context_compacted',
+      phase: 'finished',
       trigger: 'auto',
       preTokens: 180_000,
       postTokens: 20_000,
@@ -2741,6 +2742,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     // know why it happened, so the reason is dropped rather than restated.
     claude.emit({
       type: 'context_compacted',
+      phase: 'finished',
       trigger: 'manual',
       preTokens: 180_000,
       postTokens: 20_000,
@@ -2751,6 +2753,92 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: null,
       activity: 'compacted the conversation',
     });
+
+    claude.finish();
+    await drain();
+  });
+
+  it('names the compaction WHILE it runs, not only once it is over', async () => {
+    // The reported defect: a `/compact` sat on "Working… 29s" with nothing
+    // saying why. A compaction measured 46s in the probe behind
+    // `CLAUDE_COMPACTING_STATUS`, and until 2.1.227 there was no line to key on.
+    // Revert the `started` branch and this fails — the only activity announced
+    // would be the post-hoc one, which is the behaviour the user complained of.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: null,
+      preTokens: null,
+      postTokens: null,
+    });
+    await drain();
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      activity: 'compacting the conversation',
+    });
+
+    claude.finish();
+    await drain();
+  });
+
+  it('stops saying a compaction is under way once the CLI reports it failed', async () => {
+    // "compacting the conversation" is PRESENT TENSE, so it claims work is
+    // happening right now. On the success path the boundary event retracts it
+    // with a past-tense phrase; on the failure path there is no boundary and no
+    // `finished` phase at all — only the CLI's failure line, which lands as a
+    // durable row and announces nothing. So the run goes on reading as still
+    // compacting while it has already carried on at full context.
+    const { service, claude, statuses, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: null,
+      preTokens: null,
+      postTokens: null,
+    });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('compacting the conversation');
+
+    // BOTH events, in the order the mapper returns them for the terminating
+    // status line of a compaction that did not happen — the durable reason and
+    // the phase that retracts the phrase. See CLAUDE_COMPACT_FAILED_NOTICE.
+    claude.emit({
+      type: 'notice',
+      message:
+        'the conversation was not compacted — Not enough messages to compact.',
+    });
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'failed',
+      trigger: null,
+      preTokens: null,
+      postTokens: null,
+    });
+    await drain();
+
+    // The failure reached the transcript AND the phrase came down. Revert the
+    // `failed` branch in either the mapper or the announce and this fails: the
+    // run keeps reading as "compacting the conversation" after the CLI has
+    // already declined, because only the SUCCESS path emits a boundary to
+    // supersede it.
+    expect(published.some((entry) => entry.item.kind === 'system')).toBe(true);
+    expect(statuses.at(-1)?.activity).toBeNull();
 
     claude.finish();
     await drain();

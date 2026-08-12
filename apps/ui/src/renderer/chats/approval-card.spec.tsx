@@ -185,6 +185,26 @@ describe('ApprovalCard', () => {
     expect(el.textContent).not.toContain('"old_string"');
   });
 
+  it('shows no argument block for a call whose arguments were never disclosed', () => {
+    // An ACP agent can name a call and disclose nothing about it — cursor's
+    // read/search/edit calls send an EMPTY argument bag, which the daemon reads
+    // as "no arguments" and forwards as null (`disclosedInput` in
+    // `acp-driver.ts`). The transcript row omits its body for exactly this
+    // shape; the card must agree, because the alternative is a card whose whole
+    // argument preview is the word `null`, which reads as a value the agent
+    // sent. The tool NAME is the part that is actually known, and it stays.
+    const el = render(
+      <ApprovalCard
+        toolName="Read File"
+        input={null}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Read File');
+    expect(el.querySelector('pre')?.textContent ?? null).not.toBe('null');
+  });
+
   it('renders the settled state with no buttons once a verdict exists', () => {
     const el = render(
       <ApprovalCard

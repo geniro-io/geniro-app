@@ -235,6 +235,11 @@ export interface AcpToolCall {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | null;
   /** ACP `ToolKind` — `edit` is what `acceptEdits` auto-approves. */
   kind: string | null;
+  /**
+   * The arguments the agent disclosed, or null when it disclosed none. An
+   * agent-sent EMPTY bag reads as null here — see `disclosedInput` in
+   * `acp-driver.ts` for the measurement that makes that distinction load-bearing.
+   */
   rawInput: unknown;
   rawOutput: unknown;
 }

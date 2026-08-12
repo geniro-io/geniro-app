@@ -433,6 +433,84 @@ describe('toolGroupSummary', () => {
     );
   });
 
+  describe('an agent that classifies its own calls', () => {
+    // The reported defect, measured on cursor-agent 2026.08.11-e8db854: its calls
+    // are titled "Read File" / "Edit File" / "grep", carry NO arguments, and so
+    // matched none of the name buckets above — a turn that read a file, edited it
+    // and ran a command summarised as "Used 3 tools".
+    const acpCall = (
+      title: string,
+      id: string,
+      toolKind: string,
+      input: unknown = null,
+    ): ChatItem => item('tool_call', { id, name: title, input, toolKind });
+
+    it('names what the agent DID from its kinds, with no arguments at all', () => {
+      const group = groupTranscript([
+        acpCall('Read File', 't1', 'read'),
+        acpCall('Edit File', 't2', 'edit'),
+        acpCall('grep', 't3', 'search'),
+        acpCall('`echo hi`', 't4', 'execute', { command: 'echo hi' }),
+      ])[0] as ToolGroupEntry;
+
+      expect(toolGroupSummary(group.pairs)).toBe(
+        'Read 1 file · searched 1 time · ran 1 command · edited 1 file',
+      );
+      // And the catch-all is gone: every call is accounted for by a kind.
+      expect(toolGroupSummary(group.pairs)).not.toContain('Used');
+    });
+
+    it('counts two edits of ONE file as one file, using the diff the result reported', () => {
+      // The call discloses no path; the completing update carries it. Without
+      // reading it back, each call is its own file and one edited file reads as
+      // two.
+      const diff = (path: string): unknown => ({
+        diffs: [{ path, oldText: 'a', newText: 'b' }],
+      });
+      const group = groupTranscript([
+        acpCall('Edit File', 't1', 'edit'),
+        result('t1', diff('/w/notes.txt')),
+        acpCall('Edit File', 't2', 'edit'),
+        result('t2', diff('/w/notes.txt')),
+      ])[0] as ToolGroupEntry;
+
+      expect(toolGroupSummary(group.pairs)).toBe('Edited 1 file');
+    });
+
+    it('keeps two edits of DIFFERENT files apart', () => {
+      const diff = (path: string): unknown => ({
+        diffs: [{ path, oldText: 'a', newText: 'b' }],
+      });
+      const group = groupTranscript([
+        acpCall('Edit File', 't1', 'edit'),
+        result('t1', diff('/w/one.txt')),
+        acpCall('Edit File', 't2', 'edit'),
+        result('t2', diff('/w/two.txt')),
+      ])[0] as ToolGroupEntry;
+
+      expect(toolGroupSummary(group.pairs)).toBe('Edited 2 files');
+    });
+
+    it('counts unpathed calls of the same kind separately rather than collapsing them', () => {
+      // Two reads with nothing to tell them apart are two reads. Sharing a
+      // sentinel key would have reported them as one file read.
+      const group = groupTranscript([
+        acpCall('Read File', 't1', 'read'),
+        acpCall('Read File', 't2', 'read'),
+      ])[0] as ToolGroupEntry;
+
+      expect(toolGroupSummary(group.pairs)).toBe('Read 2 files');
+    });
+
+    it('falls back to the tool total for a kind it has no phrase for', () => {
+      const group = groupTranscript([
+        acpCall('Think', 't1', 'think'),
+      ])[0] as ToolGroupEntry;
+
+      expect(toolGroupSummary(group.pairs)).toBe('Used 1 tool');
+    });
+  });
+
   it('reports a group of file reads as reads, not as a bare tool count', () => {
     // The line the user photographed read "Used 7 tools · ran 3 commands" for
     // four Reads and three Bashes — the reads were invisible.

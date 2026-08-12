@@ -86,7 +86,23 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       return {
         kind: 'tool_call',
         role: 'assistant',
-        payload: { id: event.id, name: event.name, input: event.input },
+        // `toolKind` — NOT `kind`, which this row's own item kind already uses.
+        // Two different `kind`s one object apart is how a reader ends up
+        // bucketing tool calls by the string `'tool_call'`.
+        //
+        // TWIN PARSER: `apps/ui/src/renderer/chats/tool-kind.ts` reads it back to
+        // say what the group DID. An item payload is `z.unknown()` on the wire BY
+        // DESIGN — every kind carries a different shape — so no generated type
+        // spans the two sides, and renaming the key here means renaming it there.
+        //
+        // Absent when the CLI does not classify its calls (claude), which is what
+        // keeps every existing row byte-identical to what it was.
+        payload: {
+          id: event.id,
+          name: event.name,
+          input: event.input,
+          ...(event.kind === undefined ? {} : { toolKind: event.kind }),
+        },
       };
     case 'tool_result':
       return {

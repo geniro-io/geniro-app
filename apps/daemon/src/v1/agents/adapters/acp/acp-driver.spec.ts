@@ -926,6 +926,128 @@ describe('AcpTurnDriver session updates', () => {
     ]);
   });
 
+  it("carries the agent's OWN classification of the call", () => {
+    // Without it the transcript has to recognise this agent's tool NAMES to say
+    // what a turn did — and cursor's are "Read File"/"Edit File"/"grep" with no
+    // arguments at all, so its group summary read "Used 3 tools" and named none
+    // of the work. ACP classifies every call; this is that field reaching the row.
+    const h = harness();
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-kind',
+          title: 'Edit File',
+          kind: 'edit',
+          rawInput: {},
+        }),
+      ),
+    ).toEqual([
+      {
+        type: 'tool_call',
+        id: 't-kind',
+        name: 'Edit File',
+        input: null,
+        kind: 'edit',
+      },
+    ]);
+  });
+
+  it('omits the kind entirely when the agent classified nothing', () => {
+    // `other` would claim a classification nobody made, and the renderer reads
+    // "no kind" as "fall through to the name buckets".
+    const h = harness();
+    const [event] = h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-nokind',
+        title: 'Mystery',
+      }),
+    ) as { kind?: unknown }[];
+    expect(event).not.toHaveProperty('kind');
+  });
+
+  it('normalizes the diff an edit reports into the shape the row renders', () => {
+    // Probed on cursor-agent 2026.08.11-e8db854: an `edit` call sends
+    // `rawInput: {}`, never fills it, sends no `locations` — and reports the whole
+    // change, path included, as a `diff` content block on the completing update.
+    // Passed through raw it rendered as the block ARRAY in JSON, escaped newlines
+    // and all; `{diffs}` is what the transcript draws as a diff.
+    const h = harness();
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-diff',
+        title: 'Edit File',
+        kind: 'edit',
+        rawInput: {},
+      }),
+    );
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 't-diff',
+          status: 'completed',
+          content: [
+            {
+              type: 'diff',
+              path: '/w/notes.txt',
+              oldText: 'alpha\nbeta\n',
+              newText: 'alpha\nBETA edited\n',
+            },
+          ],
+        }),
+      ),
+    ).toEqual([
+      {
+        type: 'tool_result',
+        id: 't-diff',
+        name: 'Edit File',
+        result: {
+          diffs: [
+            {
+              path: '/w/notes.txt',
+              oldText: 'alpha\nbeta\n',
+              newText: 'alpha\nBETA edited\n',
+            },
+          ],
+        },
+        isError: false,
+      },
+    ]);
+  });
+
+  it("prefers the agent's rawOutput over a diff, and passes other content through", () => {
+    // Two guards in one: an agent that reports BOTH keeps its own output (the
+    // richer answer), and content that is not a diff must reach the row exactly
+    // as it did before — the normalization is additive, not a filter.
+    const h = harness();
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 't-both',
+          status: 'completed',
+          rawOutput: { exitCode: 0 },
+          content: [{ type: 'diff', path: '/w/a', newText: 'x' }],
+        }),
+      ),
+    ).toMatchObject([{ result: { exitCode: 0 } }]);
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 't-text',
+          status: 'completed',
+          content: [{ type: 'content', content: { type: 'text', text: 'hi' } }],
+        }),
+      ),
+    ).toMatchObject([
+      { result: [{ type: 'content', content: { type: 'text', text: 'hi' } }] },
+    ]);
+  });
+
   it('closes the pair only on a settled tool call', () => {
     const h = harness();
     expect(

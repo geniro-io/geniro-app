@@ -157,6 +157,49 @@ function disclosedInput(value: unknown): unknown {
   return record !== null && Object.keys(record).length === 0 ? null : value;
 }
 
+/**
+ * The `diff` content blocks a tool call reports — ACP's own
+ * `ToolCallContent` variant `{type:'diff', path, oldText, newText}`.
+ *
+ * This is the one place a cursor edit says WHAT IT DID: probed on cursor-agent
+ * 2026.08.11-e8db854, its `edit` calls send `rawInput: {}` on the opening
+ * `tool_call`, no `rawInput` ever after, no `locations` — and then the completing
+ * `tool_call_update` carries the full diff, path included. Read here so the row
+ * can render a diff and name the file instead of printing the raw block array as
+ * JSON, which is what it did: `[{"type":"diff","path":"/private/tmp/…",
+ * "oldText":"alpha\nbeta\n"…}]`, escaped newlines and all.
+ *
+ * `oldText` is nullable in the schema (a creation has no previous text) and is
+ * normalized to null here, so a reader never has to tell `null` from absent.
+ */
+function readAcpDiffs(
+  content: unknown,
+): { path: string | null; oldText: string | null; newText: string }[] {
+  const diffs: {
+    path: string | null;
+    oldText: string | null;
+    newText: string;
+  }[] = [];
+  for (const entry of asArray(content)) {
+    const block = asRecord(entry);
+    if (!block || asString(block.type) !== 'diff') {
+      continue;
+    }
+    const newText = asString(block.newText);
+    if (newText === null) {
+      // A diff with no new text is not renderable as one; let the caller fall
+      // back to reporting the raw block rather than showing an empty panel.
+      continue;
+    }
+    diffs.push({
+      path: asString(block.path),
+      oldText: asString(block.oldText),
+      newText,
+    });
+  }
+  return diffs;
+}
+
 function readToolCall(source: Record<string, unknown>): AcpToolCall {
   return {
     toolCallId: asString(source.toolCallId) ?? '',
@@ -1147,6 +1190,11 @@ export class AcpTurnDriver implements TurnDriver {
             id: toolCall.toolCallId,
             name: toolCall.name,
             input: toolCall.rawInput,
+            // ACP classifies its own calls, so the transcript can say what the
+            // agent DID without recognising this agent's tool names. Omitted
+            // rather than defaulted when the agent sent none: `other` would
+            // claim a classification nobody made.
+            ...(toolCall.kind === null ? {} : { kind: toolCall.kind }),
           },
         ];
       }
@@ -1160,6 +1208,11 @@ export class AcpTurnDriver implements TurnDriver {
         if (toolCall.status !== 'completed' && toolCall.status !== 'failed') {
           return [];
         }
+        // A diff is the one thing an agent may report INSTEAD of arguments, so
+        // it is normalized here rather than passed through as the raw ACP block
+        // array: `{diffs}` is the shape the transcript renders as a diff, and it
+        // carries the path an undisclosed edit is otherwise missing.
+        const diffs = readAcpDiffs(update.content);
         return [
           ...this.flushPending(),
           {
@@ -1168,7 +1221,9 @@ export class AcpTurnDriver implements TurnDriver {
             name:
               this.toolNames.get(toolCall.toolCallId) ??
               (toolCall.name.length > 0 ? toolCall.name : null),
-            result: toolCall.rawOutput ?? update.content ?? null,
+            result:
+              toolCall.rawOutput ??
+              (diffs.length > 0 ? { diffs } : (update.content ?? null)),
             isError: toolCall.status === 'failed',
           },
         ];

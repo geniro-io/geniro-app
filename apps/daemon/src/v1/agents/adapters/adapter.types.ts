@@ -163,7 +163,27 @@ type AgentEventBody =
       contextTokens: number;
     }
   | { type: 'reasoning'; text: string }
-  | { type: 'tool_call'; id: string; name: string; input: unknown }
+  | {
+      type: 'tool_call';
+      id: string;
+      name: string;
+      input: unknown;
+      /**
+       * WHAT KIND of work this call is, in one vocabulary shared by every agent:
+       * ACP's own `ToolKind` (`read` | `edit` | `delete` | `move` | `search` |
+       * `execute` | `think` | `fetch` | `switch_mode` | `other`). Absent when the
+       * CLI does not classify its calls.
+       *
+       * It exists because the alternative is a reader recognising one CLI's tool
+       * NAMES, which is what the transcript did: the group summary bucketed on
+       * `Read`/`Edit`/`Bash` and on an `input.file_path`, so a cursor turn — whose
+       * calls are titled "Read File", "Edit File", "grep" and disclose no
+       * arguments at all — fell through to "Used 2 tools" and named nothing it had
+       * done. The vocabulary is ACP's rather than geniro's own because one agent
+       * already speaks it on the wire, so only the other side needs a mapping.
+       */
+      kind?: string;
+    }
   | {
       type: 'tool_result';
       id: string;

@@ -5,6 +5,8 @@ import { subagentIdOf } from './subagent-payload';
 // re-exports these): reaching into the component module from here is what
 // closed the `agent-activity → transcript-groups → transcript-item →
 // live-row → agent-activity` import cycle.
+import { toolKindOf } from './tool-kind';
+import { resultDiffsOf, toolResultText } from './tool-render';
 import { payloadString } from './transcript-payload';
 
 /**
@@ -932,6 +934,24 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
   };
 }
 
+/**
+ * The file a tool RESULT names, when the call itself named none.
+ *
+ * An agent may disclose nothing about an edit up front and then report the whole
+ * diff, path included, on completion (measured on cursor-agent — see
+ * `resultDiffsOf`). That path is the only way to tell two edits of the same file
+ * from edits of two files, which is the difference between "edited 1 file" and
+ * "edited 2 files".
+ */
+function diffPathOf(result: ChatItem | null): string | null {
+  if (result === null) {
+    return null;
+  }
+  const payload = result.payload as { result?: unknown } | null;
+  const [first] = resultDiffsOf(payload?.result ?? null);
+  return first?.path ?? null;
+}
+
 /** File-touching tools, for the group summary's edit/create counts. */
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
 /** Tools that OPEN a named file — counted by distinct path, like the edits. */
@@ -979,13 +999,51 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   const opened = new Set<string>();
   const edited = new Set<string>();
   const created = new Set<string>();
-  for (const { call } of pairs) {
+  for (const { call, result } of pairs) {
     const name = payloadString(call.payload, 'name') ?? '';
     const input = (call.payload as { input?: unknown } | null)?.input;
     const file =
       input && typeof input === 'object' && 'file_path' in input
         ? String((input as { file_path: unknown }).file_path)
         : null;
+    // The agent's OWN classification, when it made one. It is consulted FIRST
+    // because the name buckets below are one CLI's vocabulary: cursor titles its
+    // calls "Read File", "Edit File", "grep" and discloses no arguments at all, so
+    // every one of them fell through to the "Used N tools" catch-all and a turn
+    // that read, edited and ran a command named nothing it had done.
+    const kind = toolKindOf(call.payload);
+    if (kind !== null) {
+      accounted += 1;
+      // A path when one is known — an edit's diff reports it even when the call
+      // did not — else the call itself is the unit. Counting distinct paths is
+      // what makes three edits of one file read as one edited file; with no path
+      // to distinguish them, each call is its own.
+      const target = file ?? diffPathOf(result) ?? `#${accounted}`;
+      switch (kind) {
+        case 'read':
+          opened.add(target);
+          break;
+        case 'edit':
+          edited.add(target);
+          break;
+        case 'search':
+          searches += 1;
+          break;
+        case 'execute':
+          commands += 1;
+          break;
+        case 'fetch':
+          fetches += 1;
+          break;
+        case 'delete':
+        case 'move':
+          // Accounted but not SPOKEN: neither has a phrase here, and inventing
+          // one ("moved 1 file") for a kind never yet seen on the wire would be
+          // guessing at wording no measurement supports.
+          break;
+      }
+      continue;
+    }
     if (name === 'Bash') {
       commands += 1;
       accounted += 1;
@@ -1114,32 +1172,14 @@ function compactJson(value: unknown): string {
 }
 
 /**
- * Flatten a tool_result payload's `result` for display: strings pass
- * through, Claude's `[{type:'text',text}]` block arrays join their text,
- * anything else pretty-prints as JSON.
+ * Flatten a tool_result payload's `result` for display.
+ *
+ * MOVED to `tool-render.ts`, which had to normalize the result itself — a diff an
+ * agent reported cannot be recognised once it has been stringified. Re-exported
+ * here because this module's own callers (and its spec) already read it from this
+ * name.
  */
-export function toolResultText(result: unknown): string {
-  if (typeof result === 'string') {
-    return result;
-  }
-  if (Array.isArray(result)) {
-    const texts = result
-      .map((block) =>
-        block && typeof block === 'object' && 'text' in block
-          ? String((block as { text: unknown }).text)
-          : null,
-      )
-      .filter((text): text is string => text !== null);
-    if (texts.length > 0 && texts.length === result.length) {
-      return texts.join('\n');
-    }
-  }
-  try {
-    return JSON.stringify(result, null, 2) ?? '';
-  } catch {
-    return String(result);
-  }
-}
+export { toolResultText } from './tool-render';
 
 /**
  * Marks the synthetic entry carrying an agent's not-yet-durable words, so a

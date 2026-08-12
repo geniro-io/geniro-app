@@ -1669,6 +1669,18 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
     });
   });
 
+  it('reports NO permanent reason, so a session-less run is not read as unsupported', () => {
+    // The two refusals mean different things and only `handoffUnavailableReason`
+    // answers the permanent one. Were it to conflate them — returning a
+    // sentence whenever `handoffTarget` refused — a claude chat that had not
+    // sent its first message yet would render the control inert and permanently
+    // explained away, on a CLI that resumes perfectly well.
+    expect(
+      new ClaudeAdapter().handoffTarget({ sessionId: null, model: null }),
+    ).toEqual({ ok: false, reason: 'no-session' });
+    expect(new ClaudeAdapter().handoffUnavailableReason()).toBeNull();
+  });
+
   it('opens through the GENIRO_CLAUDE_BIN override path', () => {
     // The mirror spawns the same binary a turn would — resolved per access, so
     // a Settings cliPaths override reaches the TUI too.

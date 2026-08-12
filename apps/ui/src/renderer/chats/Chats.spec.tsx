@@ -2293,6 +2293,39 @@ describe('Chats — handing a conversation to the user', () => {
     );
   });
 
+  it('shows the pasteable invocation on HOVER, before anything is opened', async () => {
+    // The resolver has to be handed to the panel for this to work at all, and
+    // it was not: `Chats` built `resolveHandoff` (its doc claiming the hover
+    // hint shared it) and passed only the click path, so `OpenInCliButton` saw
+    // no resolver, treated it as "nothing to show" and stayed silent. The
+    // copyable line is the documented way out for anyone whose terminal geniro
+    // cannot launch — a remote host, an open tmux pane — and it was unreachable
+    // on this screen.
+    handoffApi.resolveHandoff.mockResolvedValue(command);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open side panel"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The hint hangs off the wrapper's mouseenter, not the button's.
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Open terminal for claude"]')
+        ?.parentElement?.dispatchEvent(
+          new MouseEvent('mouseover', { bubbles: true }),
+        );
+    });
+
+    expect(handoffApi.resolveHandoff).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(container.textContent).toContain('claude --resume sess-1');
+    // Hovering must not RUN it — the whole point is to show the line first.
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+  });
+
   it('reports a failure to open rather than swallowing it', async () => {
     handoffApi.resolveHandoff.mockResolvedValue(command);
     (

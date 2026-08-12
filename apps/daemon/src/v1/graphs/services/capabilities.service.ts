@@ -78,25 +78,25 @@ export class CapabilitiesService {
    * Every registered CLI's handoff answer, asked of its own
    * adapter. Iterated, never listed — same rule as the config-dir row above.
    *
-   * `handoffTarget` is asked with a placeholder session id because the
-   * question here is "can this CLI reopen its conversations AT ALL", not "can
-   * it reopen this thread": a `no-session` refusal is a not-YET and still
-   * means the CLI can. Only `unsupported` is the permanent answer.
+   * The question here is "can this CLI reopen its conversations AT ALL", not
+   * "can it reopen this thread" — so it asks
+   * {@link AgentAdapter.handoffUnavailableReason}, which answers exactly that
+   * and hands back the CLI's OWN sentence.
+   *
+   * It used to ask `handoffTarget` with a fabricated session id
+   * (`'capability-probe'`) and then replace the adapter's reason with
+   * `"<agent> has no interactive terminal session"`. Both halves were wrong:
+   * the placeholder made a permanent refusal indistinguishable from a
+   * malformed request, and the invented sentence is the one the panel shows —
+   * so the user was told "no interactive terminal session" while the daemon
+   * knew, and `GET /v1/handoff` was already returning, that ACP sessions are
+   * not in cursor-agent's chat store and resuming one opens an empty chat.
    */
   private terminalCapabilities(): AgentTerminalCapability[] {
-    return [...this.adapters.all()].map(([agent, adapter]) => {
-      const resolved = adapter.handoffTarget({
-        sessionId: 'capability-probe',
-        model: null,
-      });
-      return {
-        agent,
-        unavailableReason:
-          !resolved.ok && resolved.reason === 'unsupported'
-            ? `${agent} has no interactive terminal session`
-            : null,
-      };
-    });
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      unavailableReason: adapter.handoffUnavailableReason(),
+    }));
   }
 
   /**

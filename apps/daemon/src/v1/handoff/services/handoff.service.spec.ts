@@ -41,16 +41,20 @@ function build(
         env: {},
       },
   );
+  const handoffConfig: AdapterConfig['handoff'] = overrides.handoffConfig ?? {
+    kind: 'resume-command' as const,
+    resumeFlag: '--resume',
+    modelFlag: '--model',
+    sessionIdPattern: /^.+$/,
+  };
   const adapter = {
     handoffTarget,
-    getConfig: () => ({
-      handoff: overrides.handoffConfig ?? {
-        kind: 'resume-command' as const,
-        resumeFlag: '--resume',
-        modelFlag: '--model',
-        sessionIdPattern: /^.+$/,
-      },
-    }),
+    getConfig: () => ({ handoff: handoffConfig }),
+    // Derived from the SAME config, exactly as the base class derives it, so
+    // this double cannot answer one thing through `getConfig` and another
+    // through the method the service calls.
+    handoffUnavailableReason: () =>
+      handoffConfig.kind === 'unavailable' ? handoffConfig.reason : null,
   };
   const service = new HandoffService(
     { fork: () => ({}) } as never,

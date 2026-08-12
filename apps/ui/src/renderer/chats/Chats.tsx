@@ -730,17 +730,25 @@ export function Chats({
 
   const capabilities = useCapabilities(capabilitiesApi);
   /**
-   * The CLI kinds that have an interactive (`--resume`) mirror, per the
-   * daemon's own report. Derived, never listed here: `AdapterConfig.terminal`
-   * is the fact, and a literal in the renderer is how a second CLI gaining one
-   * silently keeps its picker hidden.
+   * Per CLI: `null` if it can reopen a conversation interactively
+   * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
+   * never listed here — `AdapterConfig.handoff` is the fact, and a literal in
+   * the renderer is how a second CLI gaining the ability silently keeps its
+   * control hidden.
+   *
+   * A MAP, not the set of capable kinds it replaced. The set threw the reason
+   * away, so the panel could only hide the control — and a cursor chat then
+   * showed one lone unlabelled glyph where a claude chat showed two, with
+   * nothing on screen or on hover to say why. An agent missing from the map is
+   * UNKNOWN (the report has not landed), which is not the same as refused.
    */
-  const interactiveTerminalAgents = useMemo(
+  const terminalReasons = useMemo(
     () =>
-      new Set<string>(
-        (capabilities?.interactiveTerminals ?? [])
-          .filter((row) => row.unavailableReason === null)
-          .map((row) => row.agent),
+      new Map<string, string | null>(
+        (capabilities?.interactiveTerminals ?? []).map((row) => [
+          row.agent,
+          row.unavailableReason,
+        ]),
       ),
     [capabilities],
   );
@@ -3482,7 +3490,24 @@ export function Chats({
                 // to prevent, merely moved to the second chat.
                 key={activeRun?.id ?? 'no-run'}
                 agents={agents}
-                interactiveTerminalAgents={interactiveTerminalAgents}
+                terminalReasons={terminalReasons}
+                // The HOVER half of the same resolution the button acts on.
+                // Never passed until now, so the hint it feeds — the invocation,
+                // selectable, with a copy control — could not open on this
+                // screen at all: `OpenInCliButton` treats a missing resolver as
+                // "nothing to show" and stays silent. That copyable line is the
+                // documented way out for anyone whose terminal geniro cannot
+                // launch (a remote host, an open tmux pane), and it was
+                // unreachable.
+                onResolveHandoff={resolveHandoff}
+                // The HOVER half of the same resolution the button acts on.
+                // Never passed until now, so the hint it feeds — the invocation,
+                // selectable, with a copy control — could not open on this
+                // screen at all: `OpenInCliButton` treats a missing resolver as
+                // "nothing to show" and stays silent. That copyable line is the
+                // documented way out for anyone whose terminal geniro cannot
+                // launch (a remote host, an open tmux pane), and it was
+                // unreachable.
                 mcpByScope={mcp.byScope}
                 mcpLoading={mcp.loading}
                 onRefreshMcp={mcp.refresh}

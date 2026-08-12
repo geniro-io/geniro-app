@@ -91,11 +91,19 @@ const mainThread: AgentThread = {
 };
 
 /**
- * The daemon's own answer for which CLIs have an INTERACTIVE (`--resume`)
- * mirror. Stated as a fixture rather than assumed, because the panel READS it —
- * an agent-kind literal in the panel is what this replaced.
+ * The daemon's own answer for whether each CLI has an INTERACTIVE (`--resume`)
+ * mirror: null means it has one, a sentence means it never will. Stated as a
+ * fixture rather than assumed, because the panel READS it — an agent-kind
+ * literal in the panel is what this replaced.
+ *
+ * Only claude is listed, so every default-fixture test also pins that an
+ * UNREPORTED kind still gets no control at all.
  */
-const INTERACTIVE = new Set(['claude']);
+const TERMINALS = new Map<string, string | null>([['claude', null]]);
+
+/** cursor-agent's own sentence, as the daemon's capability report carries it. */
+const CURSOR_NO_RESUME =
+  'cursor-agent cannot reopen this conversation: sessions started over ACP are not in its chat store, and resuming one would silently open an empty chat';
 
 const agents: AgentDisplay[] = [
   {
@@ -161,7 +169,7 @@ describe('AgentsPanel', () => {
   it('lists EVERY agent with status, active/total thread counts, context + ring, and spend', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
@@ -220,7 +228,7 @@ describe('AgentsPanel', () => {
     const parked: AgentDisplay = { ...agents[1]!, status: 'needs-input' };
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={[parked]}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
@@ -238,7 +246,7 @@ describe('AgentsPanel', () => {
     const onOpenThread = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={onOpenThread}
         onClose={vi.fn()}
@@ -293,7 +301,7 @@ describe('AgentsPanel', () => {
     };
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={[cursorCaller]}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
@@ -313,7 +321,7 @@ describe('AgentsPanel', () => {
     // threads must stay reachable.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
@@ -348,7 +356,7 @@ describe('AgentsPanel', () => {
     });
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={[
           withContext('calm', 45_200), // 23% → success
           withContext('hot', 150_000), // 75% → warning
@@ -373,7 +381,7 @@ describe('AgentsPanel', () => {
     const onClose = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
         onClose={onClose}
@@ -389,7 +397,7 @@ describe('AgentsPanel', () => {
   it('shows an empty state when the run has no agents', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={[]}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
@@ -408,7 +416,7 @@ describe('AgentsPanel', () => {
     // happily if the WRONG control had been deleted.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map([
@@ -518,7 +526,7 @@ describe('AgentsPanel — MCP servers', () => {
     // that used to occupy a third line by itself.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -545,7 +553,7 @@ describe('AgentsPanel — MCP servers', () => {
     // stopping the press the list underneath toggles on every open.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -568,7 +576,7 @@ describe('AgentsPanel — MCP servers', () => {
     // popup it opens.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -593,7 +601,7 @@ describe('AgentsPanel — MCP servers', () => {
     const onMcpOpenChange = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onMcpOpenChange={onMcpOpenChange}
@@ -625,7 +633,7 @@ describe('AgentsPanel — MCP servers', () => {
     const onMcpOpenChange = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onMcpOpenChange={onMcpOpenChange}
@@ -662,7 +670,7 @@ describe('AgentsPanel — MCP servers', () => {
     // of this suite could keep two lists open and never notice.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -689,7 +697,7 @@ describe('AgentsPanel — MCP servers', () => {
   it('lists one agent’s servers with the health the CLI reported', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -716,7 +724,7 @@ describe('AgentsPanel — MCP servers', () => {
     // for the row, so it must survive somewhere — not be dropped for fitting.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -741,7 +749,7 @@ describe('AgentsPanel — MCP servers', () => {
     // did not answer, not an unimplemented feature.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map<string, AgentMcpListing>([
@@ -779,7 +787,7 @@ describe('AgentsPanel — MCP servers', () => {
   it('says "No servers" when the CLI could be asked and had none', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map<string, AgentMcpListing>([
@@ -809,7 +817,7 @@ describe('AgentsPanel — MCP servers', () => {
     // looking — the same class of untruth `unavailableReason` exists to stop.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map<string, AgentMcpListing>()}
         onOpenThread={vi.fn()}
@@ -827,7 +835,7 @@ describe('AgentsPanel — MCP servers', () => {
     const onRefreshMcp = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         mcpLoading={false}
@@ -845,7 +853,7 @@ describe('AgentsPanel — MCP servers', () => {
     act(() => {
       root!.render(
         <AgentsPanel
-          interactiveTerminalAgents={INTERACTIVE}
+          terminalReasons={TERMINALS}
           agents={agents}
           mcpByScope={new Map([[scope('claude'), claudeListing]])}
           mcpLoading
@@ -872,7 +880,7 @@ describe('AgentsPanel — MCP servers', () => {
     // wrong reason — it passed with the control rendered unconditionally.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
@@ -889,7 +897,7 @@ describe('AgentsPanel — MCP servers', () => {
     // The panel predates this feature and must still render standalone.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
@@ -930,7 +938,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     // by kind again and both cards show the same list, which is the bug.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={[
           {
             ...agents[0]!,
@@ -969,7 +977,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     // which is precisely what keying by CLI kind did.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={[{ ...agents[0]!, id: 'a', configDir: '/profiles/review' }]}
         mcpByScope={new Map([[scope('claude'), oneServer('only-plugin-less')]])}
         onOpenThread={vi.fn()}
@@ -1015,7 +1023,7 @@ describe('AgentsPanel — MCP toggle', () => {
   it('renders a switch for a project-scope server', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         onSetMcpEnabled={vi.fn()}
@@ -1034,7 +1042,7 @@ describe('AgentsPanel — MCP toggle', () => {
     // local-scope server.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map([
@@ -1064,7 +1072,7 @@ describe('AgentsPanel — MCP toggle', () => {
     const reason = 'switched off in your own claude settings';
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map([
@@ -1093,7 +1101,7 @@ describe('AgentsPanel — MCP toggle', () => {
   it('reflects a disabled server as off, not on', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map([
@@ -1118,7 +1126,7 @@ describe('AgentsPanel — MCP toggle', () => {
     const onSetMcpEnabled = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={
           new Map([
@@ -1143,7 +1151,7 @@ describe('AgentsPanel — MCP toggle', () => {
     const onSetMcpEnabled = vi.fn();
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         onSetMcpEnabled={onSetMcpEnabled}
@@ -1164,7 +1172,7 @@ describe('AgentsPanel — MCP toggle', () => {
     // The panel never invents a control its owner did not offer.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         onOpenThread={vi.fn()}
@@ -1179,7 +1187,7 @@ describe('AgentsPanel — MCP toggle', () => {
   it('shows a failed toggle instead of letting the switch snap back silently', () => {
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         mcpToggleError="daemon PUT /v1/agents/mcp failed (400): not project scope"
@@ -1199,7 +1207,7 @@ describe('AgentsPanel — MCP toggle', () => {
     // order, and the loser would be rendered as the truth.
     const el = render(
       <AgentsPanel
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         agents={agents}
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         mcpLoading
@@ -1225,12 +1233,12 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
 
   function renderCaller(
     agent: 'claude' | 'cursor-agent',
-    interactive: ReadonlySet<string>,
+    terminals: ReadonlyMap<string, string | null>,
   ): HTMLElement {
     const el = render(
       <AgentsPanel
         agents={[caller(agent)]}
-        interactiveTerminalAgents={interactive}
+        terminalReasons={terminals}
         onOpenThread={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -1242,24 +1250,63 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
   const callButton = (el: HTMLElement): Element | null =>
     el.querySelector('button[aria-label="Open terminal for Caller — call-1"]');
 
-  it('hides it for a CLI the daemon says has no interactive mirror', () => {
-    expect(
-      callButton(renderCaller('cursor-agent', new Set(['claude']))),
-    ).toBeNull();
+  it("shows it INERT, carrying the daemon's reason, for a CLI that cannot resume", () => {
+    // It used to be HIDDEN, and that is the defect: a cursor card then showed
+    // one lone unlabelled glyph where a claude card shows two, with nothing
+    // anywhere saying why — which is exactly what the user asked about. The
+    // daemon has had this sentence all along.
+    const button = callButton(
+      renderCaller(
+        'cursor-agent',
+        new Map([
+          ['claude', null],
+          ['cursor-agent', CURSOR_NO_RESUME],
+        ]),
+      ),
+    );
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute('aria-disabled')).toBe('true');
+    // The CLI's own words, on the control itself — not a generic "unavailable".
+    expect(button?.getAttribute('title')).toBe(CURSOR_NO_RESUME);
+    // `aria-disabled`, never the `disabled` attribute: the latter drops the
+    // button out of the tab order, and the reason would then be reachable by
+    // pointer alone — which defeats the whole point of rendering it.
+    expect(button?.hasAttribute('disabled')).toBe(false);
   });
 
-  it('shows it for ANY CLI the daemon says has one — no agent-kind literal', () => {
+  it('does not open a terminal when the inert control is clicked', () => {
+    // The control is present for its EXPLANATION. Were the click still wired,
+    // pressing it would resolve a handoff the daemon refuses and open nothing,
+    // which reads as a dead button rather than an answered question.
+    const onOpenThread = vi.fn();
+    const el = render(
+      <AgentsPanel
+        agents={[caller('cursor-agent')]}
+        terminalReasons={new Map([['cursor-agent', CURSOR_NO_RESUME]])}
+        onOpenThread={onOpenThread}
+        onClose={vi.fn()}
+      />,
+    );
+    click(el.querySelector('button[aria-label="Caller threads"]'));
+    click(callButton(el));
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it('shows it LIVE for ANY CLI the daemon says has one — no agent-kind literal', () => {
     // The point of reading the capability: were the panel still matching
-    // 'claude' by name, this would be null however the daemon answered, and a
+    // 'claude' by name, this would be inert however the daemon answered, and a
     // second CLI gaining a mirror would keep its call threads unopenable.
-    expect(
-      callButton(renderCaller('cursor-agent', new Set(['cursor-agent']))),
-    ).not.toBeNull();
+    const button = callButton(
+      renderCaller('cursor-agent', new Map([['cursor-agent', null]])),
+    );
+    expect(button).not.toBeNull();
+    expect(button?.getAttribute('aria-disabled')).toBeNull();
   });
 
   it('offers nothing while the capability is still unknown', () => {
-    // Errs toward not showing a control that would answer TERMINAL_UNSUPPORTED.
-    expect(callButton(renderCaller('claude', new Set()))).toBeNull();
+    // Absent from the map is "we have not been told", which is NOT the same as
+    // a refusal and must not render a control carrying an invented reason.
+    expect(callButton(renderCaller('claude', new Map()))).toBeNull();
   });
 });
 
@@ -1290,7 +1337,7 @@ describe('AgentsPanel — sub-agent threads', () => {
     const el = render(
       <AgentsPanel
         agents={[delegator]}
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
         onOpenSubagent={onOpenSubagent}
         onClose={() => undefined}
@@ -1345,7 +1392,7 @@ describe('AgentsPanel — sub-agent threads', () => {
     const el = render(
       <AgentsPanel
         agents={[{ ...delegator, threads: [{ ...mainThread }] }]}
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
         subagentUnavailableReason="cursor-agent reports no sub-agents over ACP"
         onClose={() => undefined}
@@ -1406,7 +1453,7 @@ describe('AgentsPanel — sub-agent threads', () => {
       const el = render(
         <AgentsPanel
           agents={[busy]}
-          interactiveTerminalAgents={INTERACTIVE}
+          terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
           onOpenSubagent={() => undefined}
           onClose={() => undefined}
@@ -1453,7 +1500,7 @@ describe('AgentsPanel — sub-agent threads', () => {
               ],
             },
           ]}
-          interactiveTerminalAgents={INTERACTIVE}
+          terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
           onClose={() => undefined}
         />,
@@ -1467,7 +1514,7 @@ describe('AgentsPanel — sub-agent threads', () => {
       const el = render(
         <AgentsPanel
           agents={[{ ...busy, threads: [{ ...mainThread }, { ...subagent }] }]}
-          interactiveTerminalAgents={INTERACTIVE}
+          terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
           onClose={() => undefined}
         />,
@@ -1506,7 +1553,7 @@ describe('AgentsPanel — the thread expander', () => {
       <AgentsPanel
         agents={[twoThreads]}
         mcpByScope={new Map()}
-        interactiveTerminalAgents={INTERACTIVE}
+        terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
         onClose={() => undefined}
       />,

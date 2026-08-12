@@ -436,11 +436,42 @@ export class CursorAcpAdapter extends AgentAdapter {
        * - Cursor staff, 2026-07-13, naming the paths: "no common stable session
        *   id and no IDE to CLI bridge for `--resume`."
        *
+       * RE-VERIFIED AGAIN 2026-08-12, against the newer 2026.08.11-e8db854 and
+       * Cursor 3.15.6, because a user asked a second time — for "open this
+       * session in Cursor web or the Cursor app, the way we do with claude in a
+       * terminal". Still no. What is new is that the separation is now read off
+       * the SHIPPED SOURCE rather than inferred from directory contents, which
+       * is the strongest form this can take short of the vendor changing it:
+       *
+       * - Both store paths are HARDCODED, with no flag, env var or config key
+       *   between them. `join(cursorHome, "acp-sessions")` appears in exactly
+       *   one chunk (`2996.index.js`, the ACP module) and
+       *   `join(cursorHome, "chats") / md5(resolve(cwd))` in four others. So
+       *   there is no setting that would make an ACP session land where
+       *   `--resume` looks; it is not a default to override.
+       * - `2996.index.js` is the only chunk naming both `acp-sessions` and
+       *   `resume`, and its single `resume` mention is not a read of that store.
+       * - An ACP session's `meta.json` carries `{schemaVersion, cwd, title}` —
+       *   no chat id, and no `bc-…`, so neither re-check trigger below has
+       *   fired. Nor is any `bc-…` id present anywhere in a local session's
+       *   `store.db-wal`.
+       * - The ONLY `cursor://` route in the whole bundle is
+       *   `cursor://internal/local-pr-creation-forge`. Cursor.app still
+       *   declares the one `cursor` scheme.
+       * - The `cursor` IDE CLI's only chat affordance is `--chat` ("Open a
+       *   standalone chat window"), which opens a NEW one in the IDE's own
+       *   third store.
+       *
        * Re-check when either of two specific things changes, not on the general
        * "it's on our radar": a `cli`/`acp` member appearing in the IDE's
        * `conversation-search` `source` union, or a `bc-…` id being minted for a
        * local run — which would make the existing `background-agent?bcId=`
        * deeplink template suddenly applicable.
+       *
+       * The user is no longer left to guess at the absence: this sentence is
+       * what `GET /v1/capabilities` now reports (it used to be replaced with a
+       * generic one), so the panel renders the control inert and says this on
+       * hover instead of hiding it.
        */
       handoff: {
         kind: 'unavailable',

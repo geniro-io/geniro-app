@@ -2844,6 +2844,111 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
   });
 
+  it("hands the compaction's own token figures to the summary row that follows", async () => {
+    // The boundary has the numbers and no text; the injected summary has the
+    // text and no numbers, and neither line can see the other. Without this
+    // correlation the transcript has no way to say what the compaction DID, so
+    // the summary lands as ten thousand characters of relayed prose with no
+    // heading — which is what the renderer collapses it behind.
+    const { service, claude, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    // The measured order on 2.1.228: boundary first, summary one millisecond
+    // later. Reverse these two and the stamp is correctly absent.
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'manual',
+      preTokens: 200_167,
+      postTokens: 34_120,
+    });
+    claude.emit({
+      type: 'notice',
+      message: 'This session is being continued…',
+      origin: 'cli',
+    });
+    await drain();
+
+    const summary = published.find((entry) => entry.item.kind === 'system');
+    expect(summary?.item.payload).toMatchObject({
+      origin: 'cli',
+      compaction: { preTokens: 200_167, postTokens: 34_120 },
+    });
+  });
+
+  it('spends the figures ONCE — a later relayed notice is not that summary', async () => {
+    // The marker is what tells the renderer a row IS a compaction summary. Left
+    // standing, the next CLI-authored notice of the turn would inherit both the
+    // marker and figures that describe something else, and be collapsed behind
+    // a heading about a compaction it has nothing to do with.
+    const { service, claude, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'manual',
+      preTokens: 200_167,
+      postTokens: 34_120,
+    });
+    claude.emit({
+      type: 'notice',
+      message: 'This session is being continued…',
+      origin: 'cli',
+    });
+    claude.emit({
+      type: 'notice',
+      message: 'some other thing the CLI said',
+      origin: 'cli',
+    });
+    await drain();
+
+    const systemRows = published.filter(
+      (entry) => entry.item.kind === 'system',
+    );
+    expect(systemRows).toHaveLength(2);
+    expect(systemRows[0]?.item.payload).toMatchObject({
+      compaction: { preTokens: 200_167 },
+    });
+    expect(systemRows[1]?.item.payload).not.toHaveProperty('compaction');
+  });
+
+  it('leaves a DAEMON-authored notice unstamped, compaction or not', async () => {
+    // Only text the CLI wrote can be its summary. A daemon advisory that
+    // happened to land after a boundary is an advisory, and stamping it would
+    // dress geniro's own words as the agent's summary.
+    const { service, claude, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 180_000,
+      postTokens: null,
+    });
+    claude.emit({ type: 'notice', message: 'images were withheld' });
+    await drain();
+
+    const advisory = published.find((entry) => entry.item.kind === 'system');
+    expect(advisory?.item.payload).not.toHaveProperty('compaction');
+  });
+
   it('says a run is WAITING on the user, which "running" alone cannot', async () => {
     const { service, claude, statuses } = setup({
       claudeModes: {

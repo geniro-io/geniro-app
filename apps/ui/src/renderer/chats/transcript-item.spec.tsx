@@ -282,6 +282,60 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toContain('spawn cursor-agent ENOENT');
   });
 
+  it('a compaction summary is COLLAPSED behind what the compaction did', () => {
+    // The reported defect: ~10 000 characters of the CLI summarising the
+    // conversation, dropped into the transcript in full between two of the
+    // user's own messages.
+    const summary =
+      'This session is being continued from a previous conversation.\nSummary:\n1. Primary Request…';
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message: summary,
+          origin: 'cli',
+          compaction: { preTokens: 200_167, postTokens: 34_120 },
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain('conversation compacted');
+    expect(container.textContent).toContain('200.2k → 34.1k tokens');
+    // The summary body is NOT on screen — neither its middle nor its first line,
+    // which the figures replaced.
+    expect(container.textContent).not.toContain('1. Primary Request');
+    expect(container.textContent).not.toContain(
+      'This session is being continued',
+    );
+    // Quiet, not the failure chrome: relayed CLI prose is not an advisory.
+    expect(container.querySelector('[data-role="error"]')).toBeNull();
+
+    act(() => {
+      container
+        .querySelector('button[aria-expanded]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('1. Primary Request');
+  });
+
+  it('a relayed notice with NO compaction marker still reads as a plain note', () => {
+    // Only a compaction summary earns the collapsed row. A short relayed line
+    // would be worse behind a disclosure than in front of one.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message: 'the conversation was not compacted — Not enough messages',
+          origin: 'cli',
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain('was not compacted');
+    expect(container.querySelector('button[aria-expanded]')).toBeNull();
+    expect(container.querySelector('[data-role="note"]')).not.toBeNull();
+  });
+
   it('an error renders red and expands to its full message on click', () => {
     render(
       <TranscriptItem

@@ -878,6 +878,32 @@ export class ChatService {
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
       let eventHandlingFailed = false;
+      /**
+       * The token figures the CLI reported for a compaction that just finished,
+       * held until its summary arrives so the summary's own row can carry them.
+       *
+       * The two are separate lines on the stream and neither can see the other:
+       * the boundary has the numbers and no text, the injected summary has the
+       * text and no numbers. Correlating them is what lets the transcript collapse
+       * the summary behind ONE line that says what the compaction actually did
+       * ("Conversation compacted · 200.2k → 34.1k") instead of a wall of relayed
+       * prose with no heading.
+       *
+       * Ordering is MEASURED, not assumed — 2.1.228, this daemon's own debug log:
+       * the boundary landed at 10:36:13.025 and the summary at 10:36:13.026, one
+       * millisecond apart and in that order. A turn-scoped `let` rather than a
+       * service field because a compaction belongs to the turn that asked for it,
+       * and a stale figure must not be able to reach a later turn's summary.
+       *
+       * Null is the honest degrade at every point: an auto-compaction whose
+       * boundary carries no metadata, a summary that arrives without one, or the
+       * graph executor's own event loop (which does not correlate them) all leave
+       * the row rendering as the plain relayed note it was before.
+       */
+      let compactedTokens: {
+        preTokens: number | null;
+        postTokens: number | null;
+      } | null = null;
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
           eventHandlingFailed = true;
@@ -1076,6 +1102,15 @@ export class ChatService {
               if (event.parentToolUseId !== undefined) {
                 return;
               }
+              if (event.phase === 'finished') {
+                // Kept for the summary line that follows (see `compactedTokens`).
+                // Only the finished phase carries metadata — `started` is a bare
+                // status line and `failed` never got as far as compacting.
+                compactedTokens = {
+                  preTokens: event.preTokens,
+                  postTokens: event.postTokens,
+                };
+              }
               this.announceActivity(
                 runId,
                 event.phase === 'failed'
@@ -1097,6 +1132,28 @@ export class ChatService {
             const mapped = mapEventToItem(event);
             if (!mapped) {
               return;
+            }
+            if (
+              event.type === 'notice' &&
+              event.origin === 'cli' &&
+              compactedTokens !== null
+            ) {
+              // The relayed text is the compaction's SUMMARY, and this is the one
+              // place that knows it — the mapper sees one line at a time and the
+              // renderer sees only what is persisted.
+              //
+              // TWIN PARSER: `apps/ui/src/renderer/chats/compaction-payload.ts`
+              // reads this `compaction` key back to title the collapsed row. An
+              // item payload is `z.unknown()` on the wire BY DESIGN, so no
+              // generated type spans the two sides — renaming the key here means
+              // renaming it there.
+              mapped.payload = {
+                ...mapped.payload,
+                compaction: compactedTokens,
+              };
+              // Spent. A second CLI-authored notice in the same turn is not this
+              // compaction's summary, and must not inherit its figures.
+              compactedTokens = null;
             }
             if (
               event.type === 'tool_call' &&

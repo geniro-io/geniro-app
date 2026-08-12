@@ -149,6 +149,14 @@ export function WorkingRow(): React.JSX.Element {
  * The shell both rows share — bubble, spinner, label. Split out so a change to
  * the chrome cannot land on one live row and not the other.
  *
+ * It wears the `note` variant — the transcript's SYSTEM row: centred, small and
+ * quiet. Neither row is the agent speaking; both are geniro narrating the state
+ * of a turn, which is exactly what every other `note` row does, and the
+ * left-aligned filled bubble they used to wear read as a message with content
+ * (it sat in the assistant's column, at the assistant's weight, saying nothing
+ * the conversation contains). The spinner is what a `note` alone cannot say:
+ * this line is about work still running, so it will change.
+ *
  * Deliberately WITHOUT `MessageBubble`'s `role` caption. These two rows are the
  * only ones whose body already names the state they are in, so the caption
  * printed the word a second time — a row reading "THINKING" over
@@ -158,8 +166,11 @@ export function WorkingRow(): React.JSX.Element {
  */
 function LiveRow({ label }: { label: string }): React.JSX.Element {
   return (
-    <MessageBubble variant="reasoning">
-      <div className="flex items-center gap-1.5 italic">
+    <MessageBubble variant="note">
+      {/* No italic: the row it must look like is the plain note beside it
+          ("✓ done · $1.3306"), and an italic of its own made it a different
+          kind of thing. The spinner is the only difference the state earns. */}
+      <div className="flex items-center gap-1.5">
         <Spinner />
         <span>{label}</span>
       </div>

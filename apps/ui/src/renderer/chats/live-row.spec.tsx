@@ -158,6 +158,32 @@ describe('WorkingRow', () => {
   });
 });
 
+describe('both live rows wear the SYSTEM row chrome, with a loader', () => {
+  it.each([
+    ['thinking', <ThinkingRow key="t" since={Date.now()} tokens={250} />],
+    ['working', <WorkingRow key="w" />],
+  ])('%s', (_word, node) => {
+    // Neither row is the agent speaking — both are geniro narrating the state of
+    // a turn, which is what every `note` row does. They used to wear the filled
+    // `reasoning` bubble: left-aligned in the assistant's column, at the
+    // assistant's weight, which read as a message with content.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(node);
+
+    const row = container.querySelector('[data-role="note"]');
+    expect(row).not.toBeNull();
+    // Centred and quiet, not a bubble in the agent's column.
+    expect(row?.className).toContain('self-center');
+    expect(row?.className).not.toContain('bg-muted/50');
+    // …and no italic either: the row it has to look like is the plain
+    // "✓ done · $1.3306" note beside it.
+    expect(container.innerHTML).not.toContain('italic');
+    // The one thing a `note` alone cannot say: this line is about work still
+    // running, so it will change.
+    expect(container.querySelector('svg')).not.toBeNull();
+  });
+});
+
 describe('the live rows say their state exactly once', () => {
   it.each([
     ['thinking', <ThinkingRow key="t" since={Date.now()} tokens={250} />],

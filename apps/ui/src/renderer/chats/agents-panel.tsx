@@ -87,8 +87,10 @@ function McpDisclosure({
         title="MCP servers this agent loads here"
         className="size-6 shrink-0 text-muted-foreground"
         onClick={(event) => {
-          // The card header is itself a button for a multi-thread agent, so a
-          // press here would toggle the thread list underneath as well.
+          // The card header is a plain row now, so nothing above this would
+          // act on the press — but the control row sits inside a list item
+          // that a later change could make activatable, and a stray toggle of
+          // the thread list is not something a reader would trace back here.
           event.stopPropagation();
           onOpenChange(!open);
         }}>
@@ -119,10 +121,13 @@ function McpDisclosure({
 /**
  * The right side panel (opened from the transcript header): every agent of
  * the active run with its live status, active/total thread counts, context
- * fill, and spend. Clicking an agent expands its full thread list — the main
- * conversation plus every `call_agent` thread — each openable in a terminal
- * (claude only; a call thread needs its recorded session id, so it opens once
- * settled). Resizable like the builder's side panels.
+ * fill, and spend. The chevron button in each card's control row opens its
+ * thread list — the main conversation, every `call_agent` thread, and every
+ * sub-agent still WORKING, with the finished delegates counted behind their
+ * own disclosure. A conversation is openable in a terminal (claude only; a
+ * call thread needs its recorded session id, so it opens once settled), while
+ * a sub-agent opens its own timeline and thread instead, having no CLI session
+ * to resume. Resizable like the builder's side panels.
  */
 /**
  * "Carry this conversation on yourself": opens the agent's own CLI on this
@@ -214,6 +219,83 @@ function OpenInCliButton({
         )}
       </Popover>
     </span>
+  );
+}
+
+/**
+ * One conversation of one agent, as a row of the card's thread list.
+ *
+ * Extracted because the list now renders threads from three places — the
+ * agent's own conversations, its running delegates, and the settled delegates
+ * behind their own disclosure — and three copies of this row is how one of them
+ * comes to lose the terminal button or the sub-agent affordance without anyone
+ * noticing.
+ */
+function ThreadRow({
+  agent,
+  thread,
+  canOpenTerminal,
+  onOpenThread,
+  onOpenSubagent,
+  onResolveHandoff,
+}: {
+  agent: AgentDisplay;
+  thread: AgentThread;
+  canOpenTerminal: boolean;
+  onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  onOpenSubagent?: (subagentId: string) => void;
+  onResolveHandoff?: (
+    agent: AgentDisplay,
+    thread: AgentThread,
+  ) => Promise<HandoffTargetDto>;
+}): React.JSX.Element {
+  // Every mirror is a `--resume` of the agent's own CLI, so the CLI must have
+  // one. A MAIN thread needs nothing else — the daemon resolves its session
+  // from `node_state`. A CALL thread is a sub-session, which can only be
+  // targeted once its own session id has been recorded (present after the call
+  // settles). A SUB-AGENT has no session at all — it lives inside its parent's
+  // turn — so it is excluded outright rather than left to fail the sessionId
+  // test by accident.
+  const canOpen =
+    canOpenTerminal &&
+    thread.kind !== 'subagent' &&
+    (thread.kind === 'main' || thread.sessionId !== null);
+  // What a sub-agent row offers INSTEAD: its own timeline and conversation, in
+  // a panel. Absent the callback the row is inert rather than falsely clickable.
+  const openSubagent =
+    thread.kind === 'subagent' && onOpenSubagent ? onOpenSubagent : null;
+  return (
+    <li className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs">
+      <RunStatusIcon status={thread.status} />
+      {openSubagent ? (
+        <button
+          type="button"
+          // `text-xs font-normal` is not decoration — it is an OVERRIDE.
+          // `styles/global.css` gives every bare `button` the base 15px at
+          // medium weight, so without it this row rendered half again the size
+          // of its `Main conversation` sibling, which is a span. Screenshotted
+          // against the real stylesheet; jsdom loads no CSS, so no component
+          // test could ever have caught it.
+          className="min-w-0 flex-1 truncate rounded px-0.5 text-left text-xs font-normal transition-colors hover:text-foreground hover:underline"
+          title={`Open ${thread.label}'s timeline and conversation`}
+          onClick={() => openSubagent(thread.id)}>
+          {thread.label}
+        </button>
+      ) : (
+        <span className="min-w-0 flex-1 truncate" title={thread.label}>
+          {thread.label}
+        </span>
+      )}
+      {canOpen ? (
+        <OpenInCliButton
+          agent={agent}
+          thread={thread}
+          label={`Open terminal for ${agent.name} — ${thread.id}`}
+          onOpen={onOpenThread}
+          onResolve={onResolveHandoff}
+        />
+      ) : null}
+    </li>
   );
 }
 
@@ -374,6 +456,20 @@ export function AgentsPanel({
       return next;
     });
   };
+  // Which cards are also showing their FINISHED delegates. Separate state from
+  // `expanded`, and per agent: a run that spawned forty delegates and finished
+  // thirty-nine of them buried its one live thread under them, which is the
+  // whole reason the list is split.
+  const [showSettled, setShowSettled] = useState<Set<string>>(new Set());
+  const toggleSettled = (agentId: string): void => {
+    setShowSettled((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(agentId)) {
+        next.add(agentId);
+      }
+      return next;
+    });
+  };
   return (
     <aside
       className="relative flex min-h-0 flex-col border-l border-border bg-sidebar"
@@ -453,37 +549,38 @@ export function AgentsPanel({
               interactiveTerminalAgents?.has(agent.agent) === true
                 ? soleThread
                 : null;
-            const Header = soleThread ? 'div' : 'button';
+            const canOpenTerminal =
+              agent.agent !== null &&
+              interactiveTerminalAgents?.has(agent.agent) === true;
+            // Delegates split by whether they are still WORKING. Only the live
+            // ones belong in the list: a run that spawns twenty read-only
+            // analysts leaves twenty rows behind it, and the one thread the
+            // reader opened the panel to watch was somewhere in the middle of
+            // them.
+            const subagents = agent.threads.filter(
+              (thread) => thread.kind === 'subagent',
+            );
+            const ownThreads = agent.threads.filter(
+              (thread) => thread.kind !== 'subagent',
+            );
+            const liveSubagents = subagents.filter(
+              (thread) => thread.status === 'running',
+            );
+            const settledSubagents = subagents.filter(
+              (thread) => thread.status !== 'running',
+            );
+            const settledOpen = showSettled.has(agent.id);
             return (
               <li
                 key={agent.id}
                 className="flex flex-col rounded-lg border border-border bg-card shadow-panel-sm">
-                <Header
-                  {...(soleThread
-                    ? {}
-                    : {
-                        type: 'button' as const,
-                        'aria-expanded': isExpanded,
-                        'aria-label': `${agent.name} threads`,
-                        onClick: () => toggleExpanded(agent.id),
-                      })}
-                  className={cn(
-                    'flex flex-col rounded-lg px-2.5 pt-1.5 text-left',
-                    !soleThread && 'transition-colors hover:bg-accent/50',
-                  )}>
-                  {/* Line 1 — WHO this is: the name, and which CLI drives it.
-                      Nothing actionable, so the whole line can stay part of
-                      the expand button without swallowing a control's press. */}
+                {/* Line 1 — WHO this is: the name, and which CLI drives it.
+                    A plain row, not a control: the thread list opens from the
+                    button in the control row below, beside the MCP one, so
+                    every affordance this card has sits in one place instead of
+                    the whole header doubling as a hit target. */}
+                <div className="flex flex-col rounded-lg px-2.5 pt-1.5 text-left">
                   <span className="flex items-center gap-1.5">
-                    {soleThread ? null : (
-                      <ChevronRight
-                        aria-hidden="true"
-                        className={cn(
-                          'size-3.5 shrink-0 text-muted-foreground transition-transform',
-                          isExpanded && 'rotate-90',
-                        )}
-                      />
-                    )}
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">
                       {agent.name}
                     </span>
@@ -491,18 +588,12 @@ export function AgentsPanel({
                       <Badge variant="muted">{agent.agent}</Badge>
                     ) : null}
                   </span>
-                </Header>
+                </div>
                 {/* Line 2 — WHAT it is doing, and what you can do about it:
                     status, how full its context is, and its two controls.
                     Everything that used to take three lines (status; a context
                     meter alone on the next; controls up beside the name) reads
-                    as one row, which is what makes the card compact.
-
-                    OUTSIDE `Header`, deliberately and for two reasons. `Header`
-                    is a <button> for any agent with more than one thread, so a
-                    nested button here is invalid DOM and every press meant for
-                    a control would also toggle the thread list. And the meter
-                    is itself a button. */}
+                    as one row, which is what makes the card compact. */}
                 <div className="flex items-center gap-1 px-2.5 pt-0.5 pb-1.5 text-xs">
                   <RunStatusIcon status={agent.status} />
                   {/* `needs-input` is a slug, not a sentence — hence `.label`. */}
@@ -580,6 +671,35 @@ export function AgentsPanel({
                         }
                       />
                     ) : null}
+                    {soleThread === null ? (
+                      // The thread list's own control, sitting with the rest of
+                      // the card's buttons rather than as a chevron up on the
+                      // name line. The header is then a plain row: nothing about
+                      // an agent's NAME suggests pressing it, and while it was a
+                      // button every control in this row had to stop the press
+                      // from bubbling into it.
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-expanded={isExpanded}
+                        aria-label={`${agent.name} threads`}
+                        title={
+                          isExpanded
+                            ? 'Hide this agent’s threads'
+                            : 'Show this agent’s threads'
+                        }
+                        className="size-6 shrink-0 text-muted-foreground"
+                        onClick={() => toggleExpanded(agent.id)}>
+                        <ChevronRight
+                          aria-hidden="true"
+                          className={cn(
+                            'size-3.5 shrink-0 transition-transform',
+                            isExpanded && 'rotate-90',
+                          )}
+                        />
+                      </Button>
+                    ) : null}
                   </span>
                 </div>
                 {isExpanded && soleThread === null ? (
@@ -588,63 +708,62 @@ export function AgentsPanel({
                       <li className="px-1 py-1 text-xs text-muted-foreground">
                         No threads yet
                       </li>
-                    ) : (
-                      agent.threads.map((thread) => {
-                        // Every mirror is a `--resume` of the agent's own CLI,
-                        // so the CLI must have one. A MAIN thread needs nothing
-                        // else — the daemon resolves its session from
-                        // `node_state`. A CALL thread is a sub-session, which
-                        // can only be targeted once its own session id has been
-                        // recorded (present after the call settles). A SUB-AGENT
-                        // has no session at all — it lives inside its parent's
-                        // turn — so it is excluded outright rather than left to
-                        // fail the sessionId test by accident.
-                        const canOpen =
-                          agent.agent !== null &&
-                          interactiveTerminalAgents?.has(agent.agent) ===
-                            true &&
-                          thread.kind !== 'subagent' &&
-                          (thread.kind === 'main' || thread.sessionId !== null);
-                        // What a sub-agent row offers INSTEAD: its own timeline
-                        // and conversation, in a panel. Absent the callback the
-                        // row is inert rather than falsely clickable.
-                        const openSubagent =
-                          thread.kind === 'subagent' && onOpenSubagent
-                            ? onOpenSubagent
-                            : null;
-                        return (
-                          <li
-                            key={thread.id}
-                            className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs">
-                            <RunStatusIcon status={thread.status} />
-                            {openSubagent ? (
-                              <button
-                                type="button"
-                                className="min-w-0 flex-1 truncate rounded px-0.5 text-left transition-colors hover:text-foreground hover:underline"
-                                title={`Open ${thread.label}'s timeline and conversation`}
-                                onClick={() => openSubagent(thread.id)}>
-                                {thread.label}
-                              </button>
-                            ) : (
-                              <span
-                                className="min-w-0 flex-1 truncate"
-                                title={thread.label}>
-                                {thread.label}
-                              </span>
+                    ) : null}
+                    {[...ownThreads, ...liveSubagents].map((thread) => (
+                      <ThreadRow
+                        key={thread.id}
+                        agent={agent}
+                        thread={thread}
+                        canOpenTerminal={canOpenTerminal}
+                        onOpenThread={onOpenThread}
+                        onOpenSubagent={onOpenSubagent}
+                        onResolveHandoff={onResolveHandoff}
+                      />
+                    ))}
+                    {settledSubagents.length > 0 ? (
+                      <li className="flex flex-col">
+                        <button
+                          type="button"
+                          aria-expanded={settledOpen}
+                          onClick={() => toggleSettled(agent.id)}
+                          // `font-normal` for the same reason the row label
+                          // carries it: global.css's base `button` rule would
+                          // otherwise weight this heavier than the threads it
+                          // is counting.
+                          className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-normal text-muted-foreground transition-colors hover:text-foreground">
+                          <ChevronRight
+                            aria-hidden="true"
+                            className={cn(
+                              'size-3 shrink-0 transition-transform',
+                              settledOpen && 'rotate-90',
                             )}
-                            {canOpen ? (
-                              <OpenInCliButton
+                          />
+                          {/* Counted, not listed: the number is the only thing
+                              a reader wants from work that is over, and it is
+                              what says the rows above are the LIVE ones rather
+                              than all there ever were. */}
+                          <span>
+                            {settledSubagents.length} finished sub-agent
+                            {settledSubagents.length === 1 ? '' : 's'}
+                          </span>
+                        </button>
+                        {settledOpen ? (
+                          <ul className="m-0 flex list-none flex-col gap-0.5 pl-4">
+                            {settledSubagents.map((thread) => (
+                              <ThreadRow
+                                key={thread.id}
                                 agent={agent}
                                 thread={thread}
-                                label={`Open terminal for ${agent.name} — ${thread.id}`}
-                                onOpen={onOpenThread}
-                                onResolve={onResolveHandoff}
+                                canOpenTerminal={canOpenTerminal}
+                                onOpenThread={onOpenThread}
+                                onOpenSubagent={onOpenSubagent}
+                                onResolveHandoff={onResolveHandoff}
                               />
-                            ) : null}
-                          </li>
-                        );
-                      })
-                    )}
+                            ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    ) : null}
                   </ul>
                 ) : null}
               </li>

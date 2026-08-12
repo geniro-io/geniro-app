@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { MarkdownContent } from './markdown-content';
+import { RunStatusIcon, type RunStatusKind } from './run-status';
 
 /** Block lifecycle in geniro web's vocabulary (see {@link StatusBadge}). */
 export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
@@ -14,6 +15,41 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   error: 'bg-destructive/10 text-destructive',
   stopped: 'bg-muted text-muted-foreground',
 };
+
+/**
+ * The block vocabulary said in the RUN vocabulary's words.
+ *
+ * The two exist because they answer different questions — a block is a piece of
+ * nested work, a run is a conversation — but they share every glyph, so the
+ * translation lives here once rather than as a second icon table that drifts
+ * from `RUN_STATUS_META`. `stopped → cancelled` is the same reading
+ * `subagentThreadsByAgent` makes: work that ended without finishing.
+ */
+const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
+  running: 'running',
+  done: 'completed',
+  error: 'failed',
+  stopped: 'cancelled',
+};
+
+/**
+ * The status GLYPH for anything drawn in the block vocabulary — a block header,
+ * a tool row inside one.
+ *
+ * Delegates to {@link RunStatusIcon} so a completed tool call and a completed
+ * run wear the same check in the same tone: one icon set for the whole app is
+ * the point, and it is why this is a translation rather than a mapping of its
+ * own.
+ */
+export function BlockStatusIcon({
+  status,
+  className,
+}: {
+  status: BlockStatus;
+  className?: string;
+}): React.JSX.Element {
+  return <RunStatusIcon status={RUN_STATUS_OF[status]} className={className} />;
+}
 
 export function StatusBadge({
   status,

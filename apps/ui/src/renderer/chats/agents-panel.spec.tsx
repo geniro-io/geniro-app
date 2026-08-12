@@ -323,9 +323,13 @@ describe('AgentsPanel', () => {
       row.textContent?.includes('Worker'),
     )!;
 
-    expect(worker.querySelector('button[aria-expanded]')).not.toBeNull();
+    // By its own label, not a bare `[aria-expanded]`: the context meter and
+    // the MCP control are both aria-expanded buttons in this row, and either
+    // would match first now that the expander lives beside them.
+    const toggle = worker.querySelector('button[aria-label="Worker threads"]');
+    expect(toggle).not.toBeNull();
     expect(worker.textContent).not.toContain('Write a haiku about rivers.');
-    click(worker.querySelector('button[aria-expanded]'));
+    click(toggle);
     expect(worker.textContent).toContain('Write a haiku about rivers.');
   });
 
@@ -1368,5 +1372,173 @@ describe('AgentsPanel — sub-agent threads', () => {
     );
     expect(row?.querySelector('button')).toBeNull();
     expect(row?.textContent).toContain('Review the diff');
+  });
+
+  describe('active and finished', () => {
+    /** One live delegate among four that are over — the reported shape. */
+    const busy: AgentDisplay = {
+      ...delegator,
+      threads: [
+        { ...mainThread, status: 'running' },
+        { ...subagent, id: 'task-live', label: 'Still mining' },
+        {
+          ...subagent,
+          id: 'task-done-1',
+          label: 'Mined session A',
+          status: 'completed',
+        },
+        {
+          ...subagent,
+          id: 'task-done-2',
+          label: 'Mined session B',
+          status: 'completed',
+        },
+        {
+          ...subagent,
+          id: 'task-dead',
+          label: 'Mined session C',
+          status: 'cancelled',
+        },
+      ],
+    };
+
+    const open = (): HTMLDivElement => {
+      const el = render(
+        <AgentsPanel
+          agents={[busy]}
+          interactiveTerminalAgents={INTERACTIVE}
+          onOpenThread={() => undefined}
+          onOpenSubagent={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
+      return el;
+    };
+
+    it('lists the live delegate and only COUNTS the finished ones', () => {
+      const el = open();
+      expect(el.textContent).toContain('Still mining');
+      expect(el.textContent).toContain('3 finished sub-agents');
+      // The whole point: a run that spawned twenty analysts must not bury its
+      // one live thread under nineteen dead ones.
+      expect(el.textContent).not.toContain('Mined session A');
+      expect(el.textContent).not.toContain('Mined session C');
+    });
+
+    it('reveals the finished ones when their own disclosure is pressed', () => {
+      const el = open();
+      const disclosure = [...el.querySelectorAll('button')].find((button) =>
+        button.textContent?.includes('finished sub-agent'),
+      );
+      click(disclosure ?? null);
+      expect(el.textContent).toContain('Mined session A');
+      expect(el.textContent).toContain('Mined session C');
+      // …and the live one has not been swept in with them.
+      expect(el.textContent).toContain('Still mining');
+    });
+
+    it('keeps the agent’s OWN threads out of the split entirely', () => {
+      // The partition is by `kind`, not by status: a settled main conversation
+      // is the thing the panel is for, and hiding it behind a control labelled
+      // "finished sub-agents" would be a lie about what it is.
+      const el = render(
+        <AgentsPanel
+          agents={[
+            {
+              ...busy,
+              threads: [
+                { ...mainThread, status: 'completed' },
+                ...busy.threads.slice(1),
+              ],
+            },
+          ]}
+          interactiveTerminalAgents={INTERACTIVE}
+          onOpenThread={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
+      expect(el.textContent).toContain('Main conversation');
+      expect(el.textContent).toContain('3 finished sub-agents');
+    });
+
+    it('shows no disclosure at all when every delegate is still working', () => {
+      const el = render(
+        <AgentsPanel
+          agents={[{ ...busy, threads: [{ ...mainThread }, { ...subagent }] }]}
+          interactiveTerminalAgents={INTERACTIVE}
+          onOpenThread={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
+      expect(el.textContent).not.toContain('finished sub-agent');
+    });
+  });
+});
+
+describe('AgentsPanel — the thread expander', () => {
+  const twoThreads: AgentDisplay = {
+    id: 'orchestrator',
+    name: 'Orchestrator',
+    agent: 'claude',
+    configDir: null,
+    status: 'running',
+    activeTurns: 1,
+    contextTokens: null,
+    contextWindowTokens: null,
+    spentUsd: null,
+    threads: [
+      { ...mainThread, status: 'running' },
+      {
+        id: 'task-1',
+        kind: 'subagent',
+        label: 'Review the diff',
+        status: 'running',
+        sessionId: null,
+      },
+    ],
+  };
+
+  const panel = (): HTMLDivElement =>
+    render(
+      <AgentsPanel
+        agents={[twoThreads]}
+        mcpByScope={new Map()}
+        interactiveTerminalAgents={INTERACTIVE}
+        onOpenThread={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+
+  it('is a button in the control row, beside the MCP one', () => {
+    const el = panel();
+    const controls = [
+      ...el.querySelectorAll('button[aria-label], button[aria-expanded]'),
+    ];
+    const toggleAt = controls.findIndex(
+      (button) => button.getAttribute('aria-label') === 'Orchestrator threads',
+    );
+    const mcpAt = controls.findIndex(
+      (button) => button.getAttribute('aria-label') === 'MCP servers',
+    );
+    expect(toggleAt).toBeGreaterThanOrEqual(0);
+    expect(mcpAt).toBeGreaterThanOrEqual(0);
+    // Adjacent, which is the ask: the two controls read as one cluster rather
+    // than the expander living up on the name line as a chevron.
+    expect(Math.abs(toggleAt - mcpAt)).toBe(1);
+  });
+
+  it('leaves the agent’s NAME line inert', () => {
+    // It used to BE the expander, which meant every control in the card had to
+    // stop its own press from bubbling into it, and nothing about an agent's
+    // name suggested it was pressable in the first place.
+    const el = panel();
+    const nameLine = [...el.querySelectorAll('li > div')].find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    );
+    expect(nameLine?.tagName).toBe('DIV');
+    expect(nameLine?.querySelector('button')).toBeNull();
   });
 });

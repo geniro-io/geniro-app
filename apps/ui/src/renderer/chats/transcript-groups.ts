@@ -513,44 +513,96 @@ export function buildSubagentBlocks(
 
   const out: TranscriptEntry[] = [];
   const blocks = new Map<string, SubagentBlockEntry>();
+  /**
+   * The `seq` the delegation was ISSUED at, per block.
+   *
+   * Only load-bearing while a block has no rows of its own: `maxSeqOf([])` is
+   * 0, so without an anchor ANY earlier turn-end of the delegating node reads
+   * as "this delegate's turn is over" and a Task call the CLI has not yet
+   * produced a single row for renders `stopped` the instant it appears.
+   */
+  const anchorSeq = new Map<string, number>();
+  const openBlock = (
+    subagentId: string,
+    /** Where to read identity from when the launching call is missing. */
+    fallback: TranscriptEntry,
+  ): SubagentBlockEntry => {
+    const existing = blocks.get(subagentId);
+    if (existing) {
+      return existing;
+    }
+    const launch = launches.get(subagentId);
+    const payload = launch?.result?.payload as {
+      result?: unknown;
+      isError?: unknown;
+    } | null;
+    const body = payload?.result;
+    const block: SubagentBlockEntry = {
+      type: 'subagent-block',
+      id: subagentId,
+      // A ternary, not `??`: every 1:1 chat row carries `nodeId: null`
+      // legitimately, so coalescing would fall through to the first row's
+      // node whenever the launcher IS the chat agent.
+      createdAt: launch ? launch.call.createdAt : entryCreatedAt(fallback),
+      nodeId: launch ? launch.call.nodeId : entryNodeId(fallback),
+      kind: inputString(launch?.call, 'subagent_type'),
+      label: inputString(launch?.call, 'description'),
+      prompt: inputString(launch?.call, 'prompt'),
+      returned: launch?.result != null,
+      failed: payload?.isError === true,
+      // Only stringify a body that EXISTS. `toolResultText(null)` returns
+      // the four characters `null`, which the result panel then framed as
+      // the delegate's own answer.
+      result: body == null ? null : toolResultText(body),
+      closed: false,
+      entries: [],
+    };
+    if (launch) {
+      anchorSeq.set(subagentId, launch.result?.seq ?? launch.call.seq);
+    }
+    blocks.set(subagentId, block);
+    out.push(block);
+    return block;
+  };
+
   for (const entry of entries) {
     const subagentId = subagentOwnerOf(entry);
-    if (subagentId === null) {
-      out.push(entry);
+    if (subagentId !== null) {
+      openBlock(subagentId, entry).entries.push(entry);
       continue;
     }
-    let block = blocks.get(subagentId);
-    if (!block) {
-      const launch = launches.get(subagentId);
-      const payload = launch?.result?.payload as {
-        result?: unknown;
-        isError?: unknown;
-      } | null;
-      const body = payload?.result;
-      block = {
-        type: 'subagent-block',
-        id: subagentId,
-        // A ternary, not `??`: every 1:1 chat row carries `nodeId: null`
-        // legitimately, so coalescing would fall through to the first row's
-        // node whenever the launcher IS the chat agent.
-        createdAt: launch ? launch.call.createdAt : entryCreatedAt(entry),
-        nodeId: launch ? launch.call.nodeId : entryNodeId(entry),
-        kind: inputString(launch?.call, 'subagent_type'),
-        label: inputString(launch?.call, 'description'),
-        prompt: inputString(launch?.call, 'prompt'),
-        returned: launch?.result != null,
-        failed: payload?.isError === true,
-        // Only stringify a body that EXISTS. `toolResultText(null)` returns
-        // the four characters `null`, which the result panel then framed as
-        // the delegate's own answer.
-        result: body == null ? null : toolResultText(body),
-        closed: false,
-        entries: [],
-      };
-      blocks.set(subagentId, block);
-      out.push(block);
+    // A MAIN-thread tool group is where the delegations were issued. The
+    // launching `Task` pair is pulled OUT of it and rendered as the block it
+    // opened: the block already says a delegate was started, who it is and
+    // how it ended, so leaving the pair in the group produced a second,
+    // poorer telling of it directly above ("Delegated to 5 subagents").
+    if (entry.type === 'tools') {
+      const kept: ToolPair[] = [];
+      const launched: string[] = [];
+      for (const pair of entry.pairs) {
+        const id = payloadString(pair.call.payload, 'id');
+        if (id !== null && launches.has(id)) {
+          launched.push(id);
+          continue;
+        }
+        kept.push(pair);
+      }
+      if (kept.length > 0) {
+        // `id` is carried over UNCHANGED even when the pair it names was the
+        // one just stripped. It is a React key, and re-deriving it from the
+        // first surviving pair would change it the moment a delegation is
+        // followed by real work in the same group — remounting the row and
+        // discarding whatever the reader had expanded.
+        out.push({ ...entry, pairs: kept });
+      }
+      // AFTER the group, so a turn that both worked and delegated still reads
+      // in the order it happened.
+      for (const id of launched) {
+        openBlock(id, entry);
+      }
+      continue;
     }
-    block.entries.push(entry);
+    out.push(entry);
   }
   if (blocks.size === 0) {
     return out;
@@ -563,9 +615,12 @@ export function buildSubagentBlocks(
     // `turn_complete` mark node B's still-working delegate `stopped` — the
     // failure showing up exactly when several agents run at once, which is
     // when this feature matters most.
+    const lastSeq = Math.max(
+      maxSeqOf(block.entries),
+      anchorSeq.get(block.id) ?? 0,
+    );
     block.closed = turnEnds.some(
-      (item) =>
-        item.nodeId === block.nodeId && item.seq > maxSeqOf(block.entries),
+      (item) => item.nodeId === block.nodeId && item.seq > lastSeq,
     );
     // Folded so the nested thread reads exactly like the main flow does.
     block.entries = buildTurnBlocks(block.entries);
@@ -919,7 +974,6 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   let commands = 0;
   let searches = 0;
   let fetches = 0;
-  let delegations = 0;
   let mcpCalls = 0;
   let accounted = 0;
   const opened = new Set<string>();
@@ -951,7 +1005,8 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
       fetches += 1;
       accounted += 1;
     } else if (AGENT_TOOLS.has(name)) {
-      delegations += 1;
+      // Accounted but never SPOKEN — see the note where the other phrases are
+      // assembled below.
       accounted += 1;
     } else if (name.startsWith(MCP_TOOL_PREFIX)) {
       mcpCalls += 1;
@@ -979,9 +1034,15 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   if (fetches > 0) {
     parts.push(`fetched ${count(fetches, 'page')}`);
   }
-  if (delegations > 0) {
-    parts.push(`delegated to ${count(delegations, 'subagent')}`);
-  }
+  // `delegations` is counted into `accounted` and then deliberately NOT
+  // spoken: a delegation already renders as its own sub-agent block directly
+  // below this row, so naming it here says the same thing twice — which is
+  // what "Delegated to 5 subagents" sitting over five sub-agent cards actually
+  // looked like. It stays ACCOUNTED for so a group that MIXES delegations with
+  // real work still reads as its breakdown ("Read 3 files") rather than
+  // falling through to the "Used N tools" catch-all. A group of nothing BUT
+  // delegations never reaches a reader at all: `buildSubagentBlocks` strips
+  // those pairs out and drops the emptied group.
   if (mcpCalls > 0) {
     parts.push(`called ${count(mcpCalls, 'MCP tool')}`);
   }

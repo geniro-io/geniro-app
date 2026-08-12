@@ -220,3 +220,25 @@ export function stripLineNumbers(text: string): string {
   }
   return stripped.join('\n');
 }
+
+/**
+ * A tool identifier as a reader should see it: `mcp__linear__get_issue` →
+ * "Linear: Get issue".
+ *
+ * Ported from geniro web's `formatToolName` (`components/ui/thread-blocks.tsx`)
+ * so a tool row reads the same in both apps. Only the MCP triple-underscore
+ * shape is rewritten — every other name is returned verbatim, because a
+ * built-in's identifier (`Bash`, `WebFetch`) is the name the user knows it by
+ * and "prettifying" it would only make it harder to match against the CLI's own
+ * output.
+ */
+export function formatToolName(toolName: string): string {
+  const parsed = /^mcp__(.+?)__(.+)$/.exec(toolName);
+  if (!parsed) {
+    return toolName;
+  }
+  const [, server = '', tool = ''] = parsed;
+  const capitalize = (text: string): string =>
+    text.length > 0 ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text;
+  return `${capitalize(server)}: ${capitalize(tool.replace(/_/g, ' '))}`;
+}

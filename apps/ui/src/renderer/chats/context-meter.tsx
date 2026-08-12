@@ -58,7 +58,15 @@ function MeterReadout({
         // its accessible name — a screen reader gets it without having to open
         // anything, which a hover-only readout could never provide.
         aria-label={label}
-        className="flex items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        // `size-full justify-center` so a caller can give the OUTER span a box
+        // and have the ring centre in it. The agents panel does, because the row
+        // it sits in is a strip of `size-6` icon buttons at `gap-0.5`: a bare
+        // 14px ring in that row is 5px closer to its neighbour than the
+        // neighbours are to each other, since their glyphs carry that padding
+        // inside the button and the ring carried none. Equal BOXES is what makes
+        // the gaps equal — a nudge margin would have to be re-tuned the moment
+        // either size changes.
+        className="flex size-full items-center justify-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         onBlur={() => setHovered(false)}
         // A press on an UNPINNED panel pins it; a press on a pinned one closes
         // it, clearing the hover term too.

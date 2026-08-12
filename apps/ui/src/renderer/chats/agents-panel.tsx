@@ -667,6 +667,12 @@ export function AgentsPanel({
                           ? null
                           : (usageReasons?.get(agent.agent) ?? null)
                       }
+                      // The same box as the two icon buttons beside it, so the
+                      // one `gap-0.5` produces one gap. The ring is 14px and
+                      // their glyphs are 14px inside a 24px button, so left as
+                      // content-width it sat 5px tighter against the terminal
+                      // control than that control sits against the plug.
+                      className="size-6 justify-center"
                     />
                     {soleThreadTerminal ? (
                       <OpenInCliButton

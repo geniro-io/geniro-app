@@ -647,7 +647,13 @@ export function AgentsPanel({
                     Everything that used to take three lines (status; a context
                     meter alone on the next; controls up beside the name) reads
                     as one row, which is what makes the card compact. */}
-                <div className="flex items-center gap-1 px-2.5 pt-0.5 pb-1.5 text-xs">
+                {/* `pt-1.5`, not the `pt-0.5` it was: the two lines answer
+                    different questions (who this is; what it is doing) and at
+                    2px they read as one wrapped line. The 24px controls sit on
+                    this line, so the gap is added ABOVE it rather than as a
+                    `gap` on the card — a column gap would also push the list's
+                    top border down and away from the row it belongs to. */}
+                <div className="flex items-center gap-1 px-2.5 pt-1.5 pb-1.5 text-xs">
                   <RunStatusIcon status={agent.status} />
                   {/* `needs-input` is a slug, not a sentence — hence `.label`. */}
                   <span className={RUN_STATUS_META[agent.status].className}>

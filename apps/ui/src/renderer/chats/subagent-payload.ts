@@ -28,3 +28,83 @@ export function subagentIdOf(item: ChatItem): string | null {
   const value = (payload as { parentToolUseId?: unknown }).parentToolUseId;
   return typeof value === 'string' && value !== '' ? value : null;
 }
+
+/**
+ * What a `subagent_info` row says about one delegate.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/event-to-item.ts` writes these
+ * keys, on the same footing as `parentToolUseId` above — the payload is
+ * `z.unknown()` on the wire BY DESIGN, so this is an independent reading of one
+ * shape and a rename on either side must be a rename on both.
+ *
+ * `id` is the LAUNCHING TOOL CALL's id, not the delegate's own: it is what joins
+ * this declaration to the row that started the work. Note it is deliberately NOT
+ * `parentToolUseId` — that key means "the delegate produced this row", and this
+ * row is one the MAIN thread produced about the delegate.
+ */
+export interface SubagentDeclaration {
+  id: string;
+  label: string | null;
+  kind: string | null;
+  prompt: string | null;
+  model: string | null;
+  durationMs: number | null;
+  stepsUnavailableReason: string | null;
+}
+
+/**
+ * Read one `subagent_info` row, or null when it names no tool call to anchor to.
+ *
+ * A CLI may announce the same delegate more than once — an anchor as soon as the
+ * launch is recognised, then its brief when that arrives — so a reader must MERGE
+ * these rather than take one, preferring the last non-null value per field.
+ * {@link mergeSubagentDeclarations} is that rule, in one place, so no caller
+ * re-implements it and lets a later anchor-only row blank out a brief.
+ */
+export function readSubagentDeclaration(
+  item: ChatItem,
+): SubagentDeclaration | null {
+  const payload: unknown = item.payload;
+  if (typeof payload !== 'object' || payload === null) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const id = str(record.id);
+  if (id === null) {
+    return null;
+  }
+  return {
+    id,
+    label: str(record.label),
+    kind: str(record.kind),
+    prompt: str(record.prompt),
+    model: str(record.model),
+    durationMs:
+      typeof record.durationMs === 'number' &&
+      Number.isFinite(record.durationMs)
+        ? record.durationMs
+        : null,
+    stepsUnavailableReason: str(record.stepsUnavailableReason),
+  };
+}
+
+/** Later non-null fields win; the id is the same by construction. */
+export function mergeSubagentDeclarations(
+  base: SubagentDeclaration,
+  next: SubagentDeclaration,
+): SubagentDeclaration {
+  return {
+    id: base.id,
+    label: next.label ?? base.label,
+    kind: next.kind ?? base.kind,
+    prompt: next.prompt ?? base.prompt,
+    model: next.model ?? base.model,
+    durationMs: next.durationMs ?? base.durationMs,
+    stepsUnavailableReason:
+      next.stepsUnavailableReason ?? base.stepsUnavailableReason,
+  };
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}

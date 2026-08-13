@@ -493,15 +493,16 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
-  it('declares that it reports its background sub-agents', () => {
-    // Claude reports delegates via `parent_tool_use_id` on the stream. This
-    // field RECORDS that fact for a reader; it does not gate anything — the
-    // renderer keys on the id in the item payload, and nothing in the daemon
-    // reads this declaration today. Pinned as the documented value it is, with
-    // no claim that flipping it changes behaviour, because it would not.
+  it('declares that it reports its background sub-agents, steps included', () => {
+    // Claude reports delegates via `parent_tool_use_id` on the stream, and that
+    // id carries their WORK as well as their existence — so both reasons are
+    // null and the block opens onto a real thread. The steps field is the half
+    // that now gates rendering: non-null makes the card say why it is empty, so
+    // a null here is the claim "this CLI's delegates speak for themselves".
     expect(new ClaudeAdapter().getConfig().subagents).toEqual({
       reports: true,
       unavailableReason: null,
+      stepsUnavailableReason: null,
     });
   });
 

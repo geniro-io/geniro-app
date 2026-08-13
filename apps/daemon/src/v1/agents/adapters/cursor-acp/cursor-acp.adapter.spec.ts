@@ -11,6 +11,7 @@ import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
+import { CURSOR_SILENTLY_DECLINED_METHODS } from './cursor-acp.const';
 
 /** The frames the adapter wrote to the child's stdin, parsed. */
 function framesOn(child: FakeChild): Record<string, unknown>[] {
@@ -790,48 +791,207 @@ describe('CursorAcpAdapter — cannot reopen a conversation', () => {
   });
 });
 
-describe('CursorAcpAdapter — no sub-agent signal', () => {
-  it('declares that it reports none, with the reason beside it', () => {
-    // A CLI with no answer declares that as a fact rather than leaving the
-    // gap to be rediscovered (.claude/rules/agent-adapters.md). Claude
-    // declares `reports: true`, so the two must stay tellable apart by the
-    // DECLARATION rather than by a caller checking which CLI it is.
-    const config = new CursorAcpAdapter().getConfig();
-    expect(config.subagents.reports).toBe(false);
-    expect(config.subagents.unavailableReason).toContain('no sub-agents');
+describe('CursorAcpAdapter — background sub-agents', () => {
+  /**
+   * Every frame below is transcribed from the wire, cursor-agent
+   * 2026.08.11-e8db854, 2026-08-13 — see the `Background sub-agents` block in
+   * `cursor-acp.const.ts`. That matters here more than usual: the declaration
+   * this replaces said cursor reports no delegates, and it was written from
+   * geniro's own types rather than from frames like these.
+   */
+  const LAUNCH = sessionUpdate({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'toolu_018bc',
+    title: 'Task: Subagent task',
+    kind: 'other',
+    status: 'pending',
+    rawInput: { _toolName: 'task' },
   });
 
-  it('never stamps a sub-agent origin on an event it emits', () => {
-    // The observable half of the declaration above: nothing on this transport
-    // sets `parentToolUseId`, so the renderer's enclosure has nothing to key
-    // on and a cursor run honestly lists no delegates. If a future ACP variant
-    // starts carrying one, this fails and the declaration gets revisited —
-    // which is the point of pinning it against events rather than the string.
+  function taskAnnouncement(params: Record<string, unknown>, id = 7): string {
+    return stdoutLine({ jsonrpc: '2.0', id, method: 'cursor/task', params });
+  }
+
+  function driveTurn(): { child: FakeChild; events: AgentEvent[] } {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
     new CursorAcpAdapter({ spawn }).start({ ...BASE }, (event) =>
       events.push(event),
     );
     handshake(child);
-    child.stdout.emitData(
-      sessionUpdate({
-        sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: 'working' },
-      }),
+    return { child, events };
+  }
+
+  it('declares that it reports delegates, but not the work inside them', () => {
+    const config = new CursorAcpAdapter().getConfig();
+    expect(config.subagents.reports).toBe(true);
+    expect(config.subagents.unavailableReason).toBeNull();
+    // The one asymmetry with claude, and the reason a second field exists: the
+    // delegation is announced, its steps never are. A null here would promise a
+    // conversation the card can never fill.
+    expect(config.subagents.stepsUnavailableReason).toContain(
+      'not the work inside it',
     );
+  });
+
+  it('announces a delegate as soon as the launch frame arrives, before its brief', () => {
+    // What makes the block open — and the run read as busy — while the delegate
+    // is still working. The launch frame names no description at all (its title
+    // is the CLI's placeholder), so the anchor is all this row can carry.
+    const { child, events } = driveTurn();
+    child.stdout.emitData(LAUNCH);
+
+    const info = events.filter((event) => event.type === 'subagent_info');
+    expect(info).toEqual([
+      {
+        type: 'subagent_info',
+        id: 'toolu_018bc',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: expect.stringContaining(
+          'not the work inside it',
+        ),
+      },
+    ]);
+    // AFTER the tool call it anchors to, so a consumer replaying in seq order
+    // has the row before anything references it.
+    const kinds = events.map((event) => event.type);
+    expect(kinds.indexOf('tool_call')).toBeLessThan(
+      kinds.indexOf('subagent_info'),
+    );
+  });
+
+  it('leaves an ordinary tool call alone — the marker is what makes it a delegation', () => {
+    const { child, events } = driveTurn();
     child.stdout.emitData(
       sessionUpdate({
         sessionUpdate: 'tool_call',
         toolCallId: 't-1',
         title: 'Read a file',
-        rawInput: { path: '/repo/a.ts' },
+        rawInput: { _toolName: 'read', path: '/repo/a.ts' },
+      }),
+    );
+    // And one that disclosed no arguments at all, which is routine on this
+    // transport (`rawInput: {}` normalizes to null) — reading the marker off it
+    // must not throw or invent a delegate.
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-2',
+        title: 'Search',
+        rawInput: {},
       }),
     );
 
-    expect(events.length).toBeGreaterThan(0);
-    expect(events.every((event) => event.parentToolUseId === undefined)).toBe(
-      true,
+    expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+  });
+
+  it('ANSWERS the announcement and records the delegate it describes', () => {
+    const { child, events } = driveTurn();
+    child.stdout.emitData(LAUNCH);
+    child.stdout.emitData(
+      taskAnnouncement({
+        toolCallId: 'toolu_018bc',
+        description: 'List files in directory',
+        prompt: 'Your task is simple and self-contained: …',
+        subagentType: { custom: { unspecified: {} } },
+        model: 'claude-opus-5-thinking-high',
+        agentId: 'bce43ebb-cf88-4adf-bb10-33f0b5458f45',
+        durationMs: 13075,
+      }),
     );
+
+    expect(
+      events.filter((event) => event.type === 'subagent_info').at(-1),
+    ).toEqual({
+      type: 'subagent_info',
+      id: 'toolu_018bc',
+      label: 'List files in directory',
+      // `{custom:{unspecified:{}}}` names no type — the row says nothing rather
+      // than labelling the delegate `unspecified`.
+      kind: null,
+      prompt: 'Your task is simple and self-contained: …',
+      model: 'claude-opus-5-thinking-high',
+      durationMs: 13075,
+      stepsUnavailableReason: expect.stringContaining('not the work inside it'),
+    });
+    // Answered, not declined. The refusal is what this whole feature was lost
+    // behind: the agent discards the outcome either way, so a `-32601` cost the
+    // turn nothing and silently threw the brief away.
+    const reply = framesOn(child).find((frame) => frame.id === 7);
+    expect(reply).toEqual({ jsonrpc: '2.0', id: 7, result: {} });
+    // …and it does NOT burn the turn's one "declined" notice, which is what
+    // being on the silent list used to buy.
+    expect(events.some((event) => event.type === 'notice')).toBe(false);
+  });
+
+  it('declines an announcement it cannot read, rather than writing a blank delegate', () => {
+    const { child, events } = driveTurn();
+    // No `toolCallId`: nothing to anchor a block to, so there is no row worth
+    // writing and the request falls through to the ordinary decline.
+    child.stdout.emitData(taskAnnouncement({ description: 'orphan' }, 9));
+
+    expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+    const reply = framesOn(child).find((frame) => frame.id === 9);
+    expect(reply?.error).toMatchObject({ code: -32601 });
+  });
+
+  it('drops the launching tool’s accounting instead of framing it as the delegate’s answer', () => {
+    // Measured: the `task` call completes with `{durationMs, isBackground}` and
+    // the findings appear only in the main agent's next message. Rendered as
+    // `Result from <delegate>`, that object printed where the reader looks for
+    // what the delegate found.
+    const { child, events } = driveTurn();
+    child.stdout.emitData(LAUNCH);
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'toolu_018bc',
+        status: 'completed',
+        rawOutput: { durationMs: 15430, isBackground: false },
+      }),
+    );
+
+    const result = events.find((event) => event.type === 'tool_result');
+    // The pair still CLOSES — the block reads `completed` off the result's
+    // existence, so suppressing the row itself would leave a finished delegate
+    // spinning forever.
+    expect(result).toMatchObject({ id: 'toolu_018bc', result: null });
+  });
+
+  it('keeps an ordinary tool call’s output, which IS its answer', () => {
+    // The other half of the rule: only a recognised delegation's result is
+    // accounting. A blanket drop would empty every shell and search row.
+    const { child, events } = driveTurn();
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        title: 'Shell',
+        rawInput: { _toolName: 'shell', command: 'ls' },
+      }),
+    );
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 't-1',
+        status: 'completed',
+        rawOutput: { stdout: 'alpha.txt\n' },
+      }),
+    );
+
+    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+      result: { stdout: 'alpha.txt\n' },
+    });
+  });
+
+  it('keeps `cursor/task` OFF the silently-declined list, so a refusal cannot go unnoticed', () => {
+    // The list is what hid this for two milestones. A future entry for it would
+    // restore exactly that: declined in protocol, no notice, no row.
+    expect(CURSOR_SILENTLY_DECLINED_METHODS).not.toContain('cursor/task');
   });
 });
 

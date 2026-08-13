@@ -315,6 +315,60 @@ describe('mapEventToItem — sub-agent origin', () => {
   });
 });
 
+describe('mapEventToItem — the sub-agent declaration', () => {
+  it('writes the keys the renderer reads back, nulls included', () => {
+    // TWIN PARSER: `apps/ui/src/renderer/chats/subagent-payload.ts` reads these
+    // exact keys. Nulls are written OUT rather than omitted on purpose: a CLI
+    // announces one delegate twice (an anchor, then its brief) and the consumer
+    // merges by preferring the last non-null field — which only holds if an
+    // omitted key and a null one read the same.
+    expect(
+      mapEventToItem({
+        type: 'subagent_info',
+        id: 'toolu_018bc',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: 'cursor-agent reports the delegation only',
+      }),
+    ).toEqual({
+      kind: 'subagent_info',
+      role: null,
+      payload: {
+        id: 'toolu_018bc',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: 'cursor-agent reports the delegation only',
+      },
+    });
+  });
+
+  it('anchors on the payload’s own `id`, never on a sub-agent ORIGIN', () => {
+    // The distinction the whole feature rests on: this row is one the MAIN
+    // thread produced ABOUT a delegate, not one the delegate produced. Stamped
+    // as `parentToolUseId` it would be folded INTO the delegate's own thread as
+    // an invisible entry, and "has this delegate done anything?" — the question
+    // the empty-thread notice answers — would read as yes.
+    const item = mapEventToItem({
+      type: 'subagent_info',
+      id: 'toolu_018bc',
+      label: 'Review the diff',
+      kind: 'explore',
+      prompt: 'look at everything',
+      model: 'claude-opus-5',
+      durationMs: 13075,
+      stepsUnavailableReason: null,
+    });
+    expect(item?.payload).not.toHaveProperty('parentToolUseId');
+    expect(item?.payload.id).toBe('toolu_018bc');
+  });
+});
+
 describe('terminalStatus', () => {
   it('maps each terminal event to its run status', () => {
     expect(

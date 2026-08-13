@@ -1336,4 +1336,152 @@ describe('buildSubagentBlocks', () => {
       turnBlocks[0]?.entries.some((entry) => entry.type === 'subagent-block'),
     ).toBe(true);
   });
+
+  describe('a delegate the DAEMON declared, whose CLI streams none of its work', () => {
+    /**
+     * One `subagent_info` row. Shaped exactly as
+     * `apps/daemon/src/v1/agents/utils/event-to-item.ts` writes it — the two are
+     * twin parsers over a payload no generated type spans.
+     */
+    const declare = (
+      id: string,
+      over: Record<string, unknown> = {},
+    ): ChatItem =>
+      item('subagent_info', {
+        id,
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: 'this CLI reports the delegation only',
+        ...over,
+      });
+
+    it('opens a block for a launch NAMED by the daemon, not by a tool name', () => {
+      // The cursor shape: the delegation's tool call is titled `Task: Subagent
+      // task` and its input holds only the CLI's machine tool name, so nothing
+      // this side can match on. Without the declaration this call stays an
+      // ordinary tool row and the delegate never appears anywhere.
+      const source = [
+        call('Task: Subagent task', 'toolu_1', { _toolName: 'task' }),
+        declare('toolu_1', {
+          label: 'List files in directory',
+          prompt: 'list every file …',
+          model: 'claude-opus-5-thinking-high',
+          durationMs: 13075,
+        }),
+        result('toolu_1', { durationMs: 13075, isBackground: false }),
+      ];
+      const block = onlyBlock(
+        buildSubagentBlocks(groupTranscript(source), source),
+      );
+
+      expect(block.id).toBe('toolu_1');
+      expect(block.label).toBe('List files in directory');
+      expect(block.prompt).toBe('list every file …');
+      expect(block.model).toBe('claude-opus-5-thinking-high');
+      expect(block.durationMs).toBe(13075);
+      expect(block.stepsUnavailableReason).toBe(
+        'this CLI reports the delegation only',
+      );
+      expect(subagentBlockStatus(block)).toBe('completed');
+    });
+
+    it('strips the declared launch out of the main tool group too', () => {
+      // Same rule the name-matched launch follows: the block IS the delegation's
+      // rendering, so leaving the pair in the group tells it twice.
+      const source = [
+        call('Grep', 'g1', { pattern: 'x' }),
+        call('Task: Subagent task', 'toolu_1', { _toolName: 'task' }),
+        declare('toolu_1'),
+      ];
+      const entries = buildSubagentBlocks(groupTranscript(source), source);
+      const groups = entries.filter(
+        (entry): entry is ToolGroupEntry => entry.type === 'tools',
+      );
+
+      expect(groups.flatMap((group) => group.pairs)).toHaveLength(1);
+      expect(
+        payloadString(groups[0]?.pairs[0]?.call.payload ?? null, 'id'),
+      ).toBe('g1');
+    });
+
+    it('is a block with NOTHING in it, which is what the reason exists to explain', () => {
+      // The half that must not regress into looking like a delegate that sat
+      // idle: this CLI sends no rows for the work, so the thread is genuinely
+      // empty and the sentence is the only honest content.
+      const source = [
+        call('Task: Subagent task', 'toolu_1', { _toolName: 'task' }),
+        declare('toolu_1'),
+      ];
+      const block = onlyBlock(
+        buildSubagentBlocks(groupTranscript(source), source),
+      );
+
+      expect(block.entries).toEqual([]);
+      expect(block.stepsUnavailableReason).not.toBeNull();
+    });
+
+    it('merges the two announcements, so the anchor cannot blank out the brief', () => {
+      // A CLI announces one delegate twice — an anchor at launch (every fact
+      // still null) and its brief at the end. Taking the LAST row wholesale
+      // would work here and fail on the reverse order; taking the first would
+      // fail on this one. Both orders are asserted for that reason.
+      const forwards = [
+        call('Task: Subagent task', 'toolu_1', { _toolName: 'task' }),
+        declare('toolu_1'),
+        declare('toolu_1', { label: 'Review the diff', durationMs: 900 }),
+      ];
+      const backwards = [
+        call('Task: Subagent task', 'toolu_2', { _toolName: 'task' }),
+        declare('toolu_2', { label: 'Review the diff', durationMs: 900 }),
+        declare('toolu_2'),
+      ];
+
+      for (const source of [forwards, backwards]) {
+        const block = onlyBlock(
+          buildSubagentBlocks(groupTranscript(source), source),
+        );
+        expect(block.label).toBe('Review the diff');
+        expect(block.durationMs).toBe(900);
+      }
+    });
+
+    it('lets the launching call’s OWN arguments win over the declaration', () => {
+      // Claude's Task arguments are richer and arrive first; the declaration is
+      // a fallback per field, not a second source that overwrites them.
+      const source = [
+        call('Task', 'task-1', {
+          description: 'from the tool call',
+          prompt: 'the real brief',
+          subagent_type: 'code-reviewer',
+        }),
+        declare('task-1', {
+          label: 'from the declaration',
+          prompt: 'a poorer brief',
+          kind: 'explore',
+        }),
+      ];
+      const block = onlyBlock(
+        buildSubagentBlocks(groupTranscript(source), source),
+      );
+
+      expect(block.label).toBe('from the tool call');
+      expect(block.prompt).toBe('the real brief');
+      expect(block.kind).toBe('code-reviewer');
+    });
+
+    it('ignores a declaration naming no tool call at all', () => {
+      const source = [
+        call('Grep', 'g1', { pattern: 'x' }),
+        item('subagent_info', { label: 'orphan' }),
+      ];
+      expect(
+        collectSubagentBlocks(
+          buildSubagentBlocks(groupTranscript(source), source),
+        ),
+      ).toEqual([]);
+    });
+  });
 });

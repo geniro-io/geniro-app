@@ -470,10 +470,95 @@ export const CURSOR_ANSWER_KEY = '__geniroAnswer';
  * first option on their behalf. That is the shape of harm this list must never
  * cover — so an entry is earned by reading the handler, not by sharing a
  * prefix with one that was.
+ *
+ * `task` was here too, and its removal is a lesson about what this list COSTS.
+ * Every word written above it was true — the agent does discard the outcome, a
+ * refusal did change nothing about the turn — and being harmless to refuse is
+ * not the same as being worthless to accept. It is the only thing on this
+ * transport that says what a sub-agent was asked to do, and while it sat here
+ * geniro declined it on every delegating turn and the adapter declared, one
+ * file away, that this CLI reports no sub-agents at all. An entry earns its
+ * place by its handler being harmless to refuse AND its payload carrying
+ * nothing geniro wants; the second half is what was skipped.
  */
 export const CURSOR_SILENTLY_DECLINED_METHODS: readonly string[] = [
   'cursor/update_todos',
-  'cursor/task',
   'cursor/generate_image',
   'cursor/create_plan',
 ];
+
+// ── Background sub-agents (the `task` tool) ────────────────────────────────
+//
+// MEASURED on the wire, 2026-08-13, cursor-agent 2026.08.11-e8db854, against a
+// throwaway CURSOR_CONFIG_DIR and a prompt asking the agent to delegate. One
+// delegation produced, in this order:
+//
+//   session/update  tool_call        {toolCallId:"toolu_018bc…", title:"Task: Subagent task",
+//                                    kind:"other", status:"pending", rawInput:{_toolName:"task"}}
+//   session/update  tool_call_update {toolCallId:"toolu_018bc…", status:"in_progress"}
+//   session/update  tool_call_update {toolCallId:"toolu_018bc…", status:"completed",
+//                                    rawOutput:{durationMs:13075, isBackground:false}}
+//   cursor/task     (a REQUEST, id 0) {toolCallId:"toolu_018bc…",
+//                                    description:"List files in directory",
+//                                    prompt:"Your task is simple and self-contained: …",
+//                                    subagentType:{custom:{unspecified:{}}},
+//                                    model:"claude-opus-5-thinking-high",
+//                                    agentId:"bce43ebb-…", durationMs:13075}
+//
+// Three things follow, and each is why one constant below exists:
+//
+// 1. The launch is recognisable ONLY by `rawInput._toolName` — the ACP frame
+//    carries no machine tool name, and its title at that point is a placeholder
+//    with the description not yet filled in.
+// 2. Everything the CLI says about the delegate arrives at the END, on
+//    `cursor/task`. So a block can open at launch but stays unlabelled until
+//    then, which is why `subagent_info` is emitted twice and merged.
+// 3. NOTHING the delegate itself did crosses the wire — no nested tool calls, no
+//    second session, no `sessionId` but the parent's. Its transcript is written
+//    under the CLI's own project dir (`kind:"subagent"`, `parentConversationId`;
+//    `190.index.js` → `getSubagentTranscriptPathIfExists`), which is a private
+//    blob store and deliberately not read here.
+//
+// A fourth thing follows from the `rawOutput` above, and it is why the adapter
+// declares `resultIsBookkeeping`: `{durationMs, isBackground}` is the CLI's own
+// accounting, not the delegate's report — the findings only ever appear in the
+// MAIN agent's next message. The duration is kept (it rides `cursor/task`);
+// `isBackground` is deliberately dropped, having been observed only as `false`.
+//
+// RE-CHECK IF: a release starts sending `rawInput` with the args populated on the
+// opening frame (then the marker can give way to reading them directly); a
+// `session/update` variant appears that carries a parent/sub-session id (then the
+// delegate's own steps become streamable and
+// `CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON` must go); or `isBackground: true` is
+// ever seen, which would be a delegate still running past the turn and the one
+// state this transcript could not currently express.
+
+/** The vendor method announcing one background sub-agent, with its brief. */
+export const CURSOR_TASK_METHOD = 'cursor/task';
+
+/**
+ * The `rawInput` entry marking a tool call as a delegation. Its key is the
+ * machine tool name this CLI stamps on every call's arguments (`_toolName`),
+ * which is the only name on the frame — the title is prose.
+ */
+export const CURSOR_TASK_LAUNCH_MARKER = { key: '_toolName', value: 'task' };
+
+/**
+ * `subagentType` values that name no type at all, so the row says nothing
+ * rather than labelling a delegate `unspecified`.
+ *
+ * Both spellings observed: the enum's own zero value, and the `{custom:{…}}`
+ * wrapper the oneof puts an unrecognised value in — which is what a plain
+ * delegation with no declared type actually arrives as
+ * (`subagentType:{custom:{unspecified:{}}}` above).
+ */
+export const CURSOR_SUBAGENT_TYPE_UNSPECIFIED: readonly string[] = [
+  'unspecified',
+  'default',
+];
+
+/** Why a cursor delegate's block opens onto no conversation. See §3 above. */
+export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
+  'cursor-agent reports the delegation but not the work inside it — the ' +
+  'sub-agent runs as its own conversation and none of its steps reach this ' +
+  'client, so there is nothing to show but what it was asked and what it took';

@@ -145,12 +145,15 @@ describe('CapabilitiesService — background sub-agents', () => {
     );
   });
 
-  it('states claude’s support as null and cursor’s absence as a real sentence', () => {
-    // This is what lets a cursor chat SAY why it lists no delegates. An empty
-    // list with no reason reads as a bug; the sentence reads as a fact.
+  it('states BOTH shipped CLIs as reporting delegates, so neither row carries an excuse', () => {
+    // Cursor's used to be a sentence here, on a measurement that never reached
+    // the wire (see `CursorAcpAdapter`'s `subagents` field). Both CLIs now report
+    // their delegates, so a null is the honest answer for both — and the row
+    // stays, because it is what a THIRD CLI that reports none would speak
+    // through. Why a cursor delegate's card shows no conversation is a different
+    // question, answered on the delegate's own row rather than here.
     expect(subagents().get('claude')).toBeNull();
-    expect(subagents().get('cursor-agent')).toEqual(expect.any(String));
-    expect(subagents().get('cursor-agent')).not.toBe('');
+    expect(subagents().get('cursor-agent')).toBeNull();
   });
 });
 

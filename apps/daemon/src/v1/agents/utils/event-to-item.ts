@@ -115,6 +115,33 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           isError: event.isError,
         },
       };
+    case 'subagent_info':
+      // A row about a DELEGATE, not one the delegate produced — so `id` is the
+      // launching tool call's id in the payload's own `id` key, exactly as
+      // `tool_call`/`tool_result` carry theirs, and never
+      // `AgentEventOrigin.parentToolUseId` (see the event's doc block).
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/subagent-payload.ts` reads
+      // these keys back. An item payload is `z.unknown()` on the wire BY DESIGN
+      // — every kind carries a different shape — so no generated type spans the
+      // two sides. Renaming a key here means renaming it there.
+      //
+      // Nulls are written OUT rather than omitted: the consumer merges several
+      // announcements per delegate by preferring the last non-null field, and an
+      // omitted key and a null one must read the same for that to be safe.
+      return {
+        kind: 'subagent_info',
+        role: null,
+        payload: {
+          id: event.id,
+          label: event.label,
+          kind: event.kind,
+          prompt: event.prompt,
+          model: event.model,
+          durationMs: event.durationMs,
+          stepsUnavailableReason: event.stepsUnavailableReason,
+        },
+      };
     case 'approval_request':
       return {
         kind: 'approval_request',

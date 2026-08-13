@@ -107,7 +107,11 @@ Rules:
   image rows inside a message item's `z.unknown()` payload — the payload is
   untyped on the wire BY DESIGN, since each item kind carries a different
   shape, so no generated type reaches the renderer); the same payload's
-  `parentToolUseId` (which sub-agent produced a row):
+  `parentToolUseId` (which sub-agent produced a row) AND the `subagent_info`
+  row's own `{id,label,kind,prompt,model,durationMs,stepsUnavailableReason}`
+  (what a delegate IS, for a CLI that announces one apart from the launching
+  call — note the two keys are deliberately different, since one means "the
+  delegate produced this row" and the other "this row is about the delegate"):
   `apps/daemon/src/v1/agents/utils/event-to-item.ts` ↔
   `apps/ui/src/renderer/chats/subagent-payload.ts`; and the pidfile's `entry`
   stamp: `apps/daemon/src/utils/handshake.ts` `stampEntry` ↔

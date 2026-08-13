@@ -140,6 +140,13 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         reports: true,
         unavailableReason: null,
+        /**
+         * Null: the delegate's own steps ARE the same stream, so its block opens
+         * onto a real thread and there is nothing to excuse. This is the shape
+         * `stepsUnavailableReason` exists to be contrasted with — cursor
+         * announces the delegation and streams none of the work.
+         */
+        stepsUnavailableReason: null,
       },
       approval: {
         /** Every `--permission-mode` value the CLI exposes, plus the `auto` bypass. */

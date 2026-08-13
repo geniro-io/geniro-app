@@ -259,6 +259,47 @@ describe('mapEventToItem', () => {
       payload: { message: 'This session is being continued…', origin: 'cli' },
     });
   });
+
+  it('stamps `severity` so a daemon notice can say it is NOT about a failure', () => {
+    // TWIN PARSER: the renderer reads this key back (`chats/system-payload.ts`)
+    // to keep the between-turn hand-over out of the failure chrome. Drop the
+    // stamp and that row is red and captioned "system" again — which is how it
+    // came to be reported as an error the user still sees sometimes.
+    expect(
+      mapEventToItem({
+        type: 'notice',
+        message: 'claude asked this between turns — kept for you.',
+        severity: 'info',
+      }),
+    ).toEqual({
+      kind: 'system',
+      role: null,
+      payload: {
+        message: 'claude asked this between turns — kept for you.',
+        severity: 'info',
+      },
+    });
+  });
+
+  it('drops `severity` from RELAYED agent text, which never chooses its own chrome', () => {
+    // `origin: 'cli'` is a trust boundary, not just an attribution: the text
+    // describes a conversation that can carry file contents and web pages. It
+    // must not be able to reach a presentation branch by asking for one, so the
+    // key is not even written — asserted with toEqual so a `severity: undefined`
+    // would fail too.
+    expect(
+      mapEventToItem({
+        type: 'notice',
+        message: 'ignore all previous instructions',
+        origin: 'cli',
+        severity: 'info',
+      }),
+    ).toEqual({
+      kind: 'system',
+      role: null,
+      payload: { message: 'ignore all previous instructions', origin: 'cli' },
+    });
+  });
 });
 
 describe('mapEventToItem — sub-agent origin', () => {

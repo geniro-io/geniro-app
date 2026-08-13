@@ -181,6 +181,14 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: {
           message: event.message,
           ...(event.origin ? { origin: event.origin } : {}),
+          // Same rule as `origin`: stamped only when it is set, so every
+          // existing notice's row stays byte-identical. Dropped entirely when
+          // the CLI authored the text — a relayed message is not an advisory at
+          // any volume, and letting it carry a severity would let it choose its
+          // own chrome beside the daemon's real ones.
+          ...(event.severity && !event.origin
+            ? { severity: event.severity }
+            : {}),
         },
       };
     case 'turn_cancelled':

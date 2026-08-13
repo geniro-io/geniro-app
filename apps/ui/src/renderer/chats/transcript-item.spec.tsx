@@ -336,6 +336,47 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.querySelector('[data-role="note"]')).not.toBeNull();
   });
 
+  it('a DAEMON notice the daemon called information reads as a note, not a failure', () => {
+    // The reported "I still see this error sometimes": the between-turn
+    // hand-over — a request the CLI raised while no turn was open, kept for the
+    // user instead of answered for them — rendered in red with a capitalised
+    // SYSTEM caption, directly above the card it was pointing at. The machinery
+    // worked; nothing should look like it did not.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message: 'claude asked this between turns — kept for you.',
+          severity: 'info',
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain('asked this between turns');
+    expect(container.querySelector('[data-role="note"]')).not.toBeNull();
+    expect(container.querySelector('[data-role="error"]')).toBeNull();
+    // Not behind a disclosure either — one short sentence in front of a card.
+    expect(container.querySelector('button[aria-expanded]')).toBeNull();
+  });
+
+  it('keeps the failure chrome for a daemon notice that says nothing about severity', () => {
+    // Every historical notice — a withheld capability, a degrade — is an
+    // advisory, and absent must go on meaning `warning`. Without this the info
+    // branch could widen to all of them and no test would notice.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message:
+            'the caller was granted no call surface — its callees will not run',
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.querySelector('[data-role="error"]')).not.toBeNull();
+    expect(container.querySelector('[data-role="note"]')).toBeNull();
+  });
+
   it('an error renders red and expands to its full message on click', () => {
     render(
       <TranscriptItem

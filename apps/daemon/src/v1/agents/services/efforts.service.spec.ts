@@ -27,9 +27,17 @@ describe('EffortsService', () => {
       'max',
       'ultracode',
     ]);
-    // The empty list is the ANSWER for a CLI with no effort control, not a
-    // failure — it is what makes the composer omit the chip entirely.
-    expect(efforts.list('cursor-agent')).toEqual([]);
+    // cursor's own five, which are NOT claude's: it has no `ultracode`. The two
+    // vocabularies overlapping in four values is exactly why the answer has to be
+    // per-CLI — this list was `[]` until the ACP handshake declared
+    // `parameterizedModelPicker` and its `effort` config option became reachable.
+    expect(efforts.list('cursor-agent').map((e) => e.id)).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
   });
 
   it('accepts only what the asked-of CLI lists', () => {
@@ -37,8 +45,10 @@ describe('EffortsService', () => {
     expect(efforts.accepts('claude', 'ultracode')).toBe(true);
     // Probe-verified as REJECTED by the CLI — the service must not pass it on.
     expect(efforts.accepts('claude', 'ultrathink')).toBe(false);
-    // A level claude accepts is still refused for cursor: the answer is
-    // per-CLI, never a shared vocabulary.
-    expect(efforts.accepts('cursor-agent', 'high')).toBe(false);
+    // The per-CLI rule, asserted on a value the two genuinely DISAGREE about:
+    // `ultracode` is claude's alone, and cursor's own agent rejects a level it
+    // did not enumerate. A value both list must of course pass for both.
+    expect(efforts.accepts('cursor-agent', 'ultracode')).toBe(false);
+    expect(efforts.accepts('cursor-agent', 'xhigh')).toBe(true);
   });
 });

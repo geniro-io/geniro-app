@@ -167,6 +167,13 @@ export function acpModelProbeFrames(input: {
   cwd: string;
   clientName: string;
   clientVersion: string;
+  /**
+   * The same `clientCapabilities._meta` the TURN declares, and it must be the
+   * same: on cursor that bag decides whether models are enumerated as bare names
+   * or as bracketed variant ids, so a probe that omitted it would fill the
+   * picker with ids no turn could apply.
+   */
+  clientMeta?: Readonly<Record<string, unknown>>;
 }): string[] {
   return [
     encodeRequest(PROBE_INITIALIZE_ID, ACP_AGENT_METHODS.initialize, {
@@ -177,6 +184,7 @@ export function acpModelProbeFrames(input: {
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        ...(input.clientMeta ? { _meta: input.clientMeta } : {}),
       },
       clientInfo: { name: input.clientName, version: input.clientVersion },
     }),

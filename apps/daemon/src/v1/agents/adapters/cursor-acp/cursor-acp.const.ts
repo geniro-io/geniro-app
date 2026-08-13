@@ -10,6 +10,76 @@ export const CURSOR_ACP_ARGS: readonly string[] = ['acp'];
 /** `clientInfo.name` this client introduces itself with over ACP. */
 export const CURSOR_ACP_CLIENT_NAME = 'geniro';
 
+// ── The parameterized model picker ────────────────────────────────────────
+//
+// WHERE THIS CAME FROM. Read out of the CLI's own bundled source, not any
+// published doc — `~/.local/share/cursor-agent/versions/<v>/2996.index.js` on
+// 2026.08.11-e8db854:
+//
+//   clientSupportsParameterizedModelPicker() {
+//     return true === this.clientCapabilities?._meta?.parameterizedModelPicker;
+//   }
+//   getModelPickerMode() {
+//     return this.clientSupportsParameterizedModelPicker()
+//       ? "parameterized" : "variants";
+//   }
+//
+// Without the flag the agent runs in `variants` mode: it composes ONE opaque id
+// per model family out of that family's stored parameters
+// (`claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`) and
+// accepts only those — which is why "I cannot change the effort of a Cursor
+// model" was true, and why it was mis-recorded here as a property of the CLI
+// rather than of the handshake geniro happened to send.
+//
+// With it, `session/new` returns the model as a BARE name plus one config
+// option per parameter, each carrying its own vocabulary. Measured on the same
+// build, with the account's own models:
+//
+//   model    [model]         claude-opus-5, claude-sonnet-5, … (33 bare names)
+//   effort   [thought_level] low, medium, high, xhigh, max
+//   thinking [thought_level] false, true
+//   context  [model_config]  300k, 1m
+//   fast     [model_config]  false, true
+//
+//   model=claude-opus-5 -> ACCEPTED, and its parameters appear with defaults
+//   effort=xhigh        -> ACCEPTED   (rejected in variants mode)
+//   effort=max          -> ACCEPTED
+//   effort=bogus        -> -32602     (so the vocabulary is authoritative)
+//
+// ORDER IS LOAD-BEARING. `buildModelParameterConfigOptions` derives the options
+// from the CURRENT model, and a fresh profile opens on `auto-smart`, which has
+// no parameters at all — so setting `effort` before `model` is
+// `-32602 Unknown model config option: effort`. Model first, then parameters.
+
+/**
+ * The `clientCapabilities._meta` this client declares, which is what unlocks the
+ * separate effort control. A vendor extension, so it lives here and is injected
+ * into the agent-agnostic driver rather than spelled inside it.
+ */
+export const CURSOR_ACP_CLIENT_META: Readonly<Record<string, unknown>> = {
+  parameterizedModelPicker: true,
+};
+
+/** The parameter whose values ARE the reasoning-effort vocabulary. */
+export const CURSOR_EFFORT_PARAMETER_ID = 'effort';
+
+// ── The per-turn config directory ─────────────────────────────────────────
+//
+// Applying a model or an effort over ACP PERSISTS into the config directory, so
+// a turn gets its own; see `utils/cursor-profile.utils.ts` for the measurements
+// behind every part of this (including why `mcp.json` is not copied).
+
+/** Where the per-turn profiles live, under the daemon's userData dir. */
+export const CURSOR_PROFILE_DIR_NAME = 'cursor-profiles';
+/** `mkdtemp` prefix inside it, so two concurrent turns cannot share one. */
+export const CURSOR_PROFILE_DIR_PREFIX = 'turn-';
+/** The user's own CLI config directory, relative to their home. */
+export const CURSOR_HOME_DIR_NAME = '.cursor';
+/** The one file copied in, so the turn keeps the user's own settings. */
+export const CURSOR_SEEDED_CONFIG_FILE = 'cli-config.json';
+/** The env var the CLI resolves its config directory from. */
+export const CURSOR_CONFIG_DIR_ENV = 'CURSOR_CONFIG_DIR';
+
 /**
  * Deadline for the model handshake.
  *

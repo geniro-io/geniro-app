@@ -87,7 +87,6 @@ import {
 } from './live-text';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
-import { ModelEffortReadout } from './model-effort-readout';
 import { ModelSelect } from './model-select';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
@@ -3000,17 +2999,10 @@ export function Chats({
                             <EffortSelect
                               efforts={agentEfforts}
                               value={efforts[agentKind] ?? null}
+                              unavailableReason={effortReasons.get(agentKind)}
                               onChange={(effort) =>
                                 changeEffort(agentKind, effort)
                               }
-                            />
-                            <ModelEffortReadout
-                              effort={
-                                agentModels.find(
-                                  (model) => model.id === models[agentKind],
-                                )?.effort ?? null
-                              }
-                              unavailableReason={effortReasons.get(agentKind)}
                             />
                           </>
                         ) : null}
@@ -3436,19 +3428,12 @@ export function Chats({
                               efforts={agentEfforts}
                               value={activeRun.effort}
                               nextTurnOnly={streaming}
-                              onChange={(effort) =>
-                                void changeRunSettings({ effort })
-                              }
-                            />
-                            <ModelEffortReadout
-                              effort={
-                                agentModels.find(
-                                  (model) => model.id === activeRun.model,
-                                )?.effort ?? null
-                              }
                               unavailableReason={effortReasons.get(
                                 activeRun.agentKind,
                               )}
+                              onChange={(effort) =>
+                                void changeRunSettings({ effort })
+                              }
                             />
                             {/* Between effort and the context readout, not up in
                           the identity row: the permission posture is editable

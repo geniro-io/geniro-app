@@ -26,6 +26,7 @@ import {
 } from './utils/instance-lock';
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
+import { CursorAcpAdapter } from './v1/agents/adapters/cursor-acp/cursor-acp.adapter';
 import { ChatService } from './v1/agents/services/chat.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import {
@@ -161,6 +162,10 @@ bootstrapper.addExtension(
       // disposer only runs on a clean settle). The tokens in them are already
       // dead — this is hygiene for <userData>/tmp.
       app.get(ClaudeAdapter).sweepStaleConfigs();
+      // Same hygiene, same reason, for the per-turn cursor config directories:
+      // a SIGKILLed daemon skips every disposer, and each leftover is ~700KB of
+      // the CLI's own cache.
+      app.get(CursorAcpAdapter).sweepStaleProfiles();
 
       // Socket.IO transport for the renderer ⇄ daemon channel (token-gated in
       // NotificationsGateway), mirroring how Geniro's apps/api installs its

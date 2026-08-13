@@ -202,16 +202,11 @@ export class ClaudeAdapter extends AgentAdapter {
        * The aliases `claude --model` documents: each resolves to the latest
        * model of its tier, so they stay correct across releases without an app
        * update. This is the floor of the list, never the whole of it.
-       *
-       * `effort: null` on every row, and on every row `listModels` reads out of
-       * the CLI's own cache: this CLI takes effort as its own `--effort` flag,
-       * so a model id here never states one. The field is for a CLI that folds
-       * the two together.
        */
       builtinModels: [
-        { id: 'opus', label: 'opus', source: 'builtin', effort: null },
-        { id: 'sonnet', label: 'sonnet', source: 'builtin', effort: null },
-        { id: 'haiku', label: 'haiku', source: 'builtin', effort: null },
+        { id: 'opus', label: 'opus', source: 'builtin' },
+        { id: 'sonnet', label: 'sonnet', source: 'builtin' },
+        { id: 'haiku', label: 'haiku', source: 'builtin' },
       ],
       skillRoots: {
         /** `<root>/.claude/skills/<name>/SKILL.md`. */

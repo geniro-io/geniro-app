@@ -1530,7 +1530,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
-  it('refuses an effort the run CLI does not list — an unknown claude level, and ANY level on cursor', async () => {
+  it('refuses an effort the run CLI does not list, per CLI', async () => {
     const { service } = setup();
     // 'ultrathink' is the probe-verified REJECTED value: claude warns and runs
     // at its own effort, so accepting it here would ACK a turn setting that
@@ -1545,16 +1545,22 @@ describe('ChatService — approval modes (parity M1)', () => {
       "claude does not accept the reasoning effort 'ultrathink'",
     );
 
-    // cursor-agent lists nothing at all — it folds effort into the model id.
+    // cursor-agent DOES list levels now (its ACP `effort` config option), but
+    // not claude's `ultracode` — so the refusal is about the asked-of CLI's own
+    // vocabulary rather than about cursor having none.
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
     });
     await expect(
-      service.updateSettings(cursorRun.id, { effort: 'high' }),
+      service.updateSettings(cursorRun.id, { effort: 'ultracode' }),
     ).rejects.toThrow(
-      "cursor-agent does not accept the reasoning effort 'high'",
+      "cursor-agent does not accept the reasoning effort 'ultracode'",
     );
+    // …and a level it DOES list goes through, which is the whole feature.
+    expect(
+      (await service.updateSettings(cursorRun.id, { effort: 'xhigh' })).effort,
+    ).toBe('xhigh');
 
     // …while a level claude DOES list goes through on the same path.
     const claudeRun = await service.createChat({

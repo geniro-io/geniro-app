@@ -51,11 +51,6 @@ export function readClaudeModelCache(homeDir = homedir()): AgentModel[] {
         id: value,
         label: typeof label === 'string' && label ? label : value,
         source: 'cli',
-        // Always null for this CLI: effort is its own `--effort` flag, so a
-        // model id never carries one. Not read from the cache entry either —
-        // the CLI's cached rows are `{value,label}` and inventing a third field
-        // would be reporting something it never said.
-        effort: null,
       },
     ];
   });

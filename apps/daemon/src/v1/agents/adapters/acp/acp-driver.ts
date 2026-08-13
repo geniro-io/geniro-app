@@ -41,7 +41,12 @@ import {
 
 /** What we sent, so the reply can be routed without a callback map. */
 type PendingKind =
-  'initialize' | 'session' | 'set_mode' | 'set_model' | 'prompt';
+  | 'initialize'
+  | 'session'
+  | 'set_mode'
+  | 'set_model'
+  | 'set_model_parameter'
+  | 'prompt';
 
 /** A permission verdict this turn can reach without asking the user. */
 export type AutoDecision = 'allow' | 'deny' | null;
@@ -120,6 +125,33 @@ export interface AcpDriverOptions {
    */
   composeSystemPrompt: (granted: boolean) => string;
   logger?: { warn(message: string): void; debug?(message: string): void };
+  /**
+   * Extra `clientCapabilities._meta` this client declares — a VENDOR extension
+   * bag, so the adapter owns its contents and this file never spells one.
+   *
+   * cursor uses it to unlock its parameterized model picker, which is what turns
+   * one opaque composed model id into a bare name plus a real effort vocabulary.
+   * An agent that does not know the key ignores it, so sending it is free.
+   */
+  clientMeta?: Readonly<Record<string, unknown>>;
+  /**
+   * What this turn should put the agent on: a model, then the parameters to set
+   * after it — the shape a CLI needs when its model and its reasoning effort are
+   * SEPARATE config options rather than one composed id.
+   *
+   * Supplied by the adapter, because splitting a stored id into the two is that
+   * CLI's syntax. Absent means "apply `input.model` verbatim and nothing else",
+   * which is what an agent with a single opaque model id wants.
+   *
+   * ORDER is the contract, not a detail: a parameter's very existence depends on
+   * the current model (cursor's `auto-smart` has none at all), so the model
+   * frame must precede them. They travel on one ordered stdio stream, so sending
+   * in order is applying in order.
+   */
+  modelSelection?: {
+    model: string | null;
+    parameters: readonly { id: string; value: string }[];
+  } | null;
 }
 
 function textOf(content: unknown): string | null {
@@ -358,6 +390,8 @@ export class AcpTurnDriver implements TurnDriver {
   private resumed = false;
   /** The model asked for, so a refusal can name it. */
   private requestedModelId: string | null = null;
+  /** The last `<id>=<value>` parameter asked for, so a refusal can name it. */
+  private requestedParameter: string | null = null;
 
   constructor(private readonly options: AcpDriverOptions) {
     this.imageBlocks = buildAcpImageBlocks(options.input.images);
@@ -373,6 +407,11 @@ export class AcpTurnDriver implements TurnDriver {
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
+          // Spread rather than assigned, so an adapter that declares nothing
+          // sends no `_meta` key at all — an empty object is a claim too.
+          ...(this.options.clientMeta
+            ? { _meta: this.options.clientMeta }
+            : {}),
         },
         clientInfo: {
           name: this.options.clientName,
@@ -499,7 +538,9 @@ export class AcpTurnDriver implements TurnDriver {
         // arrives as an error reply instead (see onErrorReply).
         return [];
       case 'set_model':
-        // Same contract as `set_mode` above.
+      case 'set_model_parameter':
+        // Same contract as `set_mode` above: silence on acceptance, and a
+        // `notice` from `onErrorReply` on a refusal.
         return [];
       case 'prompt':
         return this.onPromptComplete(result);
@@ -526,6 +567,19 @@ export class AcpTurnDriver implements TurnDriver {
         {
           type: 'notice',
           message: `agent declined model '${this.requestedModelId ?? ''}': ${message} — this turn runs on the agent's current model`,
+        },
+      ];
+    }
+    if (kind === 'set_model_parameter') {
+      // A degrade, like the two above: the turn runs, on the parameter value the
+      // agent already had. Never silent, because a run the user set to `xhigh`
+      // quietly thinking at `high` is a wrong turn that reports success — and
+      // this arm is genuinely reachable, since a value is only offered for SOME
+      // models and a legacy chat's stored id can name one the model dropped.
+      return [
+        {
+          type: 'notice',
+          message: `agent declined model setting '${this.requestedParameter ?? ''}': ${message} — this turn keeps the agent's current value for it`,
         },
       ];
     }
@@ -713,11 +767,21 @@ export class AcpTurnDriver implements TurnDriver {
     sessionResult: Record<string, unknown> | null,
     events: AgentEvent[],
   ): void {
-    const wanted = this.options.input.model?.trim();
-    if (!wanted || this.sessionId === null) {
+    if (this.sessionId === null) {
       return;
     }
-    if (readAcpCurrentModelId(sessionResult) === wanted) {
+    // The adapter's split when it supplied one, else the stored id verbatim.
+    const selection = this.options.modelSelection ?? {
+      model: this.options.input.model ?? null,
+      parameters: [],
+    };
+    const wanted = selection.model?.trim();
+    // Parameters are applied EVEN WHEN the model needs no change — they are a
+    // separate axis, and a run that keeps the agent's current model while
+    // choosing a different effort is the ordinary case for a chat left on
+    // "default model". Both early returns below therefore fall through to them.
+    if (!wanted || readAcpCurrentModelId(sessionResult) === wanted) {
+      this.applyModelParameters(selection.parameters, events);
       return;
     }
     // The offers check applies only when the agent actually ENUMERATED a
@@ -745,6 +809,9 @@ export class AcpTurnDriver implements TurnDriver {
         type: 'notice',
         message: `agent does not offer the model '${wanted}' — this turn runs on the agent's current model instead`,
       });
+      // Deliberately WITHOUT the parameters. They belong to the model that was
+      // refused, and setting them against whichever model the agent stays on
+      // would apply half of a selection the user never made.
       return;
     }
     this.requestedModelId = wanted;
@@ -763,6 +830,9 @@ export class AcpTurnDriver implements TurnDriver {
         'set_model',
         events,
       );
+      // AFTER the model frame, never instead of it: a parameter's own existence
+      // depends on which model is current, so this ordering is the contract.
+      this.applyModelParameters(selection.parameters, events);
       return;
     }
     this.request(
@@ -771,6 +841,45 @@ export class AcpTurnDriver implements TurnDriver {
       'set_model',
       events,
     );
+    this.applyModelParameters(selection.parameters, events);
+  }
+
+  /**
+   * Set the model's own parameters — a reasoning effort, a context size — after
+   * the model frame and before the prompt.
+   *
+   * Sent optimistically, and that is the same call `applyModel` makes one level
+   * up: the options a `session/new` reply carries describe the model that was
+   * current when it was written, so a parameter belonging to the model this turn
+   * is switching TO cannot be checked against it. Asking the agent and letting
+   * it answer is strictly better than refusing locally on a reply that never
+   * claimed to describe the new model — a refusal becomes one notice, while a
+   * local refusal is a setting silently dropped.
+   *
+   * Each frame carries `configId`/`value`, which is the only shape this protocol
+   * has for a parameter. An agent with no config-option support answers
+   * `-32601` and the turn continues on its defaults.
+   */
+  private applyModelParameters(
+    parameters: readonly { id: string; value: string }[],
+    events: AgentEvent[],
+  ): void {
+    if (this.sessionId === null) {
+      return;
+    }
+    for (const parameter of parameters) {
+      this.requestedParameter = `${parameter.id}=${parameter.value}`;
+      this.request(
+        ACP_AGENT_METHODS.sessionSetConfigOption,
+        {
+          sessionId: this.sessionId,
+          configId: parameter.id,
+          value: parameter.value,
+        },
+        'set_model_parameter',
+        events,
+      );
+    }
   }
 
   /**

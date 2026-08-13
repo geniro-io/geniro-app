@@ -1,3 +1,6 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { AgentKind } from '../../../runs/runs.types';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import type { AcpToolCall } from '../acp/acp.types';
@@ -20,8 +23,11 @@ import type {
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import {
   CURSOR_ACP_ARGS,
+  CURSOR_ACP_CLIENT_META,
   CURSOR_ACP_CLIENT_NAME,
   CURSOR_ASK_QUESTION_METHOD,
+  CURSOR_CONFIG_DIR_ENV,
+  CURSOR_EFFORT_PARAMETER_ID,
   CURSOR_MCP_EMPTY_MARKER,
   CURSOR_MCP_LIST_ARGS,
   CURSOR_MCP_LIST_FAILED_MESSAGE,
@@ -29,10 +35,16 @@ import {
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
   CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
+  CURSOR_PROFILE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
-import { cursorModelEffort } from './utils/cursor-model.utils';
+import { cursorModelSelection } from './utils/cursor-model.utils';
+import {
+  removeCursorProfile,
+  seedCursorProfile,
+  sweepStaleCursorProfiles,
+} from './utils/cursor-profile.utils';
 import {
   cursorAdapterQuestion,
   encodeCursorQuestionReply,
@@ -47,6 +59,14 @@ const CURSOR_PLAN_MODE_ID = 'plan';
 export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
   /** Advertised to the agent as `clientInfo.version`; the daemon's version. */
   clientVersion?: string;
+  /**
+   * Where per-turn config directories are created; defaults to the OS tmpdir,
+   * which is only ever used standalone. Provided by the module as
+   * `<userData>/cursor-profiles`.
+   */
+  profileDir?: string;
+  /** The user's home, for reading their `cli-config.json` (test seam). */
+  homeDir?: string;
 }
 
 /**
@@ -177,84 +197,45 @@ export class CursorAcpAdapter extends AgentAdapter {
         soleModeDegradeReason: null,
       },
       /**
-       * Effort rides the model id for this CLI, and the id is an OPAQUE TOKEN —
-       * so effort is not independently selectable here, and this empty list is a
-       * measurement rather than an omission.
+       * REAL, and every level here was accepted by the CLI itself.
        *
-       * `cursor-agent --help` says otherwise, which is the trap: it advertises
-       * "Parameterized models accept quoted bracket overrides, e.g.
-       * 'claude-opus-4-8[context=1m,effort=high,fast=false]'". Probed on
-       * 2026.08.04-aaa8809 over `cursor-agent acp` — a handshake, then
-       * `session/set_config_option {configId:'model'}` per candidate, against the
-       * account's own current id
-       * `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`:
+       * This list was `[]` for months, on the recorded grounds that effort was
+       * not independently selectable — cursor composes it into an opaque model id
+       * (`claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`) and
+       * rejects every recomposed one with `-32602`. All of that was true, and the
+       * conclusion drawn from it was still wrong: it is a property of the
+       * HANDSHAKE, not of the CLI. `clientCapabilities._meta.parameterizedModelPicker`
+       * — which geniro never sent — switches the agent to a bare model name plus
+       * one config option per parameter, and `effort` is one of them. See
+       * {@link CURSOR_ACP_CLIENT_META} for the source it was read out of and the
+       * probe transcript.
        *
-       *   effort=high   -> ACCEPTED   (byte-identical to the advertised id)
-       *   effort=low    -> -32602 Invalid params
-       *   effort=medium -> -32602 Invalid params
-       *   effort=xhigh  -> -32602 Invalid params
-       *   effort=max    -> -32602 Invalid params
-       *   adding effort= to an id that lacked one -> -32602 Invalid params
+       * The five values below are the ones the agent ENUMERATED for that option
+       * on 2026.08.11-e8db854, and applying them was measured, not assumed:
+       * `effort=xhigh` and `effort=max` on `claude-opus-5` are both ACCEPTED
+       * (the same values the old note recorded as rejected), and `effort=bogus`
+       * is `-32602` — so the vocabulary is closed and this is all of it.
        *
-       * `xhigh` is the decisive one: cursor itself ships
-       * `claude-opus-4-7[…,effort=xhigh,…]`, so the value is valid to the vendor
-       * and still rejected on another model. Only ids the agent enumerated are
-       * accepted, and it enumerates exactly ONE effort per model.
+       * Weakest first, per the field's contract.
        *
-       * So the model picker already offers every effort this CLI permits, and an
-       * effort chip could only ever produce a failed turn. RE-CHECK by re-running
-       * that probe if a release starts enumerating two ids for one model, or if
-       * `configOptions` gains a category other than `mode`/`model` — those are
-       * the two shapes that would make a real chip possible.
-       *
-       * RE-PROBED 2026-08-13 on 2026.08.11-e8db854, after this was reported as a
-       * bug ("I cannot change the effort of a Cursor model; in the Cursor UI I
-       * can"). Every rejection above reproduced, and the search widened without
-       * finding a door:
-       *
-       *   - BOTH carriers, not just one: `session/set_config_option` and the
-       *     pre-1.0 `session/set_model` reject the identical set.
-       *   - The DASH spelling `cursor-agent models` prints — that subcommand
-       *     enumerates 205 rows including `claude-opus-5-medium`,
-       *     `claude-opus-5-thinking-xhigh`, `claude-sonnet-5-thinking-max` — is
-       *     rejected on both carriers too. It is a second namespace for the same
-       *     models and no part of it reaches the session.
-       *   - `claude-opus-5[thinking=true,context=1m,effort=xhigh,fast=false]`,
-       *     the exact bracket shape `--help` documents (note `1m`, where ACP
-       *     reports `300k` for the same model): rejected.
-       *   - Omitting `effort=` from an otherwise valid id: rejected. There is no
-       *     "unspecified" that would let the agent choose.
-       *   - `configOptions` still carries exactly two entries, `mode` and
-       *     `model`. No third axis appeared.
-       *
-       * And the MECHANISM, which is what the earlier note was missing and what
-       * makes the verdict predictive rather than a list of failures. The
-       * enumerated set is composed from the user's own
-       * `~/.cursor/cli-config.json` → `modelParameters.<family>`, which stores
-       * ONE parameter list per model family
-       * (`[{id:'thinking'},{id:'context'},{id:'effort',value:'high'},{id:'fast'}]`).
-       * That is why exactly one variant per family is offered, and why the
-       * offered effort is whatever the user last chose in Cursor itself. Copying
-       * that file into a `CURSOR_CONFIG_DIR` with `effort` edited to `xhigh` and
-       * running the ACP server under it was measured: the CLI OVERWROTE the
-       * seeded value back to `high` on startup (and filled in `authInfo`), so
-       * the value is account state Cursor syncs down, not a local knob. Writing
-       * `~/.cursor/cli-config.json` is therefore both ruled out by policy and
-       * futile.
-       *
-       * Which leaves one honest answer, and it is what
-       * {@link effortsUnavailableReason} says: the effort changes in Cursor's own
-       * model picker, and this list follows it.
+       * RE-CHECK by re-running that probe when the CLI series moves. Two shapes
+       * would matter: a value added or removed here, and the vocabulary becoming
+       * genuinely per-MODEL in a way that bites — `buildModelParameterConfigOptions`
+       * derives the option from the CURRENT model, and a model with no effort
+       * axis (`auto-smart`, `gemini-3.1-pro[]`) offers none at all. A run that
+       * names an effort such a model does not take is declined in-protocol and
+       * surfaces as a `notice` on that turn, which is the honest outcome: the
+       * turn runs, and the user is told the setting did not apply.
        */
-      efforts: [],
-      /**
-       * Named where it changes, not merely refused. An inert chip stating "high"
-       * beside a picker offering no efforts is what got this reported; the value
-       * lives in the user's Cursor account (see the block above), and the CLI's
-       * own `/model` picker is what writes it.
-       */
-      effortsUnavailableReason:
-        'cursor-agent builds the reasoning effort into the model itself and accepts only the variants your Cursor account selected — change the effort in Cursor’s own model picker (`/model` in cursor-agent, or the Cursor app) and this list follows it',
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'medium', label: 'medium' },
+        { id: 'high', label: 'high' },
+        { id: 'xhigh', label: 'xhigh' },
+        { id: 'max', label: 'max' },
+      ],
+      /** Null: the list above is non-empty, so there is nothing to explain. */
+      effortsUnavailableReason: null,
       /**
        * Empty because {@link CursorAcpAdapter.listModels} answers for real —
        * `builtinModels` is the fallback for a CLI that cannot be asked, and
@@ -617,8 +598,16 @@ export class CursorAcpAdapter extends AgentAdapter {
     // an unusable probe root must degrade to "we could not ask", never throw
     // out of a listing.
     let cwd = '';
+    let profile = '';
     try {
       cwd = this.makeProbeRoot('models');
+      // Its own profile, like a turn's: a parameterized handshake can migrate a
+      // persisted variant selection, which WRITES the config directory — and a
+      // listing must never change what the user's own CLI opens with.
+      profile = seedCursorProfile(
+        this.profileBaseDir(),
+        this.cursorOptions.homeDir,
+      );
       const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
         ...options,
         cwd,
@@ -626,8 +615,13 @@ export class CursorAcpAdapter extends AgentAdapter {
           cwd,
           clientName: CURSOR_ACP_CLIENT_NAME,
           clientVersion: this.clientVersion,
+          // The SAME handshake a turn sends. Without it the probe would list the
+          // bracketed variant ids while turns speak bare names, and every model
+          // the picker offered would be refused.
+          clientMeta: CURSOR_ACP_CLIENT_META,
         }),
         settleWhen: acpModelProbeSettled,
+        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
         timeoutMs: options.timeoutMs ?? CURSOR_MODEL_PROBE_TIMEOUT_MS,
       });
       return this.readModelProbe(stdout);
@@ -636,6 +630,9 @@ export class CursorAcpAdapter extends AgentAdapter {
     } finally {
       if (cwd !== '') {
         this.removeProbeRoot(cwd);
+      }
+      if (profile !== '') {
+        removeCursorProfile(profile);
       }
     }
   }
@@ -647,15 +644,14 @@ export class CursorAcpAdapter extends AgentAdapter {
       // honest reading of "we could not ask".
       return [];
     }
+    // The ids come back BARE now (`claude-opus-5`, not the bracketed form) —
+    // the probe speaks the same parameterized handshake a turn does, so what the
+    // picker stores is what a turn can apply. That is also why no effort is read
+    // out of an id here any more: on this transport the effort is its own control.
     return readAcpModelProbe(stdout).map((model) => ({
       id: model.modelId,
       label: model.name,
       source: 'cli',
-      // The half the agent's own `name` throws away. Every id it enumerates
-      // carries its parameters and the label carries none of them, so without
-      // this the picker offers "Opus 5" and "Opus 4.7" as if the only difference
-      // were the model — when on this CLI that pair IS the effort choice.
-      effort: cursorModelEffort(model.modelId),
     }));
   }
 
@@ -807,7 +803,58 @@ export class CursorAcpAdapter extends AgentAdapter {
    * shipped build. Say that rather than implying otherwise.
    */
   protected override buildEnv(input: AgentTurnInput): Record<string, string> {
-    return { ...this.inheritedEnv(), ...input.env };
+    const profile = this.turnProfiles.get(input);
+    return {
+      ...this.inheritedEnv(),
+      // Runs BEFORE `input.env`, deliberately: a caller that names its own
+      // config directory (a node pointed at a profile) must win over the
+      // throwaway one, or the feature would be silently disabled by this.
+      ...(profile ? { [CURSOR_CONFIG_DIR_ENV]: profile } : {}),
+      ...input.env,
+    };
+  }
+
+  /** Per-turn config directory paths, created by `prepareTurn`. */
+  private readonly turnProfiles = new WeakMap<AgentTurnInput, string>();
+
+  /**
+   * Give the turn its own `CURSOR_CONFIG_DIR`, seeded from the user's.
+   *
+   * This exists because applying a model or an effort over ACP WRITES the config
+   * directory — so without it, a chat's model choice changes what the user's own
+   * `cursor-agent` opens with. `utils/cursor-profile.utils.ts` carries the
+   * measurements, including why only `cli-config.json` is copied.
+   *
+   * The base runs the returned disposer on exactly one settle path, so the
+   * directory is removed once however the turn ends.
+   */
+  protected override prepareTurn(
+    input: AgentTurnInput,
+  ): (() => void) | undefined {
+    const dir = seedCursorProfile(
+      this.profileBaseDir(),
+      this.cursorOptions.homeDir,
+    );
+    this.turnProfiles.set(input, dir);
+    return () => {
+      this.turnProfiles.delete(input);
+      removeCursorProfile(dir);
+    };
+  }
+
+  private profileBaseDir(): string {
+    return (
+      this.cursorOptions.profileDir ?? join(tmpdir(), CURSOR_PROFILE_DIR_NAME)
+    );
+  }
+
+  /**
+   * Drop the per-turn profiles a prior daemon launch left behind. Called once at
+   * boot; only a SIGKILLed daemon can leave any, since the disposer covers every
+   * ordinary settle path.
+   */
+  sweepStaleProfiles(): void {
+    sweepStaleCursorProfiles(this.profileBaseDir());
   }
 
   /**
@@ -829,6 +876,13 @@ export class CursorAcpAdapter extends AgentAdapter {
         this.composeSystemPrompt(input, granted),
       clientName: CURSOR_ACP_CLIENT_NAME,
       clientVersion: this.clientVersion,
+      // What unlocks the separate effort control; see CURSOR_ACP_CLIENT_META.
+      clientMeta: CURSOR_ACP_CLIENT_META,
+      // The stored id split into a bare model plus its parameters, with this
+      // turn's own effort applied over whatever the id carried. Composed here
+      // because the bracket syntax is this CLI's, and the driver must not learn
+      // to read one.
+      modelSelection: cursorModelSelection(input.model, input.effort),
       autoDecide: (toolCall) =>
         cursorAutoDecision(input.approvalMode, toolCall),
       preferredModeId:

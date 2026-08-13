@@ -265,12 +265,6 @@ export interface AgentModelDto {
      * @memberof AgentModelDto
      */
     source: AgentModelDtoSourceEnum;
-    /**
-     * 
-     * @type {string}
-     * @memberof AgentModelDto
-     */
-    effort: string | null;
 }
 
 

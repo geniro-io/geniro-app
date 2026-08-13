@@ -401,20 +401,6 @@ export interface AgentModel {
   label: string;
   /** How this entry was obtained — the UI says so when it is not live. */
   source: 'cli' | 'builtin';
-  /**
-   * The reasoning effort this id ALREADY carries, for a CLI that folds effort
-   * into the model instead of taking it as a flag — `high` for
-   * `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`. Null
-   * when the CLI has a separate effort control, or when the id states none.
-   *
-   * Reported here rather than parsed by the reader, and that is the whole point:
-   * the bracket syntax belongs to one CLI, so the picker showing it must not
-   * learn to read it. It also puts the effort where the choice is MADE — a list
-   * of "Opus 5" and "Opus 4.7" hides that picking between those two rows IS how
-   * effort is chosen on such a CLI, which is exactly how "I cannot change
-   * effort" gets reported against a control that is working as designed.
-   */
-  effort: string | null;
 }
 
 /**

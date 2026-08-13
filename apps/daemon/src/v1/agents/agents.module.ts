@@ -7,6 +7,7 @@ import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { ClaudeProbeService } from './adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
+import { CURSOR_PROFILE_DIR_NAME } from './adapters/cursor-acp/cursor-acp.const';
 import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
 import { SkillsController } from './controllers/skills.controller';
@@ -157,6 +158,10 @@ import { defaultSpawn } from './utils/spawn-cli';
         new CursorAcpAdapter({
           spawn: createTeeingSpawn(defaultSpawn),
           logger: new Logger(CursorAcpAdapter.name),
+          // Per-turn config directories, so applying a model or an effort over
+          // ACP cannot reach the user's own `~/.cursor/cli-config.json` — that
+          // write is real and measured; see `utils/cursor-profile.utils.ts`.
+          profileDir: join(environment.userDataDir, CURSOR_PROFILE_DIR_NAME),
         }),
     },
     {

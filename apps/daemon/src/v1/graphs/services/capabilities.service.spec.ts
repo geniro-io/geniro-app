@@ -211,15 +211,14 @@ describe('CapabilitiesService — the reasoning-effort picker', () => {
     );
   });
 
-  it('states claude’s picker as null and names where cursor’s effort lives', () => {
-    // The row exists because `GET /v1/agents/efforts` answering `[]` hides the
-    // picker without explaining what replaced it — which is how "I cannot change
-    // the effort of a Cursor model" was reported against a control behaving
-    // exactly as measured. A refusal that does not name the place it CAN be
-    // changed is the same silence with more words.
+  it('reports BOTH shipped CLIs as having a picker', () => {
+    // Null for both is the current truth, not a placeholder: claude has
+    // `--effort`, and cursor's `effort` config option became reachable once the
+    // handshake declared `parameterizedModelPicker`. The row stays because it is
+    // the only thing that can explain an ABSENT picker to the user, and a third
+    // CLI without one is exactly what it is for.
     expect(efforts().get('claude')).toBeNull();
-    expect(efforts().get('cursor-agent')).toEqual(expect.any(String));
-    expect(efforts().get('cursor-agent')).toContain('model picker');
+    expect(efforts().get('cursor-agent')).toBeNull();
   });
 });
 

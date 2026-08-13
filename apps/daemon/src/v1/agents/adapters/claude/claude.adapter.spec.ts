@@ -1745,7 +1745,6 @@ describe('ClaudeAdapter — models', () => {
               id: 'pinned-floor-model',
               label: 'Pinned floor',
               source: 'builtin',
-              effort: null,
             },
           ],
         };
@@ -1761,7 +1760,6 @@ describe('ClaudeAdapter — models', () => {
         id: 'pinned-floor-model',
         label: 'Pinned floor',
         source: 'builtin',
-        effort: null,
       },
     ]);
   });

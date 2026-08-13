@@ -324,36 +324,36 @@ describe('AgentAdapter effort vocabulary and its reason agree', () => {
     });
   }
 
-  it('is not vacuous — the shipped pair covers BOTH answers', () => {
-    const answers = ADAPTERS.map(
-      ({ adapter }) => adapter.getConfig().efforts.length > 0,
-    );
-
-    expect(new Set(answers)).toEqual(new Set([true, false]));
+  it('gives a REASON, never a bare cannot', () => {
+    // Deliberately NOT a "covers both answers" pin: BOTH shipped adapters now
+    // declare a vocabulary, so such a test could only pass by inventing an
+    // adapter with none. What matters is the agreement above, plus this — a
+    // reason, when there is one, says something.
+    for (const { adapter } of ADAPTERS) {
+      const reason = adapter.getConfig().effortsUnavailableReason;
+      if (reason !== null) {
+        expect(reason.trim().length).toBeGreaterThan(0);
+      }
+    }
   });
 
-  it('names where the effort DOES change, not merely that it cannot here', () => {
-    // The renderer shows this sentence on an inert chip, so "cursor-agent has no
-    // effort flag" would be true and useless. The measured answer is that the
-    // value lives in the user's Cursor account, and the sentence has to carry
-    // it — that is the whole difference between this and a bare refusal.
-    const reason = new CursorAcpAdapter().getConfig().effortsUnavailableReason;
+  it('cursor offers the five levels its own agent enumerated', () => {
+    // The item was "I cannot change the effort of a Cursor model". It was true
+    // while this list was empty, and the cause was the HANDSHAKE, not the CLI:
+    // `parameterizedModelPicker` turns one composed model id into a bare name
+    // plus a real `effort` option. Every value here was accepted by the agent
+    // (`xhigh` and `max` on claude-opus-5, both recorded as rejected before),
+    // and `bogus` refused. Empty this list again and the item comes back.
+    const config = new CursorAcpAdapter().getConfig();
 
-    expect(reason).not.toBeNull();
-    expect(reason).toMatch(/Cursor/);
-    expect(reason).toMatch(/model picker/);
-  });
-});
-
-describe('AgentAdapter models report the effort their id carries', () => {
-  it('a CLI with its own effort flag states none on its models', () => {
-    // The builtin floor rather than `listModels`, which reads the user's real
-    // `~/.claude.json`: this is the declared set, and it is where a copy-paste
-    // from the cursor adapter would put a stray effort on a bare alias.
-    const models = new ClaudeAdapter().getConfig().builtinModels;
-
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.every((model) => model.effort === null)).toBe(true);
+    expect(config.efforts.map((effort) => effort.id)).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+    expect(config.effortsUnavailableReason).toBeNull();
   });
 });
 

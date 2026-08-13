@@ -2649,40 +2649,31 @@ describe('Chats composer memory & suggestions', () => {
     expect(modelTrigger(container).textContent).toContain('default model');
   });
 
-  it('shows the effort of a selected cursor model, and no effort picker', async () => {
-    // The effort now arrives as a FIELD on the model the daemon reported — the
-    // renderer no longer reads a cursor model id, so a fixture whose rows omit
-    // `effort` is a fixture whose CLI reported none.
-    agentsApi.listAgentModels.mockImplementation(
+  it('offers a REAL effort picker for cursor, from what the daemon lists', async () => {
+    // The item was "I cannot change the effort of a Cursor model". This is the
+    // fix: the levels are the CLI's own (its ACP `effort` config option, unlocked
+    // by the parameterized handshake), so the composer shows a picker rather than
+    // an inert readout. Empty that vocabulary and the picker disappears again.
+    agentsApi.listAgentEfforts.mockImplementation(
       ({ agent }: { agent: string }) =>
         Promise.resolve(
           agent === 'cursor-agent'
             ? [
-                {
-                  id: 'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
-                  label: 'Opus 5',
-                  source: 'cli',
-                  effort: 'high',
-                },
+                { id: 'low', label: 'low' },
+                { id: 'xhigh', label: 'xhigh' },
               ]
-            : [{ id: 'opus', label: 'opus', source: 'builtin', effort: null }],
+            : [{ id: 'high', label: 'high' }],
         ),
     );
     const { client } = makeClient();
     const container = await mount(client);
 
     await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
-    await pickMenuRow(container, modelTrigger(container), 'Opus 5');
 
-    expect(effortTrigger(container)).toBeUndefined();
-    expect(container.textContent).toContain('high');
-    // And the chip says where the effort DOES change — the daemon's sentence,
-    // not one written here. A chip stating a value the user cannot change with
-    // no cause given is what got this reported in the first place.
-    const chipTitle = [...container.querySelectorAll('[title]')]
-      .map((el) => el.getAttribute('title') ?? '')
-      .find((title) => title.startsWith('Reasoning effort'));
-    expect(chipTitle).toContain('Cursor’s own model picker');
+    const trigger = effortTrigger(container);
+    expect(trigger).not.toBeUndefined();
+    await pickMenuRow(container, trigger!, 'xhigh');
+    expect(trigger!.textContent).toContain('xhigh');
   });
 
   it('lists what the DAEMON reports for whichever CLI is selected', async () => {

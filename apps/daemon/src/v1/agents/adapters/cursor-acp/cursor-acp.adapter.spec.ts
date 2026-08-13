@@ -1,4 +1,7 @@
 import type { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -61,7 +64,13 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
   };
 }
 
+/** Per-turn profile dirs this spec created, removed after each case. */
+const dirs: string[] = [];
+
 afterEach(() => {
+  for (const dir of dirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
   delete process.env.GENIRO_CURSOR_API_KEY;
   // The adapter now sources the user's OWN inherited key, so a test that sets
   // it would otherwise leak into every later case's child env.
@@ -356,10 +365,8 @@ describe('CursorAcpAdapter turn shaping', () => {
         result: {
           sessionId: 's',
           models: {
-            currentModelId: 'composer-2.5[fast=true]',
-            availableModels: [
-              { modelId: 'claude-opus-5[thinking=true]', name: 'Opus 5' },
-            ],
+            currentModelId: 'composer-2.5',
+            availableModels: [{ modelId: 'claude-opus-5', name: 'Opus 5' }],
           },
         },
       })}\n`,
@@ -369,13 +376,144 @@ describe('CursorAcpAdapter turn shaping', () => {
     expect(
       framesOn(child).find((frame) => frame.method === 'session/set_model')
         ?.params,
-    ).toEqual({ sessionId: 's', modelId: 'claude-opus-5[thinking=true]' });
+    ).toEqual({ sessionId: 's', modelId: 'claude-opus-5' });
     // Order is the whole mechanism: the frames share one ordered stream, so a
     // set_model AFTER the prompt would apply to the next turn, not this one.
     expect(methods.indexOf('session/set_model')).toBeLessThan(
       methods.indexOf('session/prompt'),
     );
     expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+  });
+
+  it('splits a LEGACY bracketed id and applies the model before its parameters', () => {
+    // Every cursor chat created before the parameterized handshake stored the
+    // composed form, and that form is `-32602 Invalid params` in the mode a turn
+    // now speaks. Splitting it is what keeps those chats running on exactly the
+    // settings they were made with. ORDER is load-bearing and not cosmetic: a
+    // parameter's existence depends on the current model, so `effort` before
+    // `model` is "Unknown model config option".
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({ spawn }).start(
+      {
+        ...BASE,
+        model:
+          'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+        // The turn's OWN effort, which must WIN over the one baked into the id
+        // months ago — otherwise the new picker could never change anything on
+        // an existing chat.
+        effort: 'xhigh',
+      },
+      (event) => events.push(event),
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        id: 2,
+        result: {
+          sessionId: 's',
+          // The parameterized shape: a model config option carrying BARE names.
+          configOptions: [
+            {
+              id: 'model',
+              category: 'model',
+              currentValue: 'auto-smart',
+              options: [{ value: 'claude-opus-5' }, { value: 'auto-smart' }],
+            },
+          ],
+        },
+      })}\n`,
+    );
+
+    const settings = framesOn(child)
+      .filter((frame) => frame.method === 'session/set_config_option')
+      .map((frame) => frame.params as { configId: string; value: string })
+      .map((params) => [params.configId, params.value]);
+    expect(settings).toEqual([
+      ['model', 'claude-opus-5'],
+      ['thinking', 'true'],
+      ['context', '300k'],
+      ['fast', 'false'],
+      // Last, and `xhigh` rather than the id's `high`.
+      ['effort', 'xhigh'],
+    ]);
+    const methods = framesOn(child).map((frame) => frame.method);
+    expect(methods.lastIndexOf('session/set_config_option')).toBeLessThan(
+      methods.indexOf('session/prompt'),
+    );
+    expect(events.filter((event) => event.type === 'notice')).toEqual([]);
+  });
+
+  it('sets the effort even when the run keeps the agent’s own model', () => {
+    // The ordinary case for a chat left on "default model": there is no model to
+    // apply, and the effort must still go out. An early return on "no model"
+    // makes the picker inert for exactly those runs.
+    const { spawn, child } = fakeSpawn();
+    new CursorAcpAdapter({ spawn }).start({ ...BASE, effort: 'max' }, () => {});
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 2, result: { sessionId: 's' } })}\n`,
+    );
+
+    expect(
+      framesOn(child)
+        .filter((frame) => frame.method === 'session/set_config_option')
+        .map((frame) => (frame.params as { configId: string }).configId),
+    ).toEqual(['effort']);
+  });
+
+  it('points the child at its OWN config dir, never the user’s ~/.cursor', () => {
+    // THE leak fix. Applying a model or an effort over ACP persists into the
+    // config directory — measured: one `set_config_option` changed `model`,
+    // `selectedModel` and `modelSelectionHistory` in the real
+    // `~/.cursor/cli-config.json`. So a chat's model choice used to change what
+    // the user's own `cursor-agent` opens with. Drop this and it does again.
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    dirs.push(profileDir);
+
+    new CursorAcpAdapter({ spawn, profileDir }).start(BASE, () => {});
+
+    const dir = captured.env?.CURSOR_CONFIG_DIR;
+    expect(dir).toBeDefined();
+    expect(dir!.startsWith(profileDir)).toBe(true);
+    // And it is NOT the user's own, which is the whole point.
+    expect(dir).not.toContain('/.cursor');
+  });
+
+  it('lets a caller’s explicit config dir win over the throwaway one', () => {
+    // A node pointed at a profile must not be silently overridden by the
+    // per-turn directory — that would disable the feature from underneath it.
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    dirs.push(profileDir);
+
+    new CursorAcpAdapter({ spawn, profileDir }).start(
+      { ...BASE, env: { CURSOR_CONFIG_DIR: '/explicit/profile' } },
+      () => {},
+    );
+
+    expect(captured.env?.CURSOR_CONFIG_DIR).toBe('/explicit/profile');
+  });
+
+  it('declares the client flag that makes a separate effort exist at all', () => {
+    // Without `_meta.parameterizedModelPicker` the agent composes one opaque id
+    // per model family and rejects every recomposed effort — which is what made
+    // "I cannot change the effort of a Cursor model" true. Drop this and the
+    // effort picker silently stops working while every test above still passes,
+    // because the frames would look identical.
+    const { spawn, child } = fakeSpawn();
+    new CursorAcpAdapter({ spawn }).start(BASE, () => {});
+
+    const init = framesOn(child).find((frame) => frame.method === 'initialize')
+      ?.params as { clientCapabilities?: { _meta?: unknown } } | undefined;
+    expect(init?.clientCapabilities?._meta).toEqual({
+      parameterizedModelPicker: true,
+    });
   });
 
   it('says so when the agent does not offer the requested model', () => {
@@ -771,21 +909,15 @@ describe('CursorAcpAdapter misuse', () => {
         sessionId: 's1',
         models: {
           currentModelId: 'composer-2.5[fast=true]',
-          // Three ids VERBATIM from a 2026.08.11-e8db854 `session/new` reply,
-          // chosen to cover the whole shape of the vocabulary: one that states
-          // no effort, one that spells it `effort=`, and one that spells the
-          // same axis `reasoning=`.
+          // BARE ids, verbatim from a 2026.08.11-e8db854 `session/new` reply
+          // under the PARAMETERIZED handshake — the one the probe now sends, so
+          // this is the shape it really reads. Under the old handshake the same
+          // models come back as composed ids (`claude-opus-5[thinking=true,…]`),
+          // and a picker built from those has every choice refused.
           availableModels: [
-            { modelId: 'composer-2.5[fast=true]', name: 'Composer 2.5' },
-            {
-              modelId:
-                'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
-              name: 'Opus 5',
-            },
-            {
-              modelId: 'gpt-5.5[context=272k,reasoning=medium,fast=false]',
-              name: 'GPT-5.5',
-            },
+            { modelId: 'composer-2.5', name: 'Composer 2.5' },
+            { modelId: 'claude-opus-5', name: 'Opus 5' },
+            { modelId: 'gpt-5.5', name: 'GPT-5.5' },
           ],
         },
       },
@@ -823,46 +955,9 @@ describe('CursorAcpAdapter misuse', () => {
       await expect(
         new CursorAcpAdapter({ groupSpawnFn }).listModels(),
       ).resolves.toEqual([
-        {
-          id: 'composer-2.5[fast=true]',
-          label: 'Composer 2.5',
-          source: 'cli',
-          effort: null,
-        },
-        {
-          id: 'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
-          label: 'Opus 5',
-          source: 'cli',
-          effort: 'high',
-        },
-        {
-          id: 'gpt-5.5[context=272k,reasoning=medium,fast=false]',
-          label: 'GPT-5.5',
-          source: 'cli',
-          effort: 'medium',
-        },
-      ]);
-    });
-
-    it('carries the effort the id holds, which the agent’s own label drops', () => {
-      // The load-bearing half of the row for this CLI. The agent reports "Opus 5"
-      // and "GPT-5.5" as names and puts the effort only inside the id, so a
-      // picker built from `label` alone shows a list in which the effort choice
-      // is invisible — which is how "I cannot change the effort" was reported
-      // against a picker that is the only place it CAN be changed.
-      //
-      // Asserted as a projection of the previous case's real output rather than
-      // as a second fixture, so it cannot pass while `listModels` drops the field.
-      const { groupSpawnFn } = fakeAcpProbe(SESSION_REPLY);
-
-      return expect(
-        new CursorAcpAdapter({ groupSpawnFn })
-          .listModels()
-          .then((models) => models.map((model) => [model.label, model.effort])),
-      ).resolves.toEqual([
-        ['Composer 2.5', null],
-        ['Opus 5', 'high'],
-        ['GPT-5.5', 'medium'],
+        { id: 'composer-2.5', label: 'Composer 2.5', source: 'cli' },
+        { id: 'claude-opus-5', label: 'Opus 5', source: 'cli' },
+        { id: 'gpt-5.5', label: 'GPT-5.5', source: 'cli' },
       ]);
     });
 

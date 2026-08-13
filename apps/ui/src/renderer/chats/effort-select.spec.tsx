@@ -66,15 +66,36 @@ describe('EffortSelect', () => {
     ]);
   });
 
-  it('renders NOTHING when the CLI reported no levels — never a disabled chip', () => {
-    // cursor-agent folds reasoning effort into its model ids, so there is no
-    // separate control. A disabled chip (or a static badge) would state a
-    // choice the user does not have; re-adding either regresses this.
+  it('renders NO PICKER when the CLI reported no levels', () => {
+    // Never a DISABLED picker: a dead dropdown states a choice the user does not
+    // have. With no reason to show either, nothing renders at all — a chip whose
+    // only explanation is still in flight reads as broken.
     const el = render(
       <EffortSelect efforts={[]} value={null} onChange={() => {}} />,
     );
     expect(trigger(el)).toBeNull();
     expect(el.textContent).toBe('');
+  });
+
+  it('states the daemon’s reason on an inert chip when there are no levels', () => {
+    // The absence has to explain itself: "I cannot change the effort of a Cursor
+    // model" was reported against a picker that had silently vanished. The
+    // sentence is the DAEMON's (`modelEfforts[]`), never composed here, and it is
+    // hover-only so it costs a working composer nothing.
+    const el = render(
+      <EffortSelect
+        efforts={[]}
+        value={null}
+        unavailableReason="this CLI takes no effort flag — set it in its own settings"
+        onChange={() => {}}
+      />,
+    );
+
+    expect(trigger(el)).toBeNull();
+    expect(el.textContent).toContain('no effort control');
+    expect(el.querySelector('[title]')?.getAttribute('title')).toBe(
+      'this CLI takes no effort flag — set it in its own settings',
+    );
   });
 
   it('reports the picked level, and null for the default row', () => {

@@ -796,6 +796,10 @@ describe('an event arriving between turns', () => {
       expect.objectContaining({
         type: 'notice',
         message: expect.stringContaining('between turns'),
+        // INFORMATION, not an advisory: the request was kept and handed over
+        // exactly as designed. Without this the row renders in the daemon's
+        // failure chrome, which got it reported as an error.
+        severity: 'info',
       }),
     ]);
 

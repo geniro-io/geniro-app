@@ -30,3 +30,26 @@ export function isCliAuthored(payload: unknown): boolean {
   }
   return (payload as { origin?: unknown }).origin === 'cli';
 }
+
+/**
+ * True when the daemon wrote this row and said it is INFORMATION, not an
+ * advisory about something going wrong.
+ *
+ * Absent means `warning`, which is every historical notice — a withheld
+ * capability, a degrade — and those keep the failure chrome. The case this
+ * exists for is the between-turn hand-over: a request the CLI raised while no
+ * turn was open, kept for the user rather than answered for them. That is the
+ * machinery working as designed, and dressing it in red got it reported as an
+ * error the user "still sees sometimes".
+ *
+ * Read from the same key `event-to-item.ts` stamps (see the TWIN PARSER note
+ * above), which the daemon omits for CLI-authored text — so relayed agent prose
+ * can never reach this branch and pick its own chrome.
+ */
+export function isInfoNotice(payload: unknown): boolean {
+  if (payload === null || typeof payload !== 'object') {
+    return false;
+  }
+  const row = payload as { severity?: unknown; origin?: unknown };
+  return row.severity === 'info' && row.origin !== 'cli';
+}

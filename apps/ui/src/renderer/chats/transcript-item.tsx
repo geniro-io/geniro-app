@@ -12,7 +12,7 @@ import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
-import { isCliAuthored } from './system-payload';
+import { isCliAuthored, isInfoNotice } from './system-payload';
 import { ToolBodyView } from './tool-body-view';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
@@ -243,6 +243,15 @@ export const TranscriptItem = memo(function TranscriptItem({
         }
         // A relayed notice with no compaction marker: not a summary, and short
         // enough to read where it stands. Unchanged.
+        return <MessageBubble variant="note">{message}</MessageBubble>;
+      }
+      // The daemon speaking, but not about a failure: it said so itself
+      // (`severity: 'info'`). The between-turn hand-over is the case — a request
+      // the CLI raised while no turn was open, kept for the user instead of
+      // answered for them. Neutral tone, same as relayed prose: the row exists
+      // so the odd timing is not silent, and it sits directly above the card it
+      // points at, where red chrome read as "something is wrong with this card".
+      if (isInfoNotice(item.payload)) {
         return <MessageBubble variant="note">{message}</MessageBubble>;
       }
       // The DAEMON's own system items are failure advisories (a degraded caller,

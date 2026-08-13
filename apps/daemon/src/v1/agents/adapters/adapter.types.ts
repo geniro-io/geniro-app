@@ -235,6 +235,23 @@ type AgentEventBody =
        * which must not be able to impersonate an application-level advisory.
        */
       origin?: 'cli';
+      /**
+       * How loud the daemon's own notice should be. Absent means `warning`,
+       * which is the historical case and what every degrade means.
+       *
+       * `info` exists for the daemon notices that are not advisories about
+       * something going wrong — the one that says a request the CLI raised
+       * between turns was KEPT for the user rather than answered on their
+       * behalf. That is the machinery working, and rendering it in the failure
+       * chrome got it reported as an error the user "still sees sometimes":
+       * red, capitalised SYSTEM, two lines of explanation, directly above the
+       * card it is pointing at. Nothing was wrong, so nothing should look it.
+       *
+       * Meaningless beside `origin: 'cli'` and ignored there — relayed agent
+       * text is never an advisory at any volume, and letting it choose its own
+       * severity is exactly the impersonation `origin` exists to prevent.
+       */
+      severity?: 'info';
     }
   | {
       /**

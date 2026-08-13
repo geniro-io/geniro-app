@@ -746,10 +746,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // ONE notice per turn however many are held: the sentence explains the
       // state, not each occurrence, and N verbatim copies of it would bury the
       // cards it is pointing at.
-      const notice =
-        `${opts.command} asked for something between turns, when nothing was on screen to ` +
-        'show it to you. It was left standing rather than answered on your behalf, and it is ' +
-        'shown above so you can answer it now.';
+      // Short, and INFORMATIONAL — see the severity below. The three-clause
+      // version this replaces explained the whole mechanism (nothing was on
+      // screen; it was not answered for you; it is shown above), in the daemon's
+      // failure chrome, immediately above the card it points at. Reported back
+      // as an error the user "still sees sometimes", which is fair: nothing went
+      // wrong, the request was kept and handed over exactly as intended.
+      const notice = `${opts.command} asked this between turns — kept for you rather than answered on your behalf.`;
       if (!pendingNotices.includes(notice)) {
         pendingNotices.push(notice);
       }
@@ -1156,7 +1159,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       turnOptions.onEvent(adopted);
     }
     while (pendingNotices.length > 0) {
-      turnOptions.onEvent({ type: 'notice', message: pendingNotices.shift()! });
+      // `info`, because every notice this queue carries is the between-turn
+      // hand-over above: the machinery worked, and the row exists only so the
+      // odd timing is not silent. The daemon's failure chrome is for degrades.
+      turnOptions.onEvent({
+        type: 'notice',
+        message: pendingNotices.shift()!,
+        severity: 'info',
+      });
     }
     opts.logger?.debug?.(`${opts.command}: turn opened`);
     // Armed from the start, not from the first event: a turn whose CLI never

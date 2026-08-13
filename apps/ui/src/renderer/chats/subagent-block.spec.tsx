@@ -373,6 +373,145 @@ describe('subagentSteps', () => {
   });
 });
 
+describe('a delegate whose CLI streams none of its work', () => {
+  const REASON =
+    'cursor-agent reports the delegation but not the work inside it';
+
+  /**
+   * The cursor shape end to end: a `task` tool call the daemon DECLARED as a
+   * launch (its title is prose and its input names only the CLI's own tool), a
+   * `subagent_info` row carrying the brief, and a result with no text in it.
+   */
+  function declaredBlock(
+    over: Record<string, unknown> = {},
+  ): SubagentBlockEntry {
+    const items: ChatItem[] = [
+      item('tool_call', {
+        id: 'toolu_1',
+        name: 'Task: Subagent task',
+        input: { _toolName: 'task' },
+      }),
+      item('subagent_info', {
+        id: 'toolu_1',
+        label: 'List files in directory',
+        kind: null,
+        prompt: 'list every file in the workspace root',
+        model: 'claude-opus-5-thinking-high',
+        durationMs: 13075,
+        stepsUnavailableReason: REASON,
+        ...over,
+      }),
+      item('tool_result', {
+        id: 'toolu_1',
+        name: null,
+        result: { durationMs: 13075, isBackground: false },
+      }),
+    ];
+    const block = collectSubagentBlocks(
+      buildTurnBlocks(buildSubagentBlocks(groupTranscript(items), items)),
+    )[0];
+    if (!block) {
+      throw new Error('expected a sub-agent block');
+    }
+    return block;
+  }
+
+  it('says WHY its thread is empty, instead of that it did nothing', () => {
+    // The line this replaces — "This sub-agent has not done anything yet" — was
+    // a claim about the delegate, printed for one that had just spent thirteen
+    // seconds working. Reverting the reason to a generic empty state fails here.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={declaredBlock()} chatAgentName="cursor" />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.textContent).toContain(REASON);
+    expect(container.textContent).not.toContain('has not done anything yet');
+    // No Timeline heading either: there is nothing to sequence, so the split
+    // would be two headings over one sentence — printed twice.
+    expect(container.textContent).not.toContain('Timeline');
+    expect(container.textContent).toContain('Conversation');
+  });
+
+  it('states the model and the duration, the only substance the CLI gives', () => {
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={declaredBlock()} chatAgentName="cursor" />
+        </Dialog>,
+      ),
+    );
+
+    const facts = container.querySelector('[data-role="subagent-facts"]');
+    expect(facts?.textContent).toContain('claude-opus-5-thinking-high');
+    expect(facts?.textContent).toContain('took 13s');
+    // And the brief it was given, which is the other thing only this channel
+    // carries — the launching tool call's own arguments never held it.
+    expect(container.textContent).toContain(
+      'list every file in the workspace root',
+    );
+  });
+
+  it('keeps the generic empty state for a delegate that simply has not spoken YET', () => {
+    // The distinction the reason exists for: a CLI that streams its delegates
+    // (claude) sends no reason, so an empty thread there means "not yet" and
+    // must keep saying so.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail
+            block={{ ...makeBlock(), entries: [] }}
+            chatAgentName="claude"
+          />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.textContent).toContain('has not done anything yet');
+    expect(container.textContent).toContain('Timeline');
+  });
+
+  it('renders no facts line at all when the CLI named neither', () => {
+    // Every claude delegate: its work IS the thread, so a metadata line would
+    // only repeat the header.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={makeBlock()} chatAgentName="claude" />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.querySelector('[data-role="subagent-facts"]')).toBeNull();
+  });
+
+  it('shows the reason inline too, without opening the dialog', () => {
+    // The block is collapsed by default, so the reason lives inside it — what
+    // must NOT happen is the card claiming a conversation that opens onto
+    // nothing at all.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={declaredBlock()}
+          soloAgent
+          chatAgentName="cursor"
+        />,
+      ),
+    );
+    const toggle = disclosure();
+    expect(toggle).not.toBeNull();
+    act(() => toggle?.click());
+
+    expect(
+      container.querySelector('[data-role="subagent-steps-missing"]')
+        ?.textContent,
+    ).toContain(REASON);
+  });
+});
+
 describe('SubagentDetail', () => {
   it('shows the timeline AND the conversation, both open', () => {
     act(() =>

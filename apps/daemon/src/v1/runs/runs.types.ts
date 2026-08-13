@@ -93,6 +93,7 @@ export const ItemKindSchema = z
     'await_collected',
     'call_question',
     'call_answer',
+    'subagent_info',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

@@ -45,6 +45,9 @@ import {
   CURSOR_PROFILE_DIR_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
+  CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
+  CURSOR_TASK_LAUNCH_MARKER,
+  CURSOR_TASK_METHOD,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
@@ -60,6 +63,7 @@ import {
   readCursorQuestions,
   withCursorAnswer,
 } from './utils/cursor-question.utils';
+import { readCursorTask } from './utils/cursor-task.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
 const CURSOR_PLAN_MODE_ID = 'plan';
@@ -162,41 +166,34 @@ export class CursorAcpAdapter extends AgentAdapter {
       questionsCostAskPosture: false,
       subagents: {
         /**
-         * No sub-agent signal has been found on this transport — so a cursor
-         * run genuinely lists no delegates, rather than listing none because
-         * geniro forgot to look.
+         * True — and it read `false` here for two milestones on a measurement
+         * that never touched the wire.
          *
-         * MEASURED 2026-08-11, and these are its exact bounds, because the
-         * next reader needs to know what to re-check rather than trust the
-         * absence:
-         * - `adapters/acp/acp.types.ts` declares no `session/update` variant
-         *   types at all, and no field of any type it DOES declare
-         *   (`AcpToolCall`: `toolCallId`, `name`, `title`, `status`, `kind`,
-         *   `rawInput`, `rawOutput`) is a parent, task or sub-session id.
-         * - `acp-driver.ts` reads none either: `readToolCall` takes only the
-         *   seven fields above, and the update envelope's own `sessionId` is
-         *   discarded — the driver holds ONE session per turn.
-         * - `cursor-acp/` carries no delegation handling anywhere.
+         * What the old entry proved was that `acp.types.ts` declared no parent
+         * id and `acp-driver.ts` read none: it measured GENIRO, and then stated
+         * the conclusion as a fact about cursor. It even named `cursor/task` as
+         * "the single most suggestive artifact found" — a method this adapter
+         * was declining on every delegating turn, one file away — and left it
+         * for a later reader, because the payload had "never been captured on
+         * the wire". Capturing it took one throwaway session and a prompt asking
+         * the agent to delegate.
          *
-         * Three things this does NOT settle, each a place to look first if a
-         * delegate ever needs surfacing here:
-         * 1. `cursor/task` — a vendor method this adapter declines without
-         *    notice ({@link CURSOR_SILENTLY_DECLINED_METHODS}). Its name is the
-         *    single most suggestive artifact found; its PAYLOAD shape is
-         *    documented nowhere here and has never been captured on the wire.
-         *    Settling it means re-reading the CLI's own shipped source, the way
-         *    {@link CURSOR_ASK_QUESTION_METHOD}'s contract was.
-         * 2. The `session/update` variants the driver drops unread —
-         *    `plan`/`plan_update`, `session_info_update` — named in a comment
-         *    and declared nowhere.
-         * 3. The published ACP schema itself. `acp.types.ts` is a deliberate
-         *    PROJECTION of what geniro sends and hopes to read, not a
-         *    transcription, so absence here is weaker than absence from the
-         *    protocol.
+         * REFUTED 2026-08-13 on 2026.08.11-e8db854. The delegation IS on the
+         * wire: an ordinary `tool_call` marked `rawInput:{_toolName:"task"}`,
+         * and then a `cursor/task` request carrying the description, the full
+         * brief, the type, the model and the duration. Every frame is
+         * transcribed in the `Background sub-agents` block of
+         * `cursor-acp.const.ts`, with what to re-check next.
          */
-        reports: false,
-        unavailableReason:
-          'cursor-agent reports no sub-agents over ACP — no session/update variant this client reads carries a parent, task or sub-session id',
+        reports: true,
+        unavailableReason: null,
+        /**
+         * What the same probe found is NOT there: nothing the delegate itself
+         * did. So a cursor block opens onto the brief and the duration rather
+         * than a conversation, and says why instead of reading as a delegate
+         * that sat idle for thirteen seconds.
+         */
+        stepsUnavailableReason: CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
       },
       approval: {
         /**
@@ -1000,6 +997,17 @@ export class CursorAcpAdapter extends AgentAdapter {
         toolName: this.getConfig().questionToolName ?? '',
         accepts: (params) => readCursorQuestions(params).length > 0,
         encodeReply: encodeCursorQuestionReply,
+      },
+      delegate: {
+        method: CURSOR_TASK_METHOD,
+        launchMarker: CURSOR_TASK_LAUNCH_MARKER,
+        read: readCursorTask,
+        // The `task` call returns `{durationMs, isBackground}` and nothing the
+        // delegate said — see the field's own doc block for what that looked
+        // like framed as its answer.
+        resultIsBookkeeping: true,
+        stepsUnavailableReason:
+          this.getConfig().subagents.stepsUnavailableReason,
       },
       logger: this.cursorOptions.logger,
     });

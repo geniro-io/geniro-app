@@ -3,6 +3,7 @@ import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
 import { Button } from '../components/ui/button';
+import { cn } from '../components/ui/utils';
 import {
   BlockPendingLine,
   BlockRequest,
@@ -13,7 +14,7 @@ import {
   BlockToolFooter,
   SectionLabel,
 } from './block-shell';
-import { RunSettledContext } from './live-row';
+import { formatElapsed, RunSettledContext } from './live-row';
 import { formatClockTime } from './relative-time';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { TranscriptEntryView } from './transcript-entry';
@@ -110,6 +111,63 @@ export function subagentSteps(block: SubagentBlockEntry): SubagentStep[] {
   return steps;
 }
 
+/**
+ * What is known about a delegate APART from what it said — the model it ran and
+ * how long it took, when its CLI reports them.
+ *
+ * Renders nothing when neither is known, which is every claude delegate: its
+ * work is the thread itself, so a metadata line would only repeat the header.
+ * For a CLI that streams none of that work this is the whole substance of the
+ * card, which is why it is stated rather than left in the payload.
+ */
+function SubagentFacts({
+  block,
+}: {
+  block: SubagentBlockEntry;
+}): React.JSX.Element | null {
+  const facts: string[] = [];
+  if (block.model !== null) {
+    facts.push(block.model);
+  }
+  if (block.durationMs !== null) {
+    facts.push(`took ${formatElapsed(block.durationMs)}`);
+  }
+  if (facts.length === 0) {
+    return null;
+  }
+  return (
+    <p
+      data-role="subagent-facts"
+      className="m-0 text-[11px] text-muted-foreground">
+      {facts.join(' · ')}
+    </p>
+  );
+}
+
+/**
+ * Why a delegate's conversation is absent, when the daemon said why.
+ *
+ * Only for a block with NOTHING in it: a delegate that reported one line and
+ * then stopped streaming is a different case, and pinning a caveat under real
+ * content would call working output incomplete.
+ */
+function SubagentStepsMissing({
+  block,
+}: {
+  block: SubagentBlockEntry;
+}): React.JSX.Element | null {
+  if (block.stepsUnavailableReason === null || block.entries.length > 0) {
+    return null;
+  }
+  return (
+    <p
+      data-role="subagent-steps-missing"
+      className="m-0 text-[11px] text-muted-foreground">
+      {block.stepsUnavailableReason}
+    </p>
+  );
+}
+
 function SubagentTimeline({
   block,
 }: {
@@ -117,9 +175,15 @@ function SubagentTimeline({
 }): React.JSX.Element {
   const steps = subagentSteps(block);
   if (steps.length === 0) {
+    // The daemon's own sentence outranks the generic line: "has not done
+    // anything yet" is a claim about the DELEGATE, and saying it about one whose
+    // steps this CLI never streams reports geniro's blind spot as the sub-agent
+    // sitting idle — which is exactly how it read for a cursor delegate that had
+    // just spent thirteen seconds working.
     return (
       <p className="m-0 text-[11px] text-muted-foreground">
-        This sub-agent has not done anything yet.
+        {block.stepsUnavailableReason ??
+          'This sub-agent has not done anything yet.'}
       </p>
     );
   }
@@ -157,13 +221,25 @@ export function SubagentDetail({
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   chatAgentName?: string | null;
 }): React.JSX.Element {
+  // With nothing to build a timeline FROM and a stated reason there never will
+  // be, the split is two headings over one sentence — and the sentence would be
+  // printed under both. The thread section keeps it, because "where is the
+  // conversation" is the question a reader opened this panel with.
+  const nothingToSequence =
+    block.stepsUnavailableReason !== null && block.entries.length === 0;
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <SectionLabel>Timeline</SectionLabel>
-        <SubagentTimeline block={block} />
-      </div>
-      <div className="flex flex-col gap-2.5 border-t border-border pt-3">
+      {nothingToSequence ? null : (
+        <div>
+          <SectionLabel>Timeline</SectionLabel>
+          <SubagentTimeline block={block} />
+        </div>
+      )}
+      <div
+        className={cn(
+          'flex flex-col gap-2.5',
+          nothingToSequence ? null : 'border-t border-border pt-3',
+        )}>
         <SectionLabel>Conversation</SectionLabel>
         <SubagentThread
           block={block}
@@ -200,6 +276,11 @@ export function SubagentThread({
       {block.prompt ? (
         <BlockRequest label={`Task for ${title}`} text={block.prompt} />
       ) : null}
+      <SubagentFacts block={block} />
+      {/* Above the (empty) thread rather than below the result: it explains why
+          there is nothing between here and there, and a caveat placed after the
+          result reads as a caveat ABOUT the result. */}
+      <SubagentStepsMissing block={block} />
       {block.entries.map((entry) => (
         <TranscriptEntryView
           key={entry.type === 'item' ? entry.item.id : entry.id}

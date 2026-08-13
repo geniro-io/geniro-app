@@ -95,6 +95,85 @@ export interface AcpQuestionProtocol {
   encodeReply(params: unknown, allow: boolean, updatedInput: unknown): unknown;
 }
 
+/**
+ * What one agent told us about a background sub-agent it launched, normalized.
+ *
+ * The reading itself belongs to the adapter (the params are that vendor's own
+ * shape); what the driver owns is WHEN to ask for it and what to emit.
+ */
+export interface AcpDelegateFacts {
+  /** The launching tool call's id — the anchor everything downstream joins on. */
+  id: string;
+  label: string | null;
+  kind: string | null;
+  prompt: string | null;
+  model: string | null;
+  durationMs: number | null;
+}
+
+/**
+ * How ONE agent reports the background sub-agents it runs, since baseline ACP
+ * models a delegation as an ordinary tool call and nothing more.
+ *
+ * Supplied by the adapter, never known here — the method name, the marker and
+ * the params shape are that CLI's facts. What the driver owns is the LIFECYCLE:
+ * recognise the launch so the delegate's block can open while it is still
+ * working, ANSWER the announcement rather than declining it, and emit both as
+ * `subagent_info` events.
+ *
+ * Answering matters more than it looks. cursor sends its announcement through
+ * `connection.extMethod(...).catch(debugLog)` — a request whose outcome it
+ * discards — so declining cost the turn nothing and was invisible, which is
+ * exactly how every fact the CLI reports about its delegates (the brief, the
+ * type, the model, the duration) came to be thrown away for two milestones
+ * while the adapter declared the signal did not exist.
+ */
+export interface AcpDelegateProtocol {
+  /** The agent→client method carrying the announcement. */
+  method: string;
+  /**
+   * The `rawInput` entry that marks a tool call as a DELEGATION, so the block
+   * can open at launch instead of at completion.
+   *
+   * A marker rather than a tool name, because an ACP `tool_call` carries no
+   * machine name at all — only a human `title`, which cursor formats as
+   * `Task: <description>` and so cannot be matched on. Measured on
+   * cursor-agent 2026.08.11-e8db854: the launch arrives as
+   * `rawInput: {"_toolName":"task"}` and its title is `Task: Subagent task`,
+   * the description not yet known.
+   */
+  launchMarker: { key: string; value: string };
+  /**
+   * Read the announcement's params, or null when the shape is unrecognized —
+   * which falls through to the ordinary decline, on the same reasoning as
+   * {@link AcpQuestionProtocol.accepts}: a row built from a payload we could
+   * not parse is worse than not having one.
+   */
+  read(params: unknown): AcpDelegateFacts | null;
+  /**
+   * The launching tool's own return value is this CLI's ACCOUNTING, not the
+   * delegate's report — so it is dropped rather than presented as one.
+   *
+   * True for cursor, measured: the `task` call completes with
+   * `rawOutput: {durationMs, isBackground}` and the delegate's actual findings
+   * only ever appear in the MAIN agent's next message. Left in, the block framed
+   * that object as `Result from <delegate>` and printed `{"durationMs": 15430,
+   * "isBackground": false}` where the reader looks for what the delegate found.
+   * The duration is not lost — it rides the announcement, which is where a fact
+   * about the delegate belongs.
+   *
+   * False for a CLI whose delegate reports THROUGH that result (claude's `Task`
+   * returns the delegate's own text), where dropping it would discard the answer.
+   */
+  resultIsBookkeeping: boolean;
+  /**
+   * `AdapterConfig.subagents.stepsUnavailableReason` — stamped onto every row
+   * this protocol emits, so the block that has no thread to open carries the
+   * reason with it rather than needing a second lookup.
+   */
+  stepsUnavailableReason: string | null;
+}
+
 export interface AcpDriverOptions {
   /** The turn being driven — prompt, cwd, resume id, MCP endpoint. */
   input: AgentTurnInput;
@@ -111,6 +190,11 @@ export interface AcpDriverOptions {
   preferredModeId?: string | null;
   /** How this agent asks the user a question, or absent when it cannot. */
   question?: AcpQuestionProtocol;
+  /**
+   * How this agent reports its background sub-agents, or absent when it does
+   * not — in which case a delegation reads as the plain tool call it is.
+   */
+  delegate?: AcpDelegateProtocol;
   /**
    * Agent→client methods this client refuses WITHOUT narrating it — the ones
    * whose own agent absorbs the refusal, so nothing about the turn changed.
@@ -387,6 +471,12 @@ export class AcpTurnDriver implements TurnDriver {
   private readonly parkedQuestions = new Map<string, unknown>();
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
+  /**
+   * Tool calls THIS turn recognised as sub-agent launches, so their result can
+   * be treated as the CLI's accounting rather than the delegate's answer (see
+   * {@link AcpDelegateProtocol.resultIsBookkeeping}).
+   */
+  private readonly delegateToolCalls = new Set<string>();
   /**
    * The MCP servers this turn actually registered. `composePrompt` derives the
    * call-surface grant from this rather than from a separate flag, so the
@@ -1175,6 +1265,21 @@ export class AcpTurnDriver implements TurnDriver {
         `acp: ${method} arrived in an unrecognized shape — declined rather than shown as a question`,
       );
     }
+    const delegate = this.options.delegate;
+    if (delegate !== undefined && method === delegate.method) {
+      const facts = delegate.read(params);
+      if (facts !== null) {
+        // ANSWERED, not declined. The agent discards the outcome either way, so
+        // this changes nothing about the turn — what it changes is that the
+        // delegate's brief, type, model and duration reach the transcript
+        // instead of being refused and dropped.
+        this.reply(id, {});
+        return [this.delegateEvent(facts)];
+      }
+      this.options.logger?.warn(
+        `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a sub-agent`,
+      );
+    }
     // Everything else is a client capability we deliberately did not advertise
     // (`fs/*`, `terminal/*`) or a vendor extension we don't implement. A
     // blocking request MUST be answered or the agent parks forever, so refuse
@@ -1244,6 +1349,63 @@ export class AcpTurnDriver implements TurnDriver {
     ];
   }
 
+  /**
+   * The anchor row for a tool call that IS a delegation, or nothing.
+   *
+   * Reads the marker off the input the agent actually disclosed, so a call that
+   * sent no arguments at all (`rawInput: {}`, normalized to null upstream —
+   * routine on this transport) is simply not recognised as one, rather than
+   * throwing on a property read.
+   */
+  private delegateLaunchEvents(toolCall: AcpToolCall): AgentEvent[] {
+    const delegate = this.options.delegate;
+    if (delegate === undefined) {
+      return [];
+    }
+    const input = asRecord(toolCall.rawInput);
+    if (
+      input === null ||
+      asString(input[delegate.launchMarker.key]) !== delegate.launchMarker.value
+    ) {
+      return [];
+    }
+    // Per-TURN state on the driver, never on the adapter: one adapter instance
+    // serves N concurrent turns under graph fan-out.
+    this.delegateToolCalls.add(toolCall.toolCallId);
+    return [
+      this.delegateEvent({
+        id: toolCall.toolCallId,
+        // Every fact is still unknown: this CLI's launch frame carries only the
+        // tool's own name, and its title at that moment is the placeholder
+        // `Task: Subagent task`. Announcing the anchor alone is the point — the
+        // block exists and says "working" until the brief arrives.
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+      }),
+    ];
+  }
+
+  /** This tool call launched a delegate whose result is the CLI's own accounting. */
+  private isBookkeepingResult(toolCallId: string): boolean {
+    return (
+      this.options.delegate?.resultIsBookkeeping === true &&
+      this.delegateToolCalls.has(toolCallId)
+    );
+  }
+
+  /** One `subagent_info` row, with this protocol's steps reason stamped on. */
+  private delegateEvent(facts: AcpDelegateFacts): AgentEvent {
+    return {
+      type: 'subagent_info',
+      ...facts,
+      stepsUnavailableReason:
+        this.options.delegate?.stepsUnavailableReason ?? null,
+    };
+  }
+
   private onPermissionRequest(id: JsonRpcId, params: unknown): AgentEvent[] {
     const root = asRecord(params);
     const toolCallRecord = root ? asRecord(root.toolCall) : null;
@@ -1297,8 +1459,11 @@ export class AcpTurnDriver implements TurnDriver {
 
   private onNotification(method: string, params: unknown): AgentEvent[] {
     if (method !== ACP_CLIENT_METHODS.sessionUpdate) {
-      // Vendor notifications (`cursor/update_todos`, `cursor/task`, …) are
-      // fire-and-forget by definition — ignoring one is a no-op, not a stall.
+      // A vendor NOTIFICATION is fire-and-forget by definition — ignoring one
+      // is a no-op, not a stall. Note that cursor's `cursor/*` extensions are
+      // not these: every one observed on the wire carries a JSON-RPC `id` and
+      // so arrives as a request (`onAgentRequest`), including the ones whose
+      // outcome the agent then throws away.
       return [];
     }
     const root = asRecord(params);
@@ -1370,6 +1535,12 @@ export class AcpTurnDriver implements TurnDriver {
             // claim a classification nobody made.
             ...(toolCall.kind === null ? {} : { kind: toolCall.kind }),
           },
+          // A delegation announces itself twice: here, so the block opens while
+          // the delegate is still working, and again with its brief when the
+          // agent sends it. Emitted AFTER the tool call it anchors to, so a
+          // consumer replaying in `seq` order has the row before the reference
+          // to it.
+          ...this.delegateLaunchEvents(toolCall),
         ];
       }
       case 'tool_call_update': {
@@ -1395,9 +1566,13 @@ export class AcpTurnDriver implements TurnDriver {
             name:
               this.toolNames.get(toolCall.toolCallId) ??
               (toolCall.name.length > 0 ? toolCall.name : null),
-            result:
-              toolCall.rawOutput ??
-              (diffs.length > 0 ? { diffs } : (update.content ?? null)),
+            result: this.isBookkeepingResult(toolCall.toolCallId)
+              ? // The pair still CLOSES — the block reads `completed` off the
+                // result's existence — it just carries no body to frame as the
+                // delegate's report.
+                null
+              : (toolCall.rawOutput ??
+                (diffs.length > 0 ? { diffs } : (update.content ?? null))),
             isError: toolCall.status === 'failed',
           },
         ];

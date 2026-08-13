@@ -238,6 +238,52 @@ type AgentEventBody =
     }
   | {
       /**
+       * WHAT a background sub-agent of this turn IS, announced by the CLI apart
+       * from the tool call that launched it.
+       *
+       * For a CLI whose delegates stream their own work (claude), the launching
+       * tool call's arguments already carry the description, the prompt and the
+       * type, and no adapter needs this. It exists for the other shape, measured
+       * on `cursor-agent acp`: the `task` tool call opens with `rawInput` holding
+       * nothing but the tool's own name, and the delegate's brief arrives later
+       * on a separate channel (`cursor/task`) — so without a row of its own,
+       * everything the CLI says about its delegate is discarded.
+       *
+       * {@link id} is the LAUNCHING TOOL CALL's id, which is what joins this
+       * announcement to the row that started the delegate. Deliberately in the
+       * body rather than as {@link AgentEventOrigin.parentToolUseId}: that field
+       * means "the delegate PRODUCED this row", and this row is one ABOUT the
+       * delegate, written by the main thread. Conflating them would fold the
+       * announcement into the delegate's own thread as an invisible entry, which
+       * is precisely what makes "did this delegate do anything?" unanswerable.
+       *
+       * Emitted more than once per delegate BY DESIGN — once when the launch is
+       * recognised (anchor only, so the block can open while the delegate is
+       * still working) and again when the facts arrive. Every field is nullable
+       * for that reason, and the consumer merges by preferring the last non-null
+       * value it saw.
+       */
+      type: 'subagent_info';
+      /** The launching tool call's id. */
+      id: string;
+      /** One-line description of the delegated task, as the CLI named it. */
+      label: string | null;
+      /** What the delegate was asked to BE — the CLI's own type/role name. */
+      kind: string | null;
+      /** The full brief the delegate was given. */
+      prompt: string | null;
+      /** The model it ran, when the CLI names one. */
+      model: string | null;
+      /** How long it took, when the CLI reports it. */
+      durationMs: number | null;
+      /**
+       * {@link AdapterConfig.subagents.stepsUnavailableReason} — why this
+       * delegate's own conversation is absent. Null for a CLI that streams it.
+       */
+      stepsUnavailableReason: string | null;
+    }
+  | {
+      /**
        * The CLI reported the session's invokable slash commands (claude's
        * `system/init` `slash_commands`: built-ins + plugin skills + user and
        * project skills/commands, shadowing already resolved — verified live
@@ -1214,13 +1260,14 @@ export interface AdapterConfig {
    * MEASUREMENT with its date and its bounds — not a permanent property. See
    * `.claude/rules/agent-adapters.md`: write down what was checked, so the
    * next reader knows what to re-check rather than trusting the absence.
+   * `cursor-acp` is the standing example of why that matters: it declared
+   * `reports: false` on the strength of geniro's OWN ACP types carrying no
+   * parent id — which measured this codebase, not the wire — and a probe of the
+   * real CLI then found the signal (`cursor/task`) it had been discarding.
    *
-   * **Declarative only — nothing reads this yet.** It records what was
-   * measured about each CLI; it gates no behaviour, and flipping either value
-   * changes nothing at runtime. Said out loud so a reader does not go looking
-   * for the consumer. Giving it one (a `subagents[]` arm on
-   * `GET /v1/capabilities`, so a cursor chat could explain why it lists no
-   * delegates) is the obvious next step and deliberately not taken here.
+   * Read by {@link stepsUnavailableReason}'s consumers and by
+   * `GET /v1/capabilities` → `subagents[]`, so a chat on a CLI that reports
+   * nothing can say so rather than showing an empty list.
    */
   readonly subagents: {
     /** This CLI reports its delegates on the stream. */
@@ -1230,6 +1277,24 @@ export interface AdapterConfig {
      * was checked. Null when {@link reports} is true.
      */
     readonly unavailableReason: string | null;
+    /**
+     * Why a reported delegate's own CONVERSATION is not shown, when the CLI
+     * announces the delegation but streams nothing the delegate did. Null when
+     * its steps ride the same stream as the main thread's (claude), which is
+     * what lets the block open into a real thread.
+     *
+     * A second, sharper fact than {@link reports} rather than a shade of it:
+     * "geniro never saw a delegate" and "geniro saw the delegate and this CLI
+     * does not stream its work" are different answers, and collapsing them left
+     * a cursor delegate's card reading "this sub-agent has not done anything
+     * yet" about one that had done thirteen seconds of it.
+     *
+     * Travels on the delegate's own row (the `subagent_info` item) rather than
+     * through a capability lookup, so the row that declares a delegate also
+     * carries the reason its thread is empty — one fetch, and the two can never
+     * describe different CLIs.
+     */
+    readonly stepsUnavailableReason: string | null;
   };
 
   // ── Approval policy ─────────────────────────────────────────────────────

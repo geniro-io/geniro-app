@@ -607,16 +607,23 @@ export abstract class AgentAdapter {
    *
    * An adapter that implements it writes the CLI's OWN state, not a private
    * one — claude edits `projects[<cwd>].disabledMcpServers` in `~/.claude.json`
-   * under the same `proper-lockfile` lock the CLI itself takes. That is a
+   * under the same `proper-lockfile` lock the CLI itself takes, and cursor
+   * drives that CLI's own `mcp enable|disable` subcommands. That is a
    * deliberate exception to "geniro writes only its own files": it is the only
    * mechanism that reaches servers of every scope, and sharing the CLI's list
    * means a switch flipped here is the same switch the user sees in their own
    * terminal.
+   *
+   * `options` is here for the implementations that reach the CLI rather than a
+   * file: it carries `onSpawn`, so the caller registers the child for shutdown
+   * exactly as it does for {@link listMcpServers}. An implementation that only
+   * edits a file ignores it.
    */
   setMcpServerEnabled(
     _cwd: string,
     _server: string,
     _enabled: boolean,
+    _options: AgentCommandOptions = {},
   ): Promise<void> {
     return Promise.reject(
       new Error(

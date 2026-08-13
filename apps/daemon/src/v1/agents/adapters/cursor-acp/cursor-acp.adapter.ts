@@ -28,12 +28,15 @@ import {
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
   CURSOR_EFFORT_PARAMETER_ID,
+  CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
+  CURSOR_MCP_ENABLE_ARGS,
   CURSOR_MCP_LIST_ARGS,
   CURSOR_MCP_LIST_FAILED_MESSAGE,
   CURSOR_MCP_LIST_TIMEOUT_MS,
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
-  CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+  CURSOR_MCP_TOGGLE_FAILED_MESSAGE,
+  CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_PROFILE_DIR_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
@@ -292,17 +295,15 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         listingUnavailableReason: null,
         /**
-         * Still non-null, and deliberately so after the same verification —
-         * {@link CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON} carries the evidence.
-         * Saying it keeps every cursor row read-only instead of offering a
-         * dead control.
-         *
-         * All three fields get the one sentence, unlike claude's three
-         * distinct ones: the latter two answer "why is THIS row not
-         * toggleable" questions that are never reached while the blanket
-         * reason above is set.
+         * Null: this CLI CAN be told which servers to load, per folder, and
+         * {@link CURSOR_MCP_ENABLE_ARGS} carries the bundle source and the
+         * measurements. It read non-null for two milestones on the recorded
+         * grounds that `mcp enable|disable` were global and wrote
+         * `cli-config.json`; both were refuted against 2026.08.11-e8db854,
+         * which is why every row in the panel used to render a padlock while
+         * the user's own Cursor UI offered live switches for the same servers.
          */
-        toggleUnavailableReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        toggleUnavailableReason: null,
         /**
          * Null: no such split is known for this CLI. `cursor-agent mcp list`
          * reports what the folder configures, and nothing has been observed
@@ -310,7 +311,7 @@ export class CursorAcpAdapter extends AgentAdapter {
          * would be a claim about the CLI nobody verified.
          */
         interactiveOnlyNote: null,
-        userDisabledReason: CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
+        userDisabledReason: CURSOR_MCP_USER_DISABLED_REASON,
         /**
          * `cursor-agent mcp login <identifier>` — "Authenticate with an MCP
          * server configured in .cursor/mcp.json or ~/.cursor/mcp.json", read
@@ -716,6 +717,45 @@ export class CursorAcpAdapter extends AgentAdapter {
       return { ok: false, reason: CURSOR_MCP_LIST_UNREADABLE_MESSAGE };
     }
     return { ok: true, servers };
+  }
+
+  /**
+   * Switch one server for one folder by driving the CLI's own subcommand.
+   *
+   * `cursor-agent mcp enable|disable <name>`, run IN that folder — the CLI
+   * resolves its own per-project state from `process.cwd()` (its git root, else
+   * the folder itself), so the cwd is the whole scoping mechanism and geniro
+   * never has to name the file. {@link CURSOR_MCP_ENABLE_ARGS} carries the
+   * bundle source and the measurements, including why the old "this is global"
+   * reading was wrong.
+   *
+   * NOT `processGroup`, unlike the listing beside it: neither subcommand dials
+   * anything — disable is a read-modify-write of one small JSON file, and
+   * enable additionally reads the two `mcp.json` files and the approvals list —
+   * so there is no grandchild to reap and the plain path's own deadline is the
+   * right one.
+   *
+   * A null stdout is the command having failed, which for the ON direction is a
+   * real refusal the panel should show (a server no config defines exits 1). The
+   * OFF direction cannot fail that way — measured, `mcp disable` exits 0 on any
+   * name at all — so nothing here has to distinguish them.
+   */
+  override async setMcpServerEnabled(
+    cwd: string,
+    server: string,
+    enabled: boolean,
+    options: AgentCommandOptions = {},
+  ): Promise<void> {
+    const stdout = await this.runCommand(
+      [...(enabled ? CURSOR_MCP_ENABLE_ARGS : CURSOR_MCP_DISABLE_ARGS), server],
+      { ...options, cwd },
+    );
+    if (stdout === null) {
+      // Thrown, not returned: the contract is a promise that REJECTS on a
+      // refusal, and `AgentMcpService` turns the message into the sentence the
+      // panel renders instead of moving the switch.
+      throw new Error(CURSOR_MCP_TOGGLE_FAILED_MESSAGE);
+    }
   }
 
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {

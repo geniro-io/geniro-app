@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdtempSync,
@@ -14,6 +16,7 @@ import { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpFolderFacts,
   AgentMcpServer,
+  AgentSpawnInfo,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -109,6 +112,13 @@ interface HarnessOptions {
    * is what sends every other test down the ask-the-adapter path.
    */
   harvest?: McpHarvestStore;
+  /**
+   * Whether a write shows up in the CLI's folder FACTS afterwards. True models
+   * claude, whose disabled list is a file geniro reads back; false models
+   * cursor, whose only evidence is the next listing — so the service's own
+   * record of what it just wrote is all there is.
+   */
+  recordsFacts?: boolean;
 }
 
 function harness(
@@ -123,6 +133,7 @@ function harness(
     facts,
     toggleUnavailableReason = null,
     harvest = emptyHarvest(),
+    recordsFacts = true,
   } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
@@ -142,10 +153,12 @@ function harness(
   );
   const setMcpServerEnabled = vi.fn(
     (_cwd: string, server: string, enabled: boolean) => {
-      if (enabled) {
-        off.delete(server);
-      } else {
-        off.add(server);
+      if (recordsFacts) {
+        if (enabled) {
+          off.delete(server);
+        } else {
+          off.add(server);
+        }
       }
       return Promise.resolve();
     },
@@ -671,29 +684,31 @@ describe('AgentMcpService.list', () => {
     expect(listMcpServers).not.toHaveBeenCalled();
   });
 
-  it('BOTH shipped adapters now list, and only cursor declares the toggle absent', async () => {
+  it('BOTH shipped adapters list AND switch, so no row is born with a padlock', async () => {
     // Pins the two REAL adapters, not a fixture, so the panel's copy follows
-    // the CLIs. This assertion was inverted in milestone 4: cursor used to
-    // declare its listing unavailable, and `cursor-agent mcp list` turned out
-    // to exist. What did NOT change is the toggle — `mcp enable|disable` write
-    // cursor's global config, which this feature will not touch — so a cursor
-    // row still carries a reason for having no switch, and losing that reason
-    // would put a dead control on every one of them.
+    // the CLIs. This assertion has now been inverted twice, and each time
+    // because a declared absence was a measurement nobody re-took: cursor's
+    // listing was declared impossible until `cursor-agent mcp list` turned out
+    // to exist, and its TOGGLE was declared impossible on the reading that
+    // `mcp enable|disable` write a global config — refuted against
+    // 2026.08.11-e8db854, where they write `mcp-disabled.json` under the
+    // folder's own project key (`cursor-acp.const.ts` carries the capture).
+    //
+    // A non-null reason on either adapter is what put a padlock on every row
+    // of the panel while the user's own Cursor UI offered live switches for
+    // the same servers, so both are asserted: reading one field alone would
+    // not notice the other regressing.
     const { ClaudeAdapter } = await import('../adapters/claude/claude.adapter');
     const { CursorAcpAdapter } =
       await import('../adapters/cursor-acp/cursor-acp.adapter');
 
-    const claudeMcp = new ClaudeAdapter().getConfig().mcp;
-    expect(claudeMcp.listingUnavailableReason).toBeNull();
-    // "ONLY cursor" is half the claim, so claude's null is asserted too: a
-    // blanket reason appearing here would strip the switch off every claude
-    // row, and reading only cursor's field would not notice.
-    expect(claudeMcp.toggleUnavailableReason).toBeNull();
-    const cursorMcp = new CursorAcpAdapter().getConfig().mcp;
-    expect(cursorMcp.listingUnavailableReason).toBeNull();
-    expect(cursorMcp.toggleUnavailableReason).toEqual(
-      expect.stringContaining('cursor-agent'),
-    );
+    for (const mcp of [
+      new ClaudeAdapter().getConfig().mcp,
+      new CursorAcpAdapter().getConfig().mcp,
+    ]) {
+      expect(mcp.listingUnavailableReason).toBeNull();
+      expect(mcp.toggleUnavailableReason).toBeNull();
+    }
   });
 
   it('marks a row the CLI itself reported as switched off, even where geniro cannot switch', async () => {
@@ -1076,7 +1091,151 @@ describe('AgentMcpService.setEnabled', () => {
 
     await service.setEnabled(AgentKind.Claude, dirA, 'proj', false);
 
-    expect(setMcpServerEnabled).toHaveBeenCalledWith(dirA, 'proj', false);
+    expect(setMcpServerEnabled).toHaveBeenCalledWith(
+      dirA,
+      'proj',
+      false,
+      // The options bag exists for an adapter whose mechanism is a SUBCOMMAND
+      // rather than a file: without `onSpawn` that child is never registered,
+      // and shutdown cannot reap it. Asserted here rather than in its own case
+      // because this is the one call site that has to carry it.
+      expect.objectContaining({ onSpawn: expect.any(Function) }),
+    );
+  });
+
+  describe('a CLI whose disabled state is only visible in the listing', () => {
+    // cursor's case. Its `mcp disable` writes state geniro deliberately does not
+    // go looking for on disk (the path needs the git root and the right one of
+    // the CLI's two project-dir functions), so `readMcpFolderFacts` reports
+    // nothing and the ONLY evidence a server is off is the next `mcp list`
+    // saying `disabled`. The cached reading was taken BEFORE the write, which is
+    // what these two pin.
+
+    it('does not spring the switch back in the answer to the write itself', async () => {
+      const cwd = realDir();
+      const { service } = harness(() => Promise.resolve([server('a')]), {
+        recordsFacts: false,
+      });
+      // Populates the cache with the pre-write reading — `connected`.
+      await service.list(AgentKind.CursorAgent, cwd);
+
+      const after = await service.setEnabled(
+        AgentKind.CursorAgent,
+        cwd,
+        'a',
+        false,
+      );
+
+      // Without the patch this is `false`: facts know nothing and the cached row
+      // still says `connected`, so the route answers that the server the user
+      // just switched off is on.
+      expect(after.servers[0]?.disabled).toBe(true);
+    });
+
+    it('does not spring it back on the next panel open either', async () => {
+      // The same staleness, reached the other way — and the worse half: this one
+      // lasts the whole TTL, so reopening the panel a minute later contradicts
+      // the run. Patching the cache rather than only the answer is what covers
+      // it, which is why this is a second case and not an extra assertion.
+      const cwd = realDir();
+      const { service, listMcpServers } = harness(
+        () => Promise.resolve([server('a')]),
+        { recordsFacts: false },
+      );
+      await service.list(AgentKind.CursorAgent, cwd);
+      await service.setEnabled(AgentKind.CursorAgent, cwd, 'a', false);
+
+      const reopened = await service.list(AgentKind.CursorAgent, cwd);
+
+      expect(reopened.servers[0]?.disabled).toBe(true);
+      // And it must be the CHEAP path: charging the click a fresh cold dial of
+      // every server in the folder is what patching instead of evicting avoids.
+      expect(listMcpServers).toHaveBeenCalledTimes(1);
+    });
+
+    it('states an ON server’s health as unknown rather than inventing one', async () => {
+      // Asymmetric on purpose. Switching a server OFF makes the CLI report
+      // exactly `disabled`; switching one ON leaves its health whatever a dial
+      // would find, and nothing has dialled it. `connected` here would be the
+      // panel asserting a server works because a switch moved.
+      const cwd = realDir();
+      const { service } = harness(() => Promise.resolve([server('a')]), {
+        recordsFacts: false,
+      });
+      await service.list(AgentKind.CursorAgent, cwd);
+      await service.setEnabled(AgentKind.CursorAgent, cwd, 'a', false);
+
+      const back = await service.setEnabled(
+        AgentKind.CursorAgent,
+        cwd,
+        'a',
+        true,
+      );
+
+      expect(back.servers[0]?.disabled).toBe(false);
+      expect(back.servers[0]?.status).toBe('unknown');
+      // The reason belonged to the status it explained.
+      expect(back.servers[0]?.detail).toBeNull();
+    });
+  });
+
+  it('registers the child of a toggle that reaches the CLI, so shutdown can reap it', async () => {
+    // The `onSpawn` above is only half the obligation — a hand-off nothing acts
+    // on is the same as none. This drives the real seam: the adapter calls
+    // `onSpawn` the way `CursorAcpAdapter.setMcpServerEnabled` does through
+    // `runCommand`, and the registry must then hold a handle.
+    const cwd = realDir();
+    const processes = new ProcessRegistry();
+    const child = new EventEmitter() as unknown as ChildProcess;
+    const setMcpServerEnabled = vi.fn(
+      (
+        _cwd: string,
+        _server: string,
+        _enabled: boolean,
+        options: {
+          onSpawn?: (c: ChildProcess, i: AgentSpawnInfo) => void;
+        } = {},
+      ) => {
+        options.onSpawn?.(child, { processGroup: false });
+        return Promise.resolve();
+      },
+    );
+    const adapter = {
+      listMcpServers: () =>
+        Promise.resolve({ ok: true as const, servers: [server('a')] }),
+      getConfig: () => ({
+        mcp: {
+          listingUnavailableReason: null,
+          toggleUnavailableReason: null,
+          userDisabledReason: 'you switched it off yourself',
+        },
+      }),
+      readMcpFolderFacts: () =>
+        Promise.resolve({ disabled: [], lockedOff: [] }),
+      setMcpServerEnabled,
+    } as unknown as AgentAdapter;
+    const service = new AgentMcpService(
+      { for: () => adapter } as unknown as AgentAdapterRegistry,
+      processes,
+      new AgentVersionService(),
+      emptyHarvest(),
+      {
+        resolveVersionFn: () => Promise.resolve('1.0.0'),
+        folderlessDir: join(realDir(), 'folderless'),
+      },
+    );
+
+    const registered = vi.spyOn(processes, 'register');
+
+    await service.setEnabled(AgentKind.CursorAgent, cwd, 'a', false);
+
+    // The id captured from the real call, then read back off the registry: the
+    // spy alone would pass on a `register` that threw the handle away, and
+    // `activeCount` alone could not tell this child from another spec's.
+    expect(registered).toHaveBeenCalledTimes(1);
+    const id = registered.mock.calls[0]?.[0] ?? '';
+    expect(id).toMatch(/^mcp:toggle:/);
+    expect(processes.has(id)).toBe(true);
   });
 });
 

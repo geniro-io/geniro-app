@@ -10,6 +10,7 @@ import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpListingResult,
   AgentMcpServer,
+  AgentMcpServerStatus,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentMcpListingWire } from '../chat.types';
@@ -91,6 +92,18 @@ function keyOf(
   version: string | null,
 ): string {
   return `${agent}\u0000${cwd}\u0000${configDir ?? ''}\u0000${version ?? ''}`;
+}
+
+/**
+ * The prefix every key for one (agent, folder) shares, whatever profile or
+ * binary version produced it.
+ *
+ * Here rather than spelled at its one call site, so the key SHAPE keeps one
+ * home: a caller composing the first two fields itself is a second place that
+ * has to be right when a dimension is added to {@link keyOf}.
+ */
+function keyPrefixOf(agent: AgentKind, cwd: string): string {
+  return `${agent}\u0000${cwd}\u0000`;
 }
 
 /**
@@ -544,7 +557,16 @@ export class AgentMcpService {
       );
     }
     try {
-      await adapter.setMcpServerEnabled(projectDir, server, enabled);
+      await adapter.setMcpServerEnabled(projectDir, server, enabled, {
+        // Registered like the listing's child, for the same reason: an adapter
+        // whose mechanism is a subcommand rather than a file spawns a process,
+        // and every child this daemon starts must be reapable on shutdown.
+        onSpawn: (child, spawnInfo) =>
+          this.processes.register(
+            `mcp:toggle:${randomUUID()}`,
+            childProcessHandle(child, spawnInfo),
+          ),
+      });
     } catch (err) {
       // The adapter reaches the user's own config file and a real lock, so
       // this is where a contended write or an unparseable config surfaces.
@@ -556,6 +578,20 @@ export class AgentMcpService {
         `could not switch ${server} for ${agent}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    // The cached READING is now about the previous configuration, and for a CLI
+    // whose disabled state is only visible IN that reading it is the whole
+    // answer: cursor reports a switched-off server as `disabled` in `mcp list`
+    // and keeps no folder facts, so a cache hit here — and on every panel open
+    // for the rest of the TTL — would put the switch straight back where the
+    // user just moved it from. Patched rather than evicted, because evicting
+    // charges the click a fresh cold dial of every server in the folder.
+    //
+    // Both directions are stated at the strength they are actually known:
+    // switching a server OFF makes the CLI report exactly `disabled` (measured),
+    // while switching one ON leaves its health genuinely unknown until something
+    // dials it — so that row degrades to `unknown` rather than claiming a health
+    // nobody observed. The next real read replaces either one.
+    this.patchCachedStatus(agent, projectDir, server, enabled);
     // BLOCKING, unlike the panel's read: this route's entire answer is the
     // listing that resulted from the write, so handing back empty rows with
     // `pending` would leave the caller nothing to render the toggle against.
@@ -570,6 +606,58 @@ export class AgentMcpService {
       read.result,
     );
     return { ...listing, pending: false };
+  }
+
+  /**
+   * Re-state one server's status in every cached reading of one (agent, folder).
+   *
+   * Called after a successful write, and it is what stops the switch springing
+   * back. The disabled state of a cursor row is visible ONLY in the listing —
+   * that CLI keeps no folder facts geniro can read cheaply — so a cache hit
+   * composed from the pre-write reading reports the server the user just
+   * switched off as on, both in this route's own answer and on every panel open
+   * until the TTL lapses.
+   *
+   * The two directions are recorded at the strength they are known. OFF is
+   * exact: `cursor-agent mcp list` reports a server switched off with its own
+   * `mcp disable` as `disabled` (captured in `cursor-acp.const.ts`). ON is not —
+   * the server's health is whatever a dial would find, and nothing has dialled
+   * it — so it degrades to `unknown`, which the panel draws as a listed server
+   * with its health unstated. Inventing `connected` there is the confident lie
+   * this whole module is arranged to avoid.
+   *
+   * Every profile's entry for the folder is patched, not just the one that asked:
+   * the toggle route takes no config directory and the CLI's state is per
+   * (folder, server), so each profile's reading of it is now equally stale — the
+   * same fact the renderer's own re-read of its other scopes is built on.
+   */
+  private patchCachedStatus(
+    agent: AgentKind,
+    cwd: string,
+    server: string,
+    enabled: boolean,
+  ): void {
+    const prefix = keyPrefixOf(agent, cwd);
+    const status: AgentMcpServerStatus = enabled ? 'unknown' : 'disabled';
+    for (const [key, entry] of this.cache) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      let touched = false;
+      const servers = entry.servers.map((row) => {
+        if (row.name !== server) {
+          return row;
+        }
+        touched = true;
+        // `detail` goes with the status it explained. A connection-failure
+        // reason left under a `disabled` row states a problem that is no longer
+        // being had, and the panel renders that string verbatim.
+        return { ...row, status, detail: null };
+      });
+      if (touched) {
+        this.cache.set(key, { ...entry, servers });
+      }
+    }
   }
 
   /**

@@ -1,4 +1,4 @@
-import type { spawn } from 'node:child_process';
+import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import { lstatSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -996,6 +996,100 @@ describe('CursorAcpAdapter misuse', () => {
       await expect(
         new CursorAcpAdapter({ groupSpawnFn }).listModels(),
       ).resolves.toEqual([]);
+    });
+  });
+
+  describe('setMcpServerEnabled', () => {
+    /**
+     * Answers the toggle subcommand, capturing its argv and cwd.
+     *
+     * `execFileFn`, not `groupSpawnFn`: neither `mcp enable` nor `mcp disable`
+     * dials anything, so this one deliberately does NOT take the process-group
+     * path the listing beside it needs.
+     */
+    function fakeToggle(ok: boolean): {
+      execFileFn: typeof execFile;
+      captured: { args?: readonly string[]; cwd?: string };
+    } {
+      const captured: { args?: readonly string[]; cwd?: string } = {};
+      const execFileFn = ((
+        _cmd: string,
+        args: readonly string[],
+        opts: { cwd?: string },
+        cb: (err: Error | null, out: string) => void,
+      ) => {
+        captured.args = args;
+        captured.cwd = opts.cwd;
+        // A non-zero exit reaches `execFile` as an error argument, which
+        // `runCommand` turns into the null stdout this adapter reads as refusal.
+        cb(ok ? null : new Error('exit 1'), ok ? 'done\n' : '');
+        return {} as ChildProcess;
+      }) as unknown as typeof execFile;
+      return { execFileFn, captured };
+    }
+
+    it('switches a server OFF in the folder it was given', async () => {
+      // The cwd IS the scoping mechanism: the CLI resolves its own per-project
+      // state from `process.cwd()` (git root, else the folder), so passing it is
+      // the whole reason one folder's switch is not another's. Drop the cwd and
+      // every toggle would land on whatever directory the daemon was started in.
+      const { execFileFn, captured } = fakeToggle(true);
+
+      await new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
+        '/proj',
+        'figma',
+        false,
+      );
+
+      expect(captured.args).toEqual(['mcp', 'disable', 'figma']);
+      expect(captured.cwd).toBe('/proj');
+    });
+
+    it('switches a server ON through `mcp enable`, which also approves it', async () => {
+      // Not merely un-disabling: the CLI's own toggle is `addApproval` then
+      // `removeDisabledServer` (its TUI handler, `6260.index.js`), and a server
+      // that is un-disabled but unapproved is still prompted for. `enable` is
+      // what makes the switch mean the same thing here as in the user's Cursor.
+      const { execFileFn, captured } = fakeToggle(true);
+
+      await new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
+        '/proj',
+        'figma',
+        true,
+      );
+
+      expect(captured.args).toEqual(['mcp', 'enable', 'figma']);
+    });
+
+    it('REJECTS when the CLI refused, instead of reporting a switch that never moved', async () => {
+      // `mcp enable` exits 1 for a server no config defines (measured). Resolving
+      // there would move the switch in the panel over a CLI that changed nothing
+      // — the silent no-op this whole feature is written to avoid.
+      const { execFileFn } = fakeToggle(false);
+
+      await expect(
+        new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
+          '/proj',
+          'nope',
+          true,
+        ),
+      ).rejects.toThrow(/refused to switch/);
+    });
+
+    it('hands its child to onSpawn, so the daemon can reap it', async () => {
+      // Every child the daemon starts must be registerable; this adapter's
+      // toggle is the one that spawns a process where claude's edits a file.
+      let handed = 0;
+      const { execFileFn } = fakeToggle(true);
+
+      await new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
+        '/proj',
+        'figma',
+        false,
+        { onSpawn: () => (handed += 1) },
+      );
+
+      expect(handed).toBe(1);
     });
   });
 

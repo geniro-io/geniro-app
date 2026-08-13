@@ -199,9 +199,11 @@ export const CURSOR_MCP_PENDING_MARKER = 'not loaded';
  * probe-http: disabled
  * ```
  *
- * Reachable by the ONLY mechanism this CLI offers for switching a server off —
- * the one {@link CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON} tells the user about —
- * so it is a routine state, not an exotic one.
+ * Reachable by the mechanism {@link CURSOR_MCP_DISABLE_ARGS} drives, which
+ * geniro's own switch now writes — so it is a routine state, not an exotic one,
+ * and it is what makes the switch POSITION readable without geniro having to
+ * locate the CLI's state file: `AgentMcpService.composeListing` already reads a
+ * row the CLI itself calls disabled as disabled.
  */
 export const CURSOR_MCP_DISABLED_MARKER = 'disabled';
 
@@ -240,23 +242,86 @@ export const CURSOR_MCP_NEEDS_AUTH_MARKER = 'requires_authentication';
 export const CURSOR_MCP_EMPTY_MARKER = 'No MCP servers configured';
 
 /**
- * Why a cursor row never carries a switch.
+ * Argv for the two halves of the switch.
  *
- * `cursor-agent mcp enable|disable` DO exist, but they write the user's global
- * `~/.cursor/cli-config.json`: enabling one server was observed to flip it from
- * `not loaded` to `ready` in EVERY folder, not just the one the command ran in.
- * There is no per-invocation equivalent — `--approve-mcps` was probed and does
- * not affect `mcp list` at all — so geniro has nothing it could switch without
- * editing a file this feature has ruled out touching.
+ * WHERE THE PER-FOLDER CLAIM COMES FROM. This adapter used to declare the
+ * toggle unavailable, on the recorded grounds that `mcp enable|disable` "write
+ * the user's global `~/.cursor/cli-config.json`" and take effect "in EVERY
+ * folder". Both halves of that are wrong on 2026.08.11-e8db854, and the CLI's
+ * own bundled source says where it really goes
+ * (`~/.local/share/cursor-agent/versions/<v>/index.js`):
  *
- * Named because `getConfig()` states it three times: `toggleUnavailableReason`
- * is the one a user can actually read, and the other two are unreachable while
- * it is non-null (`AgentMcpService` returns early on it before ever consulting
- * them) — they exist only to satisfy a contract that requires a string. Three
- * copies of one sentence to keep in lockstep is what a name is for.
+ *   "./src/mcp/project-paths.ts": function o(dir) {
+ *     return join(dir, "mcp-disabled.json")
+ *   }
+ *   function C(cwd, root) {
+ *     const projectRoot = root ?? gitRoot(cwd) ?? cwd;
+ *     const projectDir  = cursorConfig.projectDir(projectRoot);
+ *     return { cwd, projectRoot, projectDir,
+ *              approvalPath: join(projectDir, "mcp-approvals.json"),
+ *              disabledPath: o(projectDir) };
+ *   }
+ *
+ * and `./src/commands/disable.ts` reads `process.cwd()` and writes through
+ * that `disabledPath`. Measured against the real binary, and BOTH directions
+ * of the old claim fell:
+ *
+ * - not `cli-config.json` — its md5 was byte-identical across a `disable`, and
+ *   no file under `~/.cursor` changed at all except
+ *   `~/.cursor/projects/<key>/mcp-disabled.json`, which appeared holding
+ *   `["playwright"]`;
+ * - not global — `disable codegraph` run in an unrelated directory wrote that
+ *   directory's own project key and left `codegraph: ready` in this repo.
+ *
+ * So the grain is the same one claude's `projects[<cwd>].disabledMcpServers`
+ * has, and geniro switches it the way the CLI's OWN toggle does: the TUI's
+ * handler (`6260.index.js`) is `addApproval` then `removeDisabledServer` on
+ * enable, `addDisabledServer` on disable — which is why enable goes through
+ * `mcp enable` rather than merely un-disabling. It also approves, and that is
+ * the CLI's own definition of the switch being on.
+ *
+ * Deliberately NOT reimplemented as a file write, unlike claude's: the path
+ * above needs the git root, `CURSOR_DATA_DIR`/`XDG_CONFIG_HOME`, and the right
+ * one of the CLI's two project-dir functions — the other bounds the length and
+ * falls back to a sha256 of the path past 92 characters. Driving the
+ * subcommand leaves all of that where it belongs.
+ *
+ * WHY THE OLD MEASUREMENT WENT WRONG is worth writing down, because it is the
+ * cheap mistake: `projectRoot` is `gitRoot(cwd) ?? cwd`, so two folders inside
+ * one repository DO share a single disabled list. "Every folder" is what
+ * per-repository looks like if the folders you compare are both in the same
+ * repository.
+ *
+ * RE-CHECK IF: `mcp --help` loses either subcommand, or a `disable` in one
+ * repository starts showing up in another.
  */
-export const CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON =
-  'cursor-agent can only switch MCP servers in its own global config';
+export const CURSOR_MCP_ENABLE_ARGS: readonly string[] = ['mcp', 'enable'];
+export const CURSOR_MCP_DISABLE_ARGS: readonly string[] = ['mcp', 'disable'];
+
+/**
+ * Shown when the switch command itself failed.
+ *
+ * Only `enable` can reach it. Measured on the same build: `mcp enable` on a
+ * name that is in no config exits 1 with "not found in configuration", while
+ * `mcp disable` exits 0 and writes the name anyway — it validates nothing. So
+ * the off direction cannot refuse, and this sentence is about turning one ON.
+ */
+export const CURSOR_MCP_TOGGLE_FAILED_MESSAGE =
+  'cursor-agent refused to switch that server — it may no longer be in .cursor/mcp.json or ~/.cursor/mcp.json';
+
+/**
+ * Why a cursor row's switch is never locked OFF the way a claude row's can be.
+ *
+ * claude unions a `.mcp.json` REJECTION list out of several settings files, and
+ * a name in any of them is one geniro cannot pull back out — that is what its
+ * `userDisabledReason` explains. No equivalent has been found for this CLI:
+ * `mcp-disabled.json` is the only state its own switch writes, and `mcp enable`
+ * undoes it. So `readMcpFolderFacts` reports an empty `lockedOff` and this
+ * sentence is unreachable today; it exists because the contract wants a string,
+ * and it says what it would mean if one were ever found.
+ */
+export const CURSOR_MCP_USER_DISABLED_REASON =
+  'switched off in cursor-agent’s own configuration, which geniro cannot undo';
 
 /**
  * Shown to the user when the listing command could not be run at all — a

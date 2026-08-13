@@ -141,6 +141,14 @@ export function InlineClampText({
  * Shared rather than repeated: the accent classes are the only thing that
  * makes a request panel look like a request panel, and two copies of them is
  * how the two blocks come to disagree after one retint.
+ *
+ * Tinted with `secondary` (the warm apricot) rather than `primary`, because
+ * `primary/5` was 5% of a brown that is itself close to the cream background:
+ * the panel came out the same beige as the card holding it, and "what this was
+ * asked to do" read as one more paragraph of the surrounding block. It is the
+ * FIRST thing in every enclosure, so it is the one panel that has to be
+ * separable at a glance — and it now differs from both the neutral card and the
+ * green `BlockResult` below it, which is the pairing that carries the meaning.
  */
 export function BlockRequest({
   label,
@@ -154,7 +162,7 @@ export function BlockRequest({
       <SectionLabel>{label}</SectionLabel>
       <InlineClampText
         text={text}
-        accentClass="bg-primary/5 border border-primary/20 text-muted-foreground"
+        accentClass="bg-secondary/20 border border-secondary/50 text-foreground"
       />
     </div>
   );

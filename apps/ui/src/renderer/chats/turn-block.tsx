@@ -124,7 +124,13 @@ export const TurnBlock = memo(function TurnBlock({
     }
     return <TranscriptItem key={item.id} item={item} nodes={nodes} />;
   };
-  if (soloAgent) {
+  // `nested` joins `soloAgent` here, and for a sharper reason than noise: inside
+  // a sub-agent enclosure the frame does not merely repeat an identity, it
+  // asserts the WRONG one. The avatar and the `claude · 15:28` line under it are
+  // drawn from `block.nodeId`, which every delegate row carries as the
+  // DELEGATING agent's — so a delegate's tool run was captioned as the chat
+  // agent's own work, one line under a header naming the delegate.
+  if (soloAgent || nested) {
     return (
       <div
         data-role="turn-block"
@@ -135,7 +141,12 @@ export const TurnBlock = memo(function TurnBlock({
           // Set in from the main thread it was delegated from — the label
           // names it, the rule makes the run of rows read as one aside at a
           // glance rather than as the conversation continuing.
-          block.subagentId !== null && 'border-l-2 border-border pl-3',
+          //
+          // Not inside an enclosure: there the CARD is that separation already,
+          // and a second rule indents the delegate's rows within their own box.
+          !nested &&
+            block.subagentId !== null &&
+            'border-l-2 border-border pl-3',
         )}>
         {subagentLabel}
         {block.entries.map(renderInner)}

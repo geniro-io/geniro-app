@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { BlockShell } from './block-shell';
+import { BlockRequest, BlockResult, BlockShell } from './block-shell';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -138,5 +138,38 @@ describe('BlockShell', () => {
 
     act(() => root.render(shell('done')));
     expect(container.querySelector('svg.animate-spin')).toBeNull();
+  });
+});
+
+describe('BlockRequest / BlockResult tints', () => {
+  /** The tinted panel each of them wraps its text in. */
+  function panelClasses(node: React.JSX.Element): string {
+    act(() => root.render(node));
+    const panel = container.querySelector('div > div[class*="rounded-lg"]');
+    return panel?.className ?? '';
+  }
+
+  it('gives the request panel a tint of its own, not the card’s own beige', () => {
+    // `primary/5` was 5% of a brown already close to the cream background: the
+    // panel came out the same colour as the card holding it, so "what this was
+    // asked to do" read as one more paragraph of the surrounding block. It is
+    // the FIRST thing in every enclosure and the one panel that has to be
+    // separable at a glance.
+    const request = panelClasses(<BlockRequest label="Task" text="do it" />);
+    expect(request).not.toContain('bg-primary/5');
+    expect(request).toContain('bg-secondary/20');
+  });
+
+  it('keeps the two panels DISTINGUISHABLE, which is what the pair means', () => {
+    // The real promise, and the one a future retint must not break: a reader
+    // tells the ask from the answer by colour. Asserting they merely differ
+    // would pass with both set to the same near-invisible wash, so each is also
+    // pinned to its own token family.
+    const request = panelClasses(<BlockRequest label="Task" text="do it" />);
+    const result = panelClasses(<BlockResult label="Result" text="done" />);
+
+    expect(request).not.toBe(result);
+    expect(request).toContain('secondary');
+    expect(result).toContain('success');
   });
 });

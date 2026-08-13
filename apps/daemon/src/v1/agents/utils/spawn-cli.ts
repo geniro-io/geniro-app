@@ -402,6 +402,29 @@ interface TurnState {
    * between-turns race at all, just a turn that ends before its user does.
    */
   outstanding: Map<string, ApprovalRequestEvent>;
+  /**
+   * Background work this turn started that has not reported back — see
+   * `AgentEvent`'s `background_work`.
+   *
+   * A turn is not over while this is non-empty, however plainly the CLI's
+   * turn-end line says otherwise: the process keeps working, and on claude it
+   * runs whole further turns of its own as each unit reports. Whatever it
+   * produces then would be a between-turn orphan — mostly dropped, and reported
+   * to the user as a `completed` run that was visibly still working.
+   */
+  openWork: Set<string>;
+  /**
+   * The terminal event held back because {@link openWork} was not empty, to be
+   * emitted when the last unit reports (or when the silence deadline gives up
+   * on them).
+   *
+   * The FIRST one is kept, not the last: it is the one that answers the user's
+   * prompt and carries that turn's usage. A CLI's later self-initiated turns
+   * report their own results, whose text ("Background note (no action
+   * needed)…") is not this turn's answer and whose usage is not this turn's
+   * context.
+   */
+  deferredTerminal: AgentEvent | null;
 }
 
 /**
@@ -647,6 +670,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (turn.settled || turn.terminalEmitted) {
         return;
       }
+      // This turn already produced its result and was only waiting on background
+      // work that has now gone silent too. It FINISHED — release the held
+      // terminal rather than overwriting a completed turn with a failure whose
+      // sentence ("produced nothing…") would be false about it twice over: it
+      // produced an answer, and what stopped talking was the work, not the turn.
+      const held = turn.deferredTerminal;
+      if (held) {
+        opts.logger?.warn(
+          `${opts.command}: releasing the held '${held.type}' — ${turn.openWork.size} unit(s) of background work never reported`,
+        );
+        finishTurn(turn, held);
+        return;
+      }
       // Through `emit`, so this takes the one-terminal gate with every other
       // outcome and cannot contradict a `result` line that arrives beside it.
       emit({
@@ -779,6 +815,33 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   }
 
   /**
+   * Hand a turn its terminal event and settle it — the one door every outcome
+   * takes, whether it arrived now or was held for background work.
+   *
+   * Extracted so a deferred terminal cannot take a shorter path than a prompt
+   * one: the one-terminal gate, the stdin close and the settle are the same
+   * three steps either way.
+   */
+  const finishTurn = (turn: TurnState, event: AgentEvent): void => {
+    if (turn.terminalEmitted) {
+      return;
+    }
+    turn.terminalEmitted = true;
+    turn.deferredTerminal = null;
+    if (opts.stdinLifetime === 'turn') {
+      endStdin();
+      // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
+      // would otherwise hold this turn — and the run's registry slot — open
+      // for good. See {@link TURN_END_EXIT_GRACE_MS}.
+      armTurnExitDeadline();
+    }
+    turn.options.onEvent(event);
+    if (settlesOnTerminalEvent) {
+      settleTurn(turn, `terminal event '${event.type}'`);
+    }
+  };
+
+  /**
    * Deliver an event to the turn it belongs to; see {@link handleOrphanEvent}
    * for what happens when there is no turn to deliver it to.
    */
@@ -799,6 +862,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // for good (see {@link TurnState.outstanding}).
       turn.outstanding.set(event.id, event);
     }
+    // Turn plumbing, consumed here and never forwarded: it says whether the
+    // turn's work is over, which is this function's business and no consumer's.
+    if (event.type === 'background_work') {
+      if (event.phase === 'started') {
+        turn.openWork.add(event.id);
+      } else if (turn.openWork.delete(event.id) && turn.openWork.size === 0) {
+        // The last unit reported, so a held terminal event is now due. Only
+        // reached when this settle actually closed something we were waiting on
+        // — a stray `settled` for unknown work must not release the turn.
+        const held = turn.deferredTerminal;
+        if (held) {
+          opts.logger?.debug?.(
+            `${opts.command}: releasing the held '${held.type}' — its background work has reported`,
+          );
+          finishTurn(turn, held);
+          return;
+        }
+      }
+      armSilenceDeadline(turn);
+      return;
+    }
     const normalized: AgentEvent =
       turn.cancelRequested && event.type === 'error'
         ? { type: 'turn_cancelled' }
@@ -811,18 +895,32 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (turn.terminalEmitted) {
         return;
       }
-      turn.terminalEmitted = true;
-      if (opts.stdinLifetime === 'turn') {
-        endStdin();
-        // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
-        // would otherwise hold this turn — and the run's registry slot — open
-        // for good. See {@link TURN_END_EXIT_GRACE_MS}.
-        armTurnExitDeadline();
+      // The CLI has stopped TALKING while work it started is still running, and
+      // on a session lifetime the process is still there doing it. Hold the
+      // terminal event: emitting it now ends the turn mid-work, and everything
+      // the process produces next — including whole turns claude runs of its own
+      // accord as each unit reports — arrives with no turn to own it.
+      //
+      // Only a `turn_complete`, and only on a session lifetime. A cancel is the
+      // user asking to stop NOW, an `error` is a turn that has failed rather
+      // than finished, and a turn whose process ends with it has no "after" to
+      // wait for — deferring in any of those three cases would hold a turn open
+      // for work that is already over.
+      if (
+        normalized.type === 'turn_complete' &&
+        settlesOnTerminalEvent &&
+        turn.openWork.size > 0
+      ) {
+        if (turn.deferredTerminal === null) {
+          turn.deferredTerminal = normalized;
+          opts.logger?.debug?.(
+            `${opts.command}: holding the turn open — ${turn.openWork.size} unit(s) of background work have not reported`,
+          );
+        }
+        armSilenceDeadline(turn);
+        return;
       }
-      turn.options.onEvent(normalized);
-      if (settlesOnTerminalEvent) {
-        settleTurn(turn, `terminal event '${normalized.type}'`);
-      }
+      finishTurn(turn, normalized);
       return;
     }
     // The CLI is still talking, so it has not wedged — push the deadline out.
@@ -941,6 +1039,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           type: 'error',
           message: `${opts.command} exited with code ${code}${detail ? `: ${detail}` : ''}`,
         });
+      } else if (current.deferredTerminal) {
+        // A CLEAN exit while a terminal event was held for background work: the
+        // process is gone, so the work is over one way or another, and the turn
+        // DID complete — release what it produced. Falling through to the branch
+        // below would replace a real `turn_complete` (with the turn's usage) with
+        // "exited without completing the turn", which is exactly backwards.
+        finishTurn(current, current.deferredTerminal);
       } else {
         // A CLEAN exit with no terminal event: the process ended without ever
         // printing the result line the mapper turns into `turn_complete`.
@@ -1136,6 +1241,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       interruptTimer: null,
       silenceTimer: null,
       outstanding: new Map(),
+      openWork: new Set(),
+      deferredTerminal: null,
     };
     current = turn;
     // Kept at session scope so a request arriving AFTER this turn settles can

@@ -19,9 +19,22 @@ const COMPLETE: AgentEvent = {
  * into an error — the two shapes a real `result` line reduces to.
  */
 const resultOnDone = (obj: unknown): AgentEvent[] => {
-  const row = obj as { done?: boolean; failed?: boolean; tool?: string };
+  const row = obj as {
+    done?: boolean;
+    failed?: boolean;
+    tool?: string;
+    work?: string;
+    phase?: 'started' | 'settled';
+    finalText?: string;
+  };
+  if (typeof row.work === 'string' && row.phase !== undefined) {
+    return [{ type: 'background_work', id: row.work, phase: row.phase }];
+  }
   if (row.done === true) {
-    return [COMPLETE];
+    // A result line's own text, for the cases that care WHICH result was kept.
+    return typeof row.finalText === 'string'
+      ? [{ ...COMPLETE, finalText: row.finalText }]
+      : [COMPLETE];
   }
   if (row.failed === true) {
     return [{ type: 'error', message: 'result: is_error' }];
@@ -633,6 +646,243 @@ describe('runHeadlessCli keeps the one-turn contract', () => {
 
     expect(child.stdin.written).toBe('PROMPT\n');
     expect(child.stdin.ended).toBe(true);
+  });
+});
+
+/**
+ * The turn-end line is the end of what the agent was SAYING, never of what its
+ * process is DOING.
+ *
+ * Probed on claude 2.1.231: a turn told to launch a delegate and not wait for it
+ * printed its `result` while the delegate was still running, and the CLI then
+ * ran a FURTHER turn of its own accord as the delegate reported
+ * (`origin:{kind:"task-notification"}` on that turn's own result line). Settling
+ * on the first `result` therefore ends geniro's turn in the middle of the work.
+ *
+ * The cost, measured across the author's own daemon log: 11 of 31 settles were
+ * followed by off-turn work — up to 33 minutes and 997 events past the settle,
+ * 227 whole assistant messages dropped for want of a turn to put them in, 430
+ * permission requests answered with no card ever shown — while the run reported
+ * `completed` and its delegates rendered as `stopped`.
+ */
+describe('a turn whose background work outlives its result', () => {
+  it('holds the turn open while a unit of work has not reported', async () => {
+    const events: AgentEvent[] = [];
+    let settled = false;
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    // The `result` line arrived and was HELD: no terminal event, no settle, and
+    // the run therefore never reads `completed` while the work is out.
+    expect(events).toEqual([]);
+    expect(settled).toBe(false);
+    expect(session.idle).toBe(false);
+
+    // …and the delegate's own output still has a turn to land in, which is the
+    // whole reason to hold it open rather than merely relabel the badge.
+    line(child, { tool: 'toolu_late' });
+    expect(events).toEqual([
+      {
+        type: 'tool_result',
+        id: 'toolu_late',
+        name: null,
+        result: 'ok',
+        isError: false,
+      },
+    ]);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+
+    expect(events.at(-1)).toEqual(COMPLETE);
+    expect(settled).toBe(true);
+  });
+
+  it('waits for the LAST unit, not the first to report', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-2', phase: 'started' });
+    line(child, { done: true });
+    line(child, { work: 'task-1', phase: 'settled' });
+    await Promise.resolve();
+
+    expect(events).toEqual([]);
+
+    line(child, { work: 'task-2', phase: 'settled' });
+    await handle?.done;
+    expect(events).toEqual([COMPLETE]);
+  });
+
+  it('is not released by a report for work it never opened', async () => {
+    // The set is keyed by the CLI's own id precisely so this cannot happen: a
+    // stray or duplicated `settled` must not stand in for the one still out.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    line(child, { work: 'somebody-elses-task', phase: 'settled' });
+    await Promise.resolve();
+
+    // Still held — the stray report closed nothing this turn was waiting on.
+    expect(events).toEqual([]);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    // A second report for the same task must not release a second terminal.
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
+  });
+
+  it('keeps the FIRST result, which is the one that answers the prompt', async () => {
+    // claude's later self-initiated turns print their own result lines, whose
+    // text is a "Background note (no action needed)…" and whose usage is that
+    // turn's, not this one's. Held means held: the answer the user asked for.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true, finalText: 'LAUNCHED' });
+    line(child, {
+      done: true,
+      finalText: 'Background note (no action needed)',
+    });
+    await Promise.resolve();
+
+    // Neither result ended the turn — the second one least of all.
+    expect(events).toEqual([]);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+
+    expect(events).toEqual([{ ...COMPLETE, finalText: 'LAUNCHED' }]);
+  });
+
+  it('never hands a background_work event to the turn', async () => {
+    // Turn plumbing, not conversation. `mapEventToItem` answers null for it too,
+    // but a consumer must not see it at all — a pair of "work started/settled"
+    // rows would say what the delegate's own rows already say.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
+  });
+
+  it('does NOT hold a cancel or a failure back', async () => {
+    // A cancel is the user asking to stop now, and an `error` is a turn that
+    // failed rather than finished. Holding either would keep a turn open for
+    // work the user just abandoned, or hide a failure behind a delegate.
+    const cancelled: AgentEvent[] = [];
+    const first = openSession();
+    const cancelHandle = first.session.startTurn({
+      onEvent: (e) => cancelled.push(e),
+      buildInterruptPayload: () => 'INTERRUPT\n',
+    });
+    line(first.child, { work: 'task-1', phase: 'started' });
+    cancelHandle?.cancel();
+    line(first.child, { failed: true });
+    await cancelHandle?.done;
+    expect(cancelled).toEqual([{ type: 'turn_cancelled' }]);
+
+    const failed: AgentEvent[] = [];
+    const second = openSession();
+    const failHandle = second.session.startTurn({
+      onEvent: (e) => failed.push(e),
+    });
+    line(second.child, { work: 'task-2', phase: 'started' });
+    line(second.child, { failed: true });
+    await failHandle?.done;
+    expect(failed).toEqual([{ type: 'error', message: 'result: is_error' }]);
+  });
+
+  it('releases the held result when the process exits cleanly under it', async () => {
+    // The work is over one way or another once the process is gone, and the turn
+    // DID complete. Falling through to the clean-exit branch would replace a real
+    // `turn_complete` with "exited without completing the turn".
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    child.emit('close', 0, null);
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
+    expect(session.alive).toBe(false);
+  });
+
+  it('releases the held result when the work goes silent too', async () => {
+    // The bound, and it is the turn's existing silence deadline rather than a
+    // second timer. Its own sentence ("produced nothing… giving up") would be
+    // false twice over about this turn — it produced an answer, and what went
+    // quiet was the work — so the held result is what gets released.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = openSession(undefined, logger);
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'never reported',
+    );
+    // And the process is left alive for the next turn, as every other
+    // silence-deadline settle leaves it.
+    expect(session.alive).toBe(true);
+  });
+
+  it('does not defer on a lifetime whose turn ends with its process', async () => {
+    // A one-turn CLI's delegates die with the process, so there is no "after" to
+    // wait for — deferring would hold the turn open for work that is over.
+    const events: AgentEvent[] = [];
+    const { spawn, child } = fakeSpawn();
+    const handle = runHeadlessCli({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      keepStdinOpen: true,
+      mapper: resultOnDone,
+      onEvent: (event) => events.push(event),
+      spawn,
+    });
+
+    child.stdout.emitData(
+      `${JSON.stringify({ work: 'task-1', phase: 'started' })}\n`,
+    );
+    child.stdout.emitData(`${JSON.stringify({ done: true })}\n`);
+    await Promise.resolve();
+
+    // Emitted at once — and stdin closed with it, which is what asks a
+    // stream-json CLI to finish at all.
+    expect(events).toEqual([COMPLETE]);
+    expect(child.stdin.ended).toBe(true);
+    child.emit('close', 0, null);
+    await handle.done;
   });
 });
 

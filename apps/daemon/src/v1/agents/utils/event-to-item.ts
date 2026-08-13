@@ -62,6 +62,13 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // as `notice` events from the mapper, so they land as `system` rows below
       // without this arm having to carry text it does not have.
       return null;
+    case 'background_work':
+      // Turn plumbing — `runCliSession` consumes it to decide when the turn is
+      // really over and never forwards it, so this arm is unreachable in
+      // practice. Answered anyway, and with null: the delegate's own rows are
+      // what the transcript shows, and a pair of "background work started /
+      // settled" rows beside them would say the same thing twice.
+      return null;
     case 'thinking_progress':
     case 'context_progress':
     case 'text_delta':

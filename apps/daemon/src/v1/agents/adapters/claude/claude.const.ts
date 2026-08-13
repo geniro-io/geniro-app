@@ -623,6 +623,65 @@ export const CLAUDE_COMPACT_RESULT_FAILED = 'failed';
 export const CLAUDE_COMPACT_FAILED_NOTICE =
   'the conversation was not compacted';
 
+// ── Background tasks (delegates that outlive the turn) ────────────────────
+
+/**
+ * The `system` subtypes bracketing one background task's life.
+ *
+ * Probed on 2.1.231 against a turn told to launch a delegate and NOT wait for
+ * it (`-p --output-format stream-json --verbose`). One task produces:
+ *
+ * ```
+ * {"type":"system","subtype":"task_started","task_id":"ad83f0a35d8a3dfc9",…}
+ * {"type":"system","subtype":"task_progress","task_id":"ad83f0a35d8a3dfc9",…}
+ * {"type":"system","subtype":"task_updated","task_id":"…","patch":{"status":"completed",…}}
+ * {"type":"system","subtype":"task_notification","task_id":"…","status":"completed",…}
+ * ```
+ *
+ * Why the turn has to care: the SAME probe printed TWO `result` lines. The
+ * first is the answer to the user's prompt (`result:"LAUNCHED"`, `num_turns:2`);
+ * the second is a turn claude ran ON ITS OWN because a task reported, and it
+ * says so — `origin:{kind:"task-notification"}`. So a `result` is the end of
+ * what the agent was SAYING, never of what the process is DOING, and a turn
+ * settled on it hands the rest to nobody. See `AgentEvent`'s `background_work`
+ * for the measured cost of that.
+ *
+ * Both terminal channels are mapped rather than the tidier one alone: they
+ * carry the status in DIFFERENT places (`patch.status` vs `status`) and report
+ * different vocabularies for one outcome (`killed` vs `stopped` for the same
+ * task, measured in one run), so reading either alone means trusting one
+ * spelling of a fact the CLI states twice. The event is keyed by task id and
+ * idempotent, so mapping both costs nothing.
+ */
+export const CLAUDE_TASK_STARTED_SUBTYPE = 'task_started';
+/** @see CLAUDE_TASK_STARTED_SUBTYPE */
+export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
+/** @see CLAUDE_TASK_STARTED_SUBTYPE */
+export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
+
+/**
+ * Task statuses meaning the work is OVER, however it ended.
+ *
+ * An allowlist, not a "not running" test, and the direction matters: an
+ * unrecognised status leaves the task open, so a vocabulary this list has not
+ * caught up with delays a settle (bounded by the turn's silence deadline) rather
+ * than declaring finished work that is still running — which is the defect the
+ * whole mechanism exists to remove. Observed on 2.1.231: `completed`, `killed`
+ * (as `task_updated.patch.status`) and `completed`, `stopped` (as
+ * `task_notification.status`) for the same two tasks; the rest are the shapes
+ * the same field takes elsewhere in the CLI's own vocabulary.
+ */
+export const CLAUDE_TASK_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'stopped',
+  'killed',
+  'failed',
+  'error',
+  'cancelled',
+  'canceled',
+  'timeout',
+]);
+
 // ── Messages ──────────────────────────────────────────────────────────────
 
 /** Fallback for an error `result` line that carries no text of its own. */

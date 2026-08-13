@@ -20,6 +20,10 @@ import {
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_RUN_FAILED_MESSAGE,
   CLAUDE_STATUS_SUBTYPE,
+  CLAUDE_TASK_NOTIFICATION_SUBTYPE,
+  CLAUDE_TASK_STARTED_SUBTYPE,
+  CLAUDE_TASK_TERMINAL_STATUSES,
+  CLAUDE_TASK_UPDATED_SUBTYPE,
 } from '../claude.const';
 import {
   readClaudeAssistantContext,
@@ -306,6 +310,28 @@ function mapClaudeLine(
         // Any other status is a state this daemon does not model. Dropped, not
         // guessed at.
         return [];
+      }
+      if (asString(root.subtype) === CLAUDE_TASK_STARTED_SUBTYPE) {
+        const id = asString(root.task_id);
+        return id === null
+          ? []
+          : [{ type: 'background_work', id, phase: 'started' }];
+      }
+      if (
+        asString(root.subtype) === CLAUDE_TASK_UPDATED_SUBTYPE ||
+        asString(root.subtype) === CLAUDE_TASK_NOTIFICATION_SUBTYPE
+      ) {
+        const id = asString(root.task_id);
+        // The two channels carry the status in different places, so read both
+        // and let a null fall through to "still open" — never to closed.
+        const patch = asRecord(root.patch);
+        const status =
+          asString(root.status) ?? (patch ? asString(patch.status) : null);
+        return id !== null &&
+          status !== null &&
+          CLAUDE_TASK_TERMINAL_STATUSES.has(status)
+          ? [{ type: 'background_work', id, phase: 'settled' }]
+          : [];
       }
       if (asString(root.subtype) === 'init') {
         const events: AgentEvent[] = [];

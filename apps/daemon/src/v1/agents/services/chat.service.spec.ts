@@ -1962,6 +1962,87 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
+  it('announces the run as parked on the user while a question is open, and unparked once it is answered', async () => {
+    // The badge half of a parked turn, and the reason it is on the STATUS
+    // channel rather than derived from items: items only reach the room of the
+    // run in focus, so a chat sitting on an unanswered question showed a
+    // spinner in the sidebar for as long as the user was looking elsewhere.
+    // Revert the two announces and the `awaiting` key disappears from both
+    // assertions below.
+    const { service, claude, statuses, approvals } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    await drain();
+    claude.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+
+    // The KIND, and no phrase: the daemon owns the fact, the renderer words it
+    // (`awaitingPhrase`). Sending the sentence here made it live-only — the
+    // activity plane is events, so a reloaded window had a correct badge with
+    // nothing under it.
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      activity: null,
+      awaiting: 'question',
+    });
+
+    statuses.length = 0;
+    // Through the registry, exactly as the WS verdict does.
+    expect(approvals.resolve(run.id, 'q-1', true, 'Blue')).toBe(true);
+    await drain();
+    // Cleared, and cleared as null rather than by omission: absent would leave
+    // the client's reading exactly as it was — still parked.
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      activity: null,
+      awaiting: null,
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('serves the parked reading on the run row too, so a reloaded window learns it', async () => {
+    // The snapshot half. A parked run emits nothing further by definition, so a
+    // window that connects AFTER the transition has only the row to read it
+    // off; without this it shows a spinner until the user clicks in.
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    await drain();
+    expect(
+      (await service.listChats()).find((r) => r.id === run.id)?.awaiting,
+    ).toBeNull();
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+
+    expect(
+      (await service.listChats()).find((r) => r.id === run.id)?.awaiting,
+    ).toBe('question');
+
+    // …and a settled turn is parked on nothing, whatever it was holding: the
+    // sweep drops the card, so the badge must not go on blaming the user.
+    claude.finish();
+    await drain();
+    expect(
+      (await service.listChats()).find((r) => r.id === run.id)?.awaiting,
+    ).toBeNull();
+  });
+
   it('records every approval still pending when the turn settles as unanswerable — and none when they were answered', async () => {
     // The run-level half of the expiry the renderer used to infer: a chat turn
     // that ends leaves cards on screen whose buttons answer into nothing. The
@@ -2602,6 +2683,9 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       runId: run.id,
       status: 'running',
       activity: null,
+      // Every status write says the run is parked on nothing: a settle sweeps
+      // its cards first, and the only non-terminal write is a fresh turn's.
+      awaiting: null,
     });
 
     claude.emit({
@@ -2616,6 +2700,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       runId: run.id,
       status: 'completed',
       activity: null,
+      awaiting: null,
     });
   });
 
@@ -2638,6 +2723,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       runId: failedRun.id,
       status: 'failed',
       activity: null,
+      awaiting: null,
     });
 
     const cancelled = setup();
@@ -2650,6 +2736,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       runId: liveRun.id,
       status: 'cancelled',
       activity: null,
+      awaiting: null,
     });
   });
 
@@ -2980,10 +3067,17 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       input: {},
     });
     await drain();
+    // WHICH kind of answer is wanted, because the two are different asks:
+    // "waiting for approval" sends the user looking for a button, which is
+    // wrong when a prompt is on screen. The sentence itself is the renderer's
+    // (`awaitingPhrase`) so it survives a reload; what crosses the wire is the
+    // kind — and the activity is cleared, because whatever the run was last
+    // said to be doing, it is not doing it while it waits.
     expect(statuses).toContainEqual({
       runId: run.id,
       status: null,
-      activity: 'waiting for approval',
+      activity: null,
+      awaiting: 'approval',
     });
     claude.finish();
     await drain();

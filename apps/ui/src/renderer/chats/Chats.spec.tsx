@@ -159,6 +159,7 @@ function approval(runId: string, seq: number, requestId: string): ChatItem {
 const run1: ChatRun = {
   id: 'r1',
   status: 'running',
+  awaiting: null,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,
@@ -834,6 +835,95 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
       emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
     });
     expect(container.textContent).not.toContain('waiting for your answer');
+  });
+
+  it('badges a BACKGROUND run parked on a question as needing info, not running', async () => {
+    // The reported bug, and why the fix is a daemon-side fact rather than more
+    // renderer derivation: `needs-input` was derived from the open chat's
+    // transcript items, and items only ever reach the room of the run in focus.
+    // So a chat sitting on an unanswered question kept a spinner in the sidebar
+    // for as long as the user was looking elsewhere — the one state where a
+    // spinner is actively misleading, since nothing advances without them.
+    //
+    // `r2` is never activated: that is the whole point. Revert the row's
+    // `displayRunStatus` call and this reads "running" again.
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'running' },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const secondRow = (): HTMLElement =>
+      [...container.querySelectorAll('li')].find((el) =>
+        el.textContent?.includes('Second chat'),
+      )!;
+    expect(secondRow().textContent).toContain('running');
+
+    await act(async () => {
+      // No phrase on the wire — the daemon sends the KIND and the row words it,
+      // which is what makes the sentence survive a reload.
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        activity: null,
+        awaiting: 'question',
+      });
+    });
+    expect(secondRow().textContent).toContain('needs more info');
+    expect(secondRow().textContent).not.toContain('running');
+    // …and which kind of answer is wanted, which the label alone cannot say.
+    expect(secondRow().textContent).toContain('waiting for your answer');
+
+    // Answered: the daemon clears it explicitly, and the badge goes back to the
+    // row's own status rather than staying blamed on the user.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        activity: null,
+        awaiting: null,
+      });
+    });
+    expect(secondRow().textContent).not.toContain('needs more info');
+    expect(secondRow().textContent).toContain('running');
+  });
+
+  it('leaves a parked run parked when a tool announce says nothing about waiting', async () => {
+    // Why `awaiting` is a THREE-state field. An activity announce carries no
+    // opinion about waiting, so it must leave the reading alone; if absent were
+    // read as null, any straggler announce during a parked turn would put the
+    // spinner straight back.
+    api.listChats.mockResolvedValue([
+      run1,
+      {
+        ...run1,
+        id: 'r2',
+        title: 'Second chat',
+        status: 'running',
+        awaiting: 'question',
+      },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const secondRow = (): HTMLElement =>
+      [...container.querySelectorAll('li')].find((el) =>
+        el.textContent?.includes('Second chat'),
+      )!;
+    // Straight from the SNAPSHOT — a window that connected after the transition
+    // has nothing else to read it off, and no event has fired for this run. The
+    // phrase comes with it, which is the half that used to be missing: it was
+    // published as an activity string, and the activity plane is events-only.
+    expect(secondRow().textContent).toContain('needs more info');
+    expect(secondRow().textContent).toContain('waiting for your answer');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, activity: 'running Bash' });
+    });
+    expect(secondRow().textContent).toContain('needs more info');
   });
 
   it('stops naming the work when the run STOPS, even carrying an activity', async () => {
@@ -1755,6 +1845,7 @@ describe('Chats workflow runs', () => {
   const wfRun: ChatRun = {
     id: 'w1',
     status: 'running',
+    awaiting: null,
     title: 'Review team',
     agentKind: null,
     workflowId: 'review-team',
@@ -2234,6 +2325,7 @@ describe('Chats — handing a conversation to the user', () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
+      awaiting: null,
       title: 'Review team',
       agentKind: null,
       workflowId: 'review-team',
@@ -4574,6 +4666,7 @@ describe('Chats sidebar list', () => {
       {
         id: 'w1',
         status: 'running',
+        awaiting: null,
         title: 'Big team',
         agentKind: null,
         workflowId: 'big-team',

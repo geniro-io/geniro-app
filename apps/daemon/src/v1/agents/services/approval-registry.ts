@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
+import type { RunAwaiting } from '../chat.types';
+
 /** One paused tool call waiting on a user verdict. */
 export interface PendingApproval {
   runId: string;
@@ -7,6 +9,18 @@ export interface PendingApproval {
   requestId: string;
   toolName: string;
   input: unknown;
+  /**
+   * Whether this is the agent ASKING something (AskUserQuestion and its
+   * per-CLI equivalents) rather than a tool call held at the permission gate.
+   *
+   * Recorded by the tracker rather than re-derived here, because deciding it
+   * needs that CLI's own `questionToolName` — an adapter fact
+   * (`.claude/rules/agent-adapters.md`), and both tracking sites have already
+   * computed it to choose the card they persist. A registry that re-answered it
+   * would be a second reading of the same question, free to disagree with the
+   * card the user is looking at.
+   */
+  question: boolean;
   /**
    * Delivers the verdict to the owning turn (persisting the verdict item on
    * success). Returns whether the turn was still live to receive it.
@@ -76,6 +90,35 @@ export class ApprovalRegistry {
       }
     }
     return swept;
+  }
+
+  /**
+   * What this run is parked on, for the badge — or null when it is parked on
+   * nothing.
+   *
+   * A question outranks an approval when both are open: a turn holding a
+   * permission gate AND a question is blocked on the question in the sense the
+   * user cares about (the agent is asking them something), and "waiting for
+   * approval" would send them looking for a button when what is on screen is a
+   * prompt.
+   *
+   * Read from the live map rather than from the transcript, which is what makes
+   * it correct for a run nobody is looking at: the persisted items would say
+   * the same thing, but only a client subscribed to that run's room ever
+   * receives them.
+   */
+  awaitingFor(runId: string): RunAwaiting | null {
+    let found: RunAwaiting | null = null;
+    for (const entry of this.pending.values()) {
+      if (entry.runId !== runId) {
+        continue;
+      }
+      if (entry.question) {
+        return 'question';
+      }
+      found = 'approval';
+    }
+    return found;
   }
 
   /**

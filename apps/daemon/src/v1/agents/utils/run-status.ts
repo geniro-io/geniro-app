@@ -28,5 +28,16 @@ export async function writeRunStatus(
   activity: string | null = null,
 ): Promise<void> {
   await deps.runDao.updateById(runId, { status }, em);
-  deps.bus.publishRunStatus({ runId, status, activity });
+  // `awaiting: null` on EVERY status write, which is the one place it can be
+  // stated once for both paths' many settle branches.
+  //
+  // It holds because a status write and an open card are mutually exclusive by
+  // construction: every settle path sweeps its node's pending approvals (and
+  // records each as `unanswerable`) BEFORE rolling the status up, and the only
+  // non-terminal write is the `running` a fresh turn starts with, which no card
+  // can predate. So a run whose status just changed is a run parked on nothing,
+  // and saying so here is what keeps a `needs-input` badge from outliving the
+  // turn it belonged to — the card is gone from the screen, and the badge would
+  // have gone on claiming the user was the blocker.
+  deps.bus.publishRunStatus({ runId, status, activity, awaiting: null });
 }

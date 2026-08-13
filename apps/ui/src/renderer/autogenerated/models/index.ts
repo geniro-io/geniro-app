@@ -1366,6 +1366,17 @@ export interface RenameRunDto {
      */
     title: string;
 }
+
+/**
+ * 
+ * @export
+ */
+export const RunAwaiting = {
+    Question: 'question',
+    Approval: 'approval'
+} as const;
+export type RunAwaiting = typeof RunAwaiting[keyof typeof RunAwaiting];
+
 /**
  * 
  * @export
@@ -1384,6 +1395,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     status: RunStatus;
+    /**
+     * 
+     * @type {RunAwaiting}
+     * @memberof RunDto
+     */
+    awaiting: RunAwaiting | null;
     /**
      * 
      * @type {string}

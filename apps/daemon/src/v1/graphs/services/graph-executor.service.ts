@@ -394,7 +394,16 @@ export class GraphExecutorService {
       runs.map((run) => run.id),
       em,
     );
-    return runs.map((run) => runToWire(run, previews.get(run.id) ?? null));
+    // Same registry the chat list reads: a workflow node parked on an `ask`
+    // card blocks its run exactly as a chat's question blocks that chat, and
+    // both lists feed the same sidebar.
+    return runs.map((run) =>
+      runToWire(
+        run,
+        previews.get(run.id) ?? null,
+        this.approvals.awaitingFor(run.id),
+      ),
+    );
   }
 
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
@@ -1004,6 +1013,12 @@ export class GraphExecutorService {
       };
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {
+          // Whether THIS event's approval request is the agent asking something
+          // — set by the routing branch below and read by the registry track
+          // further down. Per-event, declared here because the two blocks that
+          // need it are siblings; false for every non-request event, which
+          // never reaches either.
+          let isQuestion = false;
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
             await saveSessionId(event.sessionId);
@@ -1080,7 +1095,11 @@ export class GraphExecutorService {
             // version drift. A flag-only request stays on the approval path
             // (card or daemon auto-approve per node.approval) with a warning
             // so the drift is loud, never silent.
-            const isQuestion = isUserQuestion(
+            // Read ONCE per request and kept for the track below, which sits in
+            // a second `approval_request` block further down: recomputing it
+            // there would be a second reading of one adapter fact, free to
+            // disagree with the branch that already routed this request.
+            isQuestion = isUserQuestion(
               adapter.getConfig().questionToolName,
               event.toolName,
             );
@@ -1167,6 +1186,9 @@ export class GraphExecutorService {
               requestId: event.id,
               toolName: event.toolName,
               input: event.input,
+              // Already decided above from this node's adapter — the registry
+              // never re-derives it (`PendingApproval.question`).
+              question: isQuestion,
               respond: (allow, answer) => {
                 const delivered = handle.respondApproval(
                   event.id,

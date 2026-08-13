@@ -273,6 +273,39 @@ export class ChatService {
     this.bus.publishRunStatus({ runId, status: null, activity });
   }
 
+  /**
+   * Announce that a run has become parked on the user — or stopped being.
+   *
+   * Separate from {@link announceActivity} because the two say different
+   * things and only one of them belongs on a tool call. The activity phrase is
+   * the sentence under the badge; this is the badge, and the badge must not
+   * read "running" while nothing can move without the user.
+   *
+   * Always read back OUT of the registry rather than passed in as the kind that
+   * just changed: a turn can hold several cards at once, so "this one closed"
+   * is not "nothing is open". Answering from the map is what keeps a second
+   * open question from being cleared by the first one's verdict.
+   *
+   * It carries no activity PHRASE, deliberately — the kind is the whole fact,
+   * and the sentence under the badge is worded by the renderer from it. The
+   * daemon used to send "waiting for your answer" here as an activity string,
+   * which read fine live and then vanished on a reload: the activity plane is
+   * events-only, so a reconnecting window had the badge (which rides the run
+   * row) with nothing under it. One authority for the fact, one place that
+   * words it, and both surfaces agree whenever they are drawn.
+   *
+   * Clearing the activity is also correct rather than incidental: whatever the
+   * run was last said to be DOING, it is not doing it while it waits.
+   */
+  private announceAwaiting(runId: string): void {
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      activity: null,
+      awaiting: this.approvals.awaitingFor(runId),
+    });
+  }
+
   async createChat(input: {
     agentKind: AgentKind;
     cwd: string;
@@ -1236,18 +1269,13 @@ export class ChatService {
                 handle.respondApproval(event.id, false, undefined);
                 throw err;
               }
-              // Parked on the user. Distinguishable from working, which is
-              // the difference a bare "running" badge could never show.
-              this.announceActivity(
-                runId,
-                isQuestion ? 'waiting for your answer' : 'waiting for approval',
-              );
               this.approvals.track({
                 runId,
                 nodeId: SINGLE_AGENT_NODE,
                 requestId: event.id,
                 toolName: event.toolName,
                 input: event.input,
+                question: isQuestion,
                 respond: (allow, answer) => {
                   const delivered = handle.respondApproval(
                     event.id,
@@ -1260,6 +1288,13 @@ export class ChatService {
                       answer,
                     ),
                   );
+                  // The entry is already out of the registry by the time this
+                  // runs (resolve() deletes before responding), so re-reading it
+                  // reports what is STILL open — nothing, unless this turn holds
+                  // another card. Announced whether or not the verdict was
+                  // delivered: an undeliverable one means the turn settled
+                  // underneath the card, which is equally not-parked.
+                  this.announceAwaiting(runId);
                   if (delivered) {
                     enqueue(async () => {
                       await this.persist(
@@ -1289,6 +1324,13 @@ export class ChatService {
                   return delivered;
                 },
               });
+              // Parked on the user — announced AFTER the track, so the registry
+              // it reads already holds this card. Two things at once, and both
+              // matter: the badge stops saying "running" (nothing will move
+              // without the user, and a spinner in the sidebar of a chat they
+              // are not looking at is the reported complaint), and the line
+              // under it says which kind of answer is wanted.
+              this.announceAwaiting(runId);
               // An approval_request is never terminal — nothing else to do.
               return;
             }
@@ -1566,8 +1608,17 @@ export class ChatService {
     });
   }
 
+  /**
+   * The run row for the wire, with its live "parked on the user" reading folded
+   * in from the registry.
+   *
+   * Every chat route projects through here, so the snapshot a reconnecting
+   * window loads agrees with the `run_status` broadcasts it will then receive —
+   * a run parked on a question emits nothing further by definition, so a client
+   * that missed the transition has only this to learn it from.
+   */
   private toRunWire(run: Run, lastMessage: string | null = null): RunWire {
-    return runToWire(run, lastMessage);
+    return runToWire(run, lastMessage, this.approvals.awaitingFor(run.id));
   }
 
   private itemToWire(item: Item): ItemWire {

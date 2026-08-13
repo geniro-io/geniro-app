@@ -910,6 +910,75 @@ describe('withLiveText', () => {
     expect(liveRowKind(liveRowPayload(entries))).toBe('working');
   });
 
+  /** One durable row, timestamped — the anchor the working row is measured from. */
+  const at = (row: ChatItem, createdAt: string): ChatItem => ({
+    ...row,
+    createdAt,
+  });
+
+  it('anchors the working row to the last row the agent put on screen', () => {
+    // Without an anchor the row counts from its own mount, so every remount —
+    // switching to another chat and back — reported a long wait as one second.
+    const items = [
+      at(
+        item('message', { text: 'first' }, null, 'assistant'),
+        '2026-08-04T00:00:00Z',
+      ),
+      at(
+        item('message', { text: 'latest' }, null, 'assistant'),
+        '2026-08-04T00:04:00Z',
+      ),
+    ];
+    const entries = withLiveText(
+      buildTurnBlocks(groupTranscript(items)),
+      new Map(),
+      new Set([CHAT_LIVE_KEY]),
+    );
+
+    expect(liveRowPayload(entries)).toMatchObject({
+      live: 'working',
+      workingSince: Date.parse('2026-08-04T00:04:00Z'),
+    });
+  });
+
+  it('ignores a DELEGATE’s rows when anchoring it', () => {
+    // A delegate writes rows continuously while the agent that launched it sits
+    // silent. Counting those would hold the clock near zero for the whole
+    // delegation and answer the opposite of the question the row asks.
+    const items = [
+      at(
+        item('message', { text: 'launching' }, null, 'assistant'),
+        '2026-08-04T00:00:00Z',
+      ),
+      at(
+        item(
+          'tool_result',
+          { id: 't-1', name: null, result: 'ok', parentToolUseId: 'toolu_d' },
+          null,
+          'tool',
+        ),
+        '2026-08-04T00:04:00Z',
+      ),
+    ];
+    const entries = withLiveText(
+      buildSubagentBlocks(groupTranscript(items), items),
+      new Map(),
+      new Set([CHAT_LIVE_KEY]),
+    );
+
+    expect(liveRowPayload(entries)).toMatchObject({
+      workingSince: Date.parse('2026-08-04T00:00:00Z'),
+    });
+  });
+
+  it('leaves the anchor off when the agent has no durable row to read', () => {
+    // Its very first stretch: there is no transcript to be anchored to, and the
+    // row's own mount is then the only honest answer — so nothing is asserted
+    // here rather than a fabricated timestamp being sent.
+    const entries = withLiveText([], new Map(), new Set([CHAT_LIVE_KEY]));
+    expect(liveRowPayload(entries)).toEqual({ live: 'working' });
+  });
+
   it('does NOT double up when the agent is already saying something', () => {
     // The working row is the fallback for silence. An agent mid-stretch is not
     // silent, and two rows would read as two things happening at once.

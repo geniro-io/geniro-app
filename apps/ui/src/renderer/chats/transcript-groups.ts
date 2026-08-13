@@ -1325,16 +1325,71 @@ export function withLiveText(
     if (spokenFor.has(key)) {
       continue;
     }
+    // Measured from the last row this agent put on screen, NEVER from the row's
+    // own mount — see {@link WorkingRow}'s `since`. Read from `blocks` rather
+    // than `out`: the loop above may already have attached a live row, whose
+    // `createdAt` is empty by construction.
+    const since = lastMainThreadRowAt(blocks, nodeIdOf(key));
     attach(
       out,
       liveEntry(key, {
         id: `${LIVE_TEXT_ITEM_PREFIX}${key}:working`,
         kind: 'reasoning',
-        payload: { live: 'working' },
+        payload: {
+          live: 'working',
+          ...(since === null ? {} : { workingSince: since }),
+        },
       }),
     );
   }
   return out;
+}
+
+/**
+ * When this agent's MAIN thread last put a row on screen, in epoch ms — the
+ * anchor the working row counts from. Null when it never has.
+ *
+ * Its own thread only, matching {@link attach}'s rule and for a sharper reason
+ * than symmetry: a delegate writes rows continuously while the agent that
+ * launched it sits silent, so counting those would hold the clock near zero for
+ * the whole delegation and answer the opposite of the question. What the row
+ * reports is how long the agent you are talking to has shown you nothing.
+ *
+ * Unparseable and empty `createdAt` values are skipped rather than coerced: the
+ * synthetic live entries carry `''`, and `Date.parse('')` is NaN, which would
+ * poison a plain `Math.max`.
+ */
+function lastMainThreadRowAt(
+  entries: readonly TranscriptEntry[],
+  nodeId: string | null,
+): number | null {
+  let latest: number | null = null;
+  const consider = (createdAt: string): void => {
+    const at = Date.parse(createdAt);
+    if (Number.isFinite(at) && (latest === null || at > latest)) {
+      latest = at;
+    }
+  };
+  const walk = (list: readonly TranscriptEntry[]): void => {
+    for (const entry of list) {
+      if (subagentOwnerOf(entry) !== null || entryNodeId(entry) !== nodeId) {
+        continue;
+      }
+      if (entry.type === 'item') {
+        consider(entry.item.createdAt);
+        continue;
+      }
+      if (entry.type === 'tools') {
+        for (const pair of entry.pairs) {
+          consider(pair.result?.createdAt ?? pair.call.createdAt);
+        }
+        continue;
+      }
+      walk(entry.entries);
+    }
+  };
+  walk(entries);
+  return latest;
 }
 
 /** One synthetic row, shaped like the durable item it renders through. */

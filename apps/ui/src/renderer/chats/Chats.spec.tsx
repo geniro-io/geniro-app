@@ -806,6 +806,81 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     expect(secondRow().textContent).not.toContain('running');
   });
 
+  it('reopening a STILL-RUNNING chat does not settle its badge from a past turn', async () => {
+    // The reported defect, measured on the real app: a chat with a blocked tool
+    // call read `running · Working… 3m 39s`, and after switching to another chat
+    // and back read `completed` with no live row at all — while the daemon still
+    // said `running`. Every chat past its first turn replays a `turn_complete`,
+    // and mirroring that row's status wrote a past turn's ending onto a run that
+    // was working. It also outlived the visit: the wrong value stayed in the
+    // row, so the NEXT activation read the run as settled and left `streaming`
+    // false, which is what took the transcript's live row away with it.
+    //
+    // Switched via a SECOND CHAT rather than the `+` button, and that is
+    // load-bearing: `+` refetches the run list, which papers over a clobbered
+    // row and hid this defect from an earlier version of this test.
+    //
+    // The transcript ends on an assistant row — that is what says the turn is
+    // still in flight; `terminal(2)` is the trap.
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'completed' },
+    ]);
+    api.listRunItems.mockImplementation(({ runId }: { runId: string }) =>
+      Promise.resolve(
+        runId === 'r1'
+          ? [
+              msg(1, 'user', 'first question'),
+              terminal(2),
+              msg(3, 'user', 'second question'),
+              msg(4, 'assistant', 'still working on it'),
+            ]
+          : [],
+      ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    const row = (): HTMLElement =>
+      [...container.querySelectorAll('li')].find((el) =>
+        el.textContent?.includes('My chat'),
+      )!;
+
+    await clickRun(container, 'My chat');
+    expect(row().textContent).toContain('running');
+    expect(row().textContent).not.toContain('completed');
+
+    // Away to the other chat and back — the second visit is where it bit.
+    await clickRun(container, 'Second chat');
+    await clickRun(container, 'My chat');
+
+    expect(row().textContent).toContain('running');
+    expect(row().textContent).not.toContain('completed');
+    // …and the working state with it: a run still in flight offers Stop, not a
+    // Send that the next message would race into a RUN_BUSY.
+    expect(container.querySelector('[aria-label="Stop"]')).not.toBeNull();
+  });
+
+  it('DOES settle a stale running row when the replay ends on a terminal item', async () => {
+    // The other half, and what stops the fix above becoming a lie of its own: a
+    // turn that ended while the user was looking at another chat is only ever
+    // seen in the replay, so the LAST item is allowed to settle the row — that
+    // is the one terminal item which can describe the present.
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'question'),
+      msg(2, 'assistant', 'answer'),
+      terminal(3),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const row = [...container.querySelectorAll('li')].find((el) =>
+      el.textContent?.includes('My chat'),
+    )!;
+    expect(row.textContent).toContain('completed');
+    expect(row.textContent).not.toContain('running');
+  });
+
   it('names what a running run is doing, and stops naming it when it stops', async () => {
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);

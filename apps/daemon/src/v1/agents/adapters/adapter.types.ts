@@ -301,6 +301,44 @@ type AgentEventBody =
     }
   | {
       /**
+       * A unit of BACKGROUND work this turn started, which the turn must
+       * outlive — opened by `started`, closed by `settled`.
+       *
+       * Turn plumbing, not conversation: `runCliSession` consumes it and never
+       * forwards it, so it is not an item and no consumer sees it.
+       *
+       * It exists because a CLI's turn-end line is not the end of its WORK.
+       * Measured on claude 2.1.231: a `result` line arrives while a delegate the
+       * turn launched is still running, and the CLI then runs FURTHER turns of
+       * its own accord as each reports back (that continuation's own `result`
+       * carries `origin: {kind:'task-notification'}`). Settling on the first
+       * `result` therefore ends geniro's turn in the middle of the work — and
+       * everything after it becomes a between-turn orphan: measured across the
+       * author's own daemon log, 11 of 31 settles were followed by off-turn
+       * work, up to 33 minutes and 997 events past the settle, including 227
+       * whole assistant messages dropped and 430 permission requests answered
+       * with no card ever shown. The run reported `completed` throughout.
+       *
+       * {@link id} is the CLI's own handle for that work, and only identity
+       * matters: the set is keyed by it so a `settled` for something never
+       * opened is a no-op and a duplicate `settled` cannot close a second one.
+       * A CLI reporting the same unit on two channels (claude reports each of
+       * its tasks on both `task_updated` and `task_notification`) is therefore
+       * safe to map from both, which is what keeps a version that drops one of
+       * them working.
+       *
+       * A CLI that reports no such lifecycle simply never emits this, and its
+       * turns settle exactly as before — this is not a capability an adapter
+       * has to declare, because the absence is indistinguishable from having no
+       * background work.
+       */
+      type: 'background_work';
+      /** The CLI's own id for this unit of work. */
+      id: string;
+      phase: 'started' | 'settled';
+    }
+  | {
+      /**
        * The CLI reported the session's invokable slash commands (claude's
        * `system/init` `slash_commands`: built-ins + plugin skills + user and
        * project skills/commands, shadowing already resolved — verified live

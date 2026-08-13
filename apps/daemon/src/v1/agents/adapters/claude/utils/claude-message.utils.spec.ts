@@ -1053,6 +1053,109 @@ describe('mapClaudeMessage — context compaction', () => {
   });
 });
 
+describe('mapClaudeMessage — background tasks', () => {
+  // Every line below is captured verbatim from a 2.1.231 turn told to launch a
+  // delegate and NOT wait for it. What makes them load-bearing: that same run
+  // printed TWO `result` lines — the user's answer, and then a turn claude ran
+  // on its own accord once a task reported (`origin:{kind:"task-notification"}`)
+  // — so a turn settled on the first `result` is settled mid-work.
+  it('opens a unit of background work on task_started', () => {
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'ad83f0a35d8a3dfc9',
+        tool_use_id: 'toolu_01LWpVdfmqPnsMuftxq7YiAA',
+        description: 'Delayed sleep echo task',
+        subagent_type: 'general-purpose',
+        task_type: 'local_agent',
+        session_id: 's1',
+      }),
+    ).toEqual([
+      { type: 'background_work', id: 'ad83f0a35d8a3dfc9', phase: 'started' },
+    ]);
+  });
+
+  it('closes it from EITHER terminal channel, which spell the status differently', () => {
+    // `task_updated` carries it in a patch, `task_notification` at the root —
+    // and the same task was reported `killed` by one and `stopped` by the other
+    // in one measured run, which is why neither spelling is trusted alone.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'ad83f0a35d8a3dfc9',
+        patch: { status: 'completed', end_time: 1786635753021 },
+      }),
+    ).toEqual([
+      { type: 'background_work', id: 'ad83f0a35d8a3dfc9', phase: 'settled' },
+    ]);
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'bblzv799n',
+        status: 'stopped',
+        tool_use_id: 'toolu_x',
+      }),
+    ).toEqual([{ type: 'background_work', id: 'bblzv799n', phase: 'settled' }]);
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'bblzv799n',
+        patch: { status: 'killed', end_time: 1786635772095 },
+      }),
+    ).toEqual([{ type: 'background_work', id: 'bblzv799n', phase: 'settled' }]);
+  });
+
+  it('leaves the work OPEN for a status it does not recognise', () => {
+    // The direction is the point: an unrecognised status delays a settle
+    // (bounded by the turn's silence deadline) rather than declaring work
+    // finished while it is still running, which is the whole defect.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 't1',
+        patch: { status: 'reticulating_splines' },
+      }),
+    ).toEqual([]);
+    // `task_progress` is the in-flight ping and carries no status at all.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_progress',
+        task_id: 't1',
+        description: 'Running sleep 40 && echo delegate-finished-late',
+        last_tool_name: 'Bash',
+      }),
+    ).toEqual([]);
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 't1',
+      }),
+    ).toEqual([]);
+  });
+
+  it('reports nothing for a task line carrying no id', () => {
+    // Identity is the whole content of the event — the set is keyed by it — so
+    // an id-less line is unusable rather than a unit of anonymous work.
+    expect(
+      mapClaudeMessage({ type: 'system', subtype: 'task_started' }),
+    ).toEqual([]);
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_notification',
+        status: 'completed',
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe('mapClaudeThinkingTokens', () => {
   it('reads the running reasoning total off the telemetry line', () => {
     // Captured verbatim from a live turn.

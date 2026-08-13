@@ -220,6 +220,7 @@ describe('verdict round-trip', () => {
       requestId: 'req-1',
       toolName: 'Write',
       input: {},
+      question: false,
       respond,
     });
     const gw = new NotificationsGateway(
@@ -266,6 +267,7 @@ describe('verdict round-trip', () => {
         requestId,
         toolName: 'AskUserQuestion',
         input: {},
+        question: true,
         respond,
       });
     const gw = new NotificationsGateway(

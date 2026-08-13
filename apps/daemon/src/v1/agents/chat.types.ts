@@ -418,6 +418,25 @@ export interface RunItemEvent {
 export interface RunStatusEvent {
   runId: string;
   /**
+   * Whether this run is parked on the USER, and on what — or `undefined` when
+   * this event says nothing about it.
+   *
+   * Three states, deliberately: `undefined` (absent on the wire) asserts
+   * nothing and leaves the client's reading alone, `null` says the run is no
+   * longer parked, and a kind says it is. The same distinction `status` below
+   * draws, for the same reason — only the two transitions (a card opening, a
+   * card closing) know anything about this, and every other announce must not
+   * overwrite what they said.
+   *
+   * It exists because "parked on you" was knowable ONLY for the chat in focus:
+   * the renderer derived it from that run's transcript items, which are the one
+   * thing a background run does not stream. So a run waiting on an answer went
+   * on showing a spinner in the sidebar for as long as the user was looking
+   * somewhere else — the one state where a spinner is actively misleading,
+   * since nothing will move until they come back.
+   */
+  awaiting?: RunAwaiting | null;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *
@@ -506,10 +525,41 @@ export interface RunDeltaEvent {
   contextWindowTokens: number | null;
 }
 
+/**
+ * What a run is parked on, when it is parked on the user at all.
+ *
+ * Two kinds rather than a boolean because they are different asks and the
+ * badge says so: a QUESTION is the agent wanting a decision only the user can
+ * make, an APPROVAL is a tool call held at the permission gate. Both stop the
+ * turn dead; only one of them means the agent has something to ask.
+ *
+ * Deliberately NOT a `RunStatus` value. The run genuinely is still running —
+ * its process is alive, its turn is open, and every settle path still has to
+ * fire — so writing this into the persisted lifecycle column would mean a
+ * crash could strand a run in a state no settle path knows how to leave. It is
+ * a live fact about an in-memory registry entry, and it is served like one.
+ */
+export const RunAwaitingSchema = z
+  .enum(['question', 'approval'])
+  .meta({ id: 'RunAwaiting' });
+export type RunAwaiting = z.infer<typeof RunAwaitingSchema>;
+
 /** A run projected to the wire (chat and workflow runs share the shape). */
 export const RunWireSchema = z.object({
   id: z.string(),
   status: RunStatusSchema,
+  /**
+   * Parked on the user, and on what — null when it is not.
+   *
+   * On the SNAPSHOT as well as the `run_status` broadcast, because the two
+   * cover different moments: the broadcast carries the transition, and this
+   * carries the state a client that reconnected AFTER it has no other way to
+   * learn. A run parked on a question emits nothing further by definition, so
+   * without it a reloaded window shows a spinner until the user clicks in.
+   */
+  awaiting: RunAwaitingSchema.nullable().describe(
+    'What this run is parked on waiting for the user, or null when it is not parked',
+  ),
   title: z.string().nullable(),
   agentKind: AgentKindSchema.nullable(),
   workflowId: z

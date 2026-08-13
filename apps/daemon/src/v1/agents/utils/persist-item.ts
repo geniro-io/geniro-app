@@ -2,7 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 
 import type { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type { ItemWire, RunWire } from '../chat.types';
+import type { ItemWire, RunAwaiting, RunWire } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 
@@ -56,10 +56,20 @@ export async function persistItemAndEmit(
 export function runToWire(
   run: Run,
   lastMessage: string | null = null,
+  /**
+   * What the run is parked on right now, from the approval registry.
+   *
+   * Passed in rather than looked up here: this is a pure projection of a row,
+   * and the registry is in-memory DI state. Defaulted to null so the paths
+   * that genuinely cannot be parked — a run being created, a workflow run just
+   * started — say so without asking.
+   */
+  awaiting: RunAwaiting | null = null,
 ): RunWire {
   return {
     id: run.id,
     status: run.status,
+    awaiting,
     title: run.title,
     agentKind: run.agentKind,
     workflowId: run.workflowId,

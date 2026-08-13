@@ -1022,10 +1022,27 @@ export function Chats({
       // badge. It fires on every tool call without reading the run, so while
       // it asserted `running` one straggler after a cancel flipped the row
       // back to running and nothing announced again to correct it.
-      if (status !== null) {
+      // `awaiting` rides the SAME row as the status rather than a map of its
+      // own, because the snapshot already carries it: `GET /v1/chats` answers
+      // it per run, so a window that reconnects after the transition learns it
+      // from the row it just loaded, and this event only has to keep that row
+      // current. A parallel map would need seeding from the snapshot anyway,
+      // and would then be a second place for the same fact to go stale.
+      //
+      // `undefined` means the announce said nothing about waiting — the field
+      // is left exactly as it was, which is what lets a tool-call announce
+      // fire during a parked turn without unparking it.
+      const parked = event.awaiting;
+      if (status !== null || parked !== undefined) {
         setRuns((prev) =>
           prev.map((run) =>
-            run.id === event.runId ? { ...run, status } : run,
+            run.id === event.runId
+              ? {
+                  ...run,
+                  ...(status !== null ? { status } : {}),
+                  ...(parked !== undefined ? { awaiting: parked } : {}),
+                }
+              : run,
           ),
         );
       }
@@ -2796,11 +2813,29 @@ export function Chats({
                       label={runLabel(run, workflowNames)}
                       isWorkflow={run.workflowId != null}
                       status={
-                        run.id === activeRunId ? activeRunStatus : run.status
+                        run.id === activeRunId
+                          ? activeRunStatus
+                          : // A run the user is NOT looking at, through the
+                            // same badge rule — its "parked on you" comes from
+                            // the row (the daemon's registry) rather than from
+                            // items, which only ever arrive for the focused
+                            // run. That asymmetry is the bug this fixes: a
+                            // chat sitting on an unanswered question showed a
+                            // spinner for as long as the user was elsewhere,
+                            // and a spinner is exactly the wrong thing to show
+                            // for the one state that will not advance on its
+                            // own. `streaming` stays false because this run's
+                            // live plane is not subscribed.
+                            displayRunStatus({
+                              status: run.status,
+                              streaming: false,
+                              awaitingAnswer: run.awaiting !== null,
+                            })
                       }
                       lastMessage={run.lastMessage}
                       lastActivityAt={run.updatedAt}
                       activity={activities.get(run.id) ?? null}
+                      awaiting={run.awaiting}
                       onActivate={handleActivateRun}
                       onRename={handleRenameRun}
                       onDelete={handleDeleteRun}

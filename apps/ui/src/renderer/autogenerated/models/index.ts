@@ -265,6 +265,12 @@ export interface AgentModelDto {
      * @memberof AgentModelDto
      */
     source: AgentModelDtoSourceEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelDto
+     */
+    effort: string | null;
 }
 
 
@@ -276,6 +282,27 @@ export const AgentModelDtoSourceEnum = {
     Builtin: 'builtin'
 } as const;
 export type AgentModelDtoSourceEnum = typeof AgentModelDtoSourceEnum[keyof typeof AgentModelDtoSourceEnum];
+
+/**
+ * 
+ * @export
+ * @interface AgentModelEffortCapability
+ */
+export interface AgentModelEffortCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentModelEffortCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelEffortCapability
+     */
+    unavailableReason: string | null;
+}
+
 
 /**
  * 
@@ -505,6 +532,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     usage: Array<AgentUsageCapability>;
+    /**
+     * Per-CLI reasoning-effort picker support, one entry per known agent
+     * @type {Array<AgentModelEffortCapability>}
+     * @memberof CapabilitiesDto
+     */
+    modelEfforts: Array<AgentModelEffortCapability>;
 }
 
 /**

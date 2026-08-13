@@ -1,45 +1,57 @@
 import { Gauge } from 'lucide-react';
 
-import type { CliKind } from '../../shared/contracts';
 import { Chip } from '../components/ui/chip';
-import { parseModelEffort } from './model-effort';
 
 /**
- * A read-only effort chip for cursor-agent.
+ * A read-only effort chip, for a CLI whose effort is not separately selectable.
  *
- * That CLI has no separate effort control — effort rides in the model id — so
- * {@link EffortSelect} stays absent and this states what the chosen model
- * already carries. Muted and non-interactive: the user changes effort by
- * picking a different model row, not a second picker.
+ * It stands in for {@link EffortSelect} where that picker has no vocabulary to
+ * offer, and states what the chosen model already carries. The user changes it
+ * by picking a different model row — which is now legible, because
+ * {@link ModelSelect} shows each row's effort as its hint.
  *
- * Read-only is not a shortfall, and the tooltip has to SAY so. Probed on
- * cursor-agent 2026.08.04-aaa8809 (recorded at `CursorAcpAdapter`'s `efforts`
- * field): the agent accepts only the exact model ids it enumerated, rejecting
- * every recomposed effort with `-32602 Invalid params` — including a value it
- * ships on another model — and it enumerates exactly one effort per model. So a
- * real picker here could only ever produce a failed turn. A chip that states a
- * value and offers no way to change it reads as broken, which is what got this
- * reported; naming the action that DOES work is the whole fix available.
+ * **Read-only is not a shortfall, and the chip has to SAY so.** A value the user
+ * cannot change, with no cause given, reads as broken — which is how this was
+ * reported ("I cannot change the effort of a Cursor model; in the Cursor UI I
+ * can"). So the tooltip carries the DAEMON's own sentence for the refusal,
+ * naming where the effort does change. It is never composed here: which CLI
+ * lacks a picker, and what to say about it, is that adapter's fact, and a
+ * sentence invented in the renderer is one the adapter cannot keep true.
+ *
+ * That is also why nothing here names an agent. It used to open with
+ * `agentKind !== 'cursor-agent'` and parse the effort out of a cursor model id
+ * itself — so a CLI that gained an effort-bearing id would have shown nothing,
+ * and one that gained a real picker would have shown both controls.
  */
 export function ModelEffortReadout({
-  agentKind,
-  modelId,
+  effort,
+  unavailableReason,
 }: {
-  agentKind: CliKind;
-  /** The model id the run will pass — not the friendly label. */
-  modelId: string | null;
+  /**
+   * The effort the selected model states, as the daemon reported it
+   * (`AgentModel.effort`). Null when no model is chosen, or when the model
+   * states none — in both cases there is nothing to read out.
+   */
+  effort: string | null;
+  /**
+   * Why this CLI offers no effort picker, from `GET /v1/capabilities`
+   * `modelEfforts[]`. Null means it HAS one, and then this chip must not render
+   * at all: `EffortSelect` is on screen and two controls for one value is worse
+   * than none. Undefined means the capability report has not landed — also
+   * nothing, since a chip whose explanation is still in flight would appear
+   * inert for exactly as long as it takes to arrive.
+   */
+  unavailableReason: string | null | undefined;
 }): React.JSX.Element | null {
-  if (agentKind !== 'cursor-agent' || modelId === null) {
-    return null;
-  }
-  const effort = parseModelEffort(modelId);
-  if (effort === null) {
+  // One condition for three cases that all mean "render nothing" — see the two
+  // prop docs above for why each of them does.
+  if (effort === null || !unavailableReason) {
     return null;
   }
   return (
     <Chip
       tone="muted"
-      title={`Reasoning effort ${effort} — cursor builds it into the model, so change it by choosing a different model`}>
+      title={`Reasoning effort ${effort} — ${unavailableReason}`}>
       <Gauge aria-hidden="true" />
       {effort}
     </Chip>

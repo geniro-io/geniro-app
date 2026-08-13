@@ -316,7 +316,14 @@ function targetTrigger(container: HTMLElement): HTMLButtonElement {
   )!;
 }
 
-/** Open a composer menu and click the row with this exact label. */
+/**
+ * Open a composer menu and click the row with this exact label.
+ *
+ * Matched on the row's LABEL span, not on its whole `textContent`: a `MenuItem`
+ * may carry a right-aligned `hint` (the model picker states each model's effort
+ * there), and comparing the concatenation would need every caller to spell the
+ * hint too — so a hint added to a picker would break every unrelated pick.
+ */
 async function pickMenuRow(
   container: HTMLElement,
   trigger: HTMLButtonElement,
@@ -327,7 +334,7 @@ async function pickMenuRow(
   });
   const row = [
     ...container.querySelectorAll<HTMLElement>('[role="option"]'),
-  ].find((o) => o.textContent === rowText);
+  ].find((o) => o.querySelector('span')?.textContent === rowText);
   if (!row) {
     throw new Error(`no menu row labelled "${rowText}"`);
   }
@@ -487,6 +494,18 @@ beforeEach(() => {
         agent: 'cursor-agent',
         unavailableReason:
           'cursor-agent takes one prompt per turn — ACP has no channel for a message mid-turn',
+      },
+    ],
+    // Which CLIs offer a reasoning-effort PICKER. Stated for the same reason as
+    // the rows above, and load-bearing in the same way: it is what the read-only
+    // effort chip shows as its cause, so a fixture without it renders no chip at
+    // all and the specs asserting one would be testing nothing.
+    modelEfforts: [
+      { agent: 'claude', unavailableReason: null },
+      {
+        agent: 'cursor-agent',
+        unavailableReason:
+          'cursor-agent builds the reasoning effort into the model itself — change the effort in Cursor’s own model picker',
       },
     ],
   });
@@ -2630,7 +2649,10 @@ describe('Chats composer memory & suggestions', () => {
     expect(modelTrigger(container).textContent).toContain('default model');
   });
 
-  it('shows the effort baked into a selected cursor model id', async () => {
+  it('shows the effort of a selected cursor model, and no effort picker', async () => {
+    // The effort now arrives as a FIELD on the model the daemon reported — the
+    // renderer no longer reads a cursor model id, so a fixture whose rows omit
+    // `effort` is a fixture whose CLI reported none.
     agentsApi.listAgentModels.mockImplementation(
       ({ agent }: { agent: string }) =>
         Promise.resolve(
@@ -2640,9 +2662,10 @@ describe('Chats composer memory & suggestions', () => {
                   id: 'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
                   label: 'Opus 5',
                   source: 'cli',
+                  effort: 'high',
                 },
               ]
-            : [{ id: 'opus', label: 'opus', source: 'builtin' }],
+            : [{ id: 'opus', label: 'opus', source: 'builtin', effort: null }],
         ),
     );
     const { client } = makeClient();
@@ -2653,6 +2676,13 @@ describe('Chats composer memory & suggestions', () => {
 
     expect(effortTrigger(container)).toBeUndefined();
     expect(container.textContent).toContain('high');
+    // And the chip says where the effort DOES change — the daemon's sentence,
+    // not one written here. A chip stating a value the user cannot change with
+    // no cause given is what got this reported in the first place.
+    const chipTitle = [...container.querySelectorAll('[title]')]
+      .map((el) => el.getAttribute('title') ?? '')
+      .find((title) => title.startsWith('Reasoning effort'));
+    expect(chipTitle).toContain('Cursor’s own model picker');
   });
 
   it('lists what the DAEMON reports for whichever CLI is selected', async () => {

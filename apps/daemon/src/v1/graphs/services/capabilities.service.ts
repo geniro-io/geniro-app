@@ -6,6 +6,7 @@ import type {
   AgentApprovalCapability,
   AgentConfigDirCapability,
   AgentFollowUpCapability,
+  AgentModelEffortCapability,
   AgentSubagentCapability,
   AgentTerminalCapability,
   AgentUsageCapability,
@@ -33,7 +34,22 @@ export class CapabilitiesService {
       followUps: this.followUpCapabilities(),
       subagents: this.subagentCapabilities(),
       usage: this.usageCapabilities(),
+      modelEfforts: this.modelEffortCapabilities(),
     };
+  }
+
+  /**
+   * Every registered CLI's effort-picker answer, read off its own config.
+   *
+   * Iterated, never listed — the same rule as the six below. It is what lets a
+   * composer with no effort picker SAY where the effort is set instead, rather
+   * than showing a value the user cannot change and no cause for it.
+   */
+  private modelEffortCapabilities(): AgentModelEffortCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      unavailableReason: adapter.getConfig().effortsUnavailableReason,
+    }));
   }
 
   /**

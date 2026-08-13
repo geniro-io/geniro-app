@@ -306,6 +306,57 @@ describe('AgentAdapter.followUp declares what buildFollowUpPayload does', () => 
   });
 });
 
+describe('AgentAdapter effort vocabulary and its reason agree', () => {
+  /**
+   * `efforts: []` hides the picker; `effortsUnavailableReason` is the only thing
+   * that then explains what replaced it. The pair is what makes an inert effort
+   * chip legible, and the combination this pins out is the one that shipped:
+   * an empty vocabulary with no reason, which rendered a value the user could
+   * not change and nothing anywhere saying where it comes from.
+   */
+  for (const { name, adapter } of ADAPTERS) {
+    it(`${name} declares a reason exactly when it offers no efforts`, () => {
+      const config = adapter.getConfig();
+
+      expect(config.effortsUnavailableReason === null).toBe(
+        config.efforts.length > 0,
+      );
+    });
+  }
+
+  it('is not vacuous — the shipped pair covers BOTH answers', () => {
+    const answers = ADAPTERS.map(
+      ({ adapter }) => adapter.getConfig().efforts.length > 0,
+    );
+
+    expect(new Set(answers)).toEqual(new Set([true, false]));
+  });
+
+  it('names where the effort DOES change, not merely that it cannot here', () => {
+    // The renderer shows this sentence on an inert chip, so "cursor-agent has no
+    // effort flag" would be true and useless. The measured answer is that the
+    // value lives in the user's Cursor account, and the sentence has to carry
+    // it — that is the whole difference between this and a bare refusal.
+    const reason = new CursorAcpAdapter().getConfig().effortsUnavailableReason;
+
+    expect(reason).not.toBeNull();
+    expect(reason).toMatch(/Cursor/);
+    expect(reason).toMatch(/model picker/);
+  });
+});
+
+describe('AgentAdapter models report the effort their id carries', () => {
+  it('a CLI with its own effort flag states none on its models', () => {
+    // The builtin floor rather than `listModels`, which reads the user's real
+    // `~/.claude.json`: this is the declared set, and it is where a copy-paste
+    // from the cursor adapter would put a stray effort on a bare alias.
+    const models = new ClaudeAdapter().getConfig().builtinModels;
+
+    expect(models.length).toBeGreaterThan(0);
+    expect(models.every((model) => model.effort === null)).toBe(true);
+  });
+});
+
 describe('AgentAdapter.mcpLoginTarget', () => {
   /** A CLI with no sign-in command — the shape neither shipped adapter has. */
   class NoLoginAdapter extends ClaudeAdapter {

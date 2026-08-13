@@ -401,6 +401,20 @@ export interface AgentModel {
   label: string;
   /** How this entry was obtained — the UI says so when it is not live. */
   source: 'cli' | 'builtin';
+  /**
+   * The reasoning effort this id ALREADY carries, for a CLI that folds effort
+   * into the model instead of taking it as a flag — `high` for
+   * `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`. Null
+   * when the CLI has a separate effort control, or when the id states none.
+   *
+   * Reported here rather than parsed by the reader, and that is the whole point:
+   * the bracket syntax belongs to one CLI, so the picker showing it must not
+   * learn to read it. It also puts the effort where the choice is MADE — a list
+   * of "Opus 5" and "Opus 4.7" hides that picking between those two rows IS how
+   * effort is chosen on such a CLI, which is exactly how "I cannot change
+   * effort" gets reported against a control that is working as designed.
+   */
+  effort: string | null;
 }
 
 /**
@@ -1238,6 +1252,18 @@ export interface AdapterConfig {
    * CLI can accept a level its own help omits.
    */
   readonly efforts: readonly AgentEffort[];
+  /**
+   * Why this CLI offers no effort PICKER, or `null` when {@link efforts} has
+   * entries. MUST agree with it — `[]` here with a null reason would render an
+   * inert chip with nothing to explain it, which is the state this replaces
+   * (pinned in `agent-adapter.spec.ts`).
+   *
+   * A SENTENCE, like the reasons on `usage` / `subagents` / `followUp`, because
+   * the renderer shows it: an effort readout the user cannot change reads as
+   * broken unless it names what DOES change it. "cursor cannot" is not enough —
+   * the answer that helps is where the value actually lives.
+   */
+  readonly effortsUnavailableReason: string | null;
 
   // ── Models ──────────────────────────────────────────────────────────────
   /**

@@ -190,6 +190,39 @@ describe('CapabilitiesService — token and cost usage', () => {
   });
 });
 
+describe('CapabilitiesService — the reasoning-effort picker', () => {
+  const efforts = (): Map<string, string | null> =>
+    new Map(
+      service()
+        .service.capabilitiesWire()
+        .modelEfforts.map((e) => [e.agent, e.unavailableReason]),
+    );
+
+  it('answers for EVERY registered CLI, so the chip never allowlists one', () => {
+    expect([...efforts().keys()]).toEqual([...registry().all().keys()]);
+  });
+
+  it('carries each adapter’s OWN reason, verbatim', () => {
+    expect(efforts().get('claude')).toBe(
+      new ClaudeAdapter().getConfig().effortsUnavailableReason,
+    );
+    expect(efforts().get('cursor-agent')).toBe(
+      new CursorAcpAdapter().getConfig().effortsUnavailableReason,
+    );
+  });
+
+  it('states claude’s picker as null and names where cursor’s effort lives', () => {
+    // The row exists because `GET /v1/agents/efforts` answering `[]` hides the
+    // picker without explaining what replaced it — which is how "I cannot change
+    // the effort of a Cursor model" was reported against a control behaving
+    // exactly as measured. A refusal that does not name the place it CAN be
+    // changed is the same silence with more words.
+    expect(efforts().get('claude')).toBeNull();
+    expect(efforts().get('cursor-agent')).toEqual(expect.any(String));
+    expect(efforts().get('cursor-agent')).toContain('model picker');
+  });
+});
+
 describe('CapabilitiesService — the interactive terminal', () => {
   it('answers for EVERY registered CLI, so the renderer never allowlists one', () => {
     expect(

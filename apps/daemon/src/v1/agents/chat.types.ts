@@ -216,6 +216,12 @@ export const AgentModelWireSchema = z.object({
   source: z
     .enum(['cli', 'builtin'])
     .describe('Reported by the CLI, or our documented fallback set'),
+  effort: z
+    .string()
+    .nullable()
+    .describe(
+      'The reasoning effort this model id already carries, for a CLI that folds effort into the model; null when the CLI takes effort separately or the id states none',
+    ),
 });
 export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;
 

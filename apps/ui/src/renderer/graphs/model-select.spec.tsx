@@ -8,13 +8,13 @@ import { ModelSelect } from './model-select';
 
 /** What the daemon reports for claude (the CLI aliases + a cached extra). */
 const CLAUDE_MODELS: AgentModel[] = [
-  { id: 'opus', label: 'opus', source: 'builtin' },
-  { id: 'sonnet', label: 'sonnet', source: 'builtin' },
-  { id: 'haiku', label: 'haiku', source: 'builtin' },
+  { id: 'opus', label: 'opus', source: 'builtin', effort: null },
+  { id: 'sonnet', label: 'sonnet', source: 'builtin', effort: null },
+  { id: 'haiku', label: 'haiku', source: 'builtin', effort: null },
 ];
 const CURSOR_MODELS: AgentModel[] = [
-  { id: 'gpt-5', label: 'gpt-5', source: 'builtin' },
-  { id: 'sonnet-4', label: 'sonnet-4', source: 'builtin' },
+  { id: 'gpt-5', label: 'gpt-5', source: 'builtin', effort: null },
+  { id: 'sonnet-4', label: 'sonnet-4', source: 'builtin', effort: null },
 ];
 
 (

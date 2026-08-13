@@ -32,6 +32,7 @@ import {
   CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
+import { cursorModelEffort } from './utils/cursor-model.utils';
 import {
   cursorAdapterQuestion,
   encodeCursorQuestionReply,
@@ -205,8 +206,55 @@ export class CursorAcpAdapter extends AgentAdapter {
        * that probe if a release starts enumerating two ids for one model, or if
        * `configOptions` gains a category other than `mode`/`model` — those are
        * the two shapes that would make a real chip possible.
+       *
+       * RE-PROBED 2026-08-13 on 2026.08.11-e8db854, after this was reported as a
+       * bug ("I cannot change the effort of a Cursor model; in the Cursor UI I
+       * can"). Every rejection above reproduced, and the search widened without
+       * finding a door:
+       *
+       *   - BOTH carriers, not just one: `session/set_config_option` and the
+       *     pre-1.0 `session/set_model` reject the identical set.
+       *   - The DASH spelling `cursor-agent models` prints — that subcommand
+       *     enumerates 205 rows including `claude-opus-5-medium`,
+       *     `claude-opus-5-thinking-xhigh`, `claude-sonnet-5-thinking-max` — is
+       *     rejected on both carriers too. It is a second namespace for the same
+       *     models and no part of it reaches the session.
+       *   - `claude-opus-5[thinking=true,context=1m,effort=xhigh,fast=false]`,
+       *     the exact bracket shape `--help` documents (note `1m`, where ACP
+       *     reports `300k` for the same model): rejected.
+       *   - Omitting `effort=` from an otherwise valid id: rejected. There is no
+       *     "unspecified" that would let the agent choose.
+       *   - `configOptions` still carries exactly two entries, `mode` and
+       *     `model`. No third axis appeared.
+       *
+       * And the MECHANISM, which is what the earlier note was missing and what
+       * makes the verdict predictive rather than a list of failures. The
+       * enumerated set is composed from the user's own
+       * `~/.cursor/cli-config.json` → `modelParameters.<family>`, which stores
+       * ONE parameter list per model family
+       * (`[{id:'thinking'},{id:'context'},{id:'effort',value:'high'},{id:'fast'}]`).
+       * That is why exactly one variant per family is offered, and why the
+       * offered effort is whatever the user last chose in Cursor itself. Copying
+       * that file into a `CURSOR_CONFIG_DIR` with `effort` edited to `xhigh` and
+       * running the ACP server under it was measured: the CLI OVERWROTE the
+       * seeded value back to `high` on startup (and filled in `authInfo`), so
+       * the value is account state Cursor syncs down, not a local knob. Writing
+       * `~/.cursor/cli-config.json` is therefore both ruled out by policy and
+       * futile.
+       *
+       * Which leaves one honest answer, and it is what
+       * {@link effortsUnavailableReason} says: the effort changes in Cursor's own
+       * model picker, and this list follows it.
        */
       efforts: [],
+      /**
+       * Named where it changes, not merely refused. An inert chip stating "high"
+       * beside a picker offering no efforts is what got this reported; the value
+       * lives in the user's Cursor account (see the block above), and the CLI's
+       * own `/model` picker is what writes it.
+       */
+      effortsUnavailableReason:
+        'cursor-agent builds the reasoning effort into the model itself and accepts only the variants your Cursor account selected — change the effort in Cursor’s own model picker (`/model` in cursor-agent, or the Cursor app) and this list follows it',
       /**
        * Empty because {@link CursorAcpAdapter.listModels} answers for real —
        * `builtinModels` is the fallback for a CLI that cannot be asked, and
@@ -603,6 +651,11 @@ export class CursorAcpAdapter extends AgentAdapter {
       id: model.modelId,
       label: model.name,
       source: 'cli',
+      // The half the agent's own `name` throws away. Every id it enumerates
+      // carries its parameters and the label carries none of them, so without
+      // this the picker offers "Opus 5" and "Opus 4.7" as if the only difference
+      // were the model — when on this CLI that pair IS the effort choice.
+      effort: cursorModelEffort(model.modelId),
     }));
   }
 

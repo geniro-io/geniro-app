@@ -771,9 +771,21 @@ describe('CursorAcpAdapter misuse', () => {
         sessionId: 's1',
         models: {
           currentModelId: 'composer-2.5[fast=true]',
+          // Three ids VERBATIM from a 2026.08.11-e8db854 `session/new` reply,
+          // chosen to cover the whole shape of the vocabulary: one that states
+          // no effort, one that spells it `effort=`, and one that spells the
+          // same axis `reasoning=`.
           availableModels: [
             { modelId: 'composer-2.5[fast=true]', name: 'Composer 2.5' },
-            { modelId: 'claude-opus-5[thinking=true]', name: 'Opus 5' },
+            {
+              modelId:
+                'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+              name: 'Opus 5',
+            },
+            {
+              modelId: 'gpt-5.5[context=272k,reasoning=medium,fast=false]',
+              name: 'GPT-5.5',
+            },
           ],
         },
       },
@@ -815,8 +827,42 @@ describe('CursorAcpAdapter misuse', () => {
           id: 'composer-2.5[fast=true]',
           label: 'Composer 2.5',
           source: 'cli',
+          effort: null,
         },
-        { id: 'claude-opus-5[thinking=true]', label: 'Opus 5', source: 'cli' },
+        {
+          id: 'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+          label: 'Opus 5',
+          source: 'cli',
+          effort: 'high',
+        },
+        {
+          id: 'gpt-5.5[context=272k,reasoning=medium,fast=false]',
+          label: 'GPT-5.5',
+          source: 'cli',
+          effort: 'medium',
+        },
+      ]);
+    });
+
+    it('carries the effort the id holds, which the agent’s own label drops', () => {
+      // The load-bearing half of the row for this CLI. The agent reports "Opus 5"
+      // and "GPT-5.5" as names and puts the effort only inside the id, so a
+      // picker built from `label` alone shows a list in which the effort choice
+      // is invisible — which is how "I cannot change the effort" was reported
+      // against a picker that is the only place it CAN be changed.
+      //
+      // Asserted as a projection of the previous case's real output rather than
+      // as a second fixture, so it cannot pass while `listModels` drops the field.
+      const { groupSpawnFn } = fakeAcpProbe(SESSION_REPLY);
+
+      return expect(
+        new CursorAcpAdapter({ groupSpawnFn })
+          .listModels()
+          .then((models) => models.map((model) => [model.label, model.effort])),
+      ).resolves.toEqual([
+        ['Composer 2.5', null],
+        ['Opus 5', 'high'],
+        ['GPT-5.5', 'medium'],
       ]);
     });
 

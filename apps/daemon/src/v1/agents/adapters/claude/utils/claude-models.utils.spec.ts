@@ -40,7 +40,7 @@ describe('readClaudeModelCache', () => {
     );
 
     expect(readClaudeModelCache(home)).toEqual([
-      { id: 'claude-fable-5[1m]', label: 'Fable', source: 'cli' },
+      { id: 'claude-fable-5[1m]', label: 'Fable', source: 'cli', effort: null },
     ]);
   });
 
@@ -50,7 +50,7 @@ describe('readClaudeModelCache', () => {
     );
 
     expect(readClaudeModelCache(home)).toEqual([
-      { id: 'x-1', label: 'x-1', source: 'cli' },
+      { id: 'x-1', label: 'x-1', source: 'cli', effort: null },
     ]);
   });
 
@@ -99,9 +99,9 @@ describe('claudeModels', () => {
     const home = tempDir('claude-empty-');
 
     expect(claudeModels(shippedFloor, home)).toEqual([
-      { id: 'opus', label: 'opus', source: 'builtin' },
-      { id: 'sonnet', label: 'sonnet', source: 'builtin' },
-      { id: 'haiku', label: 'haiku', source: 'builtin' },
+      { id: 'opus', label: 'opus', source: 'builtin', effort: null },
+      { id: 'sonnet', label: 'sonnet', source: 'builtin', effort: null },
+      { id: 'haiku', label: 'haiku', source: 'builtin', effort: null },
     ]);
   });
 
@@ -113,7 +113,12 @@ describe('claudeModels', () => {
       JSON.stringify({ additionalModelOptionsCache: [{ value: 'fable-x' }] }),
     );
     const floor: readonly AgentModel[] = [
-      { id: 'given-floor-model', label: 'Given floor', source: 'builtin' },
+      {
+        id: 'given-floor-model',
+        label: 'Given floor',
+        source: 'builtin',
+        effort: null,
+      },
     ];
 
     expect(claudeModels(floor, home).map((model) => model.id)).toEqual([

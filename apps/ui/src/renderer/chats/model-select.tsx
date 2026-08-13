@@ -72,7 +72,21 @@ export function ModelSelect({
   }
   const known = models.some((model) => model.id === value);
   const rows = [
-    ...models.map((model) => ({ value: model.id, label: model.label })),
+    ...models.map((model) => ({
+      value: model.id,
+      label: model.label,
+      // The effort the daemon says this id already carries, right-aligned on the
+      // row. Non-null only for a CLI that folds effort into the model, and for
+      // such a CLI it is the whole reason this list is browsable: the agent's own
+      // label drops it ("Opus 5", "Opus 4.7"), so without it the rows differ by
+      // an invisible parameter and the list reads as offering no effort choice at
+      // all. That is exactly how it was reported — "I cannot change the effort" —
+      // against the one control where it CAN be chosen.
+      //
+      // Nothing here parses a model id: the field is the daemon's answer, so a
+      // CLI's own syntax stays in that CLI's adapter.
+      hint: model.effort ?? undefined,
+    })),
     ...(value !== null && !known ? [{ value, label: value }] : []),
   ];
   return (

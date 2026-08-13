@@ -527,6 +527,34 @@ export type AgentSubagentCapability = z.infer<
   typeof AgentSubagentCapabilitySchema
 >;
 
+/**
+ * Whether ONE CLI offers a reasoning-effort PICKER — the wire home for
+ * `AdapterConfig.effortsUnavailableReason`.
+ *
+ * `GET /v1/agents/efforts` already answers `[]` for a CLI with no such control,
+ * and `[]` is enough to hide the picker — but not enough to explain the chip
+ * that replaces it. That gap is what got "I cannot change the effort of a Cursor
+ * model" reported against a surface working exactly as measured: the composer
+ * showed an inert `high` and the only cause was a hover tooltip the renderer had
+ * written itself, behind an `agentKind === 'cursor-agent'` branch. This row is
+ * the same iterate-never-list shape as the six above, and it carries the
+ * adapter's own sentence — which names where the effort DOES change, the one
+ * thing a refusal has to say to be worth reading.
+ */
+export const AgentModelEffortCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    /**
+     * Why this CLI offers no effort picker, or null when it does. A sentence for
+     * the same reason as every row above: the renderer shows it verbatim.
+     */
+    unavailableReason: z.string().nullable(),
+  })
+  .meta({ id: 'AgentModelEffortCapability' });
+export type AgentModelEffortCapability = z.infer<
+  typeof AgentModelEffortCapabilitySchema
+>;
+
 /** Whether one CLI reports what a turn cost it in tokens and money. */
 export const AgentUsageCapabilitySchema = z
   .object({
@@ -574,6 +602,11 @@ export const CapabilitiesWireSchema = z.object({
   usage: z
     .array(AgentUsageCapabilitySchema)
     .describe('Per-CLI token/cost usage reporting, one entry per known agent'),
+  modelEfforts: z
+    .array(AgentModelEffortCapabilitySchema)
+    .describe(
+      'Per-CLI reasoning-effort picker support, one entry per known agent',
+    ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

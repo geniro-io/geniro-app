@@ -772,6 +772,27 @@ export function Chats({
     [capabilities],
   );
   /**
+   * Per CLI: `null` if it offers a reasoning-effort picker, else the daemon's
+   * own sentence for where the effort is set instead.
+   *
+   * Derived like the two maps above, and for the same reason — `EffortSelect`
+   * already hides itself on an empty vocabulary, but the read-only chip that
+   * replaces it needs a cause, and inventing one here is how the renderer came
+   * to hold a hand-written sentence behind an `agentKind === 'cursor-agent'`
+   * branch. An agent MISSING from the map is unknown (the report has not
+   * landed), which is not the same as "has a picker".
+   */
+  const effortReasons = useMemo(
+    () =>
+      new Map<string, string | null>(
+        (capabilities?.modelEfforts ?? []).map((row) => [
+          row.agent,
+          row.unavailableReason,
+        ]),
+      ),
+    [capabilities],
+  );
+  /**
    * Approval modes per CLI, straight off the daemon's capability report.
    * Derived for the same reason as the terminal set above: the fact lives in
    * `AdapterConfig.approval`, and the moment the renderer decides it by agent
@@ -2984,8 +3005,12 @@ export function Chats({
                               }
                             />
                             <ModelEffortReadout
-                              agentKind={agentKind}
-                              modelId={models[agentKind] ?? null}
+                              effort={
+                                agentModels.find(
+                                  (model) => model.id === models[agentKind],
+                                )?.effort ?? null
+                              }
+                              unavailableReason={effortReasons.get(agentKind)}
                             />
                           </>
                         ) : null}
@@ -3416,8 +3441,14 @@ export function Chats({
                               }
                             />
                             <ModelEffortReadout
-                              agentKind={activeRun.agentKind}
-                              modelId={activeRun.model}
+                              effort={
+                                agentModels.find(
+                                  (model) => model.id === activeRun.model,
+                                )?.effort ?? null
+                              }
+                              unavailableReason={effortReasons.get(
+                                activeRun.agentKind,
+                              )}
                             />
                             {/* Between effort and the context readout, not up in
                           the identity row: the permission posture is editable

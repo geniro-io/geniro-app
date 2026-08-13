@@ -1745,6 +1745,7 @@ describe('ClaudeAdapter — models', () => {
               id: 'pinned-floor-model',
               label: 'Pinned floor',
               source: 'builtin',
+              effort: null,
             },
           ],
         };
@@ -1756,7 +1757,12 @@ describe('ClaudeAdapter — models', () => {
     }).listModels();
 
     expect(models).toEqual([
-      { id: 'pinned-floor-model', label: 'Pinned floor', source: 'builtin' },
+      {
+        id: 'pinned-floor-model',
+        label: 'Pinned floor',
+        source: 'builtin',
+        effort: null,
+      },
     ]);
   });
 

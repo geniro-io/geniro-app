@@ -173,3 +173,69 @@ describe('BlockRequest / BlockResult tints', () => {
     expect(result).toContain('success');
   });
 });
+
+describe('BlockShell header hover surface', () => {
+  /** The header row and the disclosure inside it. */
+  function header(): { row: Element; button: Element | null } {
+    const row = container.querySelector(
+      '[data-role="block-shell"] > div.overflow-hidden > div',
+    );
+    if (row === null) {
+      throw new Error('expected a header row');
+    }
+    return { row, button: row.querySelector('button[aria-expanded]') };
+  }
+
+  it('puts the hover fill on the ROW, never on the disclosure inside it', () => {
+    // Measured on a live block before this: the button's own hover filled
+    // x=0..858 of an 888px row, leaving the 30px the header action occupies at
+    // the row's untouched tone — two colours in one row, which is why the expand
+    // control read as a separate cell notched into the card's corner. Moving the
+    // fill up to the row is what makes it one surface, so the assertion is about
+    // WHERE the class lives.
+    act(() =>
+      root.render(
+        <BlockShell
+          eyebrow="Sub-agent"
+          eyebrowIcon={<span />}
+          header={<span>code-reviewer</span>}
+          status="done"
+          collapsible
+          toggleLabel="Show the sub-agent's conversation"
+          headerAction={<button type="button">open</button>}>
+          <p>inner thread</p>
+        </BlockShell>,
+      ),
+    );
+    const { row, button } = header();
+
+    // The FAMILY, not the alpha: which token carries the hover is the promise
+    // (see below), while `/70` vs `/60` is a designer's dial and pinning it
+    // would fail a tone tweak that keeps every claim here true.
+    expect(row.className).toMatch(/hover:bg-muted/);
+    expect(button?.className ?? '').not.toMatch(/hover:bg-/);
+    // Neutral, not the apricot it was: `accent` is now the request panel's
+    // colour, so a hovered header and the ask below it read as one tone.
+    expect(row.className).not.toMatch(/hover:bg-accent/);
+  });
+
+  it('offers no hover affordance on a header that is not a disclosure', () => {
+    // A call block's header does not open anything — highlighting it on hover
+    // promises a press that does nothing.
+    act(() =>
+      root.render(
+        <BlockShell
+          eyebrow="Agent communication"
+          eyebrowIcon={<span />}
+          header={<span>poet</span>}
+          status="running">
+          <p>the sub-turn</p>
+        </BlockShell>,
+      ),
+    );
+    const { row, button } = header();
+
+    expect(button).toBeNull();
+    expect(row.className).not.toMatch(/hover:bg-/);
+  });
+});

@@ -323,9 +323,30 @@ export function BlockShell({
         <span>{eyebrow}</span>
       </div>
       <div className="overflow-hidden rounded-xl border border-border bg-card">
+        {/*
+          The hover state belongs to the ROW, not to the disclosure button
+          inside it. Measured on a live block, mid-header scanline: the button's
+          own `hover:bg-accent/50` filled x=0..858 of an 888px row, leaving the
+          30px the header action occupies at the row's untouched `bg-muted/30` —
+          two colours in one row, which is why the expand control read as a
+          separate cell wedged into the corner of the card rather than as a
+          control sitting on the header.
+
+          Neutral (`muted`, the row's own family) rather than the apricot
+          `accent` it was, for two reasons measured at the same time. The fill
+          was `246,237,226` against a card border of `221,212,200`: at the 10.5px
+          inner radius that 1px curve is a hairline, and under a saturated fill
+          it reads as a stair-stepped edge — the "strange border" at the top-left
+          corner. And apricot is now the REQUEST panel's colour, so a hovered
+          header and the ask below it were the same tone.
+        */}
         <div
           className={cn(
-            'flex items-center bg-muted/30',
+            'flex items-center bg-muted/30 transition-colors',
+            // Only where the row actually does something: a call block's header
+            // is not a disclosure, and offering a hover affordance for a press
+            // that does nothing is its own small lie.
+            collapsible && 'hover:bg-muted/70',
             open && 'border-b border-border',
           )}>
           {collapsible ? (
@@ -334,10 +355,7 @@ export function BlockShell({
               aria-expanded={open}
               aria-label={toggleLabel}
               onClick={() => setOpen((v) => !v)}
-              className={cn(
-                headerClass,
-                'transition-colors hover:bg-accent/50',
-              )}>
+              className={headerClass}>
               {headerInner}
             </button>
           ) : (

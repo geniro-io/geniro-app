@@ -1696,6 +1696,16 @@ export function Chats({
         // used to surface the raw 409 JSON as a red banner.
         enqueueMessage(runId, { text, images });
         attachments.clear();
+        // ...and kick the drain, which is what makes the queue more than a
+        // holding pen here. The automatic drain fires on a TERMINAL ITEM, and in
+        // this branch the renderer already believed no turn was running — so
+        // when the disagreement is the daemon finishing a turn's teardown (its
+        // process being reaped a moment after the terminal item), there is no
+        // further item coming and the message would sit in the strip until the
+        // user left the chat and came back. The drain's own RUN_BUSY backoff
+        // covers exactly that window; a genuinely busy run falls through it and
+        // is still drained by its terminal item, unchanged.
+        drainQueueRef.current(runId);
         return;
       }
       setError(String(err));

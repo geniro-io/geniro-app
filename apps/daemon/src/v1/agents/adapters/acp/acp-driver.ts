@@ -43,6 +43,13 @@ import {
 type PendingKind =
   | 'initialize'
   | 'session'
+  /**
+   * A `session/load`, kept apart from a `session/new` only so its REFUSAL can be
+   * handled: both replies mean the same thing and route to `onSessionReady`, but
+   * a load that fails is recoverable (open a fresh session, say the history is
+   * gone) while a `session/new` that fails leaves nothing to run the turn on.
+   */
+  | 'session_load'
   | 'set_mode'
   | 'set_model'
   | 'set_model_parameter'
@@ -386,7 +393,7 @@ export class AcpTurnDriver implements TurnDriver {
    * "May call" block and the tools it names cannot disagree.
    */
   private grantedMcpServers: AcpMcpServerHttp[] = [];
-  /** This turn resumed via `session/load`, whose reply reports no modes. */
+  /** This turn resumed via `session/load` — and its load actually succeeded. */
   private resumed = false;
   /** The model asked for, so a refusal can name it. */
   private requestedModelId: string | null = null;
@@ -532,6 +539,10 @@ export class AcpTurnDriver implements TurnDriver {
       case 'initialize':
         return this.onInitialized(result);
       case 'session':
+      case 'session_load':
+        // One reply shape, one handler: a loaded session is as ready as a new
+        // one, and `onSessionReady` reads the resume id back for the load case
+        // (`session/load` mints none — the id is the one we sent).
         return this.onSessionReady(result);
       case 'set_mode':
         // A mode the agent accepted needs no announcement; a mode it rejected
@@ -548,6 +559,45 @@ export class AcpTurnDriver implements TurnDriver {
   }
 
   private onErrorReply(kind: PendingKind, message: string): AgentEvent[] {
+    if (kind === 'session_load') {
+      // The thread could not be reopened — so run the turn on a FRESH session
+      // rather than ending it. A hard failure here is a dead end by
+      // construction: every later turn of that chat resumes the same id, so the
+      // conversation is unusable for good, and the user sees a turn that
+      // finished instantly having written nothing. Losing the history is bad;
+      // losing the chat is worse, and the notice is what keeps the loss from
+      // being silent.
+      //
+      // Reachable in the ordinary way — the agent's store is not geniro's to
+      // guarantee, and a chat whose session store was deleted (a cleared
+      // userData dir, or the per-turn-profile defect this shipped with) is
+      // exactly this. Measured against 2026.08.11-e8db854: a load of an id the
+      // profile does not hold answers
+      // `-32602 Invalid params {"message":"Session \"…\" not found"}`.
+      const events: AgentEvent[] = [
+        {
+          type: 'notice',
+          message: `agent could not reopen this conversation (${message}) — this turn runs on a fresh session, without the earlier history in its context`,
+        },
+      ];
+      // Undo the replay bookkeeping the load armed: nothing is being replayed
+      // now, and leaving `replaying` set would drop every transcript update of
+      // the turn we are about to run.
+      this.replaying = false;
+      this.resumed = false;
+      this.replayStartedAt = null;
+      this.replayedUpdates = 0;
+      this.request(
+        ACP_AGENT_METHODS.sessionNew,
+        {
+          cwd: this.options.input.cwd,
+          mcpServers: this.grantedMcpServers,
+        },
+        'session',
+        events,
+      );
+      return events;
+    }
     if (kind === 'set_mode') {
       // A refused mode is a degrade, not a failure: the turn still runs, just
       // in the agent's default mode. Say so rather than silently downgrading.
@@ -627,7 +677,7 @@ export class AcpTurnDriver implements TurnDriver {
       this.request(
         ACP_AGENT_METHODS.sessionLoad,
         { sessionId: resumeId, cwd: this.options.input.cwd, mcpServers },
-        'session',
+        'session_load',
         events,
       );
       return events;
@@ -725,10 +775,19 @@ export class AcpTurnDriver implements TurnDriver {
       // The requested mode was NOT applied. Either way this turn runs under
       // the agent's current mode, which for a read-only request like `plan`
       // means write access the user believed they had turned off — so it can
-      // never be silent. WHICH message is truthful depends on what we sent:
-      // a `session/load` reply carries no `modes` block at all, so reading
-      // that absence as "not offered" would state something false about the
-      // agent on every resumed turn.
+      // never be silent. WHICH message is truthful depends on what we sent: a
+      // reply that enumerated modes and did not include this one is a refusal,
+      // while one that enumerated none says nothing about what the agent offers.
+      //
+      // The `resumed` arm was written on the belief that a `session/load` reply
+      // carries no `modes` block at all. That is REFUTED — measured on
+      // 2026.08.11-e8db854, a load reply carries `modes`
+      // (`currentModeId: 'agent'`, three `availableModes`), `models` and
+      // `configOptions` alike, so a resumed turn takes the same path as a fresh
+      // one and this arm is only reached if a build stops sending them. It was
+      // mis-recorded because the reply could not be observed: cursor's session
+      // store lived inside a per-turn config directory that was deleted on
+      // settle, so every resume failed before its reply existed.
       events.push({
         type: 'notice',
         message: this.resumed
@@ -791,15 +850,21 @@ export class AcpTurnDriver implements TurnDriver {
     // result means "the agent said nothing", never "the agent has no models",
     // and every caller must read it as unknown.
     //
-    // Two replies are silent, and reading either as "not offered" would refuse
-    // LOCALLY: a `session/load` reply is not observed to carry the block at all
-    // — every turn after a chat's first resumes, since cursor cannot keep its
-    // process, so the model would go unapplied for the whole conversation with
-    // a degrade row per turn — and a `session/new` reply is free to omit it
-    // too, which would assert something the agent never said. Sending it and
-    // letting the agent answer is strictly better either way: `onErrorReply`
-    // already turns a genuine refusal into the same notice, earned rather than
-    // assumed. That subsumes the resumed case, so there is no branch on it.
+    // A reply is free to say nothing here, and reading silence as "not offered"
+    // would refuse LOCALLY — asserting something the agent never said, on the
+    // path every turn after a chat's first takes (cursor cannot keep its
+    // process, so those all resume). Sending it and letting the agent answer is
+    // strictly better: `onErrorReply` turns a genuine refusal into the same
+    // notice, earned rather than assumed. So there is no branch on `resumed`.
+    //
+    // A `session/load` reply was recorded here as carrying no model block at
+    // all. REFUTED on 2026.08.11-e8db854: it carries `models.currentModelId`
+    // AND a full `configOptions` list with each option's `currentValue`, so a
+    // resumed turn reads the same fields as a fresh one and applies the model
+    // through `set_config_option` exactly as it does on turn 1 (measured:
+    // `model=claude-opus-5` then `effort=xhigh` both ACCEPTED on a loaded
+    // session). The old note was written when no resume could succeed — the
+    // session store was being deleted with the turn's config directory.
     const offered = readAcpModels(sessionResult);
     if (offered.length > 0 && !acpOffersModel(sessionResult, wanted)) {
       // Never silent, for the reason the mode degrade above is not: a node the

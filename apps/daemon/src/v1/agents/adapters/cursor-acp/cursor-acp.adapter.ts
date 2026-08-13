@@ -36,6 +36,7 @@ import {
   CURSOR_MCP_TOGGLE_UNAVAILABLE_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_PROFILE_DIR_NAME,
+  CURSOR_SESSION_STORE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
@@ -65,6 +66,15 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
    * `<userData>/cursor-profiles`.
    */
   profileDir?: string;
+  /**
+   * Where the CLI's ACP conversations really live, linked into every turn
+   * profile as `acp-sessions`. Defaults beside {@link profileDir} in the OS
+   * tmpdir; provided by the module as `<userData>/cursor-sessions`.
+   *
+   * Separate from the profile base because that base is swept wholesale at boot
+   * — see `CURSOR_SESSION_STORE_DIR_NAME`.
+   */
+  sessionStoreDir?: string;
   /** The user's home, for reading their `cli-config.json` (test seam). */
   homeDir?: string;
 }
@@ -604,10 +614,14 @@ export class CursorAcpAdapter extends AgentAdapter {
       // Its own profile, like a turn's: a parameterized handshake can migrate a
       // persisted variant selection, which WRITES the config directory — and a
       // listing must never change what the user's own CLI opens with.
-      profile = seedCursorProfile(
-        this.profileBaseDir(),
-        this.cursorOptions.homeDir,
-      );
+      //
+      // With NO session store, unlike a turn's: this handshake opens a real
+      // `session/new`, and a probe's throwaway conversation has no business in
+      // the store a chat resumes from. It dies with the profile below.
+      profile = seedCursorProfile({
+        baseDir: this.profileBaseDir(),
+        homeDir: this.cursorOptions.homeDir,
+      });
       const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
         ...options,
         cwd,
@@ -825,16 +839,23 @@ export class CursorAcpAdapter extends AgentAdapter {
    * `cursor-agent` opens with. `utils/cursor-profile.utils.ts` carries the
    * measurements, including why only `cli-config.json` is copied.
    *
+   * The CONVERSATION is the one thing that must outlive the turn, so the profile
+   * links `acp-sessions` at a shared store instead of holding its own: the CLI
+   * keeps each thread inside its config directory, and the first version of this
+   * therefore deleted every chat as it settled — the next message failed at
+   * `session/load`. See the utils doc for both measurements.
+   *
    * The base runs the returned disposer on exactly one settle path, so the
    * directory is removed once however the turn ends.
    */
   protected override prepareTurn(
     input: AgentTurnInput,
   ): (() => void) | undefined {
-    const dir = seedCursorProfile(
-      this.profileBaseDir(),
-      this.cursorOptions.homeDir,
-    );
+    const dir = seedCursorProfile({
+      baseDir: this.profileBaseDir(),
+      sessionStoreDir: this.sessionStoreDir(),
+      homeDir: this.cursorOptions.homeDir,
+    });
     this.turnProfiles.set(input, dir);
     return () => {
       this.turnProfiles.delete(input);
@@ -845,6 +866,13 @@ export class CursorAcpAdapter extends AgentAdapter {
   private profileBaseDir(): string {
     return (
       this.cursorOptions.profileDir ?? join(tmpdir(), CURSOR_PROFILE_DIR_NAME)
+    );
+  }
+
+  private sessionStoreDir(): string {
+    return (
+      this.cursorOptions.sessionStoreDir ??
+      join(tmpdir(), CURSOR_SESSION_STORE_DIR_NAME)
     );
   }
 

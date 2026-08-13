@@ -300,6 +300,35 @@ const INTERRUPT_SETTLE_GRACE_MS = 5000;
 const EXIT_SETTLE_GRACE_MS = 2000;
 
 /**
+ * How long a `turn`-lifetime CLI is given to exit BY ITSELF after its turn's
+ * terminal event, before its process group is terminated.
+ *
+ * A `turn` process exists to serve exactly one turn, and that turn settles when
+ * the process ENDS — so a CLI that ends its turn and then goes on living wedges
+ * the turn open forever. Closing stdin is all that used to be done about it,
+ * which assumes a CLI that treats EOF as "we're finished". `cursor-agent acp`
+ * does not (probe-recorded in `cursor-acp.const.ts`, and measured again here:
+ * 3m25s after its turn reported `end_turn`, the process was still alive at
+ * 163MB with a `worker-server` grandchild beside it). The consequences were both
+ * halves of one report — the run's `ProcessRegistry` slot was never released, so
+ * every later message in that chat answered `RUN_BUSY` and sat in the composer's
+ * queue with the spinner still running, and each turn leaked a process group
+ * that outlived the daemon (four such groups found reparented to launchd, 1.5
+ * days old).
+ *
+ * So the terminal event arms this instead of merely closing stdin. A CLI that
+ * does exit on EOF — claude — is gone long before it fires and never notices;
+ * the turn still settles on the process actually ending, so the guarantee that
+ * `done` implies fully-drained stdout is unchanged.
+ *
+ * 2s for the same reason `EXIT_SETTLE_GRACE_MS` is 2s: long enough that a CLI
+ * intending to exit always wins the race, short enough to stay inside the
+ * renderer's own RUN_BUSY retry budget (300+600+1200+2400ms), so a message
+ * queued in this window still goes out on its own.
+ */
+const TURN_END_EXIT_GRACE_MS = 2000;
+
+/**
  * How long a run-scoped turn may go completely SILENT before the turn is
  * settled as failed and the user gets their composer back.
  *
@@ -495,6 +524,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   let cancelledTurnMayStillEmit = false;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
+  /** See {@link TURN_END_EXIT_GRACE_MS} — one per process, which serves one turn. */
+  let turnExitTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
@@ -573,6 +604,30 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // escalate if the group ignores it. Only the process actually ending
     // disarms it — see `endProcess`.
     turn.resolveDone();
+  };
+
+  /**
+   * Make sure a one-turn process actually goes away once its turn is over — see
+   * {@link TURN_END_EXIT_GRACE_MS}.
+   *
+   * Armed from the terminal event, beside the stdin close it is the backstop
+   * for. Idempotent and a no-op once the process is accounted for, so a second
+   * terminal condition cannot arm a second kill.
+   */
+  const armTurnExitDeadline = (): void => {
+    if (turnExitTimer !== null || processGone) {
+      return;
+    }
+    turnExitTimer = setTimeout(() => {
+      turnExitTimer = null;
+      if (processGone) {
+        return;
+      }
+      opts.logger?.debug?.(
+        `${opts.command}: its turn ended but the process did not — terminating the group`,
+      );
+      killGroup();
+    }, TURN_END_EXIT_GRACE_MS);
   };
 
   /**
@@ -756,6 +811,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       turn.terminalEmitted = true;
       if (opts.stdinLifetime === 'turn') {
         endStdin();
+        // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
+        // would otherwise hold this turn — and the run's registry slot — open
+        // for good. See {@link TURN_END_EXIT_GRACE_MS}.
+        armTurnExitDeadline();
       }
       turn.options.onEvent(normalized);
       if (settlesOnTerminalEvent) {
@@ -833,6 +892,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (exitTimer) {
         clearTimeout(exitTimer);
         exitTimer = null;
+      }
+      if (turnExitTimer) {
+        clearTimeout(turnExitTimer);
+        turnExitTimer = null;
       }
       terminator.disarm();
       resolveClosed();

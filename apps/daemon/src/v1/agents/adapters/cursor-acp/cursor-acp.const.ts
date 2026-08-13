@@ -67,7 +67,8 @@ export const CURSOR_EFFORT_PARAMETER_ID = 'effort';
 //
 // Applying a model or an effort over ACP PERSISTS into the config directory, so
 // a turn gets its own; see `utils/cursor-profile.utils.ts` for the measurements
-// behind every part of this (including why `mcp.json` is not copied).
+// behind every part of this (including why `mcp.json` is not copied, and why the
+// conversation store is the one thing linked OUT of the throwaway directory).
 
 /** Where the per-turn profiles live, under the daemon's userData dir. */
 export const CURSOR_PROFILE_DIR_NAME = 'cursor-profiles';
@@ -79,6 +80,32 @@ export const CURSOR_HOME_DIR_NAME = '.cursor';
 export const CURSOR_SEEDED_CONFIG_FILE = 'cli-config.json';
 /** The env var the CLI resolves its config directory from. */
 export const CURSOR_CONFIG_DIR_ENV = 'CURSOR_CONFIG_DIR';
+/**
+ * Where the CLI keeps each ACP conversation, RELATIVE TO ITS CONFIG DIRECTORY —
+ * `acp-sessions/<sessionId>/{meta.json,store.db}`.
+ *
+ * This is the one thing in a config directory that must NOT be per turn, and
+ * missing that shipped a chat whose every message after the first failed: the
+ * conversation `session/load` resumes lives here, so a profile removed on settle
+ * takes the thread with it. Probed on 2026.08.11-e8db854 — `session/load` under
+ * a second, empty profile answers
+ * `-32602 Invalid params {"message":"Session \"…\" not found"}` and the turn dies
+ * there, while the same load under the profile that created it succeeds.
+ *
+ * So the turn profile links this name at a store shared by every turn
+ * ({@link CURSOR_SESSION_STORE_DIR_NAME}), and the settings the isolation exists
+ * for stay per turn. Written by `utils/cursor-profile.utils.ts`; hardcoded in the
+ * CLI's own bundle (`join(cursorHome, "acp-sessions")`, `2996.index.js`), so
+ * there is no flag that would move it.
+ */
+export const CURSOR_ACP_SESSIONS_DIR_NAME = 'acp-sessions';
+/**
+ * Where those conversations actually live, under the daemon's userData dir.
+ *
+ * Deliberately NOT inside {@link CURSOR_PROFILE_DIR_NAME}: the boot sweep
+ * removes that base wholesale, which would delete every thread on every launch.
+ */
+export const CURSOR_SESSION_STORE_DIR_NAME = 'cursor-sessions';
 
 /**
  * Deadline for the model handshake.

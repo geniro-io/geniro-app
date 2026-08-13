@@ -7,7 +7,10 @@ import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { ClaudeProbeService } from './adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
-import { CURSOR_PROFILE_DIR_NAME } from './adapters/cursor-acp/cursor-acp.const';
+import {
+  CURSOR_PROFILE_DIR_NAME,
+  CURSOR_SESSION_STORE_DIR_NAME,
+} from './adapters/cursor-acp/cursor-acp.const';
 import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
 import { SkillsController } from './controllers/skills.controller';
@@ -162,6 +165,15 @@ import { defaultSpawn } from './utils/spawn-cli';
           // ACP cannot reach the user's own `~/.cursor/cli-config.json` — that
           // write is real and measured; see `utils/cursor-profile.utils.ts`.
           profileDir: join(environment.userDataDir, CURSOR_PROFILE_DIR_NAME),
+          // The conversations, which must OUTLIVE the turn profile that opens
+          // them: the CLI keeps each thread inside its config directory, so a
+          // store nested in the profile is deleted with it and the chat's next
+          // message dies at `session/load`. Its own directory, because the
+          // profile base is swept wholesale at boot.
+          sessionStoreDir: join(
+            environment.userDataDir,
+            CURSOR_SESSION_STORE_DIR_NAME,
+          ),
         }),
     },
     {

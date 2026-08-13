@@ -348,15 +348,16 @@ describe('AcpTurnDriver session resume', () => {
     expect(events.filter((e) => e.type === 'notice')).toEqual([]);
   });
 
-  it('never claims a resumed turn’s agent lacks the mode — session/load reports none', () => {
+  it('never claims the agent lacks a mode from a reply that enumerated none', () => {
     const h = harness({
       input: { ...BASE_INPUT, resumeSessionId: 'prior-7' },
       preferredModeId: 'plan',
     });
     h.feed(initializeReply(1, { loadSession: true }));
-    // A `session/load` reply carries no `modes` block at all. Reading that
-    // absence as "not offered" would put a false statement about the agent
-    // into the transcript of every resumed turn.
+    // Silence is not a refusal: reading a missing `modes` block as "not offered"
+    // would put a false statement about the agent into the transcript. (A real
+    // `session/load` reply DOES carry modes — measured on 2026.08.11-e8db854 —
+    // so this is the shape a future build could still send, not the normal one.)
     const events = h.feed({ id: 2, result: {} });
 
     expect(
@@ -364,6 +365,122 @@ describe('AcpTurnDriver session resume', () => {
         (e) => e.type === 'notice' && e.message.includes('does not offer'),
       ),
     ).toEqual([]);
+  });
+
+  it('applies the mode and model a session/load reply enumerates, like a fresh one', () => {
+    // The measured shape of a real load reply on 2026.08.11-e8db854: `modes`,
+    // `models` and a full `configOptions` list with each option's currentValue.
+    // Recorded here because it was previously believed to carry none of them,
+    // which is what made a resumed turn look like it needed its own rules.
+    const h = harness({
+      input: { ...BASE_INPUT, resumeSessionId: 'prior-7', model: 'opus-5' },
+      preferredModeId: 'plan',
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    h.feed({
+      id: 2,
+      result: {
+        modes: {
+          currentModeId: 'agent',
+          availableModes: [{ id: 'agent' }, { id: 'plan' }],
+        },
+        models: { currentModelId: 'sonnet-5', availableModels: [] },
+        configOptions: [
+          {
+            id: 'model',
+            category: 'model',
+            currentValue: 'sonnet-5',
+            availableValues: [{ value: 'opus-5' }, { value: 'sonnet-5' }],
+          },
+        ],
+      },
+    });
+
+    expect(h.sentMethod('session/set_mode')?.params).toEqual({
+      sessionId: 'prior-7',
+      modeId: 'plan',
+    });
+    expect(h.sentMethod('session/set_config_option')?.params).toEqual({
+      sessionId: 'prior-7',
+      configId: 'model',
+      value: 'opus-5',
+    });
+  });
+
+  it('runs the turn on a FRESH session when the agent cannot reopen the thread', () => {
+    // The dead end this replaces: a refused load ended the turn, and since every
+    // later turn resumes the same id, the chat was unusable for good — the user
+    // saw a turn finish instantly having written nothing. Measured refusal shape
+    // on 2026.08.11-e8db854: `-32602 Invalid params`, "Session … not found".
+    const h = harness(resuming);
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    const events = h.feed({
+      id: 2,
+      error: { code: -32602, message: 'Invalid params' },
+    });
+
+    expect(events).toContainEqual({
+      type: 'notice',
+      message:
+        'agent could not reopen this conversation (Invalid params) — this turn runs on a fresh session, without the earlier history in its context',
+    });
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(h.sentMethod('session/new')?.params).toEqual({
+      cwd: '/work',
+      mcpServers: [],
+    });
+  });
+
+  it('un-arms the replay drop after a failed load, so the new turn is not swallowed', () => {
+    // The load set `replaying`, and every transcript update is dropped while it
+    // is set. Leave it armed and the fresh session's whole answer vanishes —
+    // which turns "lost the history" into "wrote nothing at all", the very
+    // symptom the degrade exists to end.
+    const h = harness(resuming);
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed({ id: 2, error: { code: -32602, message: 'Invalid params' } });
+    h.feed({ id: 3, result: { sessionId: 'fresh-1' } });
+
+    expect(h.feed(chunk('agent_message_chunk', 'a new answer'))).toEqual([
+      { type: 'text_delta', text: 'a new answer' },
+    ]);
+    expect(h.sentMethod('session/prompt')?.params).toEqual({
+      sessionId: 'fresh-1',
+      prompt: [{ type: 'text', text: 'do the thing' }],
+    });
+  });
+
+  it('carries the call surface into the fresh session a failed load falls back to', () => {
+    // The MCP servers were granted during `initialize`; a fallback that dropped
+    // them would silently withhold the agent-call tools for that turn while its
+    // instructions still named the callees.
+    const h = harness({
+      input: {
+        ...BASE_INPUT,
+        resumeSessionId: 'prior-7',
+        mcpEndpoint: {
+          url: 'http://127.0.0.1:1/v1/mcp/r/n',
+          token: 'tok',
+          serverName: 'geniro-r',
+        },
+      },
+    });
+    h.feed(initializeReply(1, { loadSession: true, http: true }));
+    h.feed({ id: 2, error: { code: -32602, message: 'Invalid params' } });
+
+    expect(h.sentMethod('session/new')?.params).toEqual({
+      cwd: '/work',
+      mcpServers: [
+        {
+          type: 'http',
+          name: 'geniro-r',
+          url: 'http://127.0.0.1:1/v1/mcp/r/n',
+          headers: [{ name: 'Authorization', value: 'Bearer tok' }],
+        },
+      ],
+    });
   });
 
   it('shows a stubbed permission request the arguments its tool_call announced', () => {

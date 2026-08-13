@@ -1,5 +1,5 @@
 import type { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { lstatSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -483,6 +483,31 @@ describe('CursorAcpAdapter turn shaping', () => {
     expect(dir!.startsWith(profileDir)).toBe(true);
     // And it is NOT the user's own, which is the whole point.
     expect(dir).not.toContain('/.cursor');
+  });
+
+  it('links that config dir’s conversation store at one the turn cannot delete', () => {
+    // The other half of the leak fix, and the half that was missing: the CLI
+    // keeps each ACP conversation at `<configDir>/acp-sessions/<id>/`, so the
+    // throwaway directory took the thread with it and a cursor chat's SECOND
+    // message died at `session/load` ("Session … not found"). Drop the store and
+    // the leak test above still passes while every chat becomes single-turn.
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    const storeParent = mkdtempSync(join(tmpdir(), 'cursor-store-spec-'));
+    const sessionStoreDir = join(storeParent, 'cursor-sessions');
+    dirs.push(profileDir, storeParent);
+
+    new CursorAcpAdapter({ spawn, profileDir, sessionStoreDir }).start(
+      BASE,
+      () => {},
+    );
+
+    const dir = captured.env?.CURSOR_CONFIG_DIR;
+    const link = join(dir!, 'acp-sessions');
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(realpathSync(link)).toBe(realpathSync(sessionStoreDir));
+    // OUTSIDE the profile base, which the boot sweep removes wholesale.
+    expect(realpathSync(sessionStoreDir).startsWith(profileDir)).toBe(false);
   });
 
   it('lets a caller’s explicit config dir win over the throwaway one', () => {

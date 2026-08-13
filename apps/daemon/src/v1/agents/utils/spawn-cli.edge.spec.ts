@@ -365,6 +365,95 @@ describe('runHeadlessCli stream edge cases', () => {
   });
 });
 
+describe('runHeadlessCli — a one-turn CLI that ignores stdin EOF', () => {
+  /** A mapper turning the CLI's result line into the terminal event. */
+  const resultMapper = (obj: unknown): AgentEvent[] =>
+    typeof obj === 'object' && (obj as { type?: string }).type === 'result'
+      ? [
+          {
+            type: 'turn_complete',
+            usage: null,
+            stopReason: 'end_turn',
+            finalText: null,
+          },
+        ]
+      : [];
+
+  it('terminates the group when the turn ends and the process lives on', async () => {
+    // `cursor-agent acp` does not exit when its stdin closes, so closing stdin
+    // was an unanswered request: the turn stayed open (its `done` waits for the
+    // process), the run's registry slot was never released, and every later
+    // message in that chat answered RUN_BUSY while the composer spun. Measured
+    // on the real CLI: alive at 163MB more than three minutes after `end_turn`.
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const events: AgentEvent[] = [];
+      const handle = runHeadlessCli({
+        command: 'cursor-agent',
+        args: ['acp'],
+        cwd: '/proj',
+        keepStdinOpen: true,
+        mapper: resultMapper,
+        onEvent: (e) => events.push(e),
+        spawn,
+      });
+
+      child.stdout.emitData('{"type":"result"}\n');
+      // Stdin is closed first, and on its own that is all that used to happen.
+      expect(child.stdin.ended).toBe(true);
+      expect(child.kills).toBe(0);
+
+      vi.advanceTimersByTime(2000);
+      expect(child.kills).toBe(1);
+
+      // The turn still settles on the process ENDING, so the guarantee that
+      // `done` implies drained stdout is unchanged — the kill is what makes that
+      // moment arrive at all.
+      child.emit('close', 0, 'SIGTERM');
+      await handle.done;
+      expect(events).toEqual([
+        {
+          type: 'turn_complete',
+          usage: null,
+          stopReason: 'end_turn',
+          finalText: null,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never touches a CLI that exits on its own', async () => {
+    // claude does end with its turn, and it must keep settling on a CLEAN exit
+    // rather than being signalled a beat later — a SIGTERM there would turn an
+    // ordinary turn into a killed one and could truncate trailing stdout.
+    vi.useFakeTimers();
+    try {
+      const { spawn, child } = fakeSpawn();
+      const handle = runHeadlessCli({
+        command: 'claude',
+        args: [],
+        cwd: '/proj',
+        keepStdinOpen: true,
+        mapper: resultMapper,
+        onEvent: () => {},
+        spawn,
+      });
+
+      child.stdout.emitData('{"type":"result"}\n');
+      child.emit('close', 0, null);
+      await handle.done;
+
+      vi.advanceTimersByTime(10_000);
+      expect(child.kills).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('runHeadlessCli spawn failure', () => {
   it('a throwing spawn yields a failed-to-spawn error event, a resolved done, and an inert cancel', async () => {
     // The spawn call itself can throw synchronously (EACCES, a bad binary

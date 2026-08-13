@@ -121,21 +121,34 @@ export function ThinkingRow({
  *
  * Without this the transcript went silent for those stretches and the only
  * signal left was the status in the chat header, which is not where the user is
- * looking. The clock runs from MOUNT rather than from a published timestamp:
- * "how long this has been quiet" is exactly the question it answers, and it
- * needs no state threaded through the fold to answer it.
+ * looking.
  *
  * It NAMES what the agent is doing whenever the daemon has said. "Working…"
  * and an elapsed clock describe a state without describing the work, which is
  * the complaint this answers: an abstract label leaves the user unable to tell
  * a long compaction from a hung tool. The clock stays either way — it is the
  * half of the row the daemon cannot supply.
+ *
+ * {@link since} is read out of the TRANSCRIPT (the last row this agent put on
+ * screen), not from this component's mount. The clock used to start at mount, on
+ * the reasoning that "how long this has been quiet" needs no state threaded
+ * through the fold — true of the number, false of the ANSWER: every remount
+ * restarted it, so switching to another chat and back reported a four-minute
+ * wait as one second. Same defect, and the same fix, as the header's own clock
+ * (`ChatHeader`'s `turnStartedAt`), which is why both now take a timestamp their
+ * caller derived from durable rows. Mount time remains the fallback for an agent
+ * with no durable row yet, where it is the only anchor there is and is right.
  */
-export function WorkingRow(): React.JSX.Element {
+export function WorkingRow({
+  since = null,
+}: {
+  /** Epoch ms this agent last showed something, or null if it never has. */
+  since?: number | null;
+}): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   const activity = useContext(RunActivityContext);
   useSecondsTick();
-  const elapsed = formatElapsed(Date.now() - mountedAt);
+  const elapsed = formatElapsed(Date.now() - (since ?? mountedAt));
   return (
     <LiveRow
       label={

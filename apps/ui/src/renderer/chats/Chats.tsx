@@ -93,6 +93,7 @@ import { formatClockTime } from './relative-time';
 import { displayRunStatus, isSettledRunStatus } from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
+import { settledRunStatus, TERMINAL_KINDS } from './settled-status';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -180,13 +181,6 @@ function queueMayDrainAfterReplay(
 const isChatApprovalMode = (value: unknown): value is ChatApprovalMode =>
   typeof value === 'string' &&
   (Object.values(ChatApprovalMode) as string[]).includes(value);
-
-/** Kinds that mark the end of a turn (re-enable the composer). */
-const TERMINAL_KINDS = new Set<ChatItem['kind']>([
-  'turn_complete',
-  'turn_cancelled',
-  'error',
-]);
 
 /**
  * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
@@ -416,6 +410,41 @@ export function Chats({
   }, []);
 
   /**
+   * A replay's one reading of the run's status, taken from the LAST item it
+   * replayed — the only terminal item that can describe the present.
+   *
+   * It exists because the alternative (letting each replayed row mirror itself)
+   * writes a past turn's ending over a run that is working right now; see the
+   * `live` gate in {@link addItem}. Applied only when the row still says
+   * `running`, so a replay can settle a stale row but never contradict a
+   * fresher `run_status` broadcast that arrived while the fetch was in flight.
+   */
+  const reconcileFromTail = useCallback(
+    (runId: string, lastItem: ChatItem | undefined): void => {
+      // The item must BELONG to the run being reconciled. The two arrive from
+      // different places — the id from the activation, the row from a fetch that
+      // may have been in flight across a run switch — and applying one run's
+      // ending to another's row is the same class of cross-contamination
+      // `activateRun`'s own stale-fetch guard exists for.
+      if (lastItem === undefined || lastItem.runId !== runId) {
+        return;
+      }
+      const settled = settledRunStatus(lastItem);
+      if (settled === null) {
+        return;
+      }
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === runId && run.status === 'running'
+            ? { ...run, status: settled, updatedAt: lastItem.createdAt }
+            : run,
+        ),
+      );
+    },
+    [],
+  );
+
+  /**
    * `live` says this item arrived on the wire as it happened, rather than out
    * of a history replay.
    *
@@ -480,35 +509,38 @@ export function Chats({
     // Only a RUN-level terminal item ends the working state — a workflow's
     // per-node turn_complete/error (nodeId set) must not re-enable the composer
     // while sibling branches are still running.
-    if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
+    const settledStatus = settledRunStatus(item);
+    if (settledStatus !== null) {
       sawTerminalRef.current = true;
       if (live) {
         sawLiveTerminalRef.current = true;
       }
-      setStreaming(false);
-      // Mirror the daemon's settle write into the sidebar list — without this
-      // a finished run keeps its stale 'running' badge until an app restart.
-      // A workflow run always ends in a turn_complete whose stopReason carries
-      // the roll-up (workflow_completed/failed/cancelled) — a failed workflow
-      // must not be patched to 'completed' just because the item kind says so.
-      const stopReason = payloadString(item.payload, 'stopReason');
-      const settledStatus: ChatRun['status'] =
-        stopReason === 'workflow_failed'
-          ? 'failed'
-          : stopReason === 'workflow_cancelled'
-            ? 'cancelled'
-            : item.kind === 'turn_complete'
-              ? 'completed'
-              : item.kind === 'turn_cancelled'
-                ? 'cancelled'
-                : 'failed';
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === item.runId
-            ? { ...run, status: settledStatus, updatedAt: item.createdAt }
-            : run,
-        ),
-      );
+      // LIVE items only — for the status and the working state alike, and for
+      // the same reason the drain below is gated: a replayed transcript carries
+      // EVERY past turn's terminal item, and the last of those is routinely not
+      // the run's current state. Mirroring one wrote `completed` onto a run whose
+      // next turn was in flight, and the write outlived the visit: the row stayed
+      // wrong in `runs`, so the next activation read it as settled, left
+      // `streaming` false, and the transcript's live row disappeared with it.
+      // Measured on the real app — a chat with a blocked tool call read
+      // `running · Working… 3m 39s`, and after switching to another chat and back
+      // read `completed` with no live row, while the daemon still said `running`.
+      //
+      // A replay's own reading is taken ONCE by the caller, from the LAST item
+      // (see `activateRun` and the reconnect delta), which is the only terminal
+      // item that can describe the present.
+      if (live) {
+        setStreaming(false);
+        // Mirror the daemon's settle write into the sidebar list — without this
+        // a finished run keeps its stale 'running' badge until an app restart.
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === item.runId
+              ? { ...run, status: settledStatus, updatedAt: item.createdAt }
+              : run,
+          ),
+        );
+      }
       // The turn ended — fire the next queued message into this chat (the
       // early return above guarantees item.runId IS the active run).
       //
@@ -891,7 +923,13 @@ export function Chats({
         const run = runsRef.current.find((r) => r.id === runId);
         const last = history.at(-1);
         const endedOnTerminal =
-          !!last && TERMINAL_KINDS.has(last.kind) && last.nodeId === null;
+          last !== undefined && settledRunStatus(last) !== null;
+        // The replay's ONE reading of its own tail — only the LAST item can say
+        // what the run is now, which is why no individual replayed row is allowed
+        // to (see `addItem`). It covers the turn that ended while the user was
+        // looking at another chat, where the row they are carrying still says
+        // running and nothing else will correct it.
+        reconcileFromTail(runId, last);
         if (
           run?.status === 'running' &&
           !sawLiveTerminalRef.current &&
@@ -995,6 +1033,11 @@ export function Chats({
         // on cursor there is not even a Steer control to release it by hand.
         .then((items) => {
           items.forEach((item) => addItem(item, false));
+          // Same single reading the activation replay takes, and needed here for
+          // the same reason it is needed there: these rows are historical to the
+          // renderer (no individual one may mirror its status) but they are the
+          // only sighting of a turn that ended while the socket was down.
+          reconcileFromTail(active, items.at(-1));
           const run = runsRef.current.find((r) => r.id === active);
           if (
             queueMayDrainAfterReplay(run, items.at(-1)) &&

@@ -88,7 +88,9 @@ export const TranscriptItem = memo(function TranscriptItem({
       // mistaken for one.
       const live = liveRowKind(item.payload);
       if (live === 'working') {
-        return <WorkingRow />;
+        return (
+          <WorkingRow since={payloadNumber(item.payload, 'workingSince')} />
+        );
       }
       if (live === 'thinking') {
         return (

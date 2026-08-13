@@ -117,9 +117,37 @@ describe('ThinkingRow', () => {
 });
 
 describe('WorkingRow', () => {
-  it('counts up from the moment it appears', () => {
-    // It has no published anchor to read — the point is answering "how long
-    // has this been quiet", which starts when the row does.
+  it('counts from the anchor it was GIVEN, not from the moment it appears', () => {
+    // The reported defect: the clock started at mount, so switching to another
+    // chat and back remounted the row and reported a four-minute wait as one
+    // second. The anchor is the last row the agent put on screen, which the
+    // caller reads out of the transcript — durable, so it survives a tab switch,
+    // a reload and a reconnect alike.
+    vi.setSystemTime(new Date('2026-08-04T00:04:00Z'));
+    const since = Date.parse('2026-08-04T00:00:00Z');
+    const container = render(<WorkingRow since={since} />);
+
+    expect(container.textContent).toContain('4m 0s');
+
+    advance(7_000);
+    expect(container.textContent).toContain('4m 7s');
+  });
+
+  it('re-reports the same elapsed when it is remounted', () => {
+    // The tab switch, stated as a test: a fresh mount of the same row must not
+    // reset the number. Two independent renders of one anchor — which is what a
+    // remount is — have to agree.
+    vi.setSystemTime(new Date('2026-08-04T00:04:00Z'));
+    const since = Date.parse('2026-08-04T00:00:00Z');
+
+    expect(render(<WorkingRow since={since} />).textContent).toContain('4m 0s');
+    unmountAll();
+    expect(render(<WorkingRow since={since} />).textContent).toContain('4m 0s');
+  });
+
+  it('counts up from its own mount when there is no anchor to read', () => {
+    // An agent with no durable row yet — its very first stretch — has no
+    // transcript to be anchored to, and mount is then the only honest answer.
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(<WorkingRow />);
     expect(container.textContent).toContain('Working…');

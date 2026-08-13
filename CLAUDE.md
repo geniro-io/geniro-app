@@ -25,7 +25,15 @@ This repo is indexed by **CodeGraph** (a `.codegraph/` directory exists at the r
 - **MCP tool** (preferred): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim, line-numbered source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current source.
 - **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
 
-Fall back to grep/Glob/Read only when CodeGraph has no answer (e.g. non-code files, brand-new code not yet indexed).
+Fall back to grep/Glob/Read only when CodeGraph has no answer (e.g. non-code files, or code still missing after the sync below).
+
+**`codegraph sync` first in any worktree — "not yet indexed" is a 15-second fix, not a reason to reach for grep.** Only the checkout holding `.codegraph/daemon.sock` is kept warm; a worktree has no daemon, so its index freezes at creation and drifts for days. `codegraph status` does **not** reliably tell you: measured 2026-08-13 (v1.1.1) on a sibling monorepo, it printed `✓ Index is up to date` on two worktrees where `sync` then found 1,087 and 629 unindexed files. A stale index answers a real symbol with `No results found` — indistinguishable from "doesn't exist" — and `codegraph_explore` fills the hole with token-level matches on unrelated code under a banner promising current on-disk source.
+
+```bash
+codegraph sync                 # 12–23s incremental; the only authoritative staleness check
+```
+
+One sync per worktree per session is enough **until you edit files** — nothing re-syncs automatically, so a file written after it stays invisible (and a deleted file's symbols linger) until the next sync. Do not use `init`/`index` for freshness: those are full rebuilds costing ~580 MB per checkout.
 
 ---
 

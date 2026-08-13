@@ -166,7 +166,7 @@ function scope(agent: CliKind, configDir: string | null = null): string {
 }
 
 describe('AgentsPanel', () => {
-  it('lists EVERY agent with status, active/total thread counts, context + ring, and spend', () => {
+  it('lists EVERY agent with status, context + ring, and spend — counts inside the list', () => {
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -179,7 +179,14 @@ describe('AgentsPanel', () => {
     expect(rows).toHaveLength(3);
 
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
+    // The counts are the thread LIST's header now, so a closed card shows
+    // none of them: on this line they were a tally every card carried whether
+    // or not the reader had opened the rows they describe.
+    expect(worker.textContent).not.toContain('3 active');
+    expect(worker.textContent).not.toContain('2 threads');
+    click(worker.querySelector('button[aria-label="Worker threads"]'));
     expect(worker.textContent).toContain('3 active · 2 threads');
+    click(worker.querySelector('button[aria-label="Worker threads"]'));
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
     // The figures are hover-only now, so the meter's accessible name is where
     // they are legible without opening anything.
@@ -190,13 +197,13 @@ describe('AgentsPanel', () => {
     ).not.toBeNull();
 
     // One main thread and nothing else: the card IS that conversation, so it
-    // shows no chevron, no thread list and no "1 thread" count to expand into.
+    // gets no list control and no counts anywhere — there is no list for them
+    // to head, and its own terminal control sits in the card's header.
     const orchestrator = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;
     expect(orchestrator.textContent).not.toContain('1 thread');
-    // The live-turn count survives the collapse — only the thread COUNT goes.
-    expect(orchestrator.textContent).toContain('1 active');
+    expect(orchestrator.textContent).not.toContain('1 active');
     // Scoped to the THREAD expander by its own label: the context meter is
     // also an aria-expanded button now, and a bare attribute selector would
     // match it and pass for the wrong reason.
@@ -1504,10 +1511,13 @@ describe('AgentsPanel — sub-agent threads', () => {
       expect(el.textContent).toContain('Still mining');
     });
 
-    it('keeps the agent’s OWN threads out of the split entirely', () => {
+    it('keeps the agent’s OWN conversation out of the split — and out of the list', () => {
       // The partition is by `kind`, not by status: a settled main conversation
       // is the thing the panel is for, and hiding it behind a control labelled
-      // "finished sub-agents" would be a lie about what it is.
+      // "finished sub-agents" would be a lie about what it is. It is not a ROW
+      // any more either — the card names that conversation and now carries its
+      // terminal control, so the promise is stronger than it was: the control is
+      // reachable with the list still closed.
       const el = render(
         <AgentsPanel
           agents={[
@@ -1524,8 +1534,14 @@ describe('AgentsPanel — sub-agent threads', () => {
           onClose={() => undefined}
         />,
       );
+      expect(
+        el.querySelector('button[aria-label="Open terminal for Orchestrator"]'),
+      ).not.toBeNull();
+      expect(el.textContent).not.toContain('Main conversation');
+
       click(el.querySelector('button[aria-label="Orchestrator threads"]'));
-      expect(el.textContent).toContain('Main conversation');
+      // Still not swept into the finished pile, which is what the split is for.
+      expect(el.textContent).not.toContain('Main conversation');
       expect(el.textContent).toContain('3 finished sub-agents');
     });
 

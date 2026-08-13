@@ -24,8 +24,9 @@ file at the start of each run and at every phase-boundary refresh via
   a good first result is not permission to revert to plain-text search for the rest
   of the run. Grep/find stay correct for exact-literal / non-symbol text (log
   strings, config values, comments, copy) — codegraph is a CODE index only. The
-  index it reads must be the worktree's own — the per-worktree index bootstrap runs
-  at `## Additional Steps → After worktree-setup`.
+  index it reads must be the worktree's own AND freshly synced — an existing index
+  is not a current one; the bootstrap + per-run sync run at `## Additional Steps →
+  After worktree-setup`.
   - **A deferred MCP tool looks exactly like a missing one.** If
     `mcp__codegraph__codegraph_explore` is not in your tool surface, load its schema
     by name before concluding codegraph is unavailable — or use the shell form,
@@ -94,21 +95,44 @@ file at the start of each run and at every phase-boundary refresh via
 
 ### After worktree-setup
 
-- **Create a worktree-local CodeGraph index when one is missing** — before any
-  code exploration, and (if fanning out parallel subagents) in the orchestrator
-  BEFORE spawning them, never inside each subagent (N concurrent `codegraph init`
-  runs race on the index lock and serialize the fan-out behind one full build).
-  codegraph resolves an index by walking UP parent directories to the nearest
-  `.codegraph/`, so a command run inside a git worktree (e.g. an
-  `isolation: 'worktree'` agent) silently borrows the MAIN checkout's index —
-  which sits on another branch and is BLIND to changes made only in the worktree
-  (codegraph never auto-creates or auto-syncs a worktree index).
+- **Give the worktree a CodeGraph index, then SYNC it — every run, not only the
+  first** — before any code exploration, and (if fanning out parallel subagents)
+  in the orchestrator BEFORE spawning them, never inside each subagent (N
+  concurrent `codegraph init` runs race on the index lock and serialize the
+  fan-out behind one full build). codegraph resolves an index by walking UP
+  parent directories to the nearest `.codegraph/`, so a command run inside a git
+  worktree (e.g. an `isolation: 'worktree'` agent) silently borrows the MAIN
+  checkout's index — which sits on another branch and is BLIND to changes made
+  only in the worktree (codegraph never auto-creates or auto-syncs a worktree
+  index).
+
+  **Creating the index is not enough — it then rots.** Only the checkout holding
+  `.codegraph/daemon.sock` is kept warm; a worktree has no daemon, so its index
+  freezes at creation. Measured 2026-08-13 (v1.1.1): five worktrees of this repo
+  carried indexes 2–7 days old, and on a sibling monorepo `codegraph status`
+  printed `✓ Index is up to date` on two worktrees where `sync` immediately found
+  1,087 and 629 unindexed files. **Do not trust that ✓** — a stale index answers a
+  real symbol with `No results found`, indistinguishable from "doesn't exist", and
+  `codegraph_explore` fills the hole with token-level matches on unrelated code
+  under a banner promising current on-disk source. `sync` is incremental
+  (12–23 s on 12k files) and is the only authoritative check, so run it
+  unconditionally rather than guarding on the index's absence.
 
     ```bash
     WT=$(git rev-parse --show-toplevel)
     MAIN=$(cd "$(dirname "$(git rev-parse --git-common-dir)")" && pwd)
-    if [ ! -d "$WT/.codegraph" ] && [ -d "$MAIN/.codegraph" ]; then (cd "$WT" && codegraph init); fi
+    if [ ! -d "$WT/.codegraph" ] && [ -d "$MAIN/.codegraph" ]; then
+      (cd "$WT" && codegraph init)   # no index yet — one full build
+    else
+      (cd "$WT" && codegraph sync)   # index exists but nothing keeps it warm
+    fi
     ```
+
+  One sync per worktree per session covers you **until you edit files** — a file
+  written after the sync stays invisible, and a deleted file's symbols linger,
+  until the next one. Re-sync after a batch of edits (or a merge/rebase) before
+  trusting a lookup. Never reach for `init`/`index` to refresh: both are full
+  rebuilds costing ~580 MB per checkout.
 
 ### Before ship
 <!-- e.g. confirm `pnpm full-check` is green and the daemon smoke

@@ -4569,7 +4569,7 @@ describe('Chats sidebar list', () => {
     expect(row!.textContent).toContain('Deploy finished cleanly.');
   });
 
-  it('the side panel tracks live agent state — parallel turns, context ring, spend', async () => {
+  it('the side panel tracks live agent state — at-work status, context ring, spend', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -4662,7 +4662,14 @@ describe('Chats sidebar list', () => {
     const workerRowEl = [...panel.querySelectorAll('li')].find((row) =>
       row.textContent?.includes('Worker A'),
     )!;
-    expect(workerRowEl.textContent).toContain('2 active');
+    // The live-turn COUNT is the thread list's header now, and this agent has
+    // only its own conversation — no calls, no delegates — so it has no list and
+    // no count to show. What still says "at work" is the spinner and the status,
+    // which is what this asserts; that two starts and one settle leave one turn
+    // live is pinned on the derivation itself (`agent-activity.spec.ts`), and the
+    // header's rendering of it in `agents-panel.spec.tsx`.
+    expect(workerRowEl.textContent).not.toContain('2 active');
+    expect(workerRowEl.textContent).toContain('running');
     expect(workerRowEl.querySelector('svg.animate-spin')).not.toBeNull();
 
     await act(async () => {

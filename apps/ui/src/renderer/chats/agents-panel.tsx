@@ -578,15 +578,6 @@ export function AgentsPanel({
               mcpKind === null
                 ? null
                 : mcpScopeKey({ agent: mcpKind, configDir: agent.configDir });
-            // An agent whose only thread is its own conversation has nothing
-            // to expand INTO — the card already is that conversation. Showing
-            // a chevron over a one-row list (the 1:1 chat's whole shape) is
-            // pure nesting, so the levels collapse and the terminal button
-            // moves up onto the card itself.
-            const soleThread =
-              agent.threads.length === 1 && agent.threads[0]?.kind === 'main'
-                ? agent.threads[0]
-                : null;
             // This CLI's handoff answer, resolved once for the card and its
             // thread rows. Null only when there is nothing to say — a workflow
             // agent whose kind is unknown, or a capability report still in
@@ -596,8 +587,16 @@ export function AgentsPanel({
               agent.agent !== null && terminalReasons?.has(agent.agent) === true
                 ? { reason: terminalReasons.get(agent.agent) ?? null }
                 : null;
-            const soleThreadTerminal =
-              soleThread !== null && terminal !== null ? soleThread : null;
+            // The agent's OWN conversation. Its terminal control lives in the
+            // card's header — always, not only when it is the agent's one thread
+            // as before. It was a row in the list captioned `Conversation`, which
+            // is the one thread every card has and the one the card itself
+            // already names: a row for it was a heading repeated as a list item,
+            // and it put the most-used control in the panel one disclosure away.
+            const mainThread =
+              agent.threads.find((thread) => thread.kind === 'main') ?? null;
+            const mainTerminal =
+              mainThread !== null && terminal !== null ? mainThread : null;
             // Delegates split by whether they are still WORKING. Only the live
             // ones belong in the list: a run that spawns twenty read-only
             // analysts leaves twenty rows behind it, and the one thread the
@@ -606,15 +605,23 @@ export function AgentsPanel({
             const subagents = agent.threads.filter(
               (thread) => thread.kind === 'subagent',
             );
-            const ownThreads = agent.threads.filter(
-              (thread) => thread.kind !== 'subagent',
-            );
             const liveSubagents = subagents.filter(
               (thread) => thread.status === 'running',
             );
             const settledSubagents = subagents.filter(
               (thread) => thread.status !== 'running',
             );
+            // What the list HOLDS: the calls this agent made, and the delegates
+            // it is running. Not its own conversation (above), which is why an
+            // agent with neither gets no list and no control to open one — the
+            // 1:1 chat's whole shape, where a disclosure over an empty box is
+            // pure nesting.
+            const listedThreads = [
+              ...agent.threads.filter((thread) => thread.kind === 'call'),
+              ...liveSubagents,
+            ];
+            const hasList =
+              listedThreads.length > 0 || settledSubagents.length > 0;
             const settledOpen = showSettled.has(agent.id);
             return (
               <li
@@ -646,19 +653,15 @@ export function AgentsPanel({
                   <span className={RUN_STATUS_META[agent.status].className}>
                     {RUN_STATUS_META[agent.status].label}
                   </span>
-                  {agent.threads.length > 0 && soleThread === null ? (
-                    <span className="truncate text-muted-foreground">
-                      · {agent.activeTurns} active · {agent.threads.length}{' '}
-                      {agent.threads.length === 1 ? 'thread' : 'threads'}
-                    </span>
-                  ) : soleThread !== null && agent.activeTurns > 0 ? (
-                    // The thread COUNT is noise when there is only one, but
-                    // how many turns are live on it is not — an agent can
-                    // run several at once on its own conversation.
-                    <span className="truncate text-muted-foreground">
-                      · {agent.activeTurns} active
-                    </span>
-                  ) : null}
+                  {/*
+                    The counts used to sit here, and they are now the thread
+                    list's own header. On this line they were a running tally
+                    nobody had asked for: every card carried "N active · M
+                    threads" whether or not the reader had opened the list they
+                    describe, and on a narrow panel they crowded out the one
+                    thing this line is for — what the agent is DOING. Inside the
+                    list they are a caption over the rows they count.
+                  */}
                   <span className="ml-auto flex shrink-0 items-center gap-0.5">
                     <ContextMeter
                       contextTokens={agent.contextTokens}
@@ -680,10 +683,10 @@ export function AgentsPanel({
                       // control than that control sits against the plug.
                       className="size-6 justify-center"
                     />
-                    {soleThreadTerminal ? (
+                    {mainTerminal ? (
                       <OpenInCliButton
                         agent={agent}
-                        thread={soleThreadTerminal}
+                        thread={mainTerminal}
                         label={`Open terminal for ${agent.name}`}
                         unavailableReason={terminal?.reason ?? null}
                         onOpen={onOpenThread}
@@ -711,7 +714,7 @@ export function AgentsPanel({
                         }
                       />
                     ) : null}
-                    {soleThread === null ? (
+                    {hasList ? (
                       // The thread list's own control, sitting with the rest of
                       // the card's buttons rather than as a chevron up on the
                       // name line. The header is then a plain row: nothing about
@@ -759,69 +762,77 @@ export function AgentsPanel({
                     ) : null}
                   </span>
                 </div>
-                {isExpanded && soleThread === null ? (
-                  <ul className="m-0 flex list-none flex-col gap-0.5 border-t border-border px-2 py-1.5">
-                    {agent.threads.length === 0 ? (
-                      <li className="px-1 py-1 text-xs text-muted-foreground">
-                        No threads yet
-                      </li>
-                    ) : null}
-                    {[...ownThreads, ...liveSubagents].map((thread) => (
-                      <ThreadRow
-                        key={thread.id}
-                        agent={agent}
-                        thread={thread}
-                        terminal={terminal}
-                        onOpenThread={onOpenThread}
-                        onOpenSubagent={onOpenSubagent}
-                        onResolveHandoff={onResolveHandoff}
-                      />
-                    ))}
-                    {settledSubagents.length > 0 ? (
-                      <li className="flex flex-col">
-                        <button
-                          type="button"
-                          aria-expanded={settledOpen}
-                          onClick={() => toggleSettled(agent.id)}
-                          // `font-normal` for the same reason the row label
-                          // carries it: global.css's base `button` rule would
-                          // otherwise weight this heavier than the threads it
-                          // is counting.
-                          className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-normal text-muted-foreground transition-colors hover:text-foreground">
-                          <ChevronRight
-                            aria-hidden="true"
-                            className={cn(
-                              'size-3 shrink-0 transition-transform',
-                              settledOpen && 'rotate-90',
-                            )}
-                          />
-                          {/* Counted, not listed: the number is the only thing
-                              a reader wants from work that is over, and it is
-                              what says the rows above are the LIVE ones rather
-                              than all there ever were. */}
-                          <span>
-                            {settledSubagents.length} finished sub-agent
-                            {settledSubagents.length === 1 ? '' : 's'}
-                          </span>
-                        </button>
-                        {settledOpen ? (
-                          <ul className="m-0 flex list-none flex-col gap-0.5 pl-4">
-                            {settledSubagents.map((thread) => (
-                              <ThreadRow
-                                key={thread.id}
-                                agent={agent}
-                                thread={thread}
-                                terminal={terminal}
-                                onOpenThread={onOpenThread}
-                                onOpenSubagent={onOpenSubagent}
-                                onResolveHandoff={onResolveHandoff}
-                              />
-                            ))}
-                          </ul>
-                        ) : null}
-                      </li>
-                    ) : null}
-                  </ul>
+                {isExpanded && hasList ? (
+                  <div className="flex flex-col border-t border-border px-2 py-1.5">
+                    {/* The counts, in the one place they describe something: a
+                        caption over the rows below. Both are the AGENT's own
+                        figures rather than the list's — turns live anywhere on
+                        it, and every thread it holds including the conversation
+                        whose control sits in the header — so the number can
+                        exceed the rows, and saying "threads" rather than naming
+                        the rows is what keeps that honest. */}
+                    <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
+                      {agent.activeTurns} active · {agent.threads.length}{' '}
+                      {agent.threads.length === 1 ? 'thread' : 'threads'}
+                    </p>
+                    <ul className="m-0 flex list-none flex-col gap-0.5">
+                      {listedThreads.map((thread) => (
+                        <ThreadRow
+                          key={thread.id}
+                          agent={agent}
+                          thread={thread}
+                          terminal={terminal}
+                          onOpenThread={onOpenThread}
+                          onOpenSubagent={onOpenSubagent}
+                          onResolveHandoff={onResolveHandoff}
+                        />
+                      ))}
+                      {settledSubagents.length > 0 ? (
+                        <li className="flex flex-col">
+                          <button
+                            type="button"
+                            aria-expanded={settledOpen}
+                            onClick={() => toggleSettled(agent.id)}
+                            // `font-normal` for the same reason the row label
+                            // carries it: global.css's base `button` rule would
+                            // otherwise weight this heavier than the threads it
+                            // is counting.
+                            className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-normal text-muted-foreground transition-colors hover:text-foreground">
+                            <ChevronRight
+                              aria-hidden="true"
+                              className={cn(
+                                'size-3 shrink-0 transition-transform',
+                                settledOpen && 'rotate-90',
+                              )}
+                            />
+                            {/* Counted, not listed: the number is the only thing
+                                a reader wants from work that is over, and it is
+                                what says the rows above are the LIVE ones rather
+                                than all there ever were. */}
+                            <span>
+                              {settledSubagents.length} finished sub-agent
+                              {settledSubagents.length === 1 ? '' : 's'}
+                            </span>
+                          </button>
+                          {settledOpen ? (
+                            <ul className="m-0 flex list-none flex-col gap-0.5 pl-4">
+                              {settledSubagents.map((thread) => (
+                                <ThreadRow
+                                  key={thread.id}
+                                  agent={agent}
+                                  thread={thread}
+                                  terminal={terminal}
+                                  onOpenThread={onOpenThread}
+                                  onOpenSubagent={onOpenSubagent}
+                                  onResolveHandoff={onResolveHandoff}
+                                />
+                              ))}
+                            </ul>
+                          ) : null}
+                        </li>
+                      ) : null}
+                    </ul>
+                  </div>
                 ) : null}
               </li>
             );

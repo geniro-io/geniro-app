@@ -299,6 +299,58 @@ export const CURSOR_MCP_ENABLE_ARGS: readonly string[] = ['mcp', 'enable'];
 export const CURSOR_MCP_DISABLE_ARGS: readonly string[] = ['mcp', 'disable'];
 
 /**
+ * Argv for the ONE-server health probe, and the wording it answers with.
+ *
+ * `cursor-agent mcp list-tools <name>` — "List available tools and their
+ * argument names for a specific MCP", from the CLI's own `mcp --help`. It dials
+ * that server and nothing else, which is what makes it usable where the folder
+ * listing is not: measured on 2026.08.11-e8db854 against this machine's eleven
+ * servers, one server takes 1.2–3.7s where the whole folder takes 4–9s.
+ *
+ * Captured verbatim, and note that only the first is on stdout with exit 0 —
+ * the other two exit 1 and write to STDERR, which is why the caller sets
+ * `captureDiagnosis`:
+ *
+ * ```
+ * $ cursor-agent mcp list-tools codegraph          # exit 0
+ * Tools for codegraph (1):
+ * - codegraph_explore (query, maxFiles, projectPath)
+ *
+ * $ cursor-agent mcp list-tools figma              # exit 1, stderr
+ * MCP 'figma' requires authentication.
+ * Please run: agent mcp login figma
+ *
+ * $ cursor-agent mcp list-tools vercel             # exit 1, stderr
+ * Failed to list tools: Failed to load MCP 'vercel': Streamable HTTP error: …
+ * ```
+ *
+ * The failed marker also covers a name in no config at all
+ * (`Failed to load MCP 'x': MCP client "x" not found in config`), which is the
+ * right reading: the panel only ever asks about a server its own listing named,
+ * so that answer means the config changed underneath — a real failure, not a
+ * state to invent a badge for.
+ *
+ * The ready marker keeps its trailing space-and-paren shape out of it on
+ * purpose: the count varies, and `Tools for ` is the stable part.
+ *
+ * RE-CHECK IF: `list-tools` leaves `mcp --help`, or a probe starts reporting a
+ * server as broken that the folder listing calls fine — the first sign of a
+ * reworded message.
+ */
+export const CURSOR_MCP_TOOLS_ARGS: readonly string[] = ['mcp', 'list-tools'];
+export const CURSOR_MCP_TOOLS_READY_MARKER = 'Tools for ';
+export const CURSOR_MCP_TOOLS_AUTH_MARKER = 'requires authentication';
+export const CURSOR_MCP_TOOLS_FAILED_MARKER = 'Failed to list tools';
+
+/**
+ * Deadline for that probe. One server rather than a folder, so it is bounded by
+ * one connect timeout instead of the slowest of eleven — but a dead HTTP
+ * endpoint still gets to spend its own, so this stays generous. Under the
+ * listing's budget, since this is the cheaper question.
+ */
+export const CURSOR_MCP_TOOLS_TIMEOUT_MS = 15_000;
+
+/**
  * Shown when the switch command itself failed.
  *
  * Only `enable` can reach it. Measured on the same build: `mcp enable` on a

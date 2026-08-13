@@ -15,6 +15,8 @@ import type {
   AdapterQuestion,
   AgentCommandOptions,
   AgentMcpListingResult,
+  AgentMcpServerHealth,
+  AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
   AgentTurnInput,
@@ -36,6 +38,8 @@ import {
   CURSOR_MCP_LIST_TIMEOUT_MS,
   CURSOR_MCP_LIST_UNREADABLE_MESSAGE,
   CURSOR_MCP_TOGGLE_FAILED_MESSAGE,
+  CURSOR_MCP_TOOLS_ARGS,
+  CURSOR_MCP_TOOLS_TIMEOUT_MS,
   CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_PROFILE_DIR_NAME,
@@ -43,6 +47,7 @@ import {
   CURSOR_SILENTLY_DECLINED_METHODS,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
+import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import { cursorModelSelection } from './utils/cursor-model.utils';
 import {
   removeCursorProfile,
@@ -717,6 +722,40 @@ export class CursorAcpAdapter extends AgentAdapter {
       return { ok: false, reason: CURSOR_MCP_LIST_UNREADABLE_MESSAGE };
     }
     return { ok: true, servers };
+  }
+
+  /**
+   * Dial ONE server, so a row the user just switched on can say what it found.
+   *
+   * `mcp list-tools <server>` is the only per-server command this CLI has, and
+   * listing a server's tools requires connecting to it — which makes it a health
+   * probe with a folder listing's meaning at a fraction of its cost
+   * ({@link CURSOR_MCP_TOOLS_ARGS} carries the timings and the captured output).
+   *
+   * `processGroup` because it DIALS: a stdio server is launched as a grandchild
+   * of this command, and a single-PID kill would leave it running. `captureDiagnosis`
+   * because the two readings worth telling apart — needs signing in, versus
+   * broken — both exit 1 and both write to stderr, so the usual null-on-failure
+   * would collapse them into each other.
+   *
+   * Never throws: an unreadable answer is null, and the caller leaves the row's
+   * health unstated rather than inventing one.
+   */
+  override async readMcpServerHealth(
+    input: AgentMcpServerHealthInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpServerHealth | null> {
+    const output = await this.runCommand(
+      [...CURSOR_MCP_TOOLS_ARGS, input.server],
+      {
+        ...options,
+        cwd: input.cwd,
+        processGroup: true,
+        captureDiagnosis: true,
+        timeoutMs: options.timeoutMs ?? CURSOR_MCP_TOOLS_TIMEOUT_MS,
+      },
+    );
+    return parseCursorToolsProbe(output);
   }
 
   /**

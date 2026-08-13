@@ -10,7 +10,7 @@ import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpListingResult,
   AgentMcpServer,
-  AgentMcpServerStatus,
+  AgentMcpServerHealth,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentMcpListingWire } from '../chat.types';
@@ -586,12 +586,44 @@ export class AgentMcpService {
     // user just moved it from. Patched rather than evicted, because evicting
     // charges the click a fresh cold dial of every server in the folder.
     //
-    // Both directions are stated at the strength they are actually known:
-    // switching a server OFF makes the CLI report exactly `disabled` (measured),
-    // while switching one ON leaves its health genuinely unknown until something
-    // dials it — so that row degrades to `unknown` rather than claiming a health
-    // nobody observed. The next real read replaces either one.
-    this.patchCachedStatus(agent, projectDir, server, enabled);
+    // Both directions are stated at the strength they are actually known.
+    // Switching a server OFF makes the CLI report exactly `disabled` (measured).
+    // Switching one ON says nothing about its health, so that direction is
+    // ASKED rather than assumed: one server's dial, which both shipped CLIs have
+    // a command for and which costs a fraction of the folder's. Only a CLI with
+    // no such command (or a probe that could not be read) falls back to
+    // `unknown`, which the panel draws as a listed server with its health
+    // unstated — never a green dot nothing verified.
+    const probed = enabled
+      ? // `Promise.resolve().then(…)` rather than a bare call, the same guard
+        // `readServers` puts in front of the listing: an adapter that throws
+        // SYNCHRONOUSLY would otherwise walk straight past the `.catch` below,
+        // and here that would fail the request over a write that already landed.
+        await Promise.resolve()
+          .then(() =>
+            adapter.readMcpServerHealth(
+              { cwd: projectDir, server },
+              {
+                onSpawn: (child, spawnInfo) =>
+                  this.processes.register(
+                    `mcp:health:${randomUUID()}`,
+                    childProcessHandle(child, spawnInfo),
+                  ),
+              },
+            ),
+          )
+          // An adapter must not throw here, but this runs AFTER a write that
+          // already landed: failing the request now would report a toggle that
+          // did take as one that did not, which is the one wrong answer this
+          // route must never give.
+          .catch((err: unknown) => {
+            this.logger.warn(
+              `probing ${server} for ${agent} failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return null;
+          })
+      : null;
+    this.patchCachedStatus(agent, projectDir, server, enabled, probed);
     // BLOCKING, unlike the panel's read: this route's entire answer is the
     // listing that resulted from the write, so handing back empty rows with
     // `pending` would leave the caller nothing to render the toggle against.
@@ -636,9 +668,17 @@ export class AgentMcpService {
     cwd: string,
     server: string,
     enabled: boolean,
+    /**
+     * What a single-server dial just reported, when one was taken. Null means
+     * nothing dialled it — a CLI without the command, or an answer that could
+     * not be read — and the row degrades to `unknown` rather than to a guess.
+     */
+    probed: AgentMcpServerHealth | null,
   ): void {
     const prefix = keyPrefixOf(agent, cwd);
-    const status: AgentMcpServerStatus = enabled ? 'unknown' : 'disabled';
+    const health: AgentMcpServerHealth = enabled
+      ? (probed ?? { status: 'unknown', detail: null })
+      : { status: 'disabled', detail: null };
     for (const [key, entry] of this.cache) {
       if (!key.startsWith(prefix)) {
         continue;
@@ -649,10 +689,11 @@ export class AgentMcpService {
           return row;
         }
         touched = true;
-        // `detail` goes with the status it explained. A connection-failure
-        // reason left under a `disabled` row states a problem that is no longer
-        // being had, and the panel renders that string verbatim.
-        return { ...row, status, detail: null };
+        // `detail` travels WITH the status, never across one. A connection
+        // failure's reason left under a `disabled` row states a problem that is
+        // no longer being had, and the panel renders that string verbatim — so
+        // the row takes the probe's own reason, or none.
+        return { ...row, status: health.status, detail: health.detail };
       });
       if (touched) {
         this.cache.set(key, { ...entry, servers });

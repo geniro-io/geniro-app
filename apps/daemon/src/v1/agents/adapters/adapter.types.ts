@@ -534,6 +534,25 @@ export interface AgentMcpServersInput {
   configDir?: string | null;
 }
 
+/** Which ONE server's health is being asked about, and where. */
+export interface AgentMcpServerHealthInput extends AgentMcpServersInput {
+  /** The server's name, as the CLI's own listing spells it. */
+  server: string;
+}
+
+/**
+ * One server's health as the CLI just reported it — the answer to
+ * `AgentAdapter.readMcpServerHealth`.
+ *
+ * Deliberately the same two fields a listed row carries, so a caller can drop
+ * it straight onto a row rather than translating; `detail` is the CLI's own
+ * sentence about the state, or null when it gave none.
+ */
+export interface AgentMcpServerHealth {
+  status: AgentMcpServerStatus;
+  detail: string | null;
+}
+
 /**
  * Where a server came from, which is what decides whether geniro may switch it
  * off at all.
@@ -643,6 +662,28 @@ export interface AgentCommandOptions {
    * `spawnInfo.processGroup`, so a registration site cannot pair them wrongly.
    */
   processGroup?: boolean;
+  /**
+   * Resolve with the command's OUTPUT — stdout AND stderr — whatever its exit
+   * status, instead of the usual `null`-on-failure.
+   *
+   * THE canonical statement of this option. Off by default, because for almost
+   * every utility command a non-zero exit means the answer is worthless. It
+   * exists for the commands where the answer IS the failure: `cursor-agent mcp
+   * list-tools <server>` exits 1 and writes `MCP 'figma' requires
+   * authentication.` to STDERR — measured on 2026.08.11-e8db854 — so the one
+   * reading that distinguishes "needs signing in" from "broken" is invisible to
+   * a caller that only sees stdout on success.
+   *
+   * Both halves are needed together and neither is useful alone here, which is
+   * why this is one flag and not two: the diagnosis is on the failure path and
+   * it is on stderr.
+   *
+   * With it set, `null` narrows to "could not be run at all" — a spawn that
+   * threw, a deadline, or output past the buffer cap. Parsing therefore has to
+   * be marker-based rather than exit-code-based, which is what the CLIs'
+   * prose-only output forces anyway.
+   */
+  captureDiagnosis?: boolean;
   /**
    * Extra env for THIS command's child, merged over `buildChildEnv()`.
    *

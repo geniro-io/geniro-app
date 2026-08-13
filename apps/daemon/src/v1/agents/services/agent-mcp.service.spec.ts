@@ -16,6 +16,7 @@ import { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpFolderFacts,
   AgentMcpServer,
+  AgentMcpServerHealth,
   AgentSpawnInfo,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
@@ -96,6 +97,7 @@ interface Harness {
   readMcpFolderFacts: ReturnType<typeof vi.fn>;
   setNow: (ms: number) => void;
   setMcpServerEnabled: ReturnType<typeof vi.fn>;
+  readMcpServerHealth: ReturnType<typeof vi.fn>;
 }
 
 interface HarnessOptions {
@@ -119,6 +121,14 @@ interface HarnessOptions {
    * record of what it just wrote is all there is.
    */
   recordsFacts?: boolean;
+  /**
+   * What a single-server dial reports, or null for a CLI that has no such
+   * command. Defaults to null — the pre-probe behaviour, so every other case
+   * keeps exercising the `unknown` fallback.
+   */
+  probeHealth?: AgentMcpServerHealth | null;
+  /** Make the probe THROW, to drive the after-the-write degrade path. */
+  probeThrows?: 'sync' | 'async';
 }
 
 function harness(
@@ -134,6 +144,8 @@ function harness(
     toggleUnavailableReason = null,
     harvest = emptyHarvest(),
     recordsFacts = true,
+    probeHealth = null,
+    probeThrows,
   } = options;
   // The fixtures speak in plain server arrays; the adapter contract is the
   // discriminated result, so wrap here rather than in every case.
@@ -163,8 +175,18 @@ function harness(
       return Promise.resolve();
     },
   );
+  const readMcpServerHealth = vi.fn(() => {
+    if (probeThrows === 'sync') {
+      throw new Error('probe blew up before returning a promise');
+    }
+    if (probeThrows === 'async') {
+      return Promise.reject(new Error('probe rejected'));
+    }
+    return Promise.resolve(probeHealth);
+  });
   const adapter = {
     listMcpServers,
+    readMcpServerHealth,
     getConfig: () => ({
       mcp: {
         listingUnavailableReason: null,
@@ -199,6 +221,7 @@ function harness(
     listMcpServers,
     readMcpFolderFacts,
     setMcpServerEnabled,
+    readMcpServerHealth,
     setNow: (ms) => {
       now = ms;
     },
@@ -1152,6 +1175,95 @@ describe('AgentMcpService.setEnabled', () => {
       // every server in the folder is what patching instead of evicting avoids.
       expect(listMcpServers).toHaveBeenCalledTimes(1);
     });
+
+    it('asks the CLI about that ONE server when switching it on, and uses the answer', async () => {
+      // The whole reason `readMcpServerHealth` exists. `unknown` was honest but
+      // useless — a row with no health and no Sign in control — and re-dialling
+      // the FOLDER to fix it would launch every server in it. One server's dial
+      // costs 1.2–3.7s against 4–9s (cursor, measured), so the answer is asked
+      // for rather than assumed.
+      const cwd = realDir();
+      const { service, readMcpServerHealth } = harness(
+        () => Promise.resolve([server('a')]),
+        {
+          recordsFacts: false,
+          probeHealth: { status: 'needs_auth', detail: null },
+        },
+      );
+      await service.list(AgentKind.CursorAgent, cwd);
+      await service.setEnabled(AgentKind.CursorAgent, cwd, 'a', false);
+
+      const back = await service.setEnabled(
+        AgentKind.CursorAgent,
+        cwd,
+        'a',
+        true,
+      );
+
+      // `needs_auth` and not `unknown`: this is the status the panel draws a
+      // Sign in button for, and it is the majority state of a real listing.
+      expect(back.servers[0]?.status).toBe('needs_auth');
+      expect(back.servers[0]?.disabled).toBe(false);
+      expect(readMcpServerHealth).toHaveBeenCalledWith(
+        { cwd, server: 'a' },
+        expect.objectContaining({ onSpawn: expect.any(Function) }),
+      );
+    });
+
+    it('does NOT dial when switching a server off', async () => {
+      // Nothing to verify: the CLI reports a switched-off server as `disabled`,
+      // and dialling a server in order to stop using it would launch the very
+      // process the user just asked not to run.
+      const cwd = realDir();
+      const { service, readMcpServerHealth } = harness(
+        () => Promise.resolve([server('a')]),
+        {
+          recordsFacts: false,
+          probeHealth: { status: 'connected', detail: null },
+        },
+      );
+      // Populates the cache, so the row below is the PATCHED one rather than a
+      // fresh dial's — otherwise this would assert nothing about the patch.
+      await service.list(AgentKind.CursorAgent, cwd);
+
+      const off = await service.setEnabled(
+        AgentKind.CursorAgent,
+        cwd,
+        'a',
+        false,
+      );
+
+      expect(readMcpServerHealth).not.toHaveBeenCalled();
+      expect(off.servers[0]?.status).toBe('disabled');
+    });
+
+    for (const throws of ['sync', 'async'] as const) {
+      it(`still reports the toggle that LANDED when the probe throws (${throws})`, async () => {
+        // The probe runs after a write that already took effect. Letting its
+        // failure reach the caller would report a switch that moved as one that
+        // did not — and the user would flip it back, undoing a change that had
+        // worked. The sync case needs its own run because a bare call would
+        // bypass the `.catch` entirely.
+        const cwd = realDir();
+        const { service } = harness(() => Promise.resolve([server('a')]), {
+          recordsFacts: false,
+          probeThrows: throws,
+        });
+        await service.list(AgentKind.CursorAgent, cwd);
+        await service.setEnabled(AgentKind.CursorAgent, cwd, 'a', false);
+
+        const back = await service.setEnabled(
+          AgentKind.CursorAgent,
+          cwd,
+          'a',
+          true,
+        );
+
+        expect(back.servers[0]?.disabled).toBe(false);
+        // Degraded to the honest placeholder, not to a guess.
+        expect(back.servers[0]?.status).toBe('unknown');
+      });
+    }
 
     it('states an ON server’s health as unknown rather than inventing one', async () => {
       // Asymmetric on purpose. Switching a server OFF makes the CLI report

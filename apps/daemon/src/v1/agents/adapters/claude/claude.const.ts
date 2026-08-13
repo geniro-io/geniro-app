@@ -428,6 +428,49 @@ export const CLAUDE_MCP_NEEDS_AUTH_MARKER = 'Needs authentication';
  * Named rather than written inline because it has the second reader that earns
  * a name: `getConfig()` spells it, and the adapter's spec asserts on it.
  */
+/**
+ * Argv for the ONE-server health probe, and the label its status line carries.
+ *
+ * `claude mcp get <name>` — and this is a health probe by the CLI's own account,
+ * not by inference: `claude mcp get --help` says "Unapproved .mcp.json servers
+ * are shown as ⏸ Pending approval and not connected to; approved servers are
+ * health-checked."
+ *
+ * Captured on 2.1.228, with the timings that make it worth having — one server
+ * against a folder listing that takes 45s worth of budget for all of them:
+ *
+ * ```
+ * $ claude mcp get codegraph                       # exit 0, 1.56s
+ * codegraph:
+ *   Scope: User config (available in all your projects)
+ *   Status: ✔ Connected
+ *   Type: stdio
+ *
+ * $ claude mcp get ticktick                        # exit 0, 8.10s
+ *   Status: ! Connected · tools fetch failed
+ *
+ * $ claude mcp get telegram                        # exit 1
+ * No MCP server named "telegram". Configured servers: …
+ * ```
+ *
+ * The status WORDING is the same vocabulary `mcp list` prints, which is why
+ * `parseMcpGetHealth` shares this CLI's existing markers instead of adding a
+ * second set — see that function.
+ *
+ * RE-CHECK IF: `mcp get` stops printing a `Status:` line, or starts reporting a
+ * state `mcp list` never produces.
+ */
+export const CLAUDE_MCP_GET_ARGS: readonly string[] = ['mcp', 'get'];
+export const CLAUDE_MCP_GET_STATUS_LABEL = 'Status:';
+
+/**
+ * Deadline for that probe. One server, so it is bounded by one connect timeout
+ * rather than the slowest of forty-five — but a server whose tools fetch hangs
+ * still spends its own (8.1s measured), so this keeps real headroom while
+ * staying well under the listing's budget.
+ */
+export const CLAUDE_MCP_GET_TIMEOUT_MS = 20_000;
+
 export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
 
 /**

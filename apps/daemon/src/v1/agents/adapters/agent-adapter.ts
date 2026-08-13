@@ -25,6 +25,8 @@ import type {
   AgentEvent,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
+  AgentMcpServerHealth,
+  AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
   AgentSession,
@@ -595,6 +597,32 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Dial ONE server and report what the CLI said about it, or null when this
+   * CLI has no way to be asked about a single one.
+   *
+   * The point is cost. A folder listing health-checks EVERY server — 4–9s here,
+   * and it launches all of them — so it is the wrong instrument for the one
+   * question that arises after a write: the user just switched a server on, and
+   * the row has to say something about it. Without this the honest answer is
+   * `unknown`, since nothing has dialled it (see
+   * `AgentMcpService.patchCachedStatus`), and a green dot would be the panel
+   * claiming a server works because a switch moved.
+   *
+   * The default returns null rather than guessing, on the same rule every
+   * declared absence here follows: a CLI with no per-server command costs the
+   * user a badge until the next real read, not a wrong one.
+   *
+   * Must NEVER throw — it feeds a panel, and a CLI that is missing or hung costs
+   * one row's health, not the toggle the user just performed.
+   */
+  readMcpServerHealth(
+    _input: AgentMcpServerHealthInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentMcpServerHealth | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
    * Switch one MCP server on or off for one folder — the WRITE half of
    * {@link readMcpFolderFacts}, and the same kind of thing: a mechanism only
    * that CLI knows, so an adapter that has one overrides this.
@@ -901,7 +929,17 @@ export abstract class AgentAdapter {
             encoding: 'utf8',
             env: buildChildEnv({ ...this.inheritedEnv(), ...options.env }),
           },
-          (err, stdout) => resolve(err ? null : String(stdout)),
+          (err, stdout, stderr) =>
+            resolve(
+              // `captureDiagnosis` keeps the output on the FAILURE path, where
+              // some CLIs put the only reading that matters — see that option.
+              // Both streams, because that is where they put it.
+              options.captureDiagnosis === true
+                ? `${String(stdout)}${String(stderr)}`
+                : err
+                  ? null
+                  : String(stdout),
+            ),
         );
       } catch {
         // A missing binary throws synchronously on some platforms.
@@ -948,6 +986,12 @@ export abstract class AgentAdapter {
       let settled = false;
       let reaped = false;
       let stdout = '';
+      /**
+       * Collected only under `captureDiagnosis`, and appended to `stdout` at
+       * settle. Kept separate while reading so an interleaved write cannot land
+       * in the middle of a stdout line the parser is about to split.
+       */
+      let stderr = '';
       const reapGroup = (): void => {
         // Idempotent, and that is the point: `exit`, `close` and the deadline
         // all reap. Without this the second signal would land after node has
@@ -1057,12 +1101,28 @@ export abstract class AgentAdapter {
           settle(null);
         }
       });
-      // DRAINED, never read. Nothing here wants the child's stderr, but a
-      // piped stream with no reader is not free: the pipe fills at ~64KB and
-      // the child blocks mid-write, so `close` never arrives. `mcp list`
-      // health-checks the user's own MCP servers and forwards their startup
-      // noise down exactly this pipe.
-      child.stderr?.resume();
+      // DRAINED at minimum, and that is not optional: a piped stream with no
+      // reader fills at ~64KB and the child blocks mid-write, so `close` never
+      // arrives. `mcp list` health-checks the user's own MCP servers and
+      // forwards their startup noise down exactly this pipe.
+      //
+      // Under `captureDiagnosis` it is drained by being COLLECTED, which is the
+      // same obligation met a different way — the stream is still consumed on
+      // every chunk. Capped like stdout, and by the SAME budget rather than its
+      // own: an MCP server's startup noise arrives here, so a chatty one must
+      // not be able to push the read past the cap that protects the daemon's
+      // memory and then have its own diagnosis truncated instead.
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string) => {
+        if (settled || options.captureDiagnosis !== true) {
+          return;
+        }
+        stderr += chunk;
+        if (stdout.length + stderr.length > UTILITY_COMMAND_MAX_BUFFER_CHARS) {
+          reapGroup();
+          settle(null);
+        }
+      });
       child.on('error', () => {
         reapGroup();
         settle(null);
@@ -1074,6 +1134,12 @@ export abstract class AgentAdapter {
       child.on('exit', () => reapGroup());
       child.on('close', (code, signal) => {
         reapGroup();
+        if (options.captureDiagnosis === true) {
+          // The exit status is deliberately not consulted: the caller asked for
+          // the output BECAUSE the reading it wants comes with a non-zero exit.
+          settle(`${stdout}${stderr}`);
+          return;
+        }
         settle(code === 0 && signal === null ? stdout : null);
       });
       options.onSpawn?.(child, { processGroup: true });

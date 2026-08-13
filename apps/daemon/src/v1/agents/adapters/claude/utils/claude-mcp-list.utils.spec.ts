@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseMcpList } from './claude-mcp-list.utils';
+import { parseMcpGetHealth, parseMcpList } from './claude-mcp-list.utils';
 
 /**
  * Verbatim `claude mcp list` output, 2.1.220. Captured by adding throwaway
@@ -284,5 +284,56 @@ describe('parseMcpList', () => {
       'plugin:probe-alpha:alpha-srv',
       'plugin:probe-beta:beta-srv',
     ]);
+  });
+});
+
+describe('parseMcpGetHealth', () => {
+  // Captured from `claude mcp get` on 2.1.228, glyphs included — the decoration
+  // is exactly what a release changes without meaning anything by it.
+  it('reads the status line, stripping the glyph in front of the wording', () => {
+    expect(
+      parseMcpGetHealth(
+        [
+          'codegraph:',
+          '  Scope: User config (available in all your projects)',
+          '  Status: \u2714 Connected',
+          '  Type: stdio',
+        ].join('\n'),
+      ),
+    ).toEqual({ status: 'connected', detail: null });
+  });
+
+  it('keeps the CLI\u2019s own qualifier as the row detail', () => {
+    // A real capture: a server that connects but whose tool fetch fails. Losing
+    // the tail would render it as plainly healthy.
+    expect(
+      parseMcpGetHealth('  Status: ! Connected \u00b7 tools fetch failed\n'),
+    ).toEqual({
+      status: 'connected',
+      detail: '\u00b7 tools fetch failed',
+    });
+  });
+
+  it('shares the marker vocabulary with the listing parser', () => {
+    // The point of living in this file. If the two ever mapped a marker
+    // differently, one surface would call a server broken while the other called
+    // it fine — with no way to tell which was right.
+    const viaGet = parseMcpGetHealth('  Status: Failed to connect\n');
+    const viaList = parseMcpList('srv: node x.js - Failed to connect\n')[0];
+
+    expect(viaGet?.status).toBe('failed');
+    expect(viaGet?.status).toBe(viaList?.status);
+  });
+
+  it('answers null when there is no status line at all', () => {
+    // How a non-zero exit arrives: `No MCP server named "x"`. Reporting that as
+    // a status would call a real server broken over a name the caller mistyped.
+    expect(
+      parseMcpGetHealth(
+        'No MCP server named "telegram". Configured servers: a, b',
+      ),
+    ).toBeNull();
+    expect(parseMcpGetHealth('  Status:   \n')).toBeNull();
+    expect(parseMcpGetHealth(null)).toBeNull();
   });
 });

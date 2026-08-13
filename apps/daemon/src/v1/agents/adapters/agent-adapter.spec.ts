@@ -1077,6 +1077,74 @@ class RawCommandAdapter extends ClaudeAdapter {
   }
 }
 
+describe('AgentAdapter.runCommand captureDiagnosis', () => {
+  // The option exists because some CLIs put the only reading that matters on the
+  // FAILURE path and on STDERR: `cursor-agent mcp list-tools figma` exits 1 and
+  // writes `MCP 'figma' requires authentication.` to stderr (measured on
+  // 2026.08.11-e8db854). Without it that answer is a bare null, and "needs
+  // signing in" is indistinguishable from "broken".
+
+  it('group path: keeps stderr and the output of a non-zero exit', async () => {
+    const groupSpawnFn = ((): ChildProcess => {
+      const fake = fakeGroupChild(4242);
+      queueMicrotask(() => {
+        fake.writeStderr("MCP 'figma' requires authentication.\n");
+        fake.close(1);
+      });
+      return fake.child;
+    }) as unknown as typeof spawn;
+
+    await expect(
+      new RawCommandAdapter({ groupSpawnFn }).run(
+        ['mcp', 'list-tools', 'figma'],
+        {
+          processGroup: true,
+          captureDiagnosis: true,
+        },
+      ),
+    ).resolves.toContain('requires authentication');
+  });
+
+  it('group path: WITHOUT the flag, the same exit is still a plain null', async () => {
+    // The default has to be untouched — every other utility command relies on a
+    // non-zero exit meaning "no answer", and widening that silently would let a
+    // failed `mcp list` be parsed as a listing.
+    const groupSpawnFn = ((): ChildProcess => {
+      const fake = fakeGroupChild(4242);
+      queueMicrotask(() => {
+        fake.writeStderr('some failure\n');
+        fake.close(1);
+      });
+      return fake.child;
+    }) as unknown as typeof spawn;
+
+    await expect(
+      new RawCommandAdapter({ groupSpawnFn }).run(['mcp', 'list'], {
+        processGroup: true,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('execFile path: keeps stdout AND stderr when the command exits non-zero', async () => {
+    const execFileFn = ((
+      _cmd: string,
+      _args: readonly string[],
+      _opts: unknown,
+      cb: (err: Error | null, out: string, errOut: string) => void,
+    ) => {
+      cb(new Error('exit 1'), 'partial stdout\n', 'the real reason\n');
+      return {} as ChildProcess;
+    }) as unknown as typeof execFile;
+
+    const out = await new RawCommandAdapter({ execFileFn }).run(['whatever'], {
+      captureDiagnosis: true,
+    });
+
+    expect(out).toContain('partial stdout');
+    expect(out).toContain('the real reason');
+  });
+});
+
 describe('AgentAdapter.runCommand spawn options', () => {
   it('a process-group command goes through spawn, detached, with piped stdio', async () => {
     // The whole finding this replaced: `detached` was being handed to

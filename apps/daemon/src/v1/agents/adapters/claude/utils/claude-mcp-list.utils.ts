@@ -1,8 +1,13 @@
-import type { AgentMcpServer, AgentMcpServerStatus } from '../../adapter.types';
+import type {
+  AgentMcpServer,
+  AgentMcpServerHealth,
+  AgentMcpServerStatus,
+} from '../../adapter.types';
 import {
   CLAUDE_MCP_CONNECTED_MARKER,
   CLAUDE_MCP_DETAIL_SEPARATOR,
   CLAUDE_MCP_FAILED_MARKER,
+  CLAUDE_MCP_GET_STATUS_LABEL,
   CLAUDE_MCP_NEEDS_AUTH_MARKER,
   CLAUDE_MCP_PENDING_MARKER,
 } from '../claude.const';
@@ -155,4 +160,64 @@ export function parseMcpList(stdout: string | null): AgentMcpServer[] {
     servers.push({ name, target, transport, status, detail });
   }
   return servers;
+}
+
+/**
+ * Read one server's health out of `claude mcp get <name>`.
+ *
+ * Lives beside `parseMcpList` rather than in a file of its own for one reason:
+ * both read this CLI's prose about a server's health, and they MUST agree on the
+ * marker→status mapping. Sharing {@link readStatus} is what makes that
+ * structural instead of a convention two files try to keep.
+ *
+ * The output is a labelled block, and only the status line matters:
+ *
+ * ```
+ * codegraph:
+ *   Scope: User config (available in all your projects)
+ *   Status: ✔ Connected
+ *   Type: stdio
+ * ```
+ *
+ * The glyph before the wording is stripped rather than matched — captured as
+ * `✔` on a healthy server and `!` on `! Connected · tools fetch failed`
+ * (2.1.228), and a decoration is exactly the kind of thing a release changes
+ * without meaning anything by it.
+ *
+ * Null when no status line is there at all, which is also how a non-zero exit
+ * arrives (`No MCP server named "x"`): the caller then leaves the row's health
+ * unstated instead of calling a real server broken.
+ *
+ * Never throws.
+ */
+export function parseMcpGetHealth(
+  stdout: string | null,
+): AgentMcpServerHealth | null {
+  if (!stdout) {
+    return null;
+  }
+  for (const rawLine of stdout.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith(CLAUDE_MCP_GET_STATUS_LABEL)) {
+      continue;
+    }
+    const text = stripGlyph(line.slice(CLAUDE_MCP_GET_STATUS_LABEL.length));
+    if (text.length === 0) {
+      return null;
+    }
+    return readStatus(text);
+  }
+  return null;
+}
+
+/**
+ * Drop a leading run of non-letter decoration, so the wording `readStatus`
+ * matches on starts at its first word.
+ *
+ * Unicode-aware (`\p{L}`) because the glyphs seen here are not ASCII, and a
+ * `[a-zA-Z]` scan would stop at the wrong place for a localized build.
+ */
+function stripGlyph(text: string): string {
+  const at = text.search(/\p{L}/u);
+  return at < 0 ? '' : text.slice(at).trim();
 }

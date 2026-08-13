@@ -19,6 +19,8 @@ import type {
   AgentEvent,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
+  AgentMcpServerHealth,
+  AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
   AgentTurnInput,
@@ -48,6 +50,8 @@ import {
   CLAUDE_MCP_CONFIG_DIR_NAME,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MCP_EMPTY_MARKER,
+  CLAUDE_MCP_GET_ARGS,
+  CLAUDE_MCP_GET_TIMEOUT_MS,
   CLAUDE_MCP_LIST_ARGS,
   CLAUDE_MCP_LIST_FAILED_MESSAGE,
   CLAUDE_MCP_LIST_TIMEOUT_MS,
@@ -80,7 +84,7 @@ import {
   parseDisabledServerNames,
   parseHomeDisabledServerNames,
 } from './utils/claude-mcp-folder.utils';
-import { parseMcpList } from './utils/claude-mcp-list.utils';
+import { parseMcpGetHealth, parseMcpList } from './utils/claude-mcp-list.utils';
 import type { ClaudeHomeConfig } from './utils/claude-mcp-toggle.utils';
 import {
   parseHomeConfig,
@@ -605,6 +609,45 @@ export class ClaudeAdapter extends AgentAdapter {
       // cannot undo: the CLI unions every source's copy of that list.
       lockedOff: [...userDisabled],
     };
+  }
+
+  /**
+   * Dial ONE server, so a row the user just switched on can say what it found.
+   *
+   * `claude mcp get <name>` health-checks by the CLI's own documentation, and
+   * costs one server's dial where the folder listing costs all of them
+   * ({@link CLAUDE_MCP_GET_ARGS} carries the captures and the timings).
+   *
+   * Taken under the run's own profile for the same reason the listing is: a
+   * config directory is where this CLI keeps its configured servers, so a probe
+   * read from the default profile would report on a server this run never loads.
+   *
+   * `processGroup` because it DIALS — a stdio server is launched as a grandchild
+   * — and no `captureDiagnosis`, unlike cursor's twin: this CLI prints the status
+   * line on stdout and exits 0 for every configured server, so the one exit-1
+   * case is a server that is not there at all, and its message carries nothing a
+   * row could say.
+   *
+   * Never throws: an unreadable answer is null, and the row's health stays
+   * unstated rather than guessed.
+   */
+  override async readMcpServerHealth(
+    input: AgentMcpServerHealthInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentMcpServerHealth | null> {
+    const stdout = await this.runCommand(
+      [...CLAUDE_MCP_GET_ARGS, input.server],
+      {
+        ...options,
+        cwd: input.cwd,
+        processGroup: true,
+        timeoutMs: options.timeoutMs ?? CLAUDE_MCP_GET_TIMEOUT_MS,
+        ...(input.configDir
+          ? { env: { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } }
+          : {}),
+      },
+    );
+    return parseMcpGetHealth(stdout);
   }
 
   /**

@@ -1,4 +1,10 @@
-import { ChevronRight, Plug, Terminal as TerminalIcon, X } from 'lucide-react';
+import {
+  ChevronRight,
+  ListTree,
+  Plug,
+  Terminal as TerminalIcon,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
@@ -723,14 +729,31 @@ export function AgentsPanel({
                             ? 'Hide this agent’s threads'
                             : 'Show this agent’s threads'
                         }
-                        className="size-6 shrink-0 text-muted-foreground"
+                        className={cn(
+                          'size-6 shrink-0',
+                          // A chevron says WHICH WAY it opens and nothing about
+                          // what is inside; this icon says what is inside, so the
+                          // open state has to be carried some other way. Tone,
+                          // like the other two controls in this row: the button
+                          // reads as lit while its list is showing.
+                          isExpanded
+                            ? 'text-foreground'
+                            : 'text-muted-foreground',
+                        )}
                         onClick={() => toggleExpanded(agent.id)}>
-                        <ChevronRight
+                        {/*
+                          What this opens is the agent's THREADS — its own
+                          conversation, plus a row per delegate it is running —
+                          so a nested list is what the glyph should be. It also
+                          has to stay legible beside its two neighbours (a
+                          context ring and the MCP plug) at 14px, which is why
+                          this is `ListTree` rather than `Users` or `Network`:
+                          a two-level list at that size still reads as a list,
+                          while a cluster of figures or nodes turns to mush.
+                        */}
+                        <ListTree
                           aria-hidden="true"
-                          className={cn(
-                            'size-3.5 shrink-0 transition-transform',
-                            isExpanded && 'rotate-90',
-                          )}
+                          className="size-3.5 shrink-0"
                         />
                       </Button>
                     ) : null}

@@ -341,6 +341,31 @@ describe('AgentsPanel', () => {
     expect(worker.textContent).toContain('Write a haiku about rivers.');
   });
 
+  it('says whether the thread list is open, now that its icon cannot', () => {
+    // The glyph is a nested list — what the control OPENS — rather than a
+    // chevron, which said which way it opened and nothing about what was in
+    // there. A list does not rotate, so the open state rides `aria-expanded`
+    // and the button's tone; without this, dropping either would leave a
+    // control that gives no feedback at all when pressed.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const toggle = [...el.querySelectorAll('ul > li')]
+      .find((row) => row.textContent?.includes('Worker'))!
+      .querySelector('button[aria-label="Worker threads"]')!;
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.className).toContain('text-muted-foreground');
+    click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.className).toContain('text-foreground');
+  });
+
   it('the fill ring escalates its tone as the context window fills', () => {
     const withContext = (id: string, contextTokens: number): AgentDisplay => ({
       id,

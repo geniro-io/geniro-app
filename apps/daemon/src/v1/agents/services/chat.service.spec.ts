@@ -2622,11 +2622,16 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     ).toEqual(['call-1', 'call-1']);
   });
 
-  it('still drops a between-turn event that has nothing to anchor it', async () => {
-    // The narrowness is the safety argument: a stray message or delta carries
-    // no id pairing it to anything, and filing one turn's words under another's
-    // is worse than dropping them. This is the assertion that fails if the
-    // filter is ever widened to "persist whatever arrives".
+  it('keeps an assistant message the CLI wrote after the turn settled', async () => {
+    // This REPLACES a test that pinned the opposite ("still drops a
+    // between-turn event that has nothing to anchor it"), and the reversal is
+    // measured rather than preferred. On a live delegating chat the CLI ran a
+    // whole further turn seven seconds after its result line, and the filter
+    // that kept only tool rows dropped 2 `text` events, 5 `text_delta`, 2
+    // `turn_complete` and a `session` with them — which is the reported "after
+    // those jobs finished all messages starting to send incorrectly". The old
+    // safety argument was about REPLAYING an event into a later turn; this
+    // files it under the run as it arrives, which needs no anchor.
     const { service, claude, itemDao } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -2638,10 +2643,214 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
 
     claude.sessions[0]?.onBetweenTurnEvent?.({
       type: 'text',
-      text: 'a stray sentence from the turn that was stopped',
+      text: 'the delegate reported back, so here is what I did with it',
     });
     await drain();
 
+    expect(itemDao.items).toHaveLength(before + 1);
+    expect(itemDao.items.at(-1)?.kind).toBe('message');
+    expect(itemDao.items.at(-1)?.payload).toContain('the delegate reported');
+  });
+
+  it('puts the badge back to running while the CLI carries on by itself', async () => {
+    // "it showed complete status, but in fact its not" — the run had settled
+    // and the CLI went on working under it. A row arriving off-turn IS the
+    // evidence that it is working again.
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    statuses.length = 0;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    // …and it says WHOSE running this is, so a chat the user thought was
+    // finished does not silently start spinning again with no explanation.
+    expect(statuses.at(-1)?.activity).toContain('still working');
+  });
+
+  it('settles the run again on the continuation’s own result', async () => {
+    // The other half: without this the run would be left `running` forever by
+    // the row above, which is the same lie pointing the other way.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({ type: 'tool_call', id: 'call-9', name: 'Bash', input: {} });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+
+    emit?.({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('records a CANCELLED run’s trailing work without moving its badge', async () => {
+    // The reason a filter was put here in the first place, kept as a rule of
+    // its own: after a Stop the cancelled turn's tail still arrives, and a
+    // straggling result flipping `cancelled` back to `completed` tells the user
+    // their Stop did not take. The rows are still written — the work happened,
+    // and a transcript that hides it is lying in the other direction.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    await service.cancel(run.id);
+    // The CLI answers an interrupt with a cancelled turn, which is what
+    // actually writes the status — `cancel` itself deliberately writes nothing.
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    const before = itemDao.items.length;
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({ type: 'tool_call', id: 'call-9', name: 'Bash', input: {} });
+    emit?.({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    await drain();
+
+    expect(itemDao.items.length).toBeGreaterThan(before);
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+  });
+
+  it('keeps the resume id the CLI reports during its own continuation', async () => {
+    // The continuation is part of this conversation, so its session id is what
+    // a later `--resume` has to reach. Dropping it left the chat resuming a
+    // session missing everything the CLI did after the turn settled.
+    const { service, claude, nodeDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    nodeDao.saved.length = 0;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'session',
+      sessionId: 'sid-after-the-turn',
+    });
+    await drain();
+
+    expect(nodeDao.saved).toContain('sid-after-the-turn');
+  });
+
+  it('files what the CLI reports about itself off-turn under the same folder', async () => {
+    // `mcp_servers` and `slash_commands` are the CLI describing its OWN state,
+    // which is as true off-turn as on. Dropping them meant a continuation's
+    // reading — often the freshest one there is — never reached the panels.
+    const { service, claude, skillHarvest, mcpHarvest } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({ type: 'slash_commands', commands: ['/review'] });
+    emit?.({
+      type: 'mcp_servers',
+      servers: [
+        {
+          name: 'playwright',
+          status: 'connected',
+          target: 'npx -y @playwright/mcp',
+          transport: 'stdio',
+          detail: null,
+        },
+      ],
+    });
+    await drain();
+
+    expect(skillHarvest.record).toHaveBeenCalledWith('claude', process.cwd(), [
+      '/review',
+    ]);
+    expect(mcpHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      process.cwd(),
+      null,
+      [
+        {
+          name: 'playwright',
+          status: 'connected',
+          target: 'npx -y @playwright/mcp',
+          transport: 'stdio',
+          detail: null,
+        },
+      ],
+    );
+  });
+
+  it('routes an off-turn live signal to the tail, never to the transcript', async () => {
+    // The words the CLI streams during its own continuation are the only thing
+    // on screen while it runs, and dropping them left the user watching a
+    // finished-looking chat grow rows with nothing above them. They go to the
+    // SAME live tail an in-turn delta does — no row of their own, because the
+    // completed `text` that follows is the durable copy.
+    const { service, claude, itemDao, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const before = itemDao.items.length;
+    deltas.length = 0;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text_delta',
+      text: 'still going…',
+    });
+    await drain();
+
+    expect(deltas.at(-1)?.text).toContain('still going…');
     expect(itemDao.items).toHaveLength(before);
   });
 

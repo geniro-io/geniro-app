@@ -55,7 +55,9 @@ afterEach(() => {
 function render(group: ToolGroupEntry, runSettled = false): void {
   act(() =>
     root.render(
-      <RunSettledContext.Provider value={runSettled}>
+      // The context carries WHEN the run settled; a tool group only ever asks
+      // WHETHER, so any moment stands for "settled" here.
+      <RunSettledContext.Provider value={runSettled ? 1_000 : null}>
         <ToolGroup group={group} />
       </RunSettledContext.Provider>,
     ),

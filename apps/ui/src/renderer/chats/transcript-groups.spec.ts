@@ -1266,6 +1266,82 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('stopped');
   });
 
+  describe('a run that settled while the delegate kept writing', () => {
+    /** A delegate mid-flight whose last row landed at `rowAt`. */
+    const midFlight = (rowAt: string) =>
+      onlyBlock(
+        fold([
+          {
+            ...call('Task', 'task-1', { description: 'Review the diff' }),
+            createdAt: '2026-08-11T17:00:00.000Z',
+          },
+          {
+            ...delegated('message', { text: 'still reading' }, 'task-1'),
+            createdAt: rowAt,
+          },
+        ]),
+      );
+
+    it('records when the delegate last spoke', () => {
+      // The field the comparison is made against — read from the rows
+      // themselves, so it survives a reload and a reconnect the same way
+      // `closed` does.
+      expect(midFlight('2026-08-11T17:05:00.000Z').lastRowAt).toBe(
+        Date.parse('2026-08-11T17:05:00.000Z'),
+      );
+    });
+
+    it('falls back to its own launch when the delegate has said nothing yet', () => {
+      // A delegation issued AFTER the run settled is itself evidence of life;
+      // reading null there would call a delegate started one second ago
+      // `stopped`.
+      const block = onlyBlock(
+        fold([
+          {
+            ...call('Task', 'task-1', { description: 'Review the diff' }),
+            createdAt: '2026-08-11T17:00:00.000Z',
+          },
+        ]),
+      );
+      expect(block.lastRowAt).toBe(Date.parse('2026-08-11T17:00:00.000Z'));
+    });
+
+    it('is stopped when it said nothing after the run settled', () => {
+      const block = midFlight('2026-08-11T17:00:05.000Z');
+      expect(
+        subagentBlockStatus(block, Date.parse('2026-08-11T17:00:41.000Z')),
+      ).toBe('stopped');
+    });
+
+    it('is STILL RUNNING when its rows are newer than the settle', () => {
+      // The reported defect. Whatever settled the run — a stale `completed`, a
+      // failed turn, a cancel — a delegate that has written since is working,
+      // and the run row saying otherwise does not make it so. Measured on the
+      // author's own `geniro.db`: 1346 delegate rows arrived in run `f42bfe2d`
+      // after the item that settled it, every one of them under a `stopped`
+      // badge.
+      const block = midFlight('2026-08-11T17:20:00.000Z');
+      expect(
+        subagentBlockStatus(block, Date.parse('2026-08-11T17:00:41.000Z')),
+      ).toBe('running');
+    });
+
+    it('still stops one whose OWN turn ended after its last row', () => {
+      // The seq-based route is untouched by the timestamp one and outranks it:
+      // a turn-end item after the delegate's last row is direct evidence that
+      // nothing more is coming, whatever the run row's clock says.
+      const block = onlyBlock(
+        fold([
+          call('Task', 'task-1', { description: 'Review the diff' }),
+          delegated('message', { text: 'still reading' }, 'task-1'),
+          item('turn_complete', {}),
+        ]),
+      );
+      expect(block.closed).toBe(true);
+      expect(subagentBlockStatus(block, 0)).toBe('stopped');
+    });
+  });
+
   it('keeps two concurrent delegates in separate blocks', () => {
     const blocks = collectSubagentBlocks(
       fold([

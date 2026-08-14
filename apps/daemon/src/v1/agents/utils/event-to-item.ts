@@ -232,3 +232,25 @@ export function terminalStatus(event: AgentEvent): RunStatus | null {
       return null;
   }
 }
+
+/**
+ * The sentence under the badge for work the CLI did with no turn of ours open.
+ *
+ * It is deliberately marked as such rather than reusing the in-turn phrasing.
+ * "running Bash" during a turn means the agent is doing what the user just
+ * asked; the same words after the turn settled mean something else entirely —
+ * the CLI carried on by itself, most often because a delegate reported back —
+ * and a user watching a chat they thought was finished is owed that
+ * distinction rather than a badge that silently starts again.
+ *
+ * Null for a terminal event: the badge itself is then the whole fact, and a
+ * phrase under it would outlive the work it describes.
+ */
+export function offTurnActivity(event: AgentEvent): string | null {
+  if (terminalStatus(event) !== null) {
+    return null;
+  }
+  return event.type === 'tool_call' && event.name
+    ? `still working · ${event.name}`
+    : 'still working';
+}

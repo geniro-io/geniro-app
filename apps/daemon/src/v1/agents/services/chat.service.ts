@@ -35,7 +35,11 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../utils/approval-answer';
-import { mapEventToItem, terminalStatus } from '../utils/event-to-item';
+import {
+  mapEventToItem,
+  offTurnActivity,
+  terminalStatus,
+} from '../utils/event-to-item';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -136,6 +140,18 @@ export class ChatService {
    * takes; dropped when the run's session is torn down.
    */
   private readonly runPosture = new Map<string, ChatApprovalMode | undefined>();
+
+  /**
+   * Runs whose `running` badge was put there by an OFF-TURN row rather than by
+   * a turn of ours — see {@link restatusAfterOffTurnEvent}.
+   *
+   * A set and not a boolean on the run row: this is a fact about who last wrote
+   * the status in THIS process, which the row cannot carry (a restart has no
+   * off-turn continuation to finish, and would read a stale flag as one).
+   * Cleared when the continuation settles and whenever a real turn takes the
+   * run over.
+   */
+  private readonly offTurnRuns = new Set<string>();
 
   constructor(
     private readonly em: EntityManager,
@@ -675,58 +691,121 @@ export class ChatService {
   }
 
   /**
-   * Write an event the CLI produced with no turn in flight into the run's
-   * transcript.
+   * Everything the CLI produces with no turn of ours in flight.
    *
-   * Only the two halves of a tool call, and the narrowness is the whole safety
-   * argument. Each carries the id that pairs them, so neither can be attributed
-   * to the wrong work; anything else arriving here (a stray message, a delta)
-   * has no such anchor, and filing one turn's words under another's is worse
-   * than dropping them. That is why `spawn-cli` hands these over rather than
-   * replaying them into the next turn, and why this filters rather than
-   * persisting whatever it is given.
+   * **This is a whole conversation, not a stray line.** After a turn's `result`
+   * the CLI can start a further turn of its own accord — a delegate reporting
+   * back is the measured cause, and its result line names itself
+   * `origin:{kind:"task-notification"}`. `spawn-cli` has no turn to hand that
+   * output to, so it arrives here.
    *
-   * Without it the row stayed unpaired forever: the renderer now stops
-   * SPINNING over one (the group's turn has ended), but the result itself was
-   * simply gone, so expanding the row showed a call with no answer.
+   * It used to be filtered down to the two halves of a tool call, on the
+   * argument that those carry an id that pairs them while a stray message has
+   * no anchor. The pairing half of that is right and is kept; the conclusion
+   * was not. Measured on a live delegating chat (2026-08-14, claude 2.1.232):
+   * seven seconds after the turn settled the CLI ran a whole further turn, and
+   * this method dropped 2 `text` events, 5 `text_delta`, 2 `turn_complete`, a
+   * `session`, and every progress and harvest event with them — keeping only
+   * the tool call and its result. What the user saw is exactly what was
+   * reported: a run badged `completed` with more work appearing under it, and
+   * the agent's own messages after that point simply not arriving. Dropping an
+   * event because geniro has no turn to file it under is geniro's bookkeeping
+   * problem being charged to the user's transcript.
    *
-   * The `tool_call` half is needed because a call can arrive between turns too
-   * — a Stop leaves the CLI starting one more tool — and dropping it while
-   * keeping its result leaves the result unpairable. `transcript-groups` pairs
-   * in a single forward pass keyed on the call id, so a result whose call is
-   * absent renders as its own top-level row: the bare `RESULT` blocks a user
-   * reported as strange messages after a Stop, one holding a `tool_reference`
-   * payload and one holding raw `mcp list` output. Both halves arrive in order
-   * and take their seq in that order, so persisting both restores the pairing.
+   * So the rule is now the same one the in-turn path uses — whatever
+   * `mapEventToItem` yields a row for is persisted, in arrival order, under
+   * this run — plus the three things that are not rows: the live signals feed
+   * the same partial stream, the self-reports feed the same harvest stores, and
+   * a terminal event settles the run again.
+   *
+   * **The one thing that does NOT follow the in-turn path is the run status
+   * after a Stop.** A cancelled run's trailing output is still recorded (the
+   * work happened, and hiding it is how a transcript starts lying), but it must
+   * not move the badge: the user asked this to stop, and a straggling `result`
+   * flipping `cancelled` back to `completed` is the defect that first put a
+   * filter here.
    *
    * Run-scoped by construction — its own `em` fork and the run's seq
    * allocator, nothing borrowed from a turn that has already settled. Failure
    * is logged and swallowed: this is called from the session's event path,
    * where a throw has no caller to reach.
    */
-  private async persistBetweenTurnEvent(
+  private async handleBetweenTurnEvent(
     runId: string,
+    agent: AgentKind,
+    cwd: string,
     event: AgentEvent,
   ): Promise<void> {
-    if (event.type !== 'tool_result' && event.type !== 'tool_call') {
-      this.logger.warn(
-        `run ${runId} dropped a '${event.type}' event arriving between turns`,
+    // Live-only signals: no row, no seq, no replay — the same treatment the
+    // in-turn handler gives them. Without these the transcript grows rows with
+    // no live row above them, which is the "it says completed while it works"
+    // half of the report seen from the other side.
+    if (event.type === 'text_delta') {
+      if (event.parentToolUseId === undefined) {
+        this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
+      }
+      return;
+    }
+    if (event.type === 'thinking_progress') {
+      if (event.parentToolUseId === undefined) {
+        this.partials.thinking(runId, SINGLE_AGENT_NODE, null, event.tokens);
+      }
+      return;
+    }
+    if (event.type === 'context_progress') {
+      this.partials.context(
+        runId,
+        SINGLE_AGENT_NODE,
+        null,
+        event.contextTokens,
+      );
+      return;
+    }
+    // What the CLI reports about ITSELF is true whether or not a turn of ours
+    // is open, and each of these feeds a panel rather than the transcript.
+    if (event.type === 'slash_commands') {
+      this.skillHarvest.record(agent, cwd, event.commands);
+      return;
+    }
+    if (event.type === 'mcp_servers') {
+      this.mcpHarvest.record(agent, cwd, null, event.servers);
+      return;
+    }
+    if (event.type === 'session') {
+      // The continuation runs in the same conversation, so this is the id a
+      // later resume has to reach. Dropping it left the run resuming a session
+      // that no longer had the last of its history. Written straight through
+      // rather than through the turn's changed-only saver, which belongs to a
+      // turn that no longer exists — the id repeats at most once per off-turn
+      // continuation, so the dedupe it provides is not worth the coupling.
+      await this.nodeStateDao.saveSessionId(
+        runId,
+        SINGLE_AGENT_NODE,
+        event.sessionId,
+        this.em.fork(),
       );
       return;
     }
     const mapped = mapEventToItem(event);
     if (!mapped) {
+      // No row and no live meaning — `background_work` bookkeeping for a turn
+      // that no longer exists is the standing example.
       return;
     }
     try {
+      const em = this.em.fork();
       await this.persist(
-        this.em.fork(),
+        em,
         runId,
         await this.seqs.reserve(runId),
         mapped.kind,
         mapped.role,
         mapped.payload,
       );
+      if (mapped.kind === 'message') {
+        this.partials.retire(runId, SINGLE_AGENT_NODE, null);
+      }
+      await this.restatusAfterOffTurnEvent(em, runId, event);
     } catch (err: unknown) {
       this.logger.error(
         `run ${runId} failed to persist a between-turn ${event.type}: ${
@@ -734,6 +813,48 @@ export class ChatService {
         }`,
       );
     }
+  }
+
+  /**
+   * What an off-turn row does to the run's badge.
+   *
+   * A settled run that is producing rows again is working again, so it goes
+   * back to `running`; the continuation's own result settles it. Two runs are
+   * left alone entirely:
+   *
+   * - one the user CANCELLED. Stop is final — a straggling result flipping
+   *   `cancelled` back to `completed` tells them their Stop did not take.
+   * - one whose status this method did not write. `spawn-cli` only routes here
+   *   while no turn is open, but this handler is async, so a new turn can have
+   *   opened in between — and settling THAT turn's run on the previous one's
+   *   trailing result is the exact defect `cancelledTurnMayStillEmit` was
+   *   written to stop. {@link offTurnRuns} is how it knows the difference: it
+   *   holds the runs whose `running` is its own.
+   */
+  private async restatusAfterOffTurnEvent(
+    em: EntityManager,
+    runId: string,
+    event: AgentEvent,
+  ): Promise<void> {
+    const run = await this.runDao.getById(runId);
+    if (!run || run.status === 'cancelled') {
+      return;
+    }
+    const settled = terminalStatus(event);
+    if (settled) {
+      if (this.offTurnRuns.delete(runId)) {
+        await this.setRunStatus(em, runId, settled);
+      }
+      return;
+    }
+    if (run.status === 'running') {
+      // Either a real turn owns it, or this method already moved it — the
+      // phrase is worth repeating either way, the write is not.
+      this.announceActivity(runId, offTurnActivity(event));
+      return;
+    }
+    this.offTurnRuns.add(runId);
+    await this.setRunStatus(em, runId, 'running', offTurnActivity(event));
   }
 
   /**
@@ -906,6 +1027,9 @@ export class ChatService {
         resumeSessionId,
         em,
       );
+      // A real turn takes the run over, so whatever an off-turn continuation
+      // was still holding is no longer this method's to settle.
+      this.offTurnRuns.delete(runId);
       await this.setRunStatus(em, runId, 'running');
 
       let chain: Promise<void> = Promise.resolve();
@@ -1374,7 +1498,12 @@ export class ChatService {
         ({ toolName }) =>
           autoApproves(toolName, this.runPosture.get(runId)) ? true : null,
         (event) => {
-          void this.persistBetweenTurnEvent(runId, event);
+          void this.handleBetweenTurnEvent(
+            runId,
+            adapter.getConfig().kind,
+            cwd,
+            event,
+          );
         },
       );
       this.registry.register(runId, handle);

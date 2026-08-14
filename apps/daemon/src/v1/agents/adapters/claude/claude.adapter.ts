@@ -27,6 +27,7 @@ import type {
   FollowUpMessage,
   InstalledApprovalSupport,
   InstalledCapabilities,
+  TurnDriver,
   TurnImage,
 } from '../adapter.types';
 import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
@@ -74,6 +75,7 @@ import {
   CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
+import { ClaudeTurnDriver } from './claude-turn.driver';
 import { buildImageBlocks } from './utils/claude-images.utils';
 import {
   definesGeniroServer,
@@ -996,5 +998,48 @@ export class ClaudeAdapter extends AgentAdapter {
 
   protected mapMessage(obj: unknown): AgentEvent[] {
     return mapClaudeMessage(obj);
+  }
+
+  /**
+   * Claude's driver adds ONE thing to the stateless default: it holds the
+   * session's first prompt until the CLI's MCP servers have finished dialling
+   * (`ClaudeTurnDriver.awaitPromptReady`). The reason, the measurements and the
+   * cost are recorded at `CLAUDE_MCP_STATUS_SUBTYPE` in `claude.const.ts`.
+   *
+   * Per turn, not per adapter, because the gate holds the poll in flight, and
+   * one adapter instance drives N concurrent turns under graph fan-out.
+   */
+  protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
+    if (!this.waitsForMcpServers(input)) {
+      // The base's stateless literal, which has no `awaitPromptReady` at all —
+      // absence is what keeps the opening write SYNCHRONOUS for a turn with
+      // nothing to wait for, rather than a gate that resolves instantly.
+      return super.createTurnDriver(input);
+    }
+    return new ClaudeTurnDriver({
+      mapMessage: (obj) => this.mapMessage(obj),
+      buildApprovalResponse: (id, allow, updatedInput) =>
+        this.buildApprovalResponse(id, allow, updatedInput),
+      logger: this.options.logger,
+    });
+  }
+
+  /**
+   * Whether THIS turn has anything to wait for.
+   *
+   * Two turns are outside the gate, and both are geniro's own rather than a
+   * user's. A turn carrying `isolateMcpServers` runs under
+   * `--strict-mcp-config` with an empty config, so by construction it loads no
+   * server and every poll would return the same empty list until the grace ran
+   * out. And a turn naming NO approval mode is a geniro-internal probe — the
+   * same population {@link CLAUDE_UNSET_MODE_FALLBACK} describes — which reads
+   * one `system/init` line and is cancelled; it never reaches a tool, so a tool
+   * surface is nothing to it.
+   */
+  private waitsForMcpServers(input: AgentTurnInput): boolean {
+    if (this.claudeOptions.waitForMcpServers === false) {
+      return false;
+    }
+    return input.isolateMcpServers !== true && input.approvalMode !== undefined;
   }
 }

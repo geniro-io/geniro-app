@@ -1555,8 +1555,13 @@ export abstract class AgentAdapter {
             return line;
           },
           buildInterruptPayload: () => this.buildInterruptPayload(turnInput),
-          // The driver opens the conversation on the FIRST turn only: its
-          // handshake belongs to the process, not to each prompt.
+          // Both are FIRST-turn only, and for the same reason: a handshake and
+          // a readiness wait belong to the PROCESS, not to each prompt. By the
+          // second turn the CLI has been up for a whole turn's worth of time,
+          // so re-asking would be a delay that could never find anything.
+          holdPrompt: firstTurnTaken
+            ? undefined
+            : driver.awaitPromptReady?.bind(driver),
           onStdinReady: firstTurnTaken
             ? undefined
             : (io) => driver.onStdinReady?.(io),

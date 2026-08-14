@@ -349,6 +349,109 @@ export const CLAUDE_MCP_CONFIG_SUFFIX = '.json';
 /** The token rides IN the file, so the file is the user's alone. */
 export const CLAUDE_MCP_CONFIG_FILE_MODE = 0o600;
 
+// ── The MCP readiness gate (PROBE EVIDENCE — undocumented control subtype) ──
+//
+// THE DEFECT THIS EXISTS FOR. "I have playwright in mcp servers list … But
+// agent cant use it" — reported with two screenshots: geniro's MCP panel with
+// `playwright` green, and the agent in the same folder replying "the Playwright
+// MCP server isn't loaded in this session", inventing a config reason for it
+// (the server is a `local`-scope entry under two OTHER projects). Both the
+// panel and the agent were reporting honestly; the panel is right and the
+// agent's session really did not have the tools.
+//
+// WHAT IS ACTUALLY HAPPENING, measured on 2.1.232 in the author's own folder
+// (45 servers). The CLI dials its MCP servers when the PROCESS starts and does
+// NOT wait for them before running a turn, so a turn that begins ~3s in is
+// given whatever has connected by then:
+//
+//   prompt written at 0s → init at 3.1s: 8 servers `pending`, 148 tools,
+//                                        0 of them playwright's
+//   prompt held to 8s    → init at 8.1s: 0 pending, 466 tools, 24 playwright
+//
+// Nothing is permanently missing — the surface GROWS mid-turn (probed: a server
+// `pending` at init answered a tool call 29s later). The damage is that the
+// model asks once, at second three, is told the tool does not exist, and
+// reasons from that for the rest of the conversation. That is why it presents
+// as "the agent can't use it" and why it is intermittent — it is a race with
+// however long each server takes to dial.
+//
+// THE ORACLE. `mcp_status` is a client-initiated control request on the same
+// stdin dialogue as `can_use_tool` — undocumented, found by enumerating the
+// subtypes in the shipped binary and then DRIVEN LIVE. It answers before any
+// prompt has been written, which is what makes a gate possible at all:
+//
+//     --> {"type":"control_request","request_id":"…",
+//          "request":{"subtype":"mcp_status"}}
+//     <-- {"type":"control_response","response":{"subtype":"success",
+//          "request_id":"…","response":{"mcpServers":[
+//            {"name":"playwright","status":"pending","config":{…},"scope":"user"},
+//            …]}}}
+//
+// Observed on 2.1.232, polling every 400ms from spawn: n=6/5 pending at 0.8s,
+// n=45/14 at 1.2s, 0 pending at 6.0s, and the turn released at 6.4s reported
+// `pending: []` and 466 tools at init. Same expiry warning as the other probe
+// blocks in this file: an observation of one build, not a contract. If a later
+// release renames the subtype or the reply, the gate degrades to "no oracle,
+// send the prompt now" — which is exactly today's behaviour, so a rename costs
+// the fix and never the turn.
+
+/** The control subtype that reports every MCP server's live connection state. */
+export const CLAUDE_MCP_STATUS_SUBTYPE = 'mcp_status';
+
+/** The key its reply carries the rows under — `mcpServers`, not `servers`. */
+export const CLAUDE_MCP_STATUS_ROWS_KEY = 'mcpServers';
+
+/** The one row status that means "still dialling"; every other is settled. */
+export const CLAUDE_MCP_STATUS_PENDING = 'pending';
+
+/**
+ * Gap between readiness polls. Small enough that the gate releases within a
+ * poll of the last server settling (measured: the servers went quiet at 6.0s
+ * and the prompt went out at 6.4s), large enough not to spin.
+ */
+export const CLAUDE_MCP_READY_POLL_MS = 400;
+
+/**
+ * How long ONE poll waits for its answer before the gate asks again.
+ *
+ * Silence is not refusal, and conflating the two cost the gate its first
+ * observed run: a cold CLI left the opening poll unanswered, and a gate that
+ * treated that as "this build has no such subtype" gave up permanently on a
+ * CLI that answers every later poll in well under a second. So an unanswered
+ * poll is read as an EMPTY reading — the same "we do not know yet" an empty
+ * server list means — and the empty grace below is what bounds a CLI that
+ * really never answers. Only an explicit error reply is a refusal.
+ */
+export const CLAUDE_MCP_READY_REPLY_TIMEOUT_MS = 1_200;
+
+/**
+ * How long an EMPTY reading is believed before the gate concludes the machine
+ * simply has no MCP servers.
+ *
+ * The list is not empty because nothing is configured — it is empty because
+ * discovery has not finished. Measured, the first non-empty reading landed at
+ * 0.77–0.8s across runs, so this is generous; a user with no servers at all
+ * pays it once per session process and nothing after.
+ */
+export const CLAUDE_MCP_READY_EMPTY_GRACE_MS = 2_000;
+
+/**
+ * The whole gate's ceiling. A server that never leaves `pending` — a broken
+ * command, an unreachable host — must not hold the user's first message
+ * forever, so past this the prompt goes out with a notice naming what was
+ * still starting. Set above the 6s the author's own 45-server folder took, and
+ * far below the turn's silence deadline, which is the backstop behind it.
+ */
+export const CLAUDE_MCP_READY_DEADLINE_MS = 15_000;
+
+/**
+ * Said out loud when the deadline expires with servers still dialling: `%s` is
+ * the comma-separated list. Without it the turn would silently be the old
+ * broken one, which is the report this whole block exists for.
+ */
+export const CLAUDE_MCP_NOT_READY_MESSAGE =
+  'these MCP servers were still starting when this turn began, so their tools are missing from it: %s. They will be available from your next message.';
+
 // ── MCP server listing (PROBE EVIDENCE — human-readable output) ───────────
 //
 // WHERE THESE MARKERS CAME FROM. `claude mcp list` has no machine-readable

@@ -1116,8 +1116,32 @@ export interface TurnIo {
  */
 export interface TurnDriver {
   /**
+   * Awaited between the child's stdin being wired and the turn's PROMPT being
+   * written — the driver's chance to hold a message back until the CLI can
+   * actually answer it. Only ever called for the first turn on a process, since
+   * whatever it waits for belongs to the process rather than to each prompt.
+   *
+   * It exists because a CLI can accept a prompt before it is ready to serve
+   * one: claude dials its MCP servers at process start and runs a turn without
+   * waiting for them, so a prompt sent three seconds in gets a tool surface
+   * with the slower servers missing — and a model told once that a tool does
+   * not exist keeps believing it. See `ClaudeTurnDriver.awaitPromptReady`.
+   *
+   * **It must resolve, and it must be bounded by its own deadline.** The turn's
+   * silence deadline is the only thing behind it, and settling a turn 30
+   * minutes later because a readiness poll hung would cost the user the message
+   * this hook exists to protect. It must not reject either — a gate that
+   * cannot decide releases; the caller logs and sends the prompt anyway.
+   *
+   * A cancel during the hold is honoured: the caller drops the prompt rather
+   * than writing it into a turn the user has already stopped.
+   */
+  awaitPromptReady?(io: TurnIo): Promise<void>;
+  /**
    * Called once the child's stdin is wired, before any stdout is parsed — the
    * driver's chance to open a conversation the CLI expects the client to start.
+   * Runs AFTER the turn's prompt, and so after {@link awaitPromptReady} when a
+   * driver defines both.
    */
   onStdinReady?(io: TurnIo): void;
   /** Map one parsed stdout line to zero or more normalized events. */

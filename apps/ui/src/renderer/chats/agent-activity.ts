@@ -329,14 +329,37 @@ export function computeAgentActivity(
       if (typeof context === 'number' && context > 0) {
         agent.contextTokens = context;
       }
-      // Kept only when this turn reported a USABLE one: a CLI that stops
-      // reporting must fall back to the default, not keep scaling against a
-      // stale window — and a reported 0 is not a window at all. Consumers read
-      // this as `?? DEFAULT`, which passes 0 straight through and divides by
-      // it, so the zero has to be rejected here rather than at each of them.
+      // REMEMBERED, on exactly the rule the count above follows — and it did
+      // not used to be, which is the `ctx 357.2k` with no ring beside it.
+      //
+      // A turn that reports no window has said NOTHING about the model's
+      // window; it is not a measurement of one. Overwriting with its silence
+      // wiped a window the previous turn had reported, and since the count IS
+      // guarded, what was left was a bare number where the ring had been —
+      // for the rest of the chat, until some later turn reported a window
+      // again. Measured in the author's own `geniro.db`: five `turn_complete`
+      // rows across three runs carry `{inputTokens:0, outputTokens:0,
+      // contextTokens:null, contextWindowTokens:null, costUsd:0}` — a turn
+      // that ended having reported no accounting at all (one of them followed
+      // three seconds later by `Tool permission request failed: AbortError:
+      // Stream closed`). That is also why it read as intermittent.
+      //
+      // The reason recorded for the old wipe was a MODEL CHANGE — a stale 1M
+      // window keeping a 200k model at 3% full. It could never have served
+      // that: the window and the model are read from the same `modelUsage`
+      // entry (`claude-usage.utils.ts` → `readContextWindow`), so a turn that
+      // switched model reports the NEW window and overwrites correctly, and a
+      // null window comes with a null `contextModel` — an absence of
+      // information, never the name of a smaller model. The turns the wipe
+      // actually fired on were the ones that measured nothing.
+      //
+      // A 0 is rejected for the same reason it is on the count: consumers read
+      // this as a denominator, and `ContextMeter` would render 0 as "no window
+      // reported" anyway.
       const window = usage.contextWindowTokens;
-      agent.contextWindowTokens =
-        typeof window === 'number' && window > 0 ? window : null;
+      if (typeof window === 'number' && window > 0) {
+        agent.contextWindowTokens = window;
+      }
       if (typeof usage.costUsd === 'number') {
         agent.spentUsd = (agent.spentUsd ?? 0) + usage.costUsd;
       }

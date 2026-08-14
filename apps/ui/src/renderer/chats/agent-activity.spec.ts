@@ -120,8 +120,15 @@ describe('computeAgentActivity', () => {
     expect(activity.get('worker')?.contextWindowTokens).toBe(1_000_000);
   });
 
-  it('drops a remembered window when the latest turn reports none', () => {
-    // A stale 1M window would keep a 200k model reading as 3% full.
+  it('keeps the remembered window when a later turn reports none', () => {
+    // REVERSES an earlier pin ("drops a remembered window when the latest turn
+    // reports none"), whose stated reason was a model change — a stale 1M
+    // window keeping a 200k model at 3% full. The wipe could never have served
+    // that: window and model are read from one `modelUsage` entry, so a turn on
+    // a new model reports the new window and overwrites. What it did fire on
+    // was a turn that reported NO accounting, of which the author's own
+    // `geniro.db` holds five, and the ring then vanished for the rest of the
+    // chat leaving a bare `ctx 357.2k`.
     const activity = computeAgentActivity([
       item('turn_complete', 'worker', {
         usage: { contextTokens: 5_000, contextWindowTokens: 1_000_000 },
@@ -129,6 +136,43 @@ describe('computeAgentActivity', () => {
       }),
       item('turn_complete', 'worker', {
         usage: { contextTokens: 6_000 },
+        stopReason: null,
+      }),
+    ]);
+    expect(activity.get('worker')?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('keeps the window across a turn that measured nothing at all', () => {
+    // The shape as the CLI really wrote it, transcribed from a `turn_complete`
+    // row in the author's own database. Both halves are asserted together
+    // because it is the PAIR that is the defect: the count survives such a turn
+    // (it is guarded), so a wiped window left a number with no ring — which is
+    // the reading the ticket screenshotted.
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 357_200, contextWindowTokens: 1_000_000 },
+        stopReason: 'end_turn',
+      }),
+      item('turn_complete', 'worker', {
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          contextTokens: null,
+          contextWindowTokens: null,
+          contextModel: null,
+          costUsd: 0,
+        },
+        stopReason: null,
+      }),
+    ]);
+    expect(activity.get('worker')?.contextTokens).toBe(357_200);
+    expect(activity.get('worker')?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('still refuses a reported window of zero as a denominator', () => {
+    const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 5_000, contextWindowTokens: 0 },
         stopReason: null,
       }),
     ]);

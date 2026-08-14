@@ -122,6 +122,14 @@ describe('a task list nothing is working through', () => {
     // And it says "Edit the file", not "Editing the file": the active form is a
     // claim about work under way.
     expect(taskTexts()).toContain('Edit the file');
+    // Stated on the element too, because the verdict is not otherwise visible
+    // from outside: the rule reads a context value and the card's own place in
+    // its thread, so this is the only handle a test or an inspector has on it.
+    expect(
+      container
+        .querySelector('[data-slot="task-list-card"]')
+        ?.getAttribute('data-live'),
+    ).toBe('false');
   });
 
   it('keeps spinning while the run is live', () => {

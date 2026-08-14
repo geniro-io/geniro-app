@@ -42,3 +42,37 @@ export function settledRunStatus(item: ChatItem): RunDto['status'] | null {
   }
   return item.kind === 'turn_cancelled' ? 'cancelled' : 'failed';
 }
+
+/**
+ * WHEN this run last stopped, as its own transcript records it — the newest
+ * terminal item's timestamp, or null when it holds none.
+ *
+ * The run ROW cannot answer this alone, which is what this exists for. Items
+ * never touch `updatedAt`, so that field is only as fresh as the last thing that
+ * DID write the row, and it can therefore sit BEFORE the moment the run actually
+ * stopped. Measured on a cancelled cursor turn: the daemon recorded the cancel at
+ * 07:24:50.871 while the row the renderer held said 07:24:48.881, and a task
+ * announcement written at 07:24:49.462 — squarely inside that 2-second gap — read
+ * as "produced after the run settled", so its in-progress row went on spinning on
+ * a run the user had just stopped.
+ *
+ * Readers take the LATER of this and the row's own timestamp, which is safe in
+ * both directions: a stale row is corrected by the item, and a run whose settle
+ * path wrote no terminal item still has the row to fall back on. It also leaves
+ * the "has this thread spoken SINCE?" question intact — the rows that arrive
+ * after a CLI's own turn-end line are after this moment too, which is exactly
+ * what makes them evidence of work carrying on.
+ */
+export function lastTerminalItemAt(items: readonly ChatItem[]): number | null {
+  let latest: number | null = null;
+  for (const item of items) {
+    if (item.nodeId !== null || !TERMINAL_KINDS.has(item.kind)) {
+      continue;
+    }
+    const at = Date.parse(item.createdAt);
+    if (Number.isFinite(at) && (latest === null || at > latest)) {
+      latest = at;
+    }
+  }
+  return latest;
+}

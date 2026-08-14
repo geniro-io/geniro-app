@@ -94,7 +94,11 @@ import { formatClockTime } from './relative-time';
 import { displayRunStatus, isSettledRunStatus } from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
-import { settledRunStatus, TERMINAL_KINDS } from './settled-status';
+import {
+  lastTerminalItemAt,
+  settledRunStatus,
+  TERMINAL_KINDS,
+} from './settled-status';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -107,6 +111,7 @@ import {
   buildTurnBlocks,
   collectSubagentBlocks,
   groupTranscript,
+  type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentTitle,
@@ -2461,15 +2466,33 @@ export function Chats({
    * item), which is exactly the gap that makes "has this delegate spoken
    * since?" answerable.
    */
-  const runStoppedAt = useMemo(() => {
-    if (!runRowStopped || !activeRun) {
-      return null;
-    }
-    const at = Date.parse(activeRun.updatedAt);
-    // `'unknown'` and not null on a timestamp we cannot read: the run DID stop,
-    // and losing that fact would put every spinner back — see {@link RunSettleAt}.
-    return Number.isFinite(at) ? at : 'unknown';
-  }, [runRowStopped, activeRun]);
+  /**
+   * WHEN a run that HAS stopped stopped — the later of its own terminal item and
+   * the row's timestamp, or `'unknown'` when neither can be read.
+   *
+   * The two together, never the row alone: items do not touch `updatedAt`, so a
+   * row can be older than the stop it describes and a row written in that gap
+   * then reads as "produced after the run settled" — see
+   * {@link lastTerminalItemAt} for the measurement. And never the item alone: a
+   * settle path that writes none still has to answer.
+   */
+  const settleMomentOf = useCallback(
+    (run: ChatRun | null, rows: readonly ChatItem[]): RunSettleAt => {
+      const rowAt = run ? Date.parse(run.updatedAt) : Number.NaN;
+      const itemAt = lastTerminalItemAt(rows);
+      const known = [rowAt, itemAt].filter(
+        (at): at is number => at !== null && Number.isFinite(at),
+      );
+      // `'unknown'` and not null when nothing is readable: the run DID stop, and
+      // losing that fact would put every spinner back — see {@link RunSettleAt}.
+      return known.length === 0 ? 'unknown' : Math.max(...known);
+    },
+    [],
+  );
+  const runStoppedAt = useMemo(
+    () => (runRowStopped ? settleMomentOf(activeRun, items) : null),
+    [runRowStopped, activeRun, items],
+  );
   const subagentRunning = useMemo(
     () =>
       collectSubagentBlocks(durableEntries).some(
@@ -2501,13 +2524,13 @@ export function Chats({
    * MOMENT — a delegate that has produced rows since is working, whichever
    * predicate said the run was over.
    */
-  const activeRunSettledAt = useMemo(() => {
-    if (!activeRun || !isSettledRunStatus(activeRunStatus)) {
-      return null;
-    }
-    const at = Date.parse(activeRun.updatedAt);
-    return Number.isFinite(at) ? at : 'unknown';
-  }, [activeRun, activeRunStatus]);
+  const activeRunSettledAt = useMemo(
+    () =>
+      isSettledRunStatus(activeRunStatus)
+        ? settleMomentOf(activeRun, items)
+        : null,
+    [activeRun, activeRunStatus, items],
+  );
   const transcriptEntries = useMemo(
     () => withLiveText(durableEntries, liveText, workingAgents),
     [durableEntries, liveText, workingAgents],

@@ -174,8 +174,16 @@ export function TaskListCard({
     return null;
   }
   const { done, total } = taskProgress(entry.tasks);
+  const live = taskCardIsLive(entry, runSettledAt);
   return (
-    <div data-slot="task-list-card" className="min-w-0">
+    <div
+      data-slot="task-list-card"
+      // Stated on the element because it is not derivable from the outside: the
+      // rule reads a context value and the card's own place in the thread, so a
+      // test (and anyone with the inspector open) has no other way to see which
+      // way it went.
+      data-live={live}
+      className="min-w-0">
       <SectionLabel>
         <span className="inline-flex items-center gap-1.5">
           <TaskIcon />
@@ -186,10 +194,7 @@ export function TaskListCard({
         </span>
       </SectionLabel>
       <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5">
-        <TaskRows
-          tasks={entry.tasks}
-          live={taskCardIsLive(entry, runSettledAt)}
-        />
+        <TaskRows tasks={entry.tasks} live={live} />
       </div>
     </div>
   );

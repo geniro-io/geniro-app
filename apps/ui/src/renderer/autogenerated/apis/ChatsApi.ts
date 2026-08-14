@@ -20,6 +20,7 @@ import type {
   CreateChatDto,
   DeletedDto,
   ItemDto,
+  LocalImageDto,
   RenameRunDto,
   RunDto,
   SendMessageDto,
@@ -46,6 +47,11 @@ export interface ChatsApiListRunItemsRequest {
 export interface ChatsApiReadChatAttachmentRequest {
     runId: string;
     attachmentId: string;
+}
+
+export interface ChatsApiReadLocalImageRequest {
+    runId: string;
+    path: string;
 }
 
 export interface ChatsApiRenameRunRequest {
@@ -341,6 +347,62 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readChatAttachment(requestParameters: ChatsApiReadChatAttachmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AttachmentDataDto> {
         const response = await this.readChatAttachmentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readLocalImageRaw(requestParameters: ChatsApiReadLocalImageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LocalImageDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readLocalImage().'
+            );
+        }
+
+        if (requestParameters['path'] == null) {
+            throw new runtime.RequiredError(
+                'path',
+                'Required parameter "path" was null or undefined when calling readLocalImage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['path'] != null) {
+            queryParameters['path'] = requestParameters['path'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/image`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readLocalImage(requestParameters: ChatsApiReadLocalImageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LocalImageDto> {
+        const response = await this.readLocalImageRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

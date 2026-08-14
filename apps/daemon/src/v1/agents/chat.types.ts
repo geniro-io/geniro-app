@@ -127,6 +127,28 @@ export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 /**
+ * Ceiling on an image an agent referenced from its own markdown
+ * ({@link LocalImageService}).
+ *
+ * Separate from {@link MAX_ATTACHMENT_BYTES} and larger, because the two bound
+ * different risks. That one caps what a user PASTES into a message the daemon
+ * must hold in memory as base64 and hand to a CLI; this one caps what the
+ * renderer will draw, and the file is one the agent produced — a full-window
+ * screenshot at 2x comfortably exceeds 5MB, and refusing to display it would
+ * be the same broken image by another route.
+ */
+export const MAX_LOCAL_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** One markdown-referenced image, read off disk for display. */
+export interface LocalImageWire {
+  /** The reference exactly as the agent wrote it — the renderer's cache key. */
+  path: string;
+  mediaType: AttachmentMediaType;
+  /** base64-encoded bytes. */
+  data: string;
+}
+
+/**
  * One image attached to a user message. Only the METADATA lives in the item
  * payload (and therefore SQLite) — the bytes are a file under
  * `<userData>/attachments/<runId>/`, per the storage split: SQLite holds

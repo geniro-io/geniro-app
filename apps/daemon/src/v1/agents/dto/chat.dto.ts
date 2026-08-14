@@ -130,6 +130,33 @@ export class AttachmentDataDto extends createZodDto(
   }),
 ) {}
 
+/** Which file on disk a markdown image reference names. */
+export class LocalImageQueryDto extends createZodDto(
+  z.object({
+    path: z
+      .string()
+      .describe(
+        'the image reference as the agent wrote it; a relative one is resolved against the run cwd',
+      ),
+  }),
+) {}
+
+/**
+ * One agent-referenced local image's bytes — same base64-in-JSON shape as
+ * {@link AttachmentDataDto}, and for the same two reasons: every route is
+ * bearer-gated and an `<img src>` cannot carry the header, so the renderer
+ * fetches through its generated client and builds a data URL. It echoes the
+ * PATH rather than an id because that is the only handle the caller has — the
+ * daemon minted nothing here.
+ */
+export class LocalImageDto extends createZodDto(
+  z.object({
+    path: z.string(),
+    mediaType: AttachmentMediaTypeSchema,
+    data: z.string().describe('base64-encoded image bytes'),
+  }),
+) {}
+
 /**
  * Acknowledgement of a cancel request. Shared with the workflow routes — the
  * cancel surface is identical for chat and graph runs.

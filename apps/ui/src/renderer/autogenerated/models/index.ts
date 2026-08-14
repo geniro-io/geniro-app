@@ -1174,6 +1174,33 @@ export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 /**
  * 
  * @export
+ * @interface LocalImageDto
+ */
+export interface LocalImageDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof LocalImageDto
+     */
+    path: string;
+    /**
+     * 
+     * @type {AttachmentMediaType}
+     * @memberof LocalImageDto
+     */
+    mediaType: AttachmentMediaType;
+    /**
+     * base64-encoded image bytes
+     * @type {string}
+     * @memberof LocalImageDto
+     */
+    data: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface LoginCodeBodyDto
  */
 export interface LoginCodeBodyDto {

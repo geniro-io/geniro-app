@@ -243,7 +243,32 @@ describe('MarkdownContent — a table whose header row is blank', () => {
       />,
     );
     expect(el.querySelector('thead')).not.toBeNull();
-    expect(el.querySelectorAll('thead img')).toHaveLength(1);
+    // The suppression reads the HAST node, where the cell still holds an `img`
+    // — so the header survives whether or not the bytes ever arrive. What is
+    // rendered in its place is `MarkdownImage`'s business: with no loader in
+    // context a local reference stands in for itself rather than becoming a
+    // broken box.
+    expect(
+      el.querySelectorAll('thead [data-slot="markdown-image-loading"]'),
+    ).toHaveLength(1);
+  });
+
+  it('renders an inline data: image directly, with no loader involved', () => {
+    // The one source the CSP already allows (`img-src 'self' data:`), so it
+    // needs no daemon round trip — and it is what the fetched path turns every
+    // other reference INTO, which makes this the arm that proves the tag is
+    // reachable at all.
+    const el = render(
+      <MarkdownContent
+        content={'![dot](data:image/png;base64,iVBORw0KGgo=)'}
+      />,
+    );
+    const img = el.querySelector<HTMLImageElement>(
+      '[data-slot="markdown-image"]',
+    );
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
+    expect(img?.getAttribute('alt')).toBe('dot');
   });
 
   it('treats a whitespace-only header as empty', () => {

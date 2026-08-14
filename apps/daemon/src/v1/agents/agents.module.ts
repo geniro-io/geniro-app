@@ -28,6 +28,7 @@ import { ChatService } from './services/chat.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { EffortsService } from './services/efforts.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
+import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
@@ -59,6 +60,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatService,
     AgentAdapterRegistry,
     AgentVersionService,
+    LocalImageService,
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },
     { provide: McpHarvestStore, useFactory: () => new McpHarvestStore() },

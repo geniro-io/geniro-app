@@ -78,7 +78,7 @@ describe('ClaudeAdapter', () => {
   it('spawns with stream-json flags, streams a turn, and sends the prompt on stdin', async () => {
     const { spawn, child, captured } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'say hi', cwd: '/proj', model: 'opus' },
       (e) => events.push(e),
     );
@@ -132,16 +132,16 @@ describe('ClaudeAdapter', () => {
 
   it('passes --effort only when the turn names a level', () => {
     const withEffort = fakeSpawn();
-    new ClaudeAdapter({ spawn: withEffort.spawn }).start(
-      { prompt: 'go', cwd: '/proj', effort: 'ultracode' },
-      () => {},
-    );
+    new ClaudeAdapter({
+      spawn: withEffort.spawn,
+      waitForMcpServers: false,
+    }).start({ prompt: 'go', cwd: '/proj', effort: 'ultracode' }, () => {});
     expect(withEffort.captured.args).toEqual(
       expect.arrayContaining(['--effort', 'ultracode']),
     );
 
     const without = fakeSpawn();
-    new ClaudeAdapter({ spawn: without.spawn }).start(
+    new ClaudeAdapter({ spawn: without.spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );
@@ -153,7 +153,10 @@ describe('ClaudeAdapter', () => {
     // decides which ACCOUNT the turn runs as. A spec asserting argv here would
     // pass against a flag the CLI ignores.
     const withConfig = fakeSpawn();
-    new ClaudeAdapter({ spawn: withConfig.spawn }).start(
+    new ClaudeAdapter({
+      spawn: withConfig.spawn,
+      waitForMcpServers: false,
+    }).start(
       { prompt: 'go', cwd: '/proj', configDir: '/profiles/work' },
       () => {},
     );
@@ -162,7 +165,7 @@ describe('ClaudeAdapter', () => {
     );
 
     const without = fakeSpawn();
-    new ClaudeAdapter({ spawn: without.spawn }).start(
+    new ClaudeAdapter({ spawn: without.spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
       () => {},
     );
@@ -218,7 +221,7 @@ describe('ClaudeAdapter', () => {
 
   it('passes --resume when a prior session id is supplied', () => {
     const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn }).start(
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj', resumeSessionId: 'prev-1' },
       () => {},
     );
@@ -230,7 +233,7 @@ describe('ClaudeAdapter', () => {
   it('emits turn_cancelled when the process is killed', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );
@@ -245,7 +248,7 @@ describe('ClaudeAdapter', () => {
   it('emits an error event on a non-zero exit with the stderr tail', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );
@@ -266,7 +269,7 @@ describe('ClaudeAdapter', () => {
     // stack-trace row with nothing to do about it.
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );
@@ -299,7 +302,7 @@ describe('ClaudeAdapter', () => {
   ])('leaves %s with no cure to offer', async (_label, stderr) => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj' },
       (e) => events.push(e),
     );
@@ -369,7 +372,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   it('maps acceptEdits and plan to their permission modes with the stdio prompt tool', () => {
     for (const mode of ['acceptEdits', 'plan'] as const) {
       const { spawn, captured } = fakeSpawn();
-      new ClaudeAdapter({ spawn }).start(
+      new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
         { prompt: 'p', cwd: '/proj', approvalMode: mode },
         () => {},
       );
@@ -391,7 +394,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     for (const mode of ['acceptEdits', 'plan'] as const) {
       const { spawn, child } = fakeSpawn();
       const endSpy = vi.spyOn(child.stdin, 'end');
-      new ClaudeAdapter({ spawn }).start(
+      new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
         { prompt: 'p', cwd: '/proj', approvalMode: mode },
         () => {},
       );
@@ -402,7 +405,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
   it('bypasses permissions in auto mode and appends the system prompt', () => {
     const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn }).start(
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
         prompt: 'p',
         cwd: '/proj',
@@ -428,7 +431,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     // instead. The daemon then stands in for the bypass at its approval seam.
     const { spawn, captured, child } = fakeSpawn();
     const endSpy = vi.spyOn(child.stdin, 'end');
-    new ClaudeAdapter({ spawn }).start(
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
         prompt: 'p',
         cwd: '/proj',
@@ -456,7 +459,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     // auto-mode argv test never asserted.
     const { spawn, captured, child } = fakeSpawn();
     const endSpy = vi.spyOn(child.stdin, 'end');
-    new ClaudeAdapter({ spawn }).start(
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'p', cwd: '/proj', approvalMode: 'auto' },
       () => {},
     );
@@ -571,7 +574,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   it('turns a stream_event into a live text increment, never a message', () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new ClaudeAdapter({ spawn }).start(
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'p', cwd: '/proj', streamPartials: true },
       (e) => events.push(e),
     );
@@ -594,7 +597,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     const { spawn, child } = fakeSpawn();
     const endSpy = vi.spyOn(child.stdin, 'end');
     const events: AgentEvent[] = [];
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
       (e) => events.push(e),
     );
@@ -634,7 +637,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
 
   it('encodes a denial with behavior deny', async () => {
     const { spawn, child } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
       () => {},
     );
@@ -658,7 +661,10 @@ describe('ClaudeAdapter binary override', () => {
   it('spawns the GENIRO_CLAUDE_BIN override instead of the bare binary', () => {
     vi.stubEnv('GENIRO_CLAUDE_BIN', '/opt/tools/claude');
     const { spawn, captured } = fakeSpawn();
-    new ClaudeAdapter({ spawn }).start({ prompt: 'p', cwd: '/proj' }, () => {});
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
     expect(captured.command).toBe('/opt/tools/claude');
   });
 });
@@ -993,7 +999,7 @@ describe('ClaudeAdapter image attachments', () => {
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     writeFileSync(path, bytes);
     const { spawn, child } = fakeSpawn();
-    const adapter = new ClaudeAdapter({ spawn });
+    const adapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
 
     try {
       adapter.start(
@@ -1022,7 +1028,7 @@ describe('ClaudeAdapter image attachments', () => {
 
   it('sends a text-only turn as a lone text block', () => {
     const { spawn, child } = fakeSpawn();
-    const adapter = new ClaudeAdapter({ spawn });
+    const adapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
 
     adapter.start({ prompt: 'hello', cwd: tmpdir() }, () => {});
 
@@ -2135,7 +2141,7 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     // draining on settle does — turns "as soon as possible" into "after
     // everything finishes".
     const { spawn, child } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       // A REAL chat turn. `approvalMode` is not decoration: `keepStdinOpen`
       // answers false the moment it is undefined, so a fixture without one
       // spawns with stdin ALREADY ENDED — and this test still passed, because
@@ -2176,7 +2182,7 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     // settle guard existed. With stdin genuinely open, the settle is the ONLY
     // thing making it false.
     const { spawn, child } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
         prompt: 'first',
         cwd: '/proj',
@@ -2197,7 +2203,7 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
     // checked the turn's own settle flags did — has the caller drop a message
     // the agent will never receive.
     const { spawn } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'first', cwd: '/proj' },
       () => {},
     );
@@ -2213,7 +2219,10 @@ describe('ClaudeAdapter — re-moding a turn already running', () => {
     act: (handle: ReturnType<ClaudeAdapter['start']>) => void,
   ): string {
     const { spawn, child } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(input, () => {});
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      input,
+      () => {},
+    );
     const openingBytes = child.stdin.written.length;
     act(handle);
     return child.stdin.written.slice(openingBytes);
@@ -2280,7 +2289,7 @@ describe('ClaudeAdapter — re-moding a turn already running', () => {
 
   it('reports false once the turn has settled', () => {
     const { spawn, child } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj', approvalMode: 'ask' },
       () => {},
     );

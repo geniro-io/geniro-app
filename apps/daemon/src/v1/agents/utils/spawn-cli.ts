@@ -153,6 +153,20 @@ export interface CliTurnOptions {
    */
   buildInterruptPayload?: () => string | undefined;
   /**
+   * Awaited BEFORE this turn's opening payload is written, for a CLI that can
+   * accept a prompt before it is ready to serve one (claude's MCP servers are
+   * still dialling for the first seconds of a process — see
+   * `TurnDriver.awaitPromptReady`, which is the only producer).
+   *
+   * The turn is open while this runs: its stdout is already being parsed, so
+   * the gate can hold a dialogue of its own through `io`, and a cancel is
+   * honoured — the payload is dropped rather than written into a turn the user
+   * has already stopped. It must resolve and must bound itself; a rejection is
+   * logged and the payload goes out anyway, because losing the user's message
+   * is worse than sending it early.
+   */
+  holdPrompt?: (io: TurnIo) => Promise<void>;
+  /**
    * Called once this turn's opening payload (if any) has been written — before
    * the handle is returned, so a client-initiated protocol can send its first
    * message ahead of any stdout.
@@ -1313,31 +1327,67 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // answers at all is exactly the case with nothing to rearm it.
     armSilenceDeadline(turn);
 
-    // The write/end can also throw synchronously (stdin already destroyed).
-    // Keep it inside the settle contract: surface an error event and end the
-    // process rather than letting the throw unwind before the handle exists.
-    try {
-      if (turnOptions.stdinPayload !== undefined) {
-        stdin?.write(turnOptions.stdinPayload);
+    /**
+     * Write the turn's prompt, then hand the driver its opening window.
+     *
+     * The two are one step because the second is documented as happening after
+     * the first: a protocol whose FIRST message comes from the client (ACP's
+     * `initialize`) opens here, and with no gate this whole function still runs
+     * inside the synchronous window below, so its opening message is queued on
+     * stdin before the child can answer it.
+     */
+    const openTurnStdin = (): void => {
+      // The write/end can also throw synchronously (stdin already destroyed).
+      // Keep it inside the settle contract: surface an error event and end the
+      // process rather than letting the throw unwind before the handle exists.
+      try {
+        if (turnOptions.stdinPayload !== undefined) {
+          stdin?.write(turnOptions.stdinPayload);
+        }
+        if (opts.stdinLifetime === 'payload') {
+          endStdin();
+        }
+      } catch (err) {
+        if (!turn.terminalEmitted) {
+          emit({
+            type: 'error',
+            message: `failed to write ${opts.command} stdin: ${errorMessage(err)}`,
+          });
+        }
+        endProcess();
       }
-      if (opts.stdinLifetime === 'payload') {
-        endStdin();
-      }
-    } catch (err) {
-      if (!turn.terminalEmitted) {
-        emit({
-          type: 'error',
-          message: `failed to write ${opts.command} stdin: ${errorMessage(err)}`,
-        });
-      }
-      endProcess();
-    }
+      turnOptions.onStdinReady?.({ write: sessionWrite, emit });
+    };
 
-    // After the payload, before any stdout is parsed: a protocol whose FIRST
-    // message comes from the client (ACP's `initialize`) opens here. Runs
-    // inside the same synchronous window as the write, so the opening message
-    // is queued on stdin before the child can answer it.
-    turnOptions.onStdinReady?.({ write: sessionWrite, emit });
+    if (turnOptions.holdPrompt) {
+      void (async () => {
+        try {
+          await turnOptions.holdPrompt?.({ write: sessionWrite, emit });
+        } catch (err) {
+          // A gate that cannot decide must never cost the message it was
+          // holding — the un-gated write is precisely the behaviour that
+          // shipped before any gate existed.
+          opts.logger?.warn(
+            `${opts.command}: prompt gate failed, sending anyway: ${errorMessage(err)}`,
+          );
+        }
+        // The user can have cancelled, or the child died, while we held. Both
+        // make the payload something to drop rather than to write: a prompt
+        // written into a stopped turn would run work nobody asked for, and one
+        // written into a dead pipe is an EPIPE dressed as a turn failure.
+        if (turn.settled || turn.terminalEmitted || processGone || stdinEnded) {
+          return;
+        }
+        openTurnStdin();
+        // Rearmed from the WRITE. The deadline measures how long the CLI has
+        // been silent with something to say, and it had nothing to say until
+        // now — leaving the arm above to run through the hold would spend the
+        // window on geniro's own waiting.
+        armSilenceDeadline(turn);
+      })();
+    } else {
+      openTurnStdin();
+    }
 
     /** A turn-scoped write: dead once this turn is decided. */
     const turnWrite = (

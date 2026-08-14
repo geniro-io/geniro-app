@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeSpawn } from '../__tests__/fake-child';
-import type { AgentEvent } from '../adapters/adapter.types';
+import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
 import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
@@ -1656,5 +1656,169 @@ describe('the account the transport keeps of itself', () => {
     const debugged = logger.debug.mock.calls.map(String).join('\n');
     expect(debugged).toContain('turn opened');
     expect(debugged).toContain("turn settled (terminal event 'turn_complete')");
+  });
+});
+
+describe('a turn whose prompt is held back until the CLI is ready', () => {
+  /** A gate the spec opens and closes by hand. */
+  function heldGate() {
+    let release!: () => void;
+    let reject!: (err: Error) => void;
+    const opened = new Promise<void>((resolve, fail) => {
+      release = resolve;
+      reject = fail;
+    });
+    const seen: TurnIo[] = [];
+    return {
+      release,
+      reject,
+      seen,
+      holdPrompt: (io: TurnIo) => {
+        seen.push(io);
+        return opened;
+      },
+    };
+  }
+
+  it('writes nothing until the gate resolves, then writes the prompt', async () => {
+    // The defect this seam exists for, at the transport level: claude accepts a
+    // prompt seconds before its MCP servers finish dialling, and answers it
+    // with a tool surface those servers are missing from. Holding the prompt is
+    // the fix, so the observable is that stdin stays EMPTY across the hold.
+    const gate = heldGate();
+    const { session, child } = openSession();
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: () => {},
+    });
+    expect(handle).not.toBeNull();
+    // The turn is open — its stdout is already being parsed, which is what lets
+    // the gate hold a dialogue of its own — and nothing has been sent.
+    expect(child.stdin.written).toBe('');
+
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(child.stdin.written).toBe('PROMPT\n');
+    line(child, { done: true });
+    await handle?.done;
+  });
+
+  it('gives the gate a channel of its own, on the same still-open stdin', async () => {
+    // The gate's poll and the prompt travel one pipe, so `write` has to be the
+    // turn's real one — a gate handed a dead channel could never ask anything.
+    const gate = heldGate();
+    const { session, child } = openSession();
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: () => {},
+    });
+    expect(gate.seen).toHaveLength(1);
+    expect(gate.seen[0]?.write('POLL\n')).toBe(true);
+    expect(child.stdin.written).toBe('POLL\n');
+
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(child.stdin.written).toBe('POLL\nPROMPT\n');
+    line(child, { done: true });
+    await handle?.done;
+  });
+
+  it('DROPS the prompt when the user cancels during the hold', async () => {
+    // Waiting made a window that did not exist before: the user can now stop a
+    // turn whose prompt has not been sent. Writing it afterwards would run work
+    // they had already called off, in a turn that is already reported cancelled.
+    const gate = heldGate();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      buildInterruptPayload: () => 'INTERRUPT\n',
+      onEvent: (e) => events.push(e),
+    });
+    handle?.cancel();
+    line(child, { failed: true });
+    await handle?.done;
+
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(child.stdin.written).not.toContain('PROMPT');
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('sends the prompt anyway when the gate itself fails', async () => {
+    // A gate is an optimisation over a turn that used to work. Losing the
+    // user's message because a readiness poll threw would be a far worse
+    // failure than the one it is fixing.
+    const gate = heldGate();
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = openSession(undefined, logger);
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: () => {},
+    });
+    gate.reject(new Error('poll exploded'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(child.stdin.written).toBe('PROMPT\n');
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'poll exploded',
+    );
+    line(child, { done: true });
+    await handle?.done;
+  });
+
+  it('keeps the opening write synchronous for a turn with no gate', async () => {
+    // Every existing caller — cursor's ACP handshake included — depends on the
+    // payload being on stdin before `startTurn` returns.
+    const { session, child } = openSession();
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      onEvent: () => {},
+    });
+
+    expect(child.stdin.written).toBe('PROMPT\n');
+    line(child, { done: true });
+    await handle?.done;
+  });
+
+  it('opens a client-initiated protocol AFTER the held prompt, not before', async () => {
+    // `onStdinReady` is documented as running once the payload is out, and a
+    // driver that both waits and opens a conversation must not have that
+    // order inverted by the wait.
+    const gate = heldGate();
+    const { session, child } = openSession();
+    const order: string[] = [];
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onStdinReady: () => order.push(`ready:${child.stdin.written}`),
+      onEvent: () => {},
+    });
+    expect(order).toEqual([]);
+
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(order).toEqual(['ready:PROMPT\n']);
+    line(child, { done: true });
+    await handle?.done;
   });
 });

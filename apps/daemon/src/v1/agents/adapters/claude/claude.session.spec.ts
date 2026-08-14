@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import type { AgentTurnInput } from '../adapter.types';
@@ -36,7 +36,10 @@ describe('a run-scoped claude session', () => {
     // only when stdin was closed. That is what keeps the run's MCP servers —
     // and a browser one of them owns — booted once instead of once per message.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -64,7 +67,10 @@ describe('a run-scoped claude session', () => {
     // Serving it on the running process would silently run the turn under the
     // OLD flags while the UI showed the new ones.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -85,7 +91,10 @@ describe('a run-scoped claude session', () => {
     // still, an ordinary turn silently running with NO MCP servers while the
     // panel lists them. Either way the process cannot serve both.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -106,7 +115,10 @@ describe('a run-scoped claude session', () => {
     // turn must not re-resume, and keying on it would make every second turn
     // look like a different process and respawn.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -131,7 +143,10 @@ describe('a run-scoped claude session', () => {
     // between turns goes on editing files with no permission request, while
     // the chip and the persisted run row both read `ask`.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -161,7 +176,10 @@ describe('a run-scoped claude session', () => {
     // The delivered mode becomes the new baseline. Without that, every later
     // turn would re-send a `set_permission_mode` the process is already in.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -192,7 +210,10 @@ describe('a run-scoped claude session', () => {
     // the turn under the PREVIOUS posture, which is the whole failure this
     // machinery exists to prevent.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
 
@@ -219,7 +240,10 @@ describe('a run-scoped claude session', () => {
       approvalMode: 'auto',
     };
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(AUTO, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(AUTO, {
       runScoped: true,
     });
 
@@ -234,7 +258,10 @@ describe('a run-scoped claude session', () => {
 
   it('stops a turn in protocol, leaving the process and its MCP servers alive', async () => {
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
     const handle = session.startTurn(CHAT, () => {});
@@ -256,7 +283,10 @@ describe('a run-scoped claude session', () => {
     // owning `close()` is the ONLY thing standing between a finished run and a
     // CLI that runs until reboot.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT, {
       runScoped: true,
     });
     session.startTurn(CHAT, () => {});
@@ -275,7 +305,10 @@ describe('a session the caller did not ask to keep', () => {
     // with nowhere to store the session would otherwise leak one process per
     // turn, since nothing but `close()` ends a run-scoped one.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(CHAT);
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession(CHAT);
 
     const first = session.startTurn(CHAT, () => {});
     endTurn(child);
@@ -293,7 +326,10 @@ describe('a session the caller did not ask to keep', () => {
     // that will serve more turns. A one-shot turn's process dies with it either
     // way, so the kill is both correct and the more certain stop.
     const { spawn, child } = fakeSpawn();
-    const handle = new ClaudeAdapter({ spawn }).start(CHAT, () => {});
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      CHAT,
+      () => {},
+    );
     const openingBytes = child.stdin.written.length;
 
     handle.cancel();
@@ -309,10 +345,10 @@ describe('a CLI that cannot host a session', () => {
     // there is no channel for a second one. `canHostSession` reuses exactly
     // that predicate, and the caller's opt-in cannot override a CLI fact.
     const { spawn, child } = fakeSpawn();
-    const session = new ClaudeAdapter({ spawn }).startSession(
-      { prompt: 'p', cwd: '/proj' },
-      { runScoped: true },
-    );
+    const session = new ClaudeAdapter({
+      spawn,
+      waitForMcpServers: false,
+    }).startSession({ prompt: 'p', cwd: '/proj' }, { runScoped: true });
 
     const first = session.startTurn({ prompt: 'p', cwd: '/proj' }, () => {});
     expect(child.stdin.ended).toBe(true);
@@ -322,5 +358,127 @@ describe('a CLI that cannot host a session', () => {
 
     child.emit('close', 0, null);
     await first?.done;
+  });
+});
+
+/**
+ * A child that answers `mcp_status` the way claude 2.1.232 does — the one
+ * behavioural variant this spec needs, kept a subclass here rather than added
+ * to the shared double (which must decide nothing).
+ *
+ * `servers` is what each successive poll is told; the last entry repeats, since
+ * the gate keeps asking until two readings agree.
+ */
+class McpStatusChild extends FakeChild {
+  polls = 0;
+
+  constructor(
+    private readonly readings: readonly (readonly {
+      name: string;
+      status: string;
+    }[])[],
+  ) {
+    super();
+    const stdin = this.stdin;
+    const write = stdin.write.bind(stdin);
+    stdin.write = (chunk: string): boolean => {
+      const accepted = write(chunk);
+      for (const raw of chunk.split('\n')) {
+        const line = raw.trim();
+        if (!line.includes('"mcp_status"')) {
+          continue;
+        }
+        const { request_id: id } = JSON.parse(line) as { request_id: string };
+        const rows = this.readings[this.polls] ?? this.readings.at(-1) ?? [];
+        this.polls += 1;
+        // On the next tick, like a real reply — a synchronous one would arrive
+        // inside the driver's own `write` call.
+        setImmediate(() =>
+          this.stdout.emitData(
+            `${JSON.stringify({
+              type: 'control_response',
+              response: {
+                subtype: 'success',
+                request_id: id,
+                response: { mcpServers: rows },
+              },
+            })}\n`,
+          ),
+        );
+      }
+      return accepted;
+    };
+  }
+}
+
+describe('a claude session holds its first prompt for the MCP servers', () => {
+  it('sends nothing until the CLI reports every server settled', async () => {
+    // The wiring, pinned end to end: the gate lives on the driver and the hold
+    // lives in the transport, but neither does anything unless the session
+    // actually hands one to the other. Without that one line the fix is inert
+    // and every other spec here still passes.
+    const child = new McpStatusChild([
+      [{ name: 'playwright', status: 'pending' }],
+      [{ name: 'playwright', status: 'connected' }],
+      [{ name: 'playwright', status: 'connected' }],
+    ]);
+    const { spawn } = fakeSpawn(child);
+    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(CHAT, () => {});
+    expect(first).not.toBeNull();
+    // Polling has begun and the user's message has NOT gone out with it.
+    expect(child.stdin.written).not.toContain('first');
+
+    await vi.waitFor(() => expect(child.stdin.written).toContain('first'));
+    // Three readings: pending, settled, and the repeat that confirms it.
+    expect(child.polls).toBe(3);
+    endTurn(child);
+    await first?.done;
+  }, 10_000);
+
+  it('does not hold the SECOND turn — the wait belongs to the process', async () => {
+    // Re-asking would add the poll gap to every message of the chat, and could
+    // never find anything: the servers have been up since the first turn.
+    const child = new McpStatusChild([[{ name: 'a', status: 'connected' }]]);
+    const { spawn } = fakeSpawn(child);
+    const session = new ClaudeAdapter({ spawn }).startSession(CHAT, {
+      runScoped: true,
+    });
+
+    const first = session.startTurn(CHAT, () => {});
+    await vi.waitFor(() => expect(child.stdin.written).toContain('first'));
+    endTurn(child);
+    await first?.done;
+    const pollsAfterFirst = child.polls;
+    const bytes = child.stdin.written.length;
+
+    const second = session.startTurn({ ...CHAT, prompt: 'second' }, () => {});
+    expect(second).not.toBeNull();
+    // Synchronously on stdin, with no poll in front of it.
+    expect(after(child, bytes)).toContain('second');
+    expect(child.polls).toBe(pollsAfterFirst);
+    endTurn(child);
+    await second?.done;
+  }, 10_000);
+
+  it('does not hold a turn that loads no servers by construction', async () => {
+    // `isolateMcpServers` runs under `--strict-mcp-config` with an empty
+    // config, so there is nothing to dial and every poll would return the same
+    // empty list until the grace ran out — on a turn geniro cancels after one
+    // line anyway.
+    const child = new McpStatusChild([[]]);
+    const { spawn } = fakeSpawn(child);
+    const session = new ClaudeAdapter({ spawn }).startSession(
+      { ...CHAT, isolateMcpServers: true },
+      { runScoped: true },
+    );
+
+    session.startTurn({ ...CHAT, isolateMcpServers: true }, () => {});
+
+    expect(child.stdin.written).toContain('first');
+    expect(child.polls).toBe(0);
   });
 });

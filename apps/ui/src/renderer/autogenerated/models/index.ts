@@ -1167,7 +1167,8 @@ export const ItemKind = {
     AwaitCollected: 'await_collected',
     CallQuestion: 'call_question',
     CallAnswer: 'call_answer',
-    SubagentInfo: 'subagent_info'
+    SubagentInfo: 'subagent_info',
+    TaskList: 'task_list'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 

@@ -48,6 +48,7 @@ import {
   CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
   CURSOR_TASK_LAUNCH_MARKER,
   CURSOR_TASK_METHOD,
+  CURSOR_TODOS_METHOD,
 } from './cursor-acp.const';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
@@ -64,6 +65,7 @@ import {
   withCursorAnswer,
 } from './utils/cursor-question.utils';
 import { readCursorTask } from './utils/cursor-task.utils';
+import { parseCursorTodos } from './utils/cursor-todos.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
 const CURSOR_PLAN_MODE_ID = 'plan';
@@ -1008,6 +1010,10 @@ export class CursorAcpAdapter extends AgentAdapter {
         resultIsBookkeeping: true,
         stepsUnavailableReason:
           this.getConfig().subagents.stepsUnavailableReason,
+      },
+      todos: {
+        method: CURSOR_TODOS_METHOD,
+        read: parseCursorTodos,
       },
       logger: this.cursorOptions.logger,
     });

@@ -1796,3 +1796,79 @@ describe('AcpTurnDriver image attachments', () => {
     ).toThrow();
   });
 });
+
+describe('AcpTurnDriver task list', () => {
+  const TODOS = 'vendor/update_todos';
+  /** A reader in the shape an adapter supplies one — the params are its facts. */
+  const todos = {
+    method: TODOS,
+    read: (params: unknown) => {
+      const record = params as { rows?: unknown[]; whole?: boolean } | null;
+      if (!Array.isArray(record?.rows)) {
+        return null;
+      }
+      return {
+        mode: (record.whole === true ? 'snapshot' : 'patch') as
+          'snapshot' | 'patch',
+        tasks: record.rows.map((row) => row as never),
+        toolCallId: 'call-1',
+      };
+    },
+  };
+
+  it('ANSWERS the announcement and emits the list', () => {
+    // The bug this fixes was a silent one: the announcement is a blocking
+    // request whose agent absorbs a refusal, so declining it cost the turn
+    // nothing and threw the list away with no symptom anywhere.
+    const h = harness({ todos });
+    const events = h.feed({
+      id: 4,
+      method: TODOS,
+      params: { whole: true, rows: [{ id: '1' }] },
+    });
+
+    expect(h.sent.find((frame) => frame.id === 4)).toEqual({
+      jsonrpc: '2.0',
+      id: 4,
+      result: {},
+    });
+    expect(events).toEqual([
+      {
+        type: 'task_list',
+        mode: 'snapshot',
+        tasks: [{ id: '1' }],
+        toolCallId: 'call-1',
+      },
+    ]);
+  });
+
+  it('carries the mode the READER decided, never one inferred here', () => {
+    const h = harness({ todos });
+    const events = h.feed({ id: 5, method: TODOS, params: { rows: [] } });
+    expect(events[0]?.type === 'task_list' && events[0].mode).toBe('patch');
+  });
+
+  it('falls back to the decline when the payload does not read as a list', () => {
+    const warn = vi.fn();
+    const h = harness({ todos, logger: { warn } });
+    const events = h.feed({ id: 6, method: TODOS, params: { rows: 'nope' } });
+
+    expect(h.sent.find((frame) => frame.id === 6)?.error).toEqual({
+      code: -32601,
+      message: `${TODOS} is not implemented by this client`,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('notice');
+    expect(warn).toHaveBeenCalledWith(
+      `acp: ${TODOS} arrived in an unrecognized shape — declined rather than recorded as a task list`,
+    );
+  });
+
+  it('declines it outright for a driver given no todo protocol', () => {
+    const h = harness();
+    expect(
+      h.feed({ id: 7, method: TODOS, params: { rows: [{ id: '1' }] } }).length,
+    ).toBe(1);
+    expect(h.sent.find((frame) => frame.id === 7)?.error).toBeDefined();
+  });
+});

@@ -99,6 +99,9 @@ import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
+import { subagentIdOf } from './subagent-payload';
+import { TaskStrip } from './task-list';
+import { taskListsByThread } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
@@ -2350,6 +2353,20 @@ export function Chats({
   // turn_complete usage carries context/spend).
   const activity = useMemo(() => computeAgentActivity(items), [items]);
   /**
+   * The agent's OWN task list as it stands now — the pinned strip above the
+   * composer.
+   *
+   * The transcript cards are history: they scroll away, and what the ticket
+   * asked for was to be able to READ the current list. Only the agent's own
+   * thread (`null`) is pinned — a delegate's list belongs to its block, which
+   * states its own progress on its header, because two lists numbered from 1
+   * side by side in one strip would say nothing about either.
+   */
+  const currentTasks = useMemo(
+    () => taskListsByThread(items, subagentIdOf).get(null) ?? [],
+    [items],
+  );
+  /**
    * The agents whose turn is in flight — the transcript draws each of them a
    * row even when they have nothing to say yet, so the flow never goes silent
    * between a tool batch and the next words.
@@ -3372,6 +3389,11 @@ export function Chats({
                   ) : null}
 
                   <div className="flex flex-col gap-2 border-t border-border p-3">
+                    {/* ABOVE the queued messages and the composer, so it sits
+                        against the transcript it describes and does not push the
+                        text field around as the list grows. */}
+                    <TaskStrip tasks={currentTasks} />
+
                     <QueuedStrip
                       messages={queued}
                       steerUnavailableReason={steerUnavailableReason}

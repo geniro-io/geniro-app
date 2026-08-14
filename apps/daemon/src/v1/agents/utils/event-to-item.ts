@@ -149,6 +149,31 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           stepsUnavailableReason: event.stepsUnavailableReason,
         },
       };
+    case 'task_list':
+      // A DURABLE row, unlike the other progress-shaped events above. The list
+      // is not derivable from anything else in the transcript: a patch names
+      // only what moved, so the current list is the fold of every announcement
+      // from the first, and a client that replays from a cursor must see them
+      // all. It is also what the user asked for — the agent's task list where
+      // they can read it, instead of an opaque tool row saying a tool ran.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/task-payload.ts` reads these
+      // keys back and folds them. An item payload is `z.unknown()` on the wire
+      // BY DESIGN — every kind carries a different shape — so no generated type
+      // spans the two sides. Renaming a key here means renaming it there.
+      //
+      // `toolCallId` is written out even when null, on the same rule the
+      // sub-agent row follows: the reader keys "which tool row does this list
+      // replace" on it, and an omitted key and a null one must read alike.
+      return {
+        kind: 'task_list',
+        role: null,
+        payload: {
+          mode: event.mode,
+          tasks: event.tasks,
+          toolCallId: event.toolCallId,
+        },
+      };
     case 'approval_request':
       return {
         kind: 'approval_request',

@@ -8,6 +8,7 @@ import { MarkdownContent } from './markdown-content';
 import { formatClockTime } from './relative-time';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
+import { TaskListCard } from './task-list';
 import { ToolGroup } from './tool-group';
 import type { TranscriptEntry, TurnBlockEntry } from './transcript-groups';
 import {
@@ -92,6 +93,9 @@ export const TurnBlock = memo(function TurnBlock({
     }
     if (entry.type === 'turn-block') {
       return null; // turn blocks never nest — the fold is one level deep
+    }
+    if (entry.type === 'task-list') {
+      return <TaskListCard key={entry.id} tasks={entry.tasks} />;
     }
     const item = entry.item;
     // The block IS the bubble: plain markdown text inside, no extra chrome.

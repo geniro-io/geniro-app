@@ -482,10 +482,40 @@ export const CURSOR_ANSWER_KEY = '__geniroAnswer';
  * nothing geniro wants; the second half is what was skipped.
  */
 export const CURSOR_SILENTLY_DECLINED_METHODS: readonly string[] = [
-  'cursor/update_todos',
   'cursor/generate_image',
   'cursor/create_plan',
 ];
+
+// -- The agent's own task list (`cursor/update_todos`) ----------------------
+//
+// MEASURED on the wire, 2026-08-14, cursor-agent 2026.08.11-e8db854, against a
+// throwaway CURSOR_CONFIG_DIR and a prompt asking for a tracked three-step job.
+// Four announcements arrived, each preceded by its own tool call:
+//
+//   session/update  tool_call  {toolCallId:"toolu_vrtx_01BgZ...", title:"Update TODOs",
+//                              kind:"other", rawInput:{_toolName:"updateTodos"}}
+//   cursor/update_todos (a REQUEST, id 0)
+//     {toolCallId:"toolu_vrtx_01BgZ...", merge:false,
+//      todos:[{id:"1", content:"Read alpha.txt",  status:"in_progress"},
+//             {id:"2", content:"Read beta.txt",   status:"pending"},
+//             {id:"3", content:"Write summary.txt ...", status:"pending"}]}
+//   ... then three more with merge:TRUE, each carrying only the rows that moved:
+//     {toolCallId:"...", merge:true, todos:[{id:"1", status:"completed"},
+//                                           {id:"2", status:"in_progress"}]}
+//
+// This is the second vendor extension found to be REAL after being declined for
+// two milestones, and it was declined the quietest way: the method is on the
+// silence list above, so nothing was even said about it. What the user saw was
+// the `Update TODOs` tool row — which discloses no arguments at all
+// (`rawInput:{_toolName:"updateTodos"}`), so the list existed nowhere in geniro.
+//
+// Baseline ACP's `plan`/`plan_update` session updates are NOT what this agent
+// sends: across the whole probe not one arrived, and the driver's own default arm
+// still lists them as updates the transcript does not model. If a future agent
+// uses them, that is the place to add it — not here.
+
+/** @see CURSOR_SILENTLY_DECLINED_METHODS for the frames this method carries. */
+export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
 
 // ── Background sub-agents (the `task` tool) ────────────────────────────────
 //

@@ -4,6 +4,7 @@ import { CallBlock } from './call-block';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
 import { SubagentBlock } from './subagent-block';
+import { TaskListCard } from './task-list';
 import { ToolGroup } from './tool-group';
 import type { TranscriptEntry } from './transcript-groups';
 import {
@@ -88,6 +89,12 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
         chatAgentName={chatAgentName}
       />
     );
+  }
+  if (entry.type === 'task-list') {
+    // No sender frame: the list is the AGENT's own bookkeeping about the work,
+    // not something it said, and the surrounding turn block already names who
+    // is working.
+    return <TaskListCard tasks={entry.tasks} />;
   }
 
   const item = entry.item;

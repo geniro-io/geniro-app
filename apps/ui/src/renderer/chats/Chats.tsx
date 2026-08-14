@@ -2404,12 +2404,30 @@ export function Chats({
    */
   const runRowStopped =
     activeRun?.status === 'failed' || activeRun?.status === 'cancelled';
+  /**
+   * WHEN it stopped, which is what a delegate's status is actually read
+   * against — see {@link subagentBlockStatus}. The run row's own `updatedAt` is
+   * the settle moment and not merely the newest thing about the run: items do
+   * not touch that row, so it stands still while a delegate keeps writing
+   * (measured — run `d8cb70c0` carries an `updatedAt` 149s BEFORE its own last
+   * item), which is exactly the gap that makes "has this delegate spoken
+   * since?" answerable.
+   */
+  const runStoppedAt = useMemo(() => {
+    if (!runRowStopped || !activeRun) {
+      return null;
+    }
+    const at = Date.parse(activeRun.updatedAt);
+    // `'unknown'` and not null on a timestamp we cannot read: the run DID stop,
+    // and losing that fact would put every spinner back — see {@link RunSettleAt}.
+    return Number.isFinite(at) ? at : 'unknown';
+  }, [runRowStopped, activeRun]);
   const subagentRunning = useMemo(
     () =>
       collectSubagentBlocks(durableEntries).some(
-        (block) => subagentBlockStatus(block, runRowStopped) === 'running',
+        (block) => subagentBlockStatus(block, runStoppedAt) === 'running',
       ),
-    [durableEntries, runRowStopped],
+    [durableEntries, runStoppedAt],
   );
   const activeRunStatus = useMemo(
     () =>
@@ -2423,6 +2441,25 @@ export function Chats({
         : 'idle',
     [activeRun, streaming, awaitingAnswer, subagentRunning],
   );
+  /**
+   * The settle moment the transcript reads — WHEN this run stopped, or null
+   * while it has not.
+   *
+   * Broader than {@link runStoppedAt} on purpose, and the two must not be
+   * merged: that one answers "did the run stop for a reason that outranks a
+   * delegate still being out", so it deliberately excludes `completed`; this
+   * one drives the blocks themselves, where a completed run genuinely does end
+   * a tool call that never returned. What both now share is that a settle is a
+   * MOMENT — a delegate that has produced rows since is working, whichever
+   * predicate said the run was over.
+   */
+  const activeRunSettledAt = useMemo(() => {
+    if (!activeRun || !isSettledRunStatus(activeRunStatus)) {
+      return null;
+    }
+    const at = Date.parse(activeRun.updatedAt);
+    return Number.isFinite(at) ? at : 'unknown';
+  }, [activeRun, activeRunStatus]);
   const transcriptEntries = useMemo(
     () => withLiveText(durableEntries, liveText, workingAgents),
     [durableEntries, liveText, workingAgents],
@@ -2464,9 +2501,9 @@ export function Chats({
       subagentThreadsByAgent(
         collectSubagentBlocks(durableEntries),
         CHAT_AGENT_KEY,
-        runRowStopped,
+        runStoppedAt,
       ),
-    [durableEntries, runRowStopped],
+    [durableEntries, runStoppedAt],
   );
   const agents = useMemo((): AgentDisplay[] => {
     if (!activeRun) {
@@ -3162,8 +3199,7 @@ export function Chats({
                   and a `scrollIntoView` on the widest descendant both leave
                   `scrollLeft` at 0. */}
                 <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
-                  <RunSettledContext.Provider
-                    value={isSettledRunStatus(activeRunStatus)}>
+                  <RunSettledContext.Provider value={activeRunSettledAt}>
                     <RunActivityContext.Provider value={activeActivity}>
                       <SubagentDetailContext.Provider
                         value={openSubagentDetail}>
@@ -3661,8 +3697,7 @@ export function Chats({
                 // working…" for a delegate the block behind it correctly
                 // showed as stopped — the original bug, surviving on the new
                 // surface.
-                <RunSettledContext.Provider
-                  value={isSettledRunStatus(activeRunStatus)}>
+                <RunSettledContext.Provider value={activeRunSettledAt}>
                   <SubagentDetail
                     block={detailSubagent}
                     nodes={nodeMeta}

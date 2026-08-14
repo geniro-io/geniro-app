@@ -133,7 +133,11 @@ export const ToolGroup = memo(function ToolGroup({
   group: ToolGroupEntry;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  const runSettled = useContext(RunSettledContext);
+  // Only the FACT here, not the moment: a tool call is a single round trip, so
+  // "has it spoken since the run stopped" is the same question as "did it
+  // return", which `pair.result` already answers. The sub-agent block is where
+  // the distinction earns its keep — see {@link RunSettledContext}.
+  const runSettled = useContext(RunSettledContext) !== null;
   const nested = useContext(NestedThreadContext);
   // A missing `result` is only evidence of work in flight while the work could
   // still be happening. Two independent things end it, and both are needed:

@@ -263,6 +263,7 @@ describe('subagentThreadsByAgent', () => {
       result: null,
       model: null,
       durationMs: null,
+      lastRowAt: null,
       stepsUnavailableReason: null,
       closed: false,
       entries: [],
@@ -299,9 +300,9 @@ describe('subagentThreadsByAgent', () => {
   it('translates each block state into the panel status vocabulary', () => {
     const statusOf = (
       over: Partial<SubagentBlockEntry>,
-      runSettled = false,
+      runSettledAt: number | null = null,
     ): string | undefined =>
-      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY, runSettled).get(
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY, runSettledAt).get(
         CHAT_AGENT_KEY,
       )?.[0]?.status;
 
@@ -312,7 +313,11 @@ describe('subagentThreadsByAgent', () => {
     // stopped without completing is reported as `cancelled`, the nearest true
     // term. Both routes into it are covered: its own turn ending, and the run.
     expect(statusOf({ closed: true })).toBe('cancelled');
-    expect(statusOf({}, true)).toBe('cancelled');
+    expect(statusOf({ lastRowAt: 500 }, 1_000)).toBe('cancelled');
+    // …and the panel reads the SAME exception the block does: a delegate whose
+    // rows are newer than the settle is working, so the panel cannot report it
+    // cancelled while the block beside it draws a spinner.
+    expect(statusOf({ lastRowAt: 2_000 }, 1_000)).toBe('running');
   });
 
   it('never offers a resumable session for a delegate', () => {

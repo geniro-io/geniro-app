@@ -26,9 +26,22 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     work?: string;
     phase?: 'started' | 'settled';
     finalText?: string;
+    ask?: string;
   };
   if (typeof row.work === 'string' && row.phase !== undefined) {
     return [{ type: 'background_work', id: row.work, phase: row.phase }];
+  }
+  // A card the CLI is now blocked on, waiting for a verdict.
+  if (typeof row.ask === 'string') {
+    return [
+      {
+        type: 'approval_request',
+        id: row.ask,
+        toolName: 'AskUserQuestion',
+        input: { questions: [] },
+        requiresUserInteraction: true,
+      },
+    ];
   }
   if (row.done === true) {
     // A result line's own text, for the cases that care WHICH result was kept.
@@ -360,6 +373,127 @@ describe('a session turn that goes silent', () => {
     line(child, { done: true });
     await handle?.done;
     expect(events).toEqual([COMPLETE]);
+  });
+});
+
+describe('a turn parked on a question nobody has answered yet', () => {
+  /** A turn whose verdicts actually reach the child. */
+  const startAnswerableTurn = (
+    session: ReturnType<typeof openSession>['session'],
+    events: AgentEvent[],
+  ) =>
+    session.startTurn({
+      onEvent: (e) => events.push(e),
+      buildApprovalResponse: (id, allow) =>
+        `${JSON.stringify({ verdict: id, allow })}\n`,
+    });
+
+  it('is not given up on, however long the user takes', async () => {
+    // The reported defect, measured on the user's own daemon log twice on
+    // 2026-08-11: an AskUserQuestion card went up, the user stepped away, and
+    // 30 minutes and one second later the turn was settled as `error` with
+    // "produced nothing… giving up on the turn", the run marked failed and the
+    // card the user was coming back to answer rewritten as `unanswerable`.
+    //
+    // Nothing arrived after the card because nothing COULD — the CLI was
+    // blocked on a verdict geniro itself was withholding. This deadline exists
+    // for UNEXPLAINED silence; here the silence is fully accounted for, so it
+    // must not run at all.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = startAnswerableTurn(session, events);
+
+    line(child, { ask: 'card-1' });
+    // Three hours away from the desk — six times the old deadline.
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'approval_request', id: 'card-1' }),
+    ]);
+
+    // …and the card is still answerable, which is the whole point: the user
+    // comes back and the turn carries on.
+    expect(handle?.respondApproval('card-1', true, undefined)).toBe(true);
+    line(child, { done: true });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('starts the clock again from the ANSWER, not from when the card went up', async () => {
+    // Suspended, not lengthened. If the deadline had merely been rearmed when
+    // the card was raised, an answer at minute 29 would leave the turn one
+    // minute from being abandoned — the user answers and watches it fail
+    // anyway. The window has to begin where the CLI's obligation to speak does.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = startAnswerableTurn(session, events);
+
+    line(child, { ask: 'card-1' });
+    await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
+    expect(handle?.respondApproval('card-1', true, undefined)).toBe(true);
+
+    // 58 minutes into the turn, 29 since the answer: still running.
+    await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    // …and the deadline is genuinely BACK, not disabled for good — a turn that
+    // stays silent after its answer is still given up on.
+    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    await handle?.done;
+    expect(events.at(-1)).toEqual({
+      type: 'error',
+      message: expect.stringContaining('giving up'),
+    });
+  });
+
+  it('keeps waiting while a SECOND card is still unanswered', async () => {
+    // Answering one of two does not unblock the CLI, so the clock must stay
+    // suspended. Rearming on the first delivery would abandon the turn while a
+    // card was still on screen — the same failure, one card later.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = startAnswerableTurn(session, events);
+
+    line(child, { ask: 'card-1' });
+    line(child, { ask: 'card-2' });
+    expect(handle?.respondApproval('card-1', true, undefined)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(90 * 60 * 1000);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    expect(handle?.respondApproval('card-2', true, undefined)).toBe(true);
+    line(child, { done: true });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('can still be stopped by the user while it waits', async () => {
+    // With no deadline behind it, Stop is the ONLY way out of a parked turn —
+    // so the escape hatch the suspension leans on is pinned here rather than
+    // assumed.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: (e) => events.push(e),
+      buildApprovalResponse: (id, allow) =>
+        `${JSON.stringify({ verdict: id, allow })}\n`,
+      buildInterruptPayload: () => 'INTERRUPT\n',
+    });
+
+    line(child, { ask: 'card-1' });
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+
+    handle?.cancel();
+    // The CLI answers an interrupt with an errored result, which the cancel
+    // normalizes.
+    line(child, { failed: true });
+    await handle?.done;
+
+    expect(events.at(-1)).toEqual({ type: 'turn_cancelled' });
   });
 });
 
@@ -1100,12 +1234,19 @@ describe('an event arriving between turns', () => {
     // buffer, so `adopted` — which only ever records what a turn ADOPTED — has
     // nothing to give back when the turn settles unanswered.
     //
-    // The turn here is given up on by the silence deadline, which deliberately
-    // leaves the process alive for the next turn: so the next turn inherits a
+    // The turn here ends on its own `result` line with the card still open —
+    // a sub-agent's question outliving the turn that launched it — and the
+    // process is deliberately kept for the next turn: so that turn inherits a
     // CLI still parked on this question, with the request now unreachable from
     // anywhere. The buffer already knows it is outstanding — `approvalSeenAt`
     // holds it right up to the `clear()` on settle — so the information to
     // re-hold it exists and is thrown away.
+    //
+    // It used to reach that settle through the silence deadline instead, which
+    // no longer runs while a card is open (see `TURN_SILENCE_DEADLINE_MS`):
+    // waiting on a user is not a wedged CLI. The re-hold this pins is unchanged
+    // — only the route into the unanswered settle had to move to one that still
+    // exists.
     vi.useFakeTimers();
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { session, child } = sessionAskingAfterSettle(logger, questionOrDone);
@@ -1115,9 +1256,8 @@ describe('an event arriving between turns', () => {
       buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
     });
     line(child, { ask: 'q-1' });
-    // Nothing answers it, and the CLI says nothing more — the turn is given up
-    // on, the process is kept.
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    // Nothing answers it, and the turn finishes anyway — the process is kept.
+    line(child, { done: true });
     await first?.done;
     expect(session.alive).toBe(true);
 

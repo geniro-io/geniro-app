@@ -20,6 +20,7 @@ import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   countTools,
+  type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentTitle,
@@ -29,9 +30,9 @@ import { payloadString, type TranscriptNodeMeta } from './transcript-item';
 
 function shellStatusOf(
   block: SubagentBlockEntry,
-  runSettled: boolean,
+  runSettledAt: RunSettleAt,
 ): BlockStatus {
-  switch (subagentBlockStatus(block, runSettled)) {
+  switch (subagentBlockStatus(block, runSettledAt)) {
     case 'completed':
       return 'done';
     case 'failed':
@@ -267,10 +268,10 @@ export function SubagentThread({
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   chatAgentName?: string | null;
 }): React.JSX.Element {
-  const runSettled = useContext(RunSettledContext);
+  const runSettledAt = useContext(RunSettledContext);
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
-  const status = subagentBlockStatus(block, runSettled);
+  const status = subagentBlockStatus(block, runSettledAt);
   return (
     <NestedThreadContext.Provider value={true}>
       {block.prompt ? (
@@ -329,7 +330,7 @@ export const SubagentBlock = memo(function SubagentBlock({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
-  const runSettled = useContext(RunSettledContext);
+  const runSettledAt = useContext(RunSettledContext);
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
   return (
@@ -337,7 +338,7 @@ export const SubagentBlock = memo(function SubagentBlock({
       <BlockShell
         eyebrow="Sub-agent"
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
-        status={shellStatusOf(block, runSettled)}
+        status={shellStatusOf(block, runSettledAt)}
         collapsible
         toggleLabel={`Show ${title}'s conversation`}
         header={

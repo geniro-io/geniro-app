@@ -251,7 +251,7 @@ describe('SubagentBlock', () => {
 
     act(() =>
       root.render(
-        <RunSettledContext.Provider value={false}>
+        <RunSettledContext.Provider value={null}>
           <TranscriptEntryView entry={block} soloAgent />
         </RunSettledContext.Provider>,
       ),
@@ -261,13 +261,39 @@ describe('SubagentBlock', () => {
 
     act(() =>
       root.render(
-        <RunSettledContext.Provider value={true}>
+        <RunSettledContext.Provider value={1_000}>
           <TranscriptEntryView entry={block} soloAgent />
         </RunSettledContext.Provider>,
       ),
     );
     expect(container.querySelector('svg.animate-spin')).toBeNull();
     expect(container.textContent).not.toContain('running');
+  });
+
+  it('keeps spinning for a delegate whose rows are NEWER than the settle', () => {
+    // The reported defect: "I can see stopped status - but it's incorrect, in
+    // fact they continue working." The run row settling painted every
+    // unreturned delegate in the chat `stopped` at once, regardless of whether
+    // that delegate was still writing. It routinely was — measured on the
+    // author's own `geniro.db`, run `f42bfe2d` took 1346 further delegate rows
+    // after the item that settled it, and every block whose Task call had not
+    // yet returned read `stopped` for as long as that lasted.
+    //
+    // The transcript is the evidence and the status is the claim, so where they
+    // disagree the evidence wins.
+    const block = { ...makeBlock({ withResult: false }), lastRowAt: 2_000 };
+
+    act(() =>
+      root.render(
+        <RunSettledContext.Provider value={1_000}>
+          <TranscriptEntryView entry={block} soloAgent />
+        </RunSettledContext.Provider>,
+      ),
+    );
+
+    expect(container.querySelector('svg.animate-spin')).not.toBeNull();
+    expect(container.textContent).toContain('running');
+    expect(container.textContent).not.toContain('stopped before');
   });
 
   it('reports a delegate whose turn ended without it reporting back as stopped', () => {

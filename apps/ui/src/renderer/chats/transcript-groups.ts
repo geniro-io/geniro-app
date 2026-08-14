@@ -211,6 +211,18 @@ export interface SubagentBlockEntry {
    * could still be running, and a spinner past that claims work that stopped.
    */
   closed: boolean;
+  /**
+   * When this delegate last put anything on screen (ms), or null if it never
+   * has — the newest row inside the block, else its own launch.
+   *
+   * Read against the moment the RUN settled, which is a different question from
+   * {@link closed} and cannot be answered by it: `closed` is a seq comparison
+   * against a turn-end ITEM, and the paths that settle a run without writing
+   * one (a cancel) or that settle it wrongly (a stale `completed`) leave no seq
+   * to compare with. A timestamp is what makes "this delegate has spoken since"
+   * answerable at all.
+   */
+  lastRowAt: number | null;
   entries: TranscriptEntry[];
 }
 
@@ -382,6 +394,46 @@ function maxSeqOf(list: readonly TranscriptEntry[]): number {
 }
 
 /**
+ * When a run stopped, for the readers that must ask whether a piece of nested
+ * work has spoken SINCE.
+ *
+ * Three states, not two, because a settle with no readable moment is not the
+ * same as no settle. Folding them lost the FACT the moment was meant to refine:
+ * an unparseable `updatedAt` silently re-enabled every spinner on a cancelled
+ * run. `'unknown'` keeps the old, conservative reading — the run is over and
+ * everything unreturned is stopped — while a number allows the exception.
+ */
+export type RunSettleAt = number | 'unknown' | null;
+
+/** The newest `createdAt` (ms) any row inside these entries carries. */
+function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
+  let latest: number | null = null;
+  const consider = (createdAt: string): void => {
+    const at = Date.parse(createdAt);
+    if (Number.isFinite(at) && (latest === null || at > latest)) {
+      latest = at;
+    }
+  };
+  for (const entry of list) {
+    if (entry.type === 'item') {
+      consider(entry.item.createdAt);
+      continue;
+    }
+    if (entry.type === 'tools') {
+      for (const pair of entry.pairs) {
+        consider(pair.result?.createdAt ?? pair.call.createdAt);
+      }
+      continue;
+    }
+    const nested = lastRowAtOf(entry.entries);
+    if (nested !== null && (latest === null || nested > latest)) {
+      latest = nested;
+    }
+  }
+  return latest;
+}
+
+/**
  * Where a sub-agent's work stands — the ONE derivation, shared by the block
  * that renders it, the panel that lists it, and the run badge that reports it,
  * so the three can never disagree about whether a delegate is still working.
@@ -390,10 +442,13 @@ function maxSeqOf(list: readonly TranscriptEntry[]): number {
  * tool ever returning: it is not running (nothing more is coming) and it did
  * not complete (there is no result), and calling it either would be a claim
  * the transcript does not support.
+ *
+ * `runSettledAt` is WHEN the run settled — see {@link RunSettleAt}, and
+ * {@link RunSettledContext} for why the moment and not merely the fact.
  */
 export function subagentBlockStatus(
   block: SubagentBlockEntry,
-  runSettled = false,
+  runSettledAt: RunSettleAt = null,
 ): 'running' | 'completed' | 'failed' | 'stopped' {
   if (block.failed) {
     return 'failed';
@@ -403,10 +458,25 @@ export function subagentBlockStatus(
   }
   // Two independent things end a delegate that never returned, and neither
   // subsumes the other — the same pairing `ToolGroupEntry.closed` documents.
-  // `closed` is its own turn ending; `runSettled` is the whole run stopping,
-  // which on the cancel path writes no turn-end item at all. Reading `closed`
-  // alone left a cancelled run's delegate spinning "is working…" forever.
-  return block.closed || runSettled ? 'stopped' : 'running';
+  // `closed` is its own turn ending; the run settling is the whole run
+  // stopping, which on the cancel path writes no turn-end item at all. Reading
+  // `closed` alone left a cancelled run's delegate spinning "is working…"
+  // forever.
+  //
+  // But a run settling only ends a delegate that has said nothing SINCE. The
+  // reported defect: a delegate rendered `stopped` while its rows were still
+  // landing, because the run row had settled and that alone painted every
+  // unreturned block in the chat at once. Measured on the author's own
+  // `geniro.db` — 1346 delegate rows arrived in run `f42bfe2d` after the item
+  // that settled it. Whatever the row says, a delegate that has spoken since is
+  // working: the transcript is the evidence and the status is the claim, so
+  // where they disagree the evidence wins.
+  const endedByRun =
+    runSettledAt !== null &&
+    (runSettledAt === 'unknown' ||
+      block.lastRowAt === null ||
+      block.lastRowAt <= runSettledAt);
+  return block.closed || endedByRun ? 'stopped' : 'running';
 }
 
 /**
@@ -618,6 +688,7 @@ export function buildSubagentBlocks(
       // the delegate's own answer.
       result: body == null ? null : toolResultText(body),
       closed: false,
+      lastRowAt: null,
       entries: [],
     };
     if (launch) {
@@ -685,6 +756,14 @@ export function buildSubagentBlocks(
     block.closed = turnEnds.some(
       (item) => item.nodeId === block.nodeId && item.seq > lastSeq,
     );
+    // Taken BEFORE the fold, while the rows are still flat. Falls back to the
+    // LAUNCH when the delegate has produced nothing yet: a delegation issued
+    // after the run settled is itself evidence of life, and reading null there
+    // would call a delegate that started one second ago `stopped`.
+    const launchedAt = Date.parse(block.createdAt);
+    block.lastRowAt =
+      lastRowAtOf(block.entries) ??
+      (Number.isFinite(launchedAt) ? launchedAt : null);
     // Folded so the nested thread reads exactly like the main flow does.
     block.entries = buildTurnBlocks(block.entries);
   }

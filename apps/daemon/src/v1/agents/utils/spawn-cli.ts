@@ -348,6 +348,23 @@ const TURN_END_EXIT_GRACE_MS = 2000;
  * build) can be silent for many minutes, and settling one of those early costs
  * the user their turn. Half an hour of nothing is not a slow turn.
  *
+ * **It does not run at all while the turn is blocked on a verdict**
+ * ({@link TurnState.outstanding} non-empty), and that is not a longer window
+ * but the absence of one. This deadline's whole premise is that silence is
+ * UNEXPLAINED — it catches a CLI nobody can account for. A turn parked on an
+ * approval card is the opposite: geniro raised the request, knows the CLI is
+ * blocked on it, and is itself the thing withholding the answer. The clock
+ * would be timing a human, and a human who steps away for lunch has not
+ * wedged.
+ *
+ * Measured on the user's own daemon log (2026-08-11, two chats): an
+ * `AskUserQuestion` card went up at 16:30:40 and nothing arrived after it,
+ * because nothing could — the CLI was waiting. Thirty minutes and one second
+ * later the turn was settled as `error` with the sentence below, the run was
+ * marked failed, and the card the user was about to answer was rewritten as
+ * `unanswerable`. The line was false in every clause: the CLI had produced an
+ * answer AND a question, and it had not given up on anything.
+ *
  * The process is deliberately LEFT ALIVE on expiry — it holds the run's MCP
  * servers, and the next turn reuses it. Only the turn is given up on.
  */
@@ -391,12 +408,17 @@ interface TurnState {
    *
    * Both kinds leave the CLI blocked on a verdict, and a turn can settle
    * without producing one: the user presses Stop, or the turn finishes on its
-   * own while a sub-agent is still parked on the card, or the silence deadline
-   * gives up on it while deliberately leaving the process alive. Whatever the
-   * route, dropping the request strands a live CLI on a question nothing can
-   * ever answer — the wedge this whole seam exists to remove, one turn later.
-   * So the remainder is drained back onto the hold buffer at settle, and
+   * own while a sub-agent is still parked on the card. Whatever the route,
+   * dropping the request strands a live CLI on a question nothing can ever
+   * answer — the wedge this whole seam exists to remove, one turn later. So the
+   * remainder is drained back onto the hold buffer at settle, and
    * `respondApproval` prunes whatever it actually delivered.
+   *
+   * The silence deadline used to be a third route and is no longer: a non-empty
+   * map SUSPENDS it ({@link TURN_SILENCE_DEADLINE_MS}), because a turn waiting
+   * on a human has not wedged. This map is therefore also what decides whether
+   * that deadline is running at all — a second reader, and the reason
+   * `respondApproval` rearms on delivery.
    *
    * The in-turn case is the commoner door, not an edge: it needs no
    * between-turns race at all, just a turn that ends before its user does.
@@ -657,6 +679,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * Arm (or rearm) the silence deadline for a turn that ends on an event.
    * A no-op for the other lifetimes, whose turn ends with its process and is
    * already bounded by `close`/`exit`.
+   *
+   * Also a no-op while the turn is blocked on a verdict — see
+   * {@link TURN_SILENCE_DEADLINE_MS}. Rearmed from `respondApproval` once the
+   * last one is delivered, so the CLI gets a full window to speak again.
    */
   const armSilenceDeadline = (turn: TurnState): void => {
     if (!settlesOnTerminalEvent || turn.settled) {
@@ -664,6 +690,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     if (turn.silenceTimer) {
       clearTimeout(turn.silenceTimer);
+      turn.silenceTimer = null;
+    }
+    if (turn.outstanding.size > 0) {
+      opts.logger?.debug?.(
+        `${opts.command}: the silence deadline is suspended — the turn is blocked on ${turn.outstanding.size} unanswered request(s)`,
+      );
+      return;
     }
     turn.silenceTimer = setTimeout(() => {
       turn.silenceTimer = null;
@@ -1331,6 +1364,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           // Keyed on delivery: a verdict the CLI never received leaves the
           // request outstanding, which is exactly when re-holding is right.
           turn.outstanding.delete(id);
+          // The CLI is unblocked and owes us output again, so the silence
+          // deadline resumes — from HERE, not from when the card went up. It
+          // was suspended for the whole wait (see TURN_SILENCE_DEADLINE_MS),
+          // and starting a full window now is the point: an answer delivered
+          // at minute 29 must not leave the turn one minute from being given
+          // up on. A no-op while another card is still open.
+          armSilenceDeadline(turn);
         }
         const seenAt = approvalSeenAt.get(id);
         approvalSeenAt.delete(id);

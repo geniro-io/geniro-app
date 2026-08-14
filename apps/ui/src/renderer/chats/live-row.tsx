@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { formatTokens } from './agent-activity';
 import { MessageBubble } from './message-bubble';
+import type { RunSettleAt } from './transcript-groups';
 
 /**
  * What the active run is doing right now — the daemon's own `run_status`
@@ -29,11 +30,20 @@ export const RunActivityContext = createContext<string | null>(null);
  *
  * A context for the reason {@link RunActivityContext} is one: the shells
  * between `Chats` and a tool group are memoized, and a prop that flips once at
- * the end of a run would defeat that for every row. False outside a provider,
+ * the end of a run would defeat that for every row. Null outside a provider,
  * which is the safe reading — a group with no run behind it keeps whatever its
  * own pairs say.
+ *
+ * It carries WHEN the run settled ({@link RunSettleAt}) rather than merely THAT
+ * it did, because a reader has to be able to ask whether a given piece of
+ * nested work has spoken SINCE. A delegate producing rows after the run row went `completed`
+ * is still working, however plainly that row says otherwise, and a bare boolean
+ * could not express the difference: it painted every unreturned delegate in the
+ * chat `stopped` at once. Measured on the author's own `geniro.db` — run
+ * `f42bfe2d` took 1346 further delegate rows after the item that settled it.
+ * A reader that only needs the fact asks `!== null`.
  */
-export const RunSettledContext = createContext<boolean>(false);
+export const RunSettledContext = createContext<RunSettleAt>(null);
 
 /**
  * The two synthetic transcript rows that describe what an agent is doing RIGHT

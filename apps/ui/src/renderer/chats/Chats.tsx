@@ -100,8 +100,7 @@ import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
-import { TaskStrip } from './task-list';
-import { taskListsByThread } from './task-payload';
+import { type AgentTaskRow, taskListsByAgent } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
@@ -2353,19 +2352,28 @@ export function Chats({
   // turn_complete usage carries context/spend).
   const activity = useMemo(() => computeAgentActivity(items), [items]);
   /**
-   * The agent's OWN task list as it stands now — the pinned strip above the
-   * composer.
+   * Each agent's OWN task list as it stands now, for the side panel.
    *
-   * The transcript cards are history: they scroll away, and what the ticket
-   * asked for was to be able to READ the current list. Only the agent's own
-   * thread (`null`) is pinned — a delegate's list belongs to its block, which
-   * states its own progress on its header, because two lists numbered from 1
-   * side by side in one strip would say nothing about either.
+   * The panel and not the composer: it is the same kind of derived, per-agent
+   * state as the delegate list beside it, and it belongs where a reader already
+   * looks for "what is this agent doing". The transcript cards stay as the
+   * history of the list moving, exactly as a sub-agent has both a block in the
+   * flow and a row in the panel.
+   *
+   * Keyed by node id (`null` for a 1:1 chat), and a delegate's rows are excluded
+   * — its list lives in its own block, whose header carries its count.
    */
-  const currentTasks = useMemo(
-    () => taskListsByThread(items, subagentIdOf).get(null) ?? [],
-    [items],
-  );
+  const tasksByAgent = useMemo(() => {
+    // Re-keyed to the PANEL's agent ids here rather than in the fold: a 1:1
+    // chat's rows carry `nodeId: null` while its agent card is keyed by
+    // `CHAT_AGENT_KEY`, and that mapping is this screen's own — the fold has no
+    // business knowing it.
+    const byAgent = new Map<string, AgentTaskRow[]>();
+    for (const [nodeId, tasks] of taskListsByAgent(items, subagentIdOf)) {
+      byAgent.set(nodeId ?? CHAT_AGENT_KEY, tasks);
+    }
+    return byAgent;
+  }, [items]);
   /**
    * The agents whose turn is in flight — the transcript draws each of them a
    * row even when they have nothing to say yet, so the flow never goes silent
@@ -3389,11 +3397,6 @@ export function Chats({
                   ) : null}
 
                   <div className="flex flex-col gap-2 border-t border-border p-3">
-                    {/* ABOVE the queued messages and the composer, so it sits
-                        against the transcript it describes and does not push the
-                        text field around as the list grows. */}
-                    <TaskStrip tasks={currentTasks} />
-
                     <QueuedStrip
                       messages={queued}
                       steerUnavailableReason={steerUnavailableReason}
@@ -3699,6 +3702,7 @@ export function Chats({
                   // to prevent, merely moved to the second chat.
                   key={activeRun?.id ?? 'no-run'}
                   agents={agents}
+                  tasksByAgent={tasksByAgent}
                   terminalReasons={terminalReasons}
                   usageReasons={usageReasons}
                   // The HOVER half of the same resolution the button acts on.

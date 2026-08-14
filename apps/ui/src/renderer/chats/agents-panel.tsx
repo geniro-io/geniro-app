@@ -24,6 +24,8 @@ import { cn } from '../components/ui/utils';
 import { type AgentDisplay, type AgentThread } from './agent-activity';
 import { ContextMeter } from './context-meter';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
+import { TaskCount, TaskIcon, TaskRows } from './task-list';
+import { type AgentTaskRow, taskProgress } from './task-payload';
 import { mcpScopeKey } from './use-agent-mcp';
 
 /**
@@ -346,6 +348,7 @@ function ThreadRow({
 
 export function AgentsPanel({
   agents,
+  tasksByAgent,
   mcpByScope,
   mcpLoading = false,
   onRefreshMcp,
@@ -413,6 +416,16 @@ export function AgentsPanel({
    * {@link onSetMcpEnabled}.
    */
   onOpenSubagent?: (subagentId: string) => void;
+  /**
+   * Each agent's OWN current task list, keyed by `AgentDisplay.id` — the
+   * checklist its CLI keeps while working a multi-step job.
+   *
+   * Here rather than above the composer because it is the same kind of thing as
+   * the delegate rows below it: per-agent state a reader opens this panel to
+   * read. An agent with no list gets no section, and a DELEGATE's list is not
+   * here — it belongs to its own block, whose header carries its count.
+   */
+  tasksByAgent?: ReadonlyMap<string, readonly AgentTaskRow[]>;
   /*
    * There was a `subagentUnavailableReason` here — a panel-level paragraph
    * saying why a CLI lists no delegates. It has been removed: on cursor it was
@@ -622,6 +635,13 @@ export function AgentsPanel({
             ];
             const hasList =
               listedThreads.length > 0 || settledSubagents.length > 0;
+            const tasks = tasksByAgent?.get(agent.id) ?? [];
+            const taskState = taskProgress(tasks);
+            // Whether the list is still being WORKED, which is what decides
+            // whether its in-progress row spins. The agent's own status answers
+            // it: a settled agent's unfinished task is one nothing is advancing,
+            // and a spinner there claims work that stopped.
+            const tasksLive = agent.status === 'running';
             const settledOpen = showSettled.has(agent.id);
             return (
               <li
@@ -768,6 +788,37 @@ export function AgentsPanel({
                     ) : null}
                   </span>
                 </div>
+                {tasks.length > 0 ? (
+                  /* ABOVE the threads: the agent's own plan comes before the
+                     work it handed out. Unlike that list it is not behind a
+                     disclosure — reading the current list is the whole reason it
+                     is in this panel. */
+                  <div
+                    data-slot="agent-task-list"
+                    className="flex flex-col gap-1 border-t border-border px-2.5 py-1.5">
+                    <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <TaskIcon />
+                      <span>Tasks</span>
+                      <TaskCount
+                        done={taskState.done}
+                        total={taskState.total}
+                      />
+                      {taskState.current !== null && tasksLive ? (
+                        <span className="min-w-0 flex-1 truncate">
+                          ·{' '}
+                          {taskState.current.activeForm ??
+                            taskState.current.title ??
+                            `Task ${taskState.current.id}`}
+                        </span>
+                      ) : null}
+                    </p>
+                    <TaskRows
+                      tasks={tasks}
+                      live={tasksLive}
+                      className="pl-0.5"
+                    />
+                  </div>
+                ) : null}
                 {isExpanded && hasList ? (
                   <div className="flex flex-col border-t border-border px-2 py-1.5">
                     {/* The counts, in the one place they describe something: a

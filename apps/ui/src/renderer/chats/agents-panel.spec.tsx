@@ -1624,3 +1624,78 @@ describe('AgentsPanel — the thread expander', () => {
     expect(nameLine?.querySelector('button')).toBeNull();
   });
 });
+
+describe('AgentsPanel task lists', () => {
+  const tasks = [
+    {
+      id: '1',
+      title: 'Read the file',
+      status: 'completed' as const,
+      activeForm: null,
+    },
+    {
+      id: '2',
+      title: 'Edit the file',
+      status: 'in_progress' as const,
+      activeForm: 'Editing the file',
+    },
+    {
+      id: '3',
+      title: 'Run the tests',
+      status: 'pending' as const,
+      activeForm: null,
+    },
+  ];
+
+  it('shows the agent’s OWN current list, not behind a disclosure', () => {
+    // Reading the current list is the whole reason it is in this panel, so it is
+    // the one section here that is not behind a toggle.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        tasksByAgent={new Map([['orchestrator', tasks]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const rows = [...el.querySelectorAll('ul > li')];
+    const orchestrator = rows.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    const section = orchestrator.querySelector(
+      '[data-slot="agent-task-list"]',
+    )!;
+    expect(section).not.toBeNull();
+    expect(section.textContent).toContain('1/3');
+    // The current task, named on the header line, so progress is legible at a
+    // glance rather than only by reading the rows.
+    expect(section.textContent).toContain('Editing the file');
+    expect(section.textContent).toContain('Run the tests');
+
+    // And it is THIS agent's: the worker was given no list.
+    const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
+    expect(worker.querySelector('[data-slot="agent-task-list"]')).toBeNull();
+  });
+
+  it('stops spinning for an agent that is no longer running', () => {
+    // The same rule the transcript card follows: a settled agent's unfinished
+    // task is one nothing is advancing, and a spinner there claims work that
+    // stopped.
+    const idle: AgentDisplay = { ...agents[0]!, status: 'completed' };
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[idle]}
+        tasksByAgent={new Map([['orchestrator', tasks]])}
+        onOpenThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-task-list"]')!;
+    expect(section.querySelector('.animate-spin')).toBeNull();
+    // Nor does it keep naming the task as under way.
+    expect(section.textContent).not.toContain('Editing the file');
+    expect(section.textContent).toContain('Edit the file');
+  });
+});

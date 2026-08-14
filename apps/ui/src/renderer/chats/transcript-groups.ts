@@ -255,6 +255,16 @@ export interface TaskListEntry {
   parentToolUseId: string | null;
   /** The list as it stood after the last announcement in this run. */
   tasks: AgentTaskRow[];
+  /**
+   * This is the thread's LAST card — the list as it stands now, rather than a
+   * step on the way there.
+   *
+   * Load-bearing for one thing only: whether an `in_progress` row may spin. An
+   * earlier card is a historical snapshot, and every one of them animating its
+   * own in-progress task meant a transcript of three spinners for a job with one
+   * task running — none of which was true any more.
+   */
+  latest: boolean;
 }
 
 export type TranscriptEntry =
@@ -1059,6 +1069,10 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         nodeId: item.nodeId,
         parentToolUseId: thread,
         tasks,
+        // Decided by the sweep below, once the whole stream is known — the same
+        // shape `closed` on a tool group takes, and for the same reason: a card
+        // cannot know whether a later one exists while it is being built.
+        latest: false,
       };
       openTaskCards.set(key, card);
       entries.push(card);
@@ -1074,7 +1088,55 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     entries.push({ type: 'item', item });
   }
   closeGroupsBeforeTurnEnds(entries, items);
+  // The last card of each thread is the current list. Keyed by the same
+  // (node, thread) pair the cards were folded on, so a delegate's last card and
+  // the agent's own are both current — they are different lists.
+  const lastCard = new Map<string, TaskListEntry>();
+  for (const entry of entries) {
+    if (entry.type === 'task-list') {
+      lastCard.set(
+        `${entry.nodeId ?? ''}\u0000${entry.parentToolUseId ?? ''}`,
+        entry,
+      );
+    }
+  }
+  for (const card of lastCard.values()) {
+    card.latest = true;
+  }
   return entries;
+}
+
+/**
+ * Whether anything is still working through the list this card shows.
+ *
+ * Two conditions, and both are needed. An earlier card is a SNAPSHOT of a list
+ * that has since moved on, so its in-progress row is history however live the
+ * run is. And the latest card is only live while the run is: a turn that ended
+ * with a task still in progress leaves a row that will never advance, and a
+ * spinner on it claims work that stopped — the reported "finished one task,
+ * still in progress for some reason".
+ *
+ * `runSettledAt` is read exactly as {@link subagentBlockStatus} reads it: a
+ * MOMENT rather than a flag, so a card written AFTER the settle (the CLI
+ * carrying on by itself past its own turn-end line) is still live, and an
+ * unparseable settle keeps the conservative reading rather than putting every
+ * spinner back.
+ */
+export function taskCardIsLive(
+  entry: TaskListEntry,
+  runSettledAt: RunSettleAt,
+): boolean {
+  if (!entry.latest) {
+    return false;
+  }
+  if (runSettledAt === null) {
+    return true;
+  }
+  if (runSettledAt === 'unknown') {
+    return false;
+  }
+  const at = Date.parse(entry.createdAt);
+  return Number.isFinite(at) && at > runSettledAt;
 }
 
 /** Item kinds that end a turn — after one, nothing more is coming for it. */

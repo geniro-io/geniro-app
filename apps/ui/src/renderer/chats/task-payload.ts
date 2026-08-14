@@ -183,36 +183,37 @@ export function taskProgress(tasks: readonly AgentTaskRow[]): {
 }
 
 /**
- * Every task list in a transcript, keyed by the thread that owns it: `null` for
- * the agent's own, else the id of the tool call that launched the sub-agent.
+ * Each AGENT's own current task list, keyed by node id (`null` for a 1:1 chat's
+ * one agent) — what the side panel shows beside that agent's threads.
  *
- * One pass over the items, because both consumers need it — the pinned strip
- * (the agent's current list) and each sub-agent block (the delegate's own).
+ * A DELEGATE's rows are excluded, deliberately: a sub-agent's list belongs to
+ * its own block, the way its conversation does, and merging it here would both
+ * mix two lists that number their tasks from 1 and report a delegate's progress
+ * as the agent's own.
  */
-export function taskListsByThread(
+export function taskListsByAgent(
   items: readonly ChatItem[],
   subagentIdOf: (item: ChatItem) => string | null,
 ): Map<string | null, AgentTaskRow[]> {
-  const perThread = new Map<string | null, TaskAnnouncement[]>();
+  const perAgent = new Map<string | null, TaskAnnouncement[]>();
   for (const item of items) {
-    if (item.kind !== 'task_list') {
+    if (item.kind !== 'task_list' || subagentIdOf(item) !== null) {
       continue;
     }
     const announcement = readTaskAnnouncement(item);
     if (announcement === null) {
       continue;
     }
-    const thread = subagentIdOf(item);
-    const list = perThread.get(thread);
+    const list = perAgent.get(item.nodeId);
     if (list) {
       list.push(announcement);
     } else {
-      perThread.set(thread, [announcement]);
+      perAgent.set(item.nodeId, [announcement]);
     }
   }
   const out = new Map<string | null, AgentTaskRow[]>();
-  for (const [thread, announcements] of perThread) {
-    out.set(thread, foldTaskList(announcements));
+  for (const [agent, announcements] of perAgent) {
+    out.set(agent, foldTaskList(announcements));
   }
   return out;
 }

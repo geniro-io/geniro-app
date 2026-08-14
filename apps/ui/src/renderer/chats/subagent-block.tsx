@@ -1,4 +1,4 @@
-import { Bot, Maximize2 } from 'lucide-react';
+import { Bot, ListChecks, Maximize2 } from 'lucide-react';
 import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
@@ -17,6 +17,8 @@ import {
 import { formatElapsed, RunSettledContext } from './live-row';
 import { formatClockTime } from './relative-time';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
+import { TaskCount } from './task-list';
+import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   countTools,
@@ -24,6 +26,7 @@ import {
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentTitle,
+  type TaskListEntry,
   toolCallSummary,
 } from './transcript-groups';
 import { payloadString, type TranscriptNodeMeta } from './transcript-item';
@@ -80,6 +83,23 @@ export function subagentSteps(block: SubagentBlockEntry): SubagentStep[] {
         walk(entry.entries);
         continue;
       }
+      if (entry.type === 'task-list') {
+        // The delegate keeping its OWN list, which is the ticket's second half:
+        // a background sub-agent plans exactly like the main agent does, and its
+        // list is its own (both CLIs number tasks from 1, so the fold keeps the
+        // threads apart).
+        const { done, total, current } = taskProgress(entry.tasks);
+        steps.push({
+          id: entry.id,
+          time: formatClockTime(entry.createdAt) ?? '',
+          what: `tasks ${done}/${total}`,
+          detail:
+            current === null
+              ? null
+              : (current.activeForm ?? current.title ?? `Task ${current.id}`),
+        });
+        continue;
+      }
       if (entry.type !== 'item') {
         // A sub-agent block never nests inside another — a claude delegate is
         // a leaf and cannot itself delegate.
@@ -110,6 +130,40 @@ export function subagentSteps(block: SubagentBlockEntry): SubagentStep[] {
   };
   walk(block.entries);
   return steps;
+}
+
+/**
+ * How far the delegate is through its OWN task list, or null when it kept none.
+ *
+ * Read off the block's folded entries rather than the transcript, so it can only
+ * ever describe rows this delegate actually produced — the same rule
+ * {@link subagentSteps} follows, and the reason a delegate's list cannot leak
+ * into the main agent's count or the other way round.
+ */
+function subagentTaskProgress(
+  block: SubagentBlockEntry,
+): { done: number; total: number } | null {
+  const cards: TaskListEntry[] = [];
+  const walk = (entries: SubagentBlockEntry['entries']): void => {
+    for (const entry of entries) {
+      if (entry.type === 'task-list') {
+        cards.push(entry);
+        continue;
+      }
+      if (entry.type === 'turn-block' || entry.type === 'call-block') {
+        walk(entry.entries);
+      }
+    }
+  };
+  walk(block.entries);
+  // The LAST card is the current list: each one already carries the fold of
+  // every announcement before it.
+  const tasks = cards.at(-1)?.tasks;
+  if (tasks === undefined || tasks.length === 0) {
+    return null;
+  }
+  const { done, total } = taskProgress(tasks);
+  return { done, total };
 }
 
 /**
@@ -333,6 +387,7 @@ export const SubagentBlock = memo(function SubagentBlock({
   const runSettledAt = useContext(RunSettledContext);
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
+  const tasks = subagentTaskProgress(block);
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell
@@ -353,6 +408,15 @@ export const SubagentBlock = memo(function SubagentBlock({
             {toolCount > 0 ? (
               <span className="shrink-0 text-[10px] text-muted-foreground">
                 {toolCount} tool{toolCount === 1 ? '' : 's'}
+              </span>
+            ) : null}
+            {/* On the header rather than only inside, because the block is
+                CLOSED by default: "how far is this delegate through its own
+                plan" is the one thing worth knowing without opening it. */}
+            {tasks !== null ? (
+              <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+                <ListChecks aria-hidden="true" className="size-3" />
+                <TaskCount done={tasks.done} total={tasks.total} />
               </span>
             ) : null}
           </>

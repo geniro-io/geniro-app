@@ -1,6 +1,7 @@
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
 import type {
   AgentEvent,
+  AgentTask,
   AgentTurnInput,
   AgentUsage,
   TurnDriver,
@@ -174,6 +175,41 @@ export interface AcpDelegateProtocol {
   stepsUnavailableReason: string | null;
 }
 
+/**
+ * How ONE agent reports its own task list, since baseline ACP's `plan` update
+ * is not what the shipped agents actually send.
+ *
+ * Supplied by the adapter — the method name and the params shape are that
+ * vendor's facts. What the driver owns is the LIFECYCLE, and there is one thing
+ * in it worth naming: the announcement arrives as a blocking REQUEST, so it must
+ * be answered. Declining it (which is what happened for two milestones, quietly,
+ * because `cursor/update_todos` is on `declinedWithoutNotice`) does not stall the
+ * turn — the agent absorbs the refusal — it simply throws the list away.
+ *
+ * An adapter that declares none keeps the old behaviour, which is correct for an
+ * agent that has no such channel.
+ */
+export interface AcpTodoProtocol {
+  /** The agent→client method carrying the list. */
+  method: string;
+  /**
+   * Read the params into the normalized announcement, or null when the shape is
+   * unrecognized — which falls through to the ordinary decline, on the same
+   * reasoning as {@link AcpQuestionProtocol.accepts}: a list built from a payload
+   * we could not parse is worse than not having one.
+   */
+  read(params: unknown): AcpTodoUpdate | null;
+}
+
+/** What one agent told us about its task list, normalized. */
+export interface AcpTodoUpdate {
+  /** See {@link AgentEvent}'s `task_list`: whole list, or only the rows named. */
+  mode: 'snapshot' | 'patch';
+  tasks: AgentTask[];
+  /** The tool call this belongs to, so its opaque row can be replaced by the list. */
+  toolCallId: string | null;
+}
+
 export interface AcpDriverOptions {
   /** The turn being driven — prompt, cwd, resume id, MCP endpoint. */
   input: AgentTurnInput;
@@ -195,6 +231,8 @@ export interface AcpDriverOptions {
    * not — in which case a delegation reads as the plain tool call it is.
    */
   delegate?: AcpDelegateProtocol;
+  /** How this agent reports its own task list, or absent when it does not. */
+  todos?: AcpTodoProtocol;
   /**
    * Agent→client methods this client refuses WITHOUT narrating it — the ones
    * whose own agent absorbs the refusal, so nothing about the turn changed.
@@ -1278,6 +1316,21 @@ export class AcpTurnDriver implements TurnDriver {
       }
       this.options.logger?.warn(
         `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a sub-agent`,
+      );
+    }
+    const todos = this.options.todos;
+    if (todos !== undefined && method === todos.method) {
+      const update = todos.read(params);
+      if (update !== null) {
+        // ANSWERED. Like the delegate announcement, the agent discards the
+        // outcome either way, so this changes nothing about the turn — what it
+        // changes is that the task list reaches the transcript instead of being
+        // refused and dropped, which is what the user could not see.
+        this.reply(id, {});
+        return [{ type: 'task_list', ...update }];
+      }
+      this.options.logger?.warn(
+        `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a task list`,
       );
     }
     // Everything else is a client capability we deliberately did not advertise

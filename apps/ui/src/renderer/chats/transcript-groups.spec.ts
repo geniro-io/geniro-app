@@ -8,6 +8,7 @@ import {
   buildTurnBlocks,
   type CallBlockEntry,
   collectSubagentBlocks,
+  countTools,
   groupTranscript,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -1628,5 +1629,140 @@ describe('buildSubagentBlocks', () => {
         ),
       ).toEqual([]);
     });
+  });
+});
+
+describe('groupTranscript task lists', () => {
+  const tasks = (
+    mode: 'snapshot' | 'patch',
+    rows: { id: string; title?: string | null; status?: string | null }[],
+    toolCallId: string | null = null,
+    nodeId: string | null = 'orch',
+  ): ChatItem =>
+    item(
+      'task_list',
+      {
+        mode,
+        toolCallId,
+        tasks: rows.map((row) => ({
+          id: row.id,
+          title: row.title ?? null,
+          status: row.status ?? 'pending',
+          activeForm: null,
+        })),
+      },
+      nodeId,
+    );
+
+  it('renders the LIST instead of the tool call that produced it', () => {
+    // The ticket itself: `TaskUpdate` collapsed into a tool group saying a tool
+    // ran, with the list nowhere. Both halves of the pair go — and the result
+    // arrives later in the stream than the announcement claiming it, which is
+    // why the claim has to be read in a pass of its own.
+    const entries = groupTranscript([
+      call('TaskUpdate', 'tc-1', { taskId: '1', status: 'completed' }),
+      tasks(
+        'patch',
+        [{ id: '1', title: 'Read it', status: 'completed' }],
+        'tc-1',
+      ),
+      result('tc-1', 'Updated task #1 status'),
+    ]);
+    expect(entries.map((entry) => entry.type)).toEqual(['task-list']);
+    expect(entries[0]?.type === 'task-list' && entries[0].tasks).toEqual([
+      { id: '1', title: 'Read it', status: 'completed', activeForm: null },
+    ]);
+  });
+
+  it('leaves an ordinary tool call alone', () => {
+    const entries = groupTranscript([
+      call('Bash', 't1'),
+      tasks('patch', [{ id: '1', title: 'Read it' }], 'tc-1'),
+    ]);
+    expect(entries.map((entry) => entry.type)).toEqual(['tools', 'task-list']);
+  });
+
+  it('folds a BURST of announcements into one card, folded cumulatively', () => {
+    // Working a list is chatty — the measured cursor turn sent four
+    // announcements for three tasks, and claude sends one per create — so a row
+    // each would bury the conversation under near-identical checklists. The
+    // cumulative fold is what makes one card correct: the last announcement here
+    // is a patch that knows about exactly one task.
+    const entries = groupTranscript([
+      tasks('patch', [{ id: '1', title: 'One' }], 'a'),
+      tasks('patch', [{ id: '2', title: 'Two' }], 'b'),
+      tasks('patch', [{ id: '1', title: null, status: 'in_progress' }], 'c'),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.type === 'task-list' && entries[0].tasks).toEqual([
+      { id: '1', title: 'One', status: 'in_progress', activeForm: null },
+      { id: '2', title: 'Two', status: 'pending', activeForm: null },
+    ]);
+  });
+
+  it('starts a fresh card after real work, and still folds cumulatively', () => {
+    // A card floating above the work done after it, while showing the list as it
+    // stood afterwards, is what a visible tool call closing the card prevents.
+    const entries = groupTranscript([
+      tasks('patch', [{ id: '1', title: 'One', status: 'in_progress' }], 'a'),
+      call('Bash', 't1'),
+      tasks('patch', [{ id: '1', title: null, status: 'completed' }], 'b'),
+    ]);
+    expect(entries.map((entry) => entry.type)).toEqual([
+      'task-list',
+      'tools',
+      'task-list',
+    ]);
+    const second = entries[2];
+    expect(second?.type === 'task-list' && second.tasks).toEqual([
+      { id: '1', title: 'One', status: 'completed', activeForm: null },
+    ]);
+  });
+
+  it('keeps a delegate’s card in the delegate’s own block', () => {
+    // The ticket's second half. The card carries the thread it belongs to, so
+    // `buildSubagentBlocks` routes it exactly as it routes the delegate's other
+    // rows — nothing about tasks had to know about sub-agents.
+    const delegated = {
+      ...tasks('snapshot', [{ id: '1', title: 'delegate task' }]),
+    };
+    delegated.payload = {
+      ...(delegated.payload as Record<string, unknown>),
+      parentToolUseId: 'toolu_parent',
+    };
+    const blocks = collectSubagentBlocks(
+      buildSubagentBlocks(
+        groupTranscript([
+          call('Task', 'toolu_parent', { description: 'go' }),
+          delegated,
+        ]),
+        [],
+      ),
+    );
+    expect(blocks).toHaveLength(1);
+    // Nested one turn-block deep, because the block folds its own contents the
+    // same way the main flow does — what matters is that the card is INSIDE the
+    // delegate's block rather than a sibling of the conversation.
+    const cardsInside = (entries: readonly TranscriptEntry[]): number =>
+      entries.reduce(
+        (sum, entry) =>
+          entry.type === 'task-list'
+            ? sum + 1
+            : entry.type === 'turn-block'
+              ? sum + cardsInside(entry.entries)
+              : sum,
+        0,
+      );
+    expect(cardsInside(blocks[0]!.entries)).toBe(1);
+  });
+
+  it('does not count the hidden task tools as tool work', () => {
+    // `countTools` feeds the "N tools" label on a block header; counting calls
+    // that have no row to open would advertise work the reader cannot reach.
+    const entries = groupTranscript([
+      call('TaskUpdate', 'tc-1', {}),
+      tasks('patch', [{ id: '1', title: 'x' }], 'tc-1'),
+    ]);
+    expect(countTools(entries)).toBe(0);
   });
 });

@@ -66,6 +66,12 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * via answer_agent, TTL timeout, or orphaned by the caller ending) — both
  * attributed to the CALLER node like the other call kinds.
  *
+ * `task_list` is one announcement about the agent's OWN task list — the todo
+ * list the CLI keeps while it works. Persisted rather than kept live-only
+ * because a reopened chat must show the list as it stands, and the list only
+ * exists as the sum of its announcements: two of the three shapes on the wire
+ * are patches, so a client that missed one cannot reconstruct the rest.
+ *
  * `unanswerable` closes an `approval_request` that can never be answered now:
  * its turn settled while the request was still pending, so the card on screen
  * is a dead control. The daemon says so explicitly rather than leaving the
@@ -94,6 +100,7 @@ export const ItemKindSchema = z
     'call_question',
     'call_answer',
     'subagent_info',
+    'task_list',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

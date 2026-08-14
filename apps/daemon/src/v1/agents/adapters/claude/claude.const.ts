@@ -815,3 +815,93 @@ export const CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS: readonly string[] = [
 /** The `system` item a user sees when the channel above has dropped. */
 export const CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE =
   'claude could not reach its permission channel for that tool call, so the CLI refused it — this was not your decision, and the turn continues.';
+
+// ── The agent's OWN task list (the todo tools) ─────────────────────────────
+//
+// NOT the background-task subtypes above: those name units of WORK the CLI runs
+// (`CLAUDE_TASK_STARTED_SUBTYPE` and friends, which keep a turn open while a
+// delegate runs). These are the tools the model calls to keep a checklist for
+// itself while it works through a multi-step job — the thing every coding UI
+// shows in a panel and geniro showed as an opaque `TaskUpdate` tool row.
+//
+// MEASURED on the wire, 2026-08-14, claude 2.1.232, one `-p
+// --output-format stream-json` turn told to build a three-item list and move two
+// of them. What arrived, in order:
+//
+//   TaskCreate   input  {subject:"Read the file", description:"Read the file",
+//                        activeForm:"Reading the file"}
+//                result "Task #1 created successfully: Read the file"
+//   TaskUpdate   input  {taskId:"1", status:"completed"}
+//                result "Updated task #1 status"
+//   TaskList     input  {}
+//                result "#1 [completed] Read the file\n#2 [in_progress] Edit the
+//                        file\n#3 [pending] Run the tests"
+//
+// The id therefore lives in the RESULT of a create and in the INPUT of an
+// update, which is what shapes `claude-tasks.utils.ts`: half of this is read off
+// tool results, and that is not a stylistic choice.
+//
+// What is NOT available, checked so the next reader need not re-check: there is
+// no pull channel for the list. The control-request subtypes of the 2.1.232
+// binary were enumerated (the same method that found `mcp_status`), and the two
+// task-shaped ones answer other questions — `background_tasks` takes a
+// `tool_use_id` and replies `{backgrounded}`, `get_plan` returns the plan-mode
+// markdown file. There IS a push channel, `system/background_tasks_changed`,
+// carrying the full list — but it is emitted onto the CLI's remote-control
+// bridge, and the probe above (which created and updated five tasks) produced no
+// such line on stdout. So the tool calls are the whole source.
+//
+// One consequence, measured through the app on the same version: a SUB-AGENT
+// keeps no list here. Told explicitly to build one, a delegate searched its own
+// toolset three times (`select:TaskCreate,TaskUpdate`, then `select:TodoWrite,…`),
+// found nothing, and did the work untracked — the task tools are not part of what
+// this CLI hands a delegate. Nothing in the mapping is conditional on that: an
+// announcement carries whatever origin the line it arrived on carried, so a
+// delegate that DOES keep a list has it attributed to itself (pinned in
+// `claude-tasks.utils.spec.ts`, and the renderer routes it in
+// `transcript-groups.spec.ts`). It is written down because it leaves that path
+// unproven on the wire for this CLI — re-check this, not the code, if a
+// delegate's list ever fails to appear.
+
+/**
+ * `TaskUpdate` — `{taskId, status}`, the one call that MOVES a task, and the
+ * only one of the family named here.
+ *
+ * `TaskCreate` and `TaskList` are recognised by their results instead, so their
+ * names have no reader: a claude `tool_result` block carries `tool_use_id` and
+ * no tool name, which is why the two regexes below exist at all.
+ */
+export const CLAUDE_TASK_UPDATE_TOOL = 'TaskUpdate';
+
+/**
+ * `TodoWrite` — the older single-call form, whose input IS the whole list.
+ *
+ * Mapped because it is still a live tool in 2.1.232 (present in the binary's own
+ * tool allowlists beside the `Task*` family, with a `todo_reminder` mechanism
+ * keyed on its name), and which of the two families a session is offered is not
+ * ours to decide — this machine's 2.1.232 `system/init` listed
+ * `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` and no `TodoWrite`, on a
+ * different account from the one the app runs by default.
+ *
+ * Its payload shape here is the tool's PUBLISHED schema, not a wire capture:
+ * nothing on this machine could be made to call it. That asymmetry is why it is
+ * mapped defensively like every other version-volatile payload — a shape that
+ * has drifted yields no tasks, never a wrong list — and why the reason is
+ * written down instead of the code implying it was seen.
+ */
+export const CLAUDE_TODO_WRITE_TOOL = 'TodoWrite';
+
+/**
+ * A `TaskCreate` result: `Task #1 created successfully: Read the file`.
+ *
+ * Anchored at both ends because it is matched against the whole result text of
+ * a tool call whose NAME is not on the wire — a claude `tool_result` block
+ * carries `tool_use_id` and no name — so the sentence is the only thing that
+ * identifies it. An unanchored search would let a `Bash` call that printed this
+ * line inject a task.
+ */
+export const CLAUDE_TASK_CREATED_RESULT =
+  /^Task #(\d+) created successfully: (.+)$/;
+
+/** One `TaskList` row: `#2 [in_progress] Edit the file`. @see CLAUDE_TASK_CREATED_RESULT */
+export const CLAUDE_TASK_LIST_ROW = /^#(\d+) \[([a-z_]+)\] (.+)$/;

@@ -71,6 +71,42 @@ export interface AgentUsage {
 }
 
 /**
+ * Where one task on an agent's own list stands.
+ *
+ * The three every shipped CLI uses, measured on both: claude's `TaskUpdate`
+ * takes `pending`/`in_progress`/`completed`, and cursor's `cursor/update_todos`
+ * rows carry the same three words. A status outside them reads as null rather
+ * than being coerced into one of these — a wrong reading of "where is this
+ * task" is worse than an honest "the CLI said something we do not know".
+ */
+export type AgentTaskStatus = 'pending' | 'in_progress' | 'completed';
+
+/** One task on the agent's own list, as {@link AgentEvent} `task_list` carries it. */
+export interface AgentTask {
+  /**
+   * The CLI's own id for the task — the join key across announcements, which is
+   * what makes a patch applicable at all. Both shipped CLIs number them (`"1"`,
+   * `"2"`, …); the value is opaque here and never parsed.
+   */
+  id: string;
+  /**
+   * What the task IS. Null in a patch that only moves a status and repeats no
+   * text (claude's `TaskUpdate` sends `{taskId, status}` and nothing else), in
+   * which case the consumer keeps the title it already had for that id.
+   */
+  title: string | null;
+  /** Null when the CLI named a status this daemon does not recognise. */
+  status: AgentTaskStatus | null;
+  /**
+   * The present-continuous label a CLI shows while the task runs ("Reading the
+   * file"). Null for a CLI that has none, and null for claude's `TaskCreate`
+   * even though the tool takes one — see `claude-tasks.utils.ts` for why the
+   * two halves cannot be paired without state the mapper deliberately lacks.
+   */
+  activeForm: string | null;
+}
+
+/**
  * Normalized streaming event emitted by an agent adapter during one turn. This
  * is the shared model both the Claude and Cursor adapters converge their
  * divergent NDJSON onto (the spec's TextChunk/ReasoningChunk/ToolCallRequest/
@@ -298,6 +334,41 @@ type AgentEventBody =
        * delegate's own conversation is absent. Null for a CLI that streams it.
        */
       stepsUnavailableReason: string | null;
+    }
+  | {
+      /**
+       * The agent's OWN task list moved — the todo list a coding CLI keeps for
+       * itself while it works through a multi-step job.
+       *
+       * Every shipped CLI has one and each reports it differently, so this is
+       * the normalized form all of them collapse to. What made it worth a
+       * dedicated event rather than leaving it as the tool call it rides on:
+       * the tool call says only that a tool NAMED something was invoked, and
+       * cursor's carries no arguments at all (`rawInput:{_toolName:
+       * "updateTodos"}`), so the list itself never reached the transcript.
+       *
+       * {@link mode} is the whole subtlety. Two of the three shapes measured
+       * are PATCHES — they name only the rows that moved — so a consumer that
+       * treats every announcement as the complete list shows one task where
+       * there are seven. It is not inferred from the contents (a patch that
+       * happens to name every row is indistinguishable from a snapshot); the
+       * CLI says which it sent, and cursor says so literally (`merge`).
+       */
+      type: 'task_list';
+      /**
+       * `snapshot` — {@link tasks} IS the list now, and anything absent from it
+       * is gone. `patch` — only the named rows moved; every other task stands
+       * as it was.
+       */
+      mode: 'snapshot' | 'patch';
+      tasks: AgentTask[];
+      /**
+       * The tool call this announcement belongs to, when the CLI ties one to
+       * it — so the consumer can render the list INSTEAD of the opaque tool row
+       * that produced it rather than beside it. Null when the CLI reports the
+       * list without one.
+       */
+      toolCallId: string | null;
     }
   | {
       /**

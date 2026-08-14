@@ -10,6 +10,8 @@ import {
 // re-exports these): reaching into the component module from here is what
 // closed the `agent-activity → transcript-groups → transcript-item →
 // live-row → agent-activity` import cycle.
+import type { AgentTaskRow, TaskAnnouncement } from './task-payload';
+import { foldTaskList, readTaskAnnouncement } from './task-payload';
 import { AGENT_TOOLS, toolKindOf, toolOperationOf } from './tool-kind';
 import { resultDiffsOf, toolResultText } from './tool-render';
 import { payloadString } from './transcript-payload';
@@ -226,12 +228,42 @@ export interface SubagentBlockEntry {
   entries: TranscriptEntry[];
 }
 
+/**
+ * The agent's own task list, at the point in the conversation where it last
+ * moved — one card standing in for a contiguous run of announcements.
+ *
+ * A run rather than a row per announcement, because working a list is chatty:
+ * the measured cursor turn sent four announcements for a three-item list and
+ * claude sends one per create and one per status change, so a row each would
+ * bury the conversation under near-identical checklists. One card per run reads
+ * as "here is where the list stood after that burst of work".
+ *
+ * {@link tasks} is folded from EVERY announcement of this thread from the
+ * beginning, not just the ones in this run — two of the three shapes on the wire
+ * are patches, so a run holding one `TaskUpdate` knows about exactly one task
+ * and the list is only ever the fold.
+ */
+export interface TaskListEntry {
+  type: 'task-list';
+  /** Stable identity for keys: the first announcement in the run. */
+  id: string;
+  createdAt: string;
+  /** The highest `seq` in the run — for the readers that order nested work. */
+  seq: number;
+  nodeId: string | null;
+  /** The thread that owns the list: a delegate's is its own. */
+  parentToolUseId: string | null;
+  /** The list as it stood after the last announcement in this run. */
+  tasks: AgentTaskRow[];
+}
+
 export type TranscriptEntry =
   | ItemEntry
   | ToolGroupEntry
   | CallBlockEntry
   | TurnBlockEntry
-  | SubagentBlockEntry;
+  | SubagentBlockEntry
+  | TaskListEntry;
 
 /** Sentinel: entry has no agent owner and breaks a turn block. */
 const NO_OWNER = Symbol('no-owner');
@@ -268,6 +300,9 @@ function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
   }
   if (entry.type === 'turn-block') {
     return { nodeId: entry.nodeId, subagentId: null };
+  }
+  if (entry.type === 'task-list') {
+    return { nodeId: entry.nodeId, subagentId: entry.parentToolUseId };
   }
   const item = entry.item;
   if (item.kind === 'message' && item.role !== 'user') {
@@ -358,6 +393,9 @@ function subagentOwnerOf(entry: TranscriptEntry): string | null {
   if (entry.type === 'turn-block') {
     return entry.subagentId;
   }
+  if (entry.type === 'task-list') {
+    return entry.parentToolUseId;
+  }
   // A call block is a NODE-to-node call and a sub-agent block is already an
   // enclosure — neither is a delegate's row needing one.
   return null;
@@ -386,6 +424,10 @@ function maxSeqOf(list: readonly TranscriptEntry[]): number {
       for (const pair of entry.pairs) {
         max = Math.max(max, pair.result?.seq ?? pair.call.seq);
       }
+      continue;
+    }
+    if (entry.type === 'task-list') {
+      max = Math.max(max, entry.seq);
       continue;
     }
     max = Math.max(max, maxSeqOf(entry.entries));
@@ -423,6 +465,10 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
       for (const pair of entry.pairs) {
         consider(pair.result?.createdAt ?? pair.call.createdAt);
       }
+      continue;
+    }
+    if (entry.type === 'task-list') {
+      consider(entry.createdAt);
       continue;
     }
     const nested = lastRowAtOf(entry.entries);
@@ -501,7 +547,9 @@ export function countTools(entries: readonly TranscriptEntry[]): number {
     if (entry.type === 'tools') {
       return sum + entry.pairs.length;
     }
-    if (entry.type === 'item') {
+    if (entry.type === 'item' || entry.type === 'task-list') {
+      // A task card holds no tool invocations: the calls that produced it are
+      // hidden BY it, and counting them would report work with no row to open.
       return sum;
     }
     return sum + countTools(entry.entries);
@@ -870,9 +918,34 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     }
   }
 
-  // Pass 2 — the main fold over everything not claimed into a block.
+  // Pass 2 — which tool calls a task announcement SPEAKS FOR.
+  //
+  // The list is rendered INSTEAD of the row that produced it, not beside it,
+  // because that row is the whole complaint: claude's `TaskUpdate` collapses to
+  // `TaskUpdate` in a tool group, and cursor's discloses no arguments at all
+  // (`rawInput:{_toolName:"updateTodos"}`), so the reader learns that a tool
+  // ran and nothing about the work. Both halves of the pair go, which is why
+  // this has to be known BEFORE the fold: the result arrives later in the
+  // stream than the announcement that claims it.
+  const taskToolCallIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== 'task_list') {
+      continue;
+    }
+    const toolCallId = readTaskAnnouncement(item)?.toolCallId;
+    if (toolCallId) {
+      taskToolCallIds.add(toolCallId);
+    }
+  }
+
+  // Pass 3 — the main fold over everything not claimed into a block.
   const entries: TranscriptEntry[] = [];
   const hiddenCallIds = new Set<string>();
+  // The running fold per thread, and the card currently open for it. Kept per
+  // thread because both CLIs number tasks from 1, so a delegate's task `1` and
+  // the main agent's are different tasks.
+  const taskLists = new Map<string | null, TaskAnnouncement[]>();
+  const openTaskCards = new Map<string, TaskListEntry>();
   const pairsByCallId = new Map<string, ToolPair>();
   // Keyed by node AND by originating thread, so a sub-agent's calls collapse
   // into their own row and neither thread's narrative closes the other's group.
@@ -904,7 +977,10 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     if (item.kind === 'tool_call') {
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');
-      if (name.startsWith(GENIRO_TOOL_PREFIX)) {
+      if (
+        name.startsWith(GENIRO_TOOL_PREFIX) ||
+        (callId !== null && taskToolCallIds.has(callId))
+      ) {
         if (callId) {
           hiddenCallIds.add(callId);
         }
@@ -915,6 +991,12 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         pairsByCallId.set(callId, pair);
       }
       const key = groupKey(item);
+      // A VISIBLE tool call closes this thread's open task card, so the next
+      // announcement starts a fresh one. Without it a card floated above the
+      // work done after it while showing the list as it stood afterwards. A
+      // HIDDEN call never reaches here, which is what keeps a burst of task
+      // tools — every one of them hidden — collapsed into the single card.
+      openTaskCards.delete(key);
       const open = openGroups.get(key);
       if (open) {
         open.pairs.push(pair);
@@ -946,12 +1028,49 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       entries.push({ type: 'item', item });
       continue;
     }
+    if (item.kind === 'task_list') {
+      const announcement = readTaskAnnouncement(item);
+      if (announcement === null) {
+        continue;
+      }
+      const thread = subagentIdOf(item);
+      const history = taskLists.get(thread) ?? [];
+      history.push(announcement);
+      taskLists.set(thread, history);
+      // Folded from the thread's WHOLE history rather than this run's rows: a
+      // run holding one `TaskUpdate` knows about one task, and the list is only
+      // ever the fold of everything before it.
+      const tasks = foldTaskList(history);
+      const key = groupKey(item);
+      const open = openTaskCards.get(key);
+      if (open) {
+        open.tasks = tasks;
+        open.seq = Math.max(open.seq, item.seq);
+        continue;
+      }
+      // A card is a narrative row of its own, so it closes the tool group of the
+      // thread that produced it — the same boundary any other rendered row is.
+      openGroups.delete(key);
+      const card: TaskListEntry = {
+        type: 'task-list',
+        id: item.id,
+        createdAt: item.createdAt,
+        seq: item.seq,
+        nodeId: item.nodeId,
+        parentToolUseId: thread,
+        tasks,
+      };
+      openTaskCards.set(key, card);
+      entries.push(card);
+      continue;
+    }
     // Any other rendered kind from this node is a narrative boundary — the
     // node "said something", so its next tool call starts a fresh group. Only
     // for the thread that said it: a sub-agent reporting mid-way must not
     // split the main thread's group, which is what produced runs of one-call
     // rows while several sub-agents were talking at once.
     openGroups.delete(groupKey(item));
+    openTaskCards.delete(groupKey(item));
     entries.push({ type: 'item', item });
   }
   closeGroupsBeforeTurnEnds(entries, items);
@@ -1462,6 +1581,10 @@ function lastMainThreadRowAt(
         for (const pair of entry.pairs) {
           consider(pair.result?.createdAt ?? pair.call.createdAt);
         }
+        continue;
+      }
+      if (entry.type === 'task-list') {
+        consider(entry.createdAt);
         continue;
       }
       walk(entry.entries);

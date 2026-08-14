@@ -26,6 +26,10 @@ import {
   CLAUDE_TASK_UPDATED_SUBTYPE,
 } from '../claude.const';
 import {
+  claudeTaskEventFromToolResult,
+  claudeTaskEventFromToolUse,
+} from './claude-tasks.utils';
+import {
   readClaudeAssistantContext,
   readClaudeUsage,
 } from './claude-usage.utils';
@@ -414,12 +418,23 @@ function mapClaudeLine(
             break;
           }
           case 'tool_use': {
+            const toolCallId = asString(b.id) ?? '';
+            const name = asString(b.name) ?? '';
             events.push({
               type: 'tool_call',
-              id: asString(b.id) ?? '',
-              name: asString(b.name) ?? '',
+              id: toolCallId,
+              name,
               input: b.input ?? null,
             });
+            // The tool row is still written. The task announcement is an
+            // ADDITION to it, not a replacement: the row is what every other
+            // consumer (the tool group, the activity line, the debug log) is
+            // built on, and only the transcript has any business hiding it —
+            // which it does by matching this call's id, carried on the event.
+            const task = claudeTaskEventFromToolUse(name, b.input, toolCallId);
+            if (task !== null) {
+              events.push(task);
+            }
             break;
           }
           default:
@@ -473,13 +488,24 @@ function mapClaudeLine(
         if (!b || asString(b.type) !== 'tool_result') {
           continue;
         }
+        const toolCallId = asString(b.tool_use_id) ?? '';
         events.push({
           type: 'tool_result',
-          id: asString(b.tool_use_id) ?? '',
+          id: toolCallId,
           name: null,
           result: b.content ?? null,
           isError: asBoolean(b.is_error),
         });
+        // Half of claude's task list is only readable HERE: a created task's id
+        // is in its result, and `TaskList`'s result is the only statement of the
+        // whole list. An error result is skipped — a failed call moved nothing,
+        // and its text is the failure rather than the task.
+        const task = asBoolean(b.is_error)
+          ? null
+          : claudeTaskEventFromToolResult(b.content, toolCallId);
+        if (task !== null) {
+          events.push(task);
+        }
         if (isPermissionChannelFailure(b.content)) {
           // Say it OUT LOUD. This failure arrives as ordinary tool-result text
           // inside a collapsed tool row, so a run can accumulate dozens of them

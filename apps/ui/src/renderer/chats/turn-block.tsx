@@ -95,7 +95,7 @@ export const TurnBlock = memo(function TurnBlock({
       return null; // turn blocks never nest — the fold is one level deep
     }
     if (entry.type === 'task-list') {
-      return <TaskListCard key={entry.id} tasks={entry.tasks} />;
+      return <TaskListCard key={entry.id} entry={entry} />;
     }
     const item = entry.item;
     // The block IS the bubble: plain markdown text inside, no extra chrome.

@@ -94,7 +94,7 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
     // No sender frame: the list is the AGENT's own bookkeeping about the work,
     // not something it said, and the surrounding turn block already names who
     // is working.
-    return <TaskListCard tasks={entry.tasks} />;
+    return <TaskListCard entry={entry} />;
   }
 
   const item = entry.item;

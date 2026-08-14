@@ -1756,6 +1756,41 @@ describe('groupTranscript task lists', () => {
     expect(cardsInside(blocks[0]!.entries)).toBe(1);
   });
 
+  it('marks only the LAST card of a thread as the current list', () => {
+    // What stops an earlier card animating its own in-progress task: those are
+    // historical snapshots, so three cards each spinning is three spinners for
+    // one running task, none of them still true.
+    const entries = groupTranscript([
+      tasks('patch', [{ id: '1', title: 'One', status: 'in_progress' }], 'a'),
+      call('Bash', 't1'),
+      tasks('patch', [{ id: '1', title: null, status: 'completed' }], 'b'),
+    ]);
+    const cards = entries.filter((entry) => entry.type === 'task-list');
+    expect(
+      cards.map((card) => card.type === 'task-list' && card.latest),
+    ).toEqual([false, true]);
+  });
+
+  it('marks a delegate’s last card current TOO — they are different lists', () => {
+    const delegated = {
+      ...tasks('snapshot', [{ id: '1', title: 'delegate task' }]),
+    };
+    delegated.payload = {
+      ...(delegated.payload as Record<string, unknown>),
+      parentToolUseId: 'toolu_parent',
+    };
+    const entries = groupTranscript([
+      tasks('snapshot', [{ id: '1', title: 'main task' }]),
+      delegated,
+    ]);
+    const cards = entries.filter(
+      (entry): entry is Extract<TranscriptEntry, { type: 'task-list' }> =>
+        entry.type === 'task-list',
+    );
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.latest)).toBe(true);
+  });
+
   it('does not count the hidden task tools as tool work', () => {
     // `countTools` feeds the "N tools" label on a block header; counting calls
     // that have no row to open would advertise work the reader cannot reach.

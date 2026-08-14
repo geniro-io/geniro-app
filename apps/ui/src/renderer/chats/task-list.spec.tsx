@@ -3,8 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TaskListCard, TaskStrip } from './task-list';
+import { RunSettledContext } from './live-row';
+import { TaskListCard, TaskRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
+import type { TaskListEntry } from './transcript-groups';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -39,6 +41,20 @@ const rows: AgentTaskRow[] = [
   { id: '3', title: 'Run the tests', status: 'pending', activeForm: null },
 ];
 
+function card(overrides: Partial<TaskListEntry> = {}): TaskListEntry {
+  return {
+    type: 'task-list',
+    id: 'c1',
+    createdAt: '2026-08-14T10:00:00.000Z',
+    seq: 5,
+    nodeId: null,
+    parentToolUseId: null,
+    tasks: rows,
+    latest: true,
+    ...overrides,
+  };
+}
+
 /** Every task line on screen, in order. */
 function taskTexts(): string[] {
   return [...container.querySelectorAll('li')].map(
@@ -46,9 +62,20 @@ function taskTexts(): string[] {
   );
 }
 
+/**
+ * Whether anything on screen is actually SPINNING.
+ *
+ * The animation class, which is what makes the glyph move — not a marker the
+ * test invented, and not "is the icon a Loader2", which would pass on a static
+ * copy of it.
+ */
+function spinning(): boolean {
+  return container.querySelector('.animate-spin') !== null;
+}
+
 describe('TaskListCard', () => {
   it('lists every task and says how far along the list is', () => {
-    render(<TaskListCard tasks={rows} />);
+    render(<TaskListCard entry={card()} />);
     expect(taskTexts()).toEqual([
       'Read the file',
       // The present-continuous label for the one being worked on — what the
@@ -64,40 +91,79 @@ describe('TaskListCard', () => {
     // task, and it sends `{taskId, status}` alone. An empty row would be worse.
     render(
       <TaskListCard
-        tasks={[{ id: '9', title: null, status: 'pending', activeForm: null }]}
+        entry={card({
+          tasks: [
+            { id: '9', title: null, status: 'pending', activeForm: null },
+          ],
+        })}
       />,
     );
     expect(taskTexts()).toEqual(['Task 9']);
   });
 
   it('renders nothing at all for an empty list', () => {
-    render(<TaskListCard tasks={[]} />);
+    render(<TaskListCard entry={card({ tasks: [] })} />);
     expect(container.firstChild).toBeNull();
   });
 });
 
-describe('TaskStrip', () => {
-  it('states the count and the current task without being opened', () => {
-    // The whole point of the strip: the transcript cards scroll away, so the
-    // current state has to be legible in the one line it costs.
-    render(<TaskStrip tasks={rows} />);
-    expect(container.textContent).toContain('1/3');
-    expect(container.textContent).toContain('Editing the file');
-    expect(taskTexts()).toEqual([]);
+describe('a task list nothing is working through', () => {
+  it('stops the in-progress row spinning once the run has settled', () => {
+    // The reported defect: "somewhere it finished one task, still in progress
+    // for some reason" — a chat whose turn ended with a task mid-flight kept a
+    // spinner on it for good. The row is still distinguishable from pending; it
+    // just stops claiming that work is happening.
+    render(
+      <RunSettledContext.Provider value={Date.parse('2026-08-14T11:00:00Z')}>
+        <TaskListCard entry={card()} />
+      </RunSettledContext.Provider>,
+    );
+    expect(spinning()).toBe(false);
+    // And it says "Edit the file", not "Editing the file": the active form is a
+    // claim about work under way.
+    expect(taskTexts()).toContain('Edit the file');
   });
 
-  it('opens onto the whole list', () => {
-    render(<TaskStrip tasks={rows} />);
-    act(() => container.querySelector<HTMLButtonElement>('button')?.click());
-    expect(taskTexts()).toEqual([
-      'Read the file',
-      'Editing the file',
-      'Run the tests',
-    ]);
+  it('keeps spinning while the run is live', () => {
+    render(
+      <RunSettledContext.Provider value={null}>
+        <TaskListCard entry={card()} />
+      </RunSettledContext.Provider>,
+    );
+    expect(spinning()).toBe(true);
   });
 
-  it('renders nothing when the agent kept no list', () => {
-    render(<TaskStrip tasks={[]} />);
-    expect(container.firstChild).toBeNull();
+  it('stops an EARLIER card spinning even on a live run', () => {
+    // A historical snapshot: the list has moved on since. Three cards each
+    // animating their own in-progress task is three spinners for one task, none
+    // of them still true.
+    render(
+      <RunSettledContext.Provider value={null}>
+        <TaskListCard entry={card({ latest: false })} />
+      </RunSettledContext.Provider>,
+    );
+    expect(spinning()).toBe(false);
+  });
+
+  it('keeps spinning for a card written AFTER the run settled', () => {
+    // The off-turn case: the CLI carries on by itself past its own turn-end
+    // line, so a card newer than the settle is live work whatever the row says.
+    render(
+      <RunSettledContext.Provider value={Date.parse('2026-08-14T09:00:00Z')}>
+        <TaskListCard entry={card()} />
+      </RunSettledContext.Provider>,
+    );
+    expect(spinning()).toBe(true);
+  });
+});
+
+describe('TaskRows', () => {
+  it('renders a live list with motion and a dead one without', () => {
+    // The shared renderer both surfaces use, so the side panel and the
+    // transcript cannot disagree about what a running task looks like.
+    render(<TaskRows tasks={rows} live />);
+    expect(spinning()).toBe(true);
+    render(<TaskRows tasks={rows} live={false} />);
+    expect(spinning()).toBe(false);
   });
 });

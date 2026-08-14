@@ -6,7 +6,7 @@ import {
   foldTaskList,
   readTaskAnnouncement,
   type TaskAnnouncement,
-  taskListsByThread,
+  taskListsByAgent,
   taskProgress,
 } from './task-payload';
 
@@ -207,13 +207,15 @@ describe('taskProgress', () => {
   });
 });
 
-describe('taskListsByThread', () => {
-  it('keeps a DELEGATE’s list apart from the main agent’s', () => {
-    // Both CLIs number tasks from 1, so a single fold would make task `1` mean
-    // two different things and each thread would overwrite the other's status.
+describe('taskListsByAgent', () => {
+  it('keeps a DELEGATE’s list OUT of the agent’s own', () => {
+    // Both CLIs number tasks from 1, so merging them would make task `1` mean
+    // two different things and report a delegate's progress as the agent's. The
+    // delegate's list is not lost — it belongs to its own block, which states
+    // its own count on its header.
     const delegated = (payload: Record<string, unknown>): ChatItem =>
       taskItem({ ...payload, parentToolUseId: 'toolu_parent' });
-    const lists = taskListsByThread(
+    const lists = taskListsByAgent(
       [
         taskItem(snapshot([row('1', 'main task', 'in_progress')])),
         delegated({
@@ -224,21 +226,27 @@ describe('taskListsByThread', () => {
       ],
       subagentIdOf,
     );
+    expect([...lists.keys()]).toEqual([null]);
     expect(lists.get(null)).toEqual([
       { id: '1', title: 'main task', status: 'in_progress', activeForm: null },
     ]);
-    expect(lists.get('toolu_parent')).toEqual([
-      {
-        id: '1',
-        title: 'delegate task',
-        status: 'completed',
-        activeForm: null,
-      },
-    ]);
+  });
+
+  it('keeps one workflow node’s list apart from another’s', () => {
+    const onNode = (nodeId: string, title: string): ChatItem => ({
+      ...taskItem(snapshot([row('1', title, 'pending')])),
+      nodeId,
+    });
+    const lists = taskListsByAgent(
+      [onNode('writer', 'draft it'), onNode('reviewer', 'review it')],
+      subagentIdOf,
+    );
+    expect(lists.get('writer')?.[0]?.title).toBe('draft it');
+    expect(lists.get('reviewer')?.[0]?.title).toBe('review it');
   });
 
   it('ignores every other item kind', () => {
     const other: ChatItem = { ...taskItem({}), kind: 'message' };
-    expect(taskListsByThread([other], subagentIdOf).size).toBe(0);
+    expect(taskListsByAgent([other], subagentIdOf).size).toBe(0);
   });
 });

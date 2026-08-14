@@ -1,10 +1,14 @@
 import { memo } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, {
+  type Components,
+  defaultUrlTransform,
+} from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { CodeBlock } from '../components/ui/code-block';
 import { languageForFence } from '../components/ui/code-language';
 import { cn } from '../components/ui/utils';
+import { MarkdownImage } from './markdown-image';
 
 /** The shape of a hast element, as far as the fence reader needs it. */
 interface HastNode {
@@ -255,7 +259,30 @@ const COMPONENTS: Components = {
     </td>
   ),
   hr: () => <hr className="my-2 border-border" />,
+  // Left to the default renderer for two milestones, which produced a broken
+  // box every time: the CSP forbids a `file:` source and a relative one
+  // resolves against the app's origin. See {@link MarkdownImage}.
+  img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
 };
+
+/**
+ * URL sanitizer — the library's own, plus `data:` IMAGE sources.
+ *
+ * `defaultUrlTransform` blanks every scheme outside its allowlist, `data:`
+ * included, which is right for a link and wrong for the one source the
+ * renderer's CSP (`img-src 'self' data:`) actually permits: an inline image
+ * arrived as `src=""` and rendered as nothing. It is also what every local
+ * reference is turned INTO once the daemon has read it, so blanking it would
+ * defeat {@link MarkdownImage} at the last step.
+ *
+ * Narrowed to `src` on an image and to the `image/` prefix — a `data:text/html`
+ * href is a script in a trench coat, and it still goes to the default.
+ */
+function urlTransform(url: string, key: string, node: HastNode): string {
+  return key === 'src' && node.tagName === 'img' && /^data:image\//i.test(url)
+    ? url
+    : defaultUrlTransform(url);
+}
 
 /** Markdown-rendered message text (geniro web's MarkdownContent). */
 export const MarkdownContent = memo(function MarkdownContent({
@@ -281,7 +308,10 @@ export const MarkdownContent = memo(function MarkdownContent({
     // is what a USER's own message is made of.
     <div
       className={cn('min-w-0 text-sm leading-relaxed break-words', className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={COMPONENTS}
+        urlTransform={urlTransform}>
         {content}
       </ReactMarkdown>
     </div>

@@ -11,7 +11,12 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { AttachmentDataWire, ItemWire, RunWire } from '../chat.types';
+import type {
+  AttachmentDataWire,
+  ItemWire,
+  LocalImageWire,
+  RunWire,
+} from '../chat.types';
 import {
   AttachmentDataDto,
   CancelledDto,
@@ -19,12 +24,15 @@ import {
   DeletedDto,
   HistoryQueryDto,
   ItemDto,
+  LocalImageDto,
+  LocalImageQueryDto,
   RenameRunDto,
   RunDto,
   SendMessageDto,
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
 import { ChatService } from '../services/chat.service';
+import { LocalImageService } from '../services/local-image.service';
 
 /**
  * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).
@@ -38,7 +46,10 @@ import { ChatService } from '../services/chat.service';
 @ApiTags('chats')
 @ApiBearerAuth()
 export class ChatController {
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly localImages: LocalImageService,
+  ) {}
 
   @Post()
   @ApiOperation({ operationId: 'createChat' })
@@ -102,6 +113,21 @@ export class ChatController {
     @Param('attachmentId') attachmentId: string,
   ): AttachmentDataWire {
     return this.chatService.readAttachment(runId, attachmentId);
+  }
+
+  /**
+   * An image an agent referenced from its own markdown. A QUERY parameter and
+   * not a path segment: the value is a filesystem path, so it carries slashes
+   * of its own and no amount of route shaping makes it one segment.
+   */
+  @Get(':runId/image')
+  @ApiOperation({ operationId: 'readLocalImage' })
+  @ZodResponse({ status: 200, type: LocalImageDto })
+  readLocalImage(
+    @Param('runId') runId: string,
+    @Query() query: LocalImageQueryDto,
+  ): Promise<LocalImageWire> {
+    return this.localImages.read(runId, query.path);
   }
 
   @Post(':runId/cancel')

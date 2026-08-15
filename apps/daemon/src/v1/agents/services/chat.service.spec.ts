@@ -1624,6 +1624,8 @@ describe('ChatService — approval modes (parity M1)', () => {
         contextWindowTokens: 1_000_000,
         contextModel: 'claude-opus-5[1m]',
         costUsd: null,
+        durationMs: null,
+        apiMs: null,
       },
       stopReason: 'end_turn',
       finalText: null,

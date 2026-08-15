@@ -393,6 +393,8 @@ describe('mapClaudeMessage', () => {
           },
         },
         total_cost_usd: 0.14,
+        duration_ms: 7618,
+        duration_api_ms: 7176,
       }),
     ).toEqual([
       {
@@ -405,6 +407,11 @@ describe('mapClaudeMessage', () => {
           contextWindowTokens: 1_000_000,
           contextModel: expect.any(String),
           costUsd: 0.14,
+          // The CLI's own turn timing, carried through the mapper to the turn
+          // the transcript persists — the number that lets a finished turn say
+          // how long it worked instead of only what it cost.
+          durationMs: 7618,
+          apiMs: 7176,
         },
         stopReason: 'end_turn',
         finalText: 'pong',

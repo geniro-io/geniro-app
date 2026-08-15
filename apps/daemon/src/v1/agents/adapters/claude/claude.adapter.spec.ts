@@ -108,6 +108,8 @@ describe('ClaudeAdapter', () => {
           contextWindowTokens: null,
           contextModel: null,
           costUsd: 0.01,
+          durationMs: null,
+          apiMs: null,
         },
         stopReason: 'end_turn',
         finalText: 'hi',

@@ -36,6 +36,14 @@ export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
     contextWindowTokens: context.window,
     contextModel: context.model,
     costUsd: asNumber(root.total_cost_usd),
+    // The CLI's OWN clock for the turn, which is the number worth having: it
+    // starts when the CLI begins working and so counts neither geniro's
+    // MCP-readiness hold nor a stretch parked on an approval card. Probed on
+    // 2.1.x (2026-08-14): `duration_ms` 7618 / `duration_api_ms` 7176 on a
+    // one-tool turn. Both were being dropped, which is why a finished turn
+    // could show its cost and never its time.
+    durationMs: asNumber(root.duration_ms),
+    apiMs: asNumber(root.duration_api_ms),
   };
 }
 

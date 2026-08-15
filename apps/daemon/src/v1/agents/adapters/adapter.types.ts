@@ -68,6 +68,44 @@ export interface AgentUsage {
    */
   contextModel: string | null;
   costUsd: number | null;
+  /**
+   * How long the turn took, as the CLI ITSELF measured it.
+   *
+   * The CLI's own figure and not a wall clock, which is the whole reason it is
+   * an adapter fact rather than something the daemon times: it measures the
+   * agent WORKING, and so excludes both of the waits geniro puts around a turn
+   * — the first-prompt MCP-readiness hold (up to 15s, see
+   * `claude-mcp-ready.utils.ts`) and any stretch parked on an approval card,
+   * which is a human being timed. A turn blocked half an hour on a question
+   * reports the seconds of work here, not the half hour.
+   *
+   * Null for a CLI that reports none, and the consumer then measures the wall
+   * clock itself rather than showing nothing — the fallback is deliberately
+   * NOT computed here, because a daemon-side timer would silently displace the
+   * better number for every CLI that does report one.
+   *
+   * Probed live on claude 2.1.x (2026-08-14): the `result` line carries
+   * `duration_ms` 7618 beside `duration_api_ms` 7176, `ttft_ms`,
+   * `time_to_request_ms` and `num_turns`. Every one of those was being dropped.
+   */
+  durationMs: number | null;
+  /**
+   * Of {@link durationMs}, how much was spent waiting on the model's API.
+   *
+   * The remainder is the CLI's own work — running tools, reading files, its own
+   * scaffolding — so the pair is what separates "the model was slow" from "the
+   * agent did a lot". Null whenever the CLI reports no such split; ACP reports
+   * neither figure (see `AcpTurnDriver.buildUsage`).
+   *
+   * **It can EXCEED {@link durationMs}, and a consumer must expect that.**
+   * Measured 2026-08-14 on a two-turn chat over one kept session: turn 1 came
+   * back `duration_ms` 3007 / `duration_api_ms` 2504, and turn 2 `duration_ms`
+   * 2562 / `duration_api_ms` 4633. The CLI is not reporting a subdivision of one
+   * interval on a resumed process, so the subtraction is only meaningful when it
+   * lands non-negative — the renderer's tooltip withholds the split entirely
+   * rather than printing a negative "own work" figure.
+   */
+  apiMs: number | null;
 }
 
 /**

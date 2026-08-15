@@ -20,6 +20,34 @@ import {
   payloadString,
   type TranscriptNodeMeta,
 } from './transcript-payload';
+import {
+  cliTurnApiMs,
+  cliTurnDurationMs,
+  formatDuration,
+  TurnDurationContext,
+} from './turn-duration';
+
+/**
+ * The API/own-work split, for the tooltip — only when the CLI reported both and
+ * the subtraction is meaningful. The remainder is the CLI running tools and
+ * reading files, which is what separates "the model was slow" from "the agent
+ * did a lot".
+ *
+ * `api > total` is a REAL reading, not a defensive guess, which is why it
+ * returns nothing rather than clamping: measured 2026-08-14 across two turns of
+ * one kept claude session, turn 2 reported `durationMs` 2562 against `apiMs`
+ * 4633. Clamping would print `0s its own work` about a turn that ran tools;
+ * withholding the split leaves the duration itself — which is sound — and says
+ * nothing it cannot support.
+ */
+function apiSuffix(payload: unknown): string {
+  const total = cliTurnDurationMs(payload);
+  const api = cliTurnApiMs(payload);
+  if (total === null || api === null || total <= 0 || api > total) {
+    return '';
+  }
+  return ` — ${formatDuration(api)} of it waiting on the model, ${formatDuration(total - api)} its own work`;
+}
 
 /**
  * Re-exported from the pure {@link ./transcript-payload} module, which is
@@ -48,6 +76,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   const cardBacked = useContext(CardBackedRequestsContext);
   const signIn = useContext(CliLoginContext);
   const nested = useContext(NestedThreadContext);
+  const durations = useContext(TurnDurationContext);
   const nodeName = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
   // Workflow-run items carry the node that produced them; tag each row so
@@ -179,9 +208,29 @@ export const TranscriptItem = memo(function TranscriptItem({
         usage && typeof usage === 'object' && 'costUsd' in usage
           ? (usage as { costUsd: unknown }).costUsd
           : null;
+      // How long this turn worked, beside the cost that was already here. The
+      // pair is the whole point: a turn's price meant little with no sense of
+      // what it bought, and the time was on screen only while the turn ran.
+      const worked = durations.get(item.id);
       return (
         <MessageBubble variant="note">
-          {`✓ done${typeof cost === 'number' ? ` · $${cost.toFixed(4)}` : ''}`}
+          {/* ONE child, because the note bubble is a `flex-col`: a second
+              sibling here does not sit beside the first, it stacks under it —
+              which put the cost on its own line the moment the duration gained
+              a span of its own. */}
+          <span>
+            <span
+              title={
+                worked === undefined
+                  ? undefined
+                  : worked.source === 'cli'
+                    ? `How long the agent worked, as the CLI itself measured it${apiSuffix(item.payload)}`
+                    : 'How long this turn worked — measured from the transcript, minus any time waiting on you'
+              }>
+              {`✓ done${worked === undefined ? '' : ` · ${formatDuration(worked.ms)}`}`}
+            </span>
+            {typeof cost === 'number' ? ` · $${cost.toFixed(4)}` : ''}
+          </span>
         </MessageBubble>
       );
     }

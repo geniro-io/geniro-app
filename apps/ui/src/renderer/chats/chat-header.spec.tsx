@@ -157,3 +157,50 @@ describe('ChatHeader — how long this turn has been running', () => {
     expect(el.querySelector('[title*="config directory"]')).toBeNull();
   });
 });
+
+describe('ChatHeader — how long this thread WORKED', () => {
+  it('states the worked total beside the relative time, not instead of it', () => {
+    // The two answer different questions, and it was the second that had no
+    // answer anywhere once a turn had settled: `3h` says when this last spoke,
+    // `worked 4m 12s` says how much work is in it.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={252_000}
+        turnCount={6}
+      />,
+    );
+
+    expect(el.textContent).toContain('worked 4m 12s');
+    expect(el.textContent).toContain('/ 6 turns');
+    // The relative time is still there — this is an addition, not a swap.
+    expect(el.textContent).toContain('1m');
+  });
+
+  it('renders nothing for a thread that has not worked yet', () => {
+    // `worked 0s` on a brand-new chat would be a claim about work that has not
+    // been asked for. Absent is the honest state.
+    const el = render(
+      <ChatHeader {...baseProps} status="completed" workedMs={0} />,
+    );
+
+    expect(el.querySelector('[data-slot="thread-worked"]')).toBeNull();
+    expect(el.textContent).not.toContain('worked');
+  });
+
+  it('drops the turn count for a single-turn thread', () => {
+    // `/ 1 turns` is wrong and `/ 1 turn` is noise — the figure IS that turn.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={7618}
+        turnCount={1}
+      />,
+    );
+
+    expect(el.textContent).toContain('worked 7.6s');
+    expect(el.textContent).not.toContain('turns');
+  });
+});

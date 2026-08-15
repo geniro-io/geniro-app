@@ -191,6 +191,8 @@ describe('mapEventToItem', () => {
           contextWindowTokens: 1_000_000,
           contextModel: 'claude-sonnet-4-5',
           costUsd: 0.14,
+          durationMs: 7618,
+          apiMs: 7176,
         },
         stopReason: 'end_turn',
         finalText: 'pong',
@@ -199,6 +201,11 @@ describe('mapEventToItem', () => {
       kind: 'turn_complete',
       role: null,
       payload: {
+        // The CLI's own turn timing reaches the persisted row untouched, which
+        // is what lets a REOPENED chat say how long each turn worked. Pinned in
+        // the whole-payload assertion rather than separately: this row is the
+        // only place the figure is ever durable, so a mapper that dropped it
+        // would leave the number visible live and gone on reload.
         usage: {
           inputTokens: 12,
           outputTokens: 3,
@@ -206,6 +213,8 @@ describe('mapEventToItem', () => {
           contextWindowTokens: 1_000_000,
           contextModel: 'claude-sonnet-4-5',
           costUsd: 0.14,
+          durationMs: 7618,
+          apiMs: 7176,
         },
         stopReason: 'end_turn',
       },

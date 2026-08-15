@@ -130,7 +130,35 @@ describe('readClaudeUsage', () => {
       contextWindowTokens: null,
       contextModel: null,
       costUsd: null,
+      durationMs: null,
+      apiMs: null,
     });
+  });
+
+  it("reads the CLI's own turn timing off the result line", () => {
+    // Verbatim from a live probe on 2.1.x (2026-08-14) — the fields alongside
+    // `total_cost_usd` that were being dropped, which is why a finished turn
+    // could report its cost and never how long it took.
+    const usage = readClaudeUsage({
+      usage: SIX_TOOL_CALLS,
+      duration_ms: 7618,
+      duration_api_ms: 7176,
+      total_cost_usd: 0.211038,
+    });
+    expect(usage.durationMs).toBe(7618);
+    // The split is the point: the remainder is the CLI's own work rather than
+    // time the model spent thinking, which is what separates "the model was
+    // slow" from "the agent did a lot".
+    expect(usage.apiMs).toBe(7176);
+  });
+
+  it('reports no timing for a build that sends none, rather than a zero', () => {
+    // A zero would render as `0s` — a turn that took no time at all — and the
+    // consumer's wall-clock fallback would never be reached, since the field
+    // would be present and numeric.
+    const usage = readClaudeUsage({ usage: SIX_TOOL_CALLS });
+    expect(usage.durationMs).toBeNull();
+    expect(usage.apiMs).toBeNull();
   });
 });
 

@@ -1038,6 +1038,8 @@ describe('GraphExecutorService', () => {
           contextWindowTokens: window,
           contextModel: nodeModel,
           costUsd: null,
+          durationMs: null,
+          apiMs: null,
         },
         stopReason: 'end_turn',
         finalText: 'done',

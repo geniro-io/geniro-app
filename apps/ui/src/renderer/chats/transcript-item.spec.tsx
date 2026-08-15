@@ -14,6 +14,7 @@ import {
   type TranscriptNodeMeta,
   unanswerableRequestIds,
 } from './transcript-item';
+import { TurnDurationContext } from './turn-duration';
 
 const NODES: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
   ['start', { name: 'Start', kind: 'trigger' }],
@@ -612,3 +613,95 @@ describe('unanswerable — the daemon says a card is dead', () => {
 // the SAME node's still-live DAG-turn approval", and the sweep test's
 // unanswerable assertion) and chat.service.spec.ts ("records every approval
 // still pending when the turn settles as unanswerable").
+
+describe('turn_complete — how long the turn worked', () => {
+  const done = (payload: unknown): ChatItem => ({
+    ...item('turn_complete', payload, null),
+    id: 'done-1',
+  });
+
+  it('shows the duration beside the cost the row already carried', () => {
+    // The pair is the point: a price with no sense of what it bought said very
+    // little, and the time was on screen only while the turn was running.
+    render(
+      <TurnDurationContext.Provider
+        value={new Map([['done-1', { ms: 7618, source: 'cli' as const }]])}>
+        <TranscriptItem
+          item={done({ usage: { costUsd: 0.211, durationMs: 7618 } })}
+        />
+      </TurnDurationContext.Provider>,
+    );
+    expect(container.textContent).toContain('7.6s');
+    expect(container.textContent).toContain('$0.2110');
+    // ONE line, not two. The note bubble is a `flex-col`, so a duration span
+    // beside the cost text stacks instead of sitting next to it — which is
+    // exactly what happened, and only showed up on screen.
+    // `childNodes`, NOT `childElementCount`: the thing that stacks is the cost
+    // TEXT node, which is a flex item and not an element — counting elements
+    // reads 1 either way, so that assertion passed with the fix reverted.
+    const bubble = container.querySelector('[data-role="note"]');
+    expect(bubble?.childNodes.length).toBe(1);
+    expect(bubble?.textContent).toBe('\u2713 done \u00b7 7.6s \u00b7 $0.2110');
+  });
+
+  it("names which clock it is, and splits the CLI's own figure on hover", () => {
+    render(
+      <TurnDurationContext.Provider
+        value={new Map([['done-1', { ms: 7618, source: 'cli' as const }]])}>
+        <TranscriptItem
+          item={done({ usage: { durationMs: 7618, apiMs: 7176 } })}
+        />
+      </TurnDurationContext.Provider>,
+    );
+    const title =
+      container.querySelector('[title]')?.getAttribute('title') ?? '';
+    expect(title).toContain('as the CLI itself measured it');
+    // The remainder is the CLI's own work — running tools, reading files — which
+    // is what separates "the model was slow" from "the agent did a lot".
+    expect(title).toContain('waiting on the model');
+    expect(title).toContain('0.4s its own work');
+  });
+
+  it('withholds the split when the CLI reports more API time than turn time', () => {
+    // A REAL reading, not a hypothetical: measured across two turns of one kept
+    // claude session, turn 2 came back durationMs 2562 against apiMs 4633. The
+    // duration itself is sound and stays; only the subdivision goes, because
+    // "0s its own work" about a turn that ran tools would be a fabrication.
+    render(
+      <TurnDurationContext.Provider
+        value={new Map([['done-1', { ms: 2562, source: 'cli' as const }]])}>
+        <TranscriptItem
+          item={done({ usage: { durationMs: 2562, apiMs: 4633 } })}
+        />
+      </TurnDurationContext.Provider>,
+    );
+    expect(container.textContent).toContain('2.6s');
+    const title =
+      container.querySelector('[title]')?.getAttribute('title') ?? '';
+    expect(title).toBe(
+      'How long the agent worked, as the CLI itself measured it',
+    );
+    expect(title).not.toContain('own work');
+  });
+
+  it('says the wall clock is measured, and excludes time spent waiting on you', () => {
+    render(
+      <TurnDurationContext.Provider
+        value={new Map([['done-1', { ms: 12_000, source: 'wall' as const }]])}>
+        <TranscriptItem item={done({ usage: { costUsd: 0.4 } })} />
+      </TurnDurationContext.Provider>,
+    );
+    const title =
+      container.querySelector('[title]')?.getAttribute('title') ?? '';
+    expect(title).toContain('measured from the transcript');
+    expect(title).toContain('waiting on you');
+  });
+
+  it('renders exactly as before for a turn nothing could time', () => {
+    // No provider at all — the context default. A row that gained a stray
+    // separator or an empty duration would be a regression on every historical
+    // chat, whose rows predate the field entirely.
+    render(<TranscriptItem item={done({ usage: { costUsd: 0.211 } })} />);
+    expect(container.textContent).toBe('✓ done · $0.2110');
+  });
+});

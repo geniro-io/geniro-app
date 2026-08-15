@@ -12,6 +12,7 @@ import {
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
+import { formatDuration } from './turn-duration';
 
 /**
  * How long the turn on screen has been running, ticking every second.
@@ -67,6 +68,8 @@ export function ChatHeader({
   status,
   lastActivityAt,
   turnStartedAt = null,
+  workedMs = 0,
+  turnCount = 0,
   sidePanelOpen,
   onToggleSidePanel,
 }: {
@@ -109,6 +112,18 @@ export function ChatHeader({
    * and claim a four-minute turn had just begun.
    */
   turnStartedAt?: string | null;
+  /**
+   * What this thread has WORKED in total — the sum of its turns, not the span
+   * from its first message to its last.
+   *
+   * The two differ enormously and only one answers the question: a chat left
+   * open across three days with five minutes of work in it spans `3d` and
+   * worked `5m`. Zero (a thread whose turns reported nothing, or that has none
+   * yet) renders nothing rather than `0s`.
+   */
+  workedMs?: number;
+  /** How many settled turns {@link workedMs} is the sum of. */
+  turnCount?: number;
   sidePanelOpen: boolean;
   onToggleSidePanel: () => void;
 }): React.JSX.Element {
@@ -154,6 +169,19 @@ export function ChatHeader({
             · {formatRelativeTime(lastActivityAt)}
           </span>
         )}
+        {workedMs > 0 ? (
+          // Beside the relative time, and deliberately NOT instead of it: the
+          // two answer different questions ("when did this last speak" vs "how
+          // much work is in here"), and it was the second that had no answer
+          // anywhere in the app once a turn had settled.
+          <span
+            data-slot="thread-worked"
+            className="shrink-0 text-xs tabular-nums text-muted-foreground"
+            title={`Total time the agent worked in this thread, across ${turnCount} ${turnCount === 1 ? 'turn' : 'turns'} — not the span since it started`}>
+            · worked {formatDuration(workedMs)}
+            {turnCount > 1 ? ` / ${turnCount} turns` : ''}
+          </span>
+        ) : null}
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
         <Button

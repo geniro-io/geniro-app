@@ -1273,6 +1273,15 @@ export class AcpTurnDriver implements TurnDriver {
         this.usage.costCurrency?.toUpperCase() === 'USD'
           ? this.usage.costAmount
           : null,
+      // ACP has no turn-timing channel at all: `session/prompt` answers with a
+      // stop reason, and `UsageUpdate` carries token occupancy and a price and
+      // no clock. Deliberately NOT timed here from the driver's own turn
+      // boundaries — that would be a wall clock wearing the CLI's name, and it
+      // would count a stretch parked on `session/request_permission` as work
+      // the agent did. The consumer measures the wall clock where this is null
+      // and knows that is what it has.
+      durationMs: null,
+      apiMs: null,
     };
   }
 

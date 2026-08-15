@@ -125,6 +125,11 @@ import {
   type TranscriptNodeMeta,
   unanswerableRequestIds,
 } from './transcript-item';
+import {
+  threadWorkedMs,
+  TurnDurationContext,
+  turnDurations as computeTurnDurations,
+} from './turn-duration';
 import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
@@ -2536,6 +2541,21 @@ export function Chats({
     [durableEntries, liveText, workingAgents],
   );
   /**
+   * How long each of this run's turns worked — see `turn-duration.ts`.
+   *
+   * Derived from the DURABLE rows, like `turnStartedAt` above and for the same
+   * reason: a reload, a tab switch or a mid-turn reconnect must not change the
+   * answer. Computed once here and handed down by context rather than per row,
+   * since every `turn_complete` in the transcript needs its own entry and the
+   * shells between are memoized.
+   */
+  const turnDurations = useMemo(() => computeTurnDurations(items), [items]);
+  /** What this whole thread has worked, for the header. */
+  const threadWorked = useMemo(
+    () => threadWorkedMs(turnDurations),
+    [turnDurations],
+  );
+  /**
    * What THIS run is doing, for the live rows — the same sentence the sidebar
    * badge carries, so the transcript and the badge cannot say different things
    * about one run.
@@ -3244,6 +3264,8 @@ export function Chats({
                       status={activeRunStatus}
                       lastActivityAt={activeRun.updatedAt}
                       turnStartedAt={turnStartedAt}
+                      workedMs={threadWorked.ms}
+                      turnCount={threadWorked.turns}
                       sidePanelOpen={agentsPanelOpen}
                       onToggleSidePanel={toggleAgentsPanel}
                     />
@@ -3277,69 +3299,71 @@ export function Chats({
                   <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
                     <RunSettledContext.Provider value={activeRunSettledAt}>
                       <RunActivityContext.Provider value={activeActivity}>
-                        <SubagentDetailContext.Provider
-                          value={openSubagentDetail}>
-                          {transcriptEntries.map((entry) => {
-                            if (
-                              entry.type !== 'item' ||
-                              entry.item.kind !== 'approval_request'
-                            ) {
-                              const key =
-                                entry.type === 'item'
-                                  ? entry.item.id
-                                  : entry.id;
-                              return (
-                                <TranscriptEntryView
-                                  key={key}
-                                  entry={entry}
-                                  nodes={nodeMeta}
-                                  chatAgentName={activeRun?.agentKind ?? null}
-                                  soloAgent={soloAgent}
-                                />
+                        <TurnDurationContext.Provider value={turnDurations}>
+                          <SubagentDetailContext.Provider
+                            value={openSubagentDetail}>
+                            {transcriptEntries.map((entry) => {
+                              if (
+                                entry.type !== 'item' ||
+                                entry.item.kind !== 'approval_request'
+                              ) {
+                                const key =
+                                  entry.type === 'item'
+                                    ? entry.item.id
+                                    : entry.id;
+                                return (
+                                  <TranscriptEntryView
+                                    key={key}
+                                    entry={entry}
+                                    nodes={nodeMeta}
+                                    chatAgentName={activeRun?.agentKind ?? null}
+                                    soloAgent={soloAgent}
+                                  />
+                                );
+                              }
+                              const item = entry.item;
+                              // EVERY open request's card lives above the composer, so
+                              // every one of them leaves a marker here. Keyed on openness
+                              // rather than on the pinned id: keying on the pin gave the
+                              // SECOND open question a fully live card in the scroller,
+                              // which is the failure the pin exists to end. Leaving the
+                              // live card here too would put two sets of buttons over one
+                              // one-shot verdict channel; leaving nothing would silently
+                              // drop a row out of the conversation's order.
+                              if (openRequestId(item) !== null) {
+                                return (
+                                  <MessageBubble key={item.id} variant="note">
+                                    {pinnedRequest?.id === item.id
+                                      ? '❓ waiting on your answer — the card is pinned below'
+                                      : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                                  </MessageBubble>
+                                );
+                              }
+                              const askerName =
+                                (item.nodeId
+                                  ? (nodeMeta.get(item.nodeId)?.name ??
+                                    item.nodeId)
+                                  : activeRun?.agentKind) ?? 'agent';
+                              const card = (
+                                <div className="w-full">
+                                  {approvalCardFor(item)}
+                                </div>
                               );
-                            }
-                            const item = entry.item;
-                            // EVERY open request's card lives above the composer, so
-                            // every one of them leaves a marker here. Keyed on openness
-                            // rather than on the pinned id: keying on the pin gave the
-                            // SECOND open question a fully live card in the scroller,
-                            // which is the failure the pin exists to end. Leaving the
-                            // live card here too would put two sets of buttons over one
-                            // one-shot verdict channel; leaving nothing would silently
-                            // drop a row out of the conversation's order.
-                            if (openRequestId(item) !== null) {
-                              return (
-                                <MessageBubble key={item.id} variant="note">
-                                  {pinnedRequest?.id === item.id
-                                    ? '❓ waiting on your answer — the card is pinned below'
-                                    : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                </MessageBubble>
+                              // A solo agent's card needs no identity frame either.
+                              return soloAgent ? (
+                                <div key={item.id}>{card}</div>
+                              ) : (
+                                <SenderRow
+                                  key={item.id}
+                                  name={askerName}
+                                  colorKey={item.nodeId ?? undefined}
+                                  time={formatClockTime(item.createdAt)}>
+                                  {card}
+                                </SenderRow>
                               );
-                            }
-                            const askerName =
-                              (item.nodeId
-                                ? (nodeMeta.get(item.nodeId)?.name ??
-                                  item.nodeId)
-                                : activeRun?.agentKind) ?? 'agent';
-                            const card = (
-                              <div className="w-full">
-                                {approvalCardFor(item)}
-                              </div>
-                            );
-                            // A solo agent's card needs no identity frame either.
-                            return soloAgent ? (
-                              <div key={item.id}>{card}</div>
-                            ) : (
-                              <SenderRow
-                                key={item.id}
-                                name={askerName}
-                                colorKey={item.nodeId ?? undefined}
-                                time={formatClockTime(item.createdAt)}>
-                                {card}
-                              </SenderRow>
-                            );
-                          })}
-                        </SubagentDetailContext.Provider>
+                            })}
+                          </SubagentDetailContext.Provider>
+                        </TurnDurationContext.Provider>
                       </RunActivityContext.Provider>
                     </RunSettledContext.Provider>
                     <div ref={transcriptEndRef} />

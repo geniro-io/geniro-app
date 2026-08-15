@@ -1255,6 +1255,10 @@ describe('AcpTurnDriver turn completion', () => {
           contextWindowTokens: null,
           contextModel: null,
           costUsd: null,
+          // ACP has no turn-timing channel at all, so the driver reports none
+          // rather than passing off its own wall clock as the agent's figure.
+          durationMs: null,
+          apiMs: null,
         },
         stopReason: 'end_turn',
         finalText: 'part one part two',

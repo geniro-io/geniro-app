@@ -71,26 +71,18 @@ export const GroupHeader = memo(function GroupHeader({
   group,
   summary,
   dragging = false,
-  dropTarget = false,
   autoFocusName = false,
   onNameFocused,
   onToggle,
   onRename,
   onCommand,
   onDragStart,
-  onDragOverGroup,
   onDragEnd,
-  onDropRun,
 }: {
   group: RunGroupDto;
   summary: RunGroupSummary;
   /** This is the group currently being dragged — dimmed while it travels. */
   dragging?: boolean;
-  /**
-   * A chat is hovering over this group and would land in it — outlined, so the
-   * drop has a visible destination before the button comes up.
-   */
-  dropTarget?: boolean;
   /**
    * Open with the name selected — a group the user just created, so naming it
    * is typing rather than a second trip through the menu.
@@ -108,19 +100,15 @@ export const GroupHeader = memo(function GroupHeader({
   onRename: (groupId: string, name: string) => Promise<void>;
   onCommand: (groupId: string, command: GroupCommand) => void;
   /**
-   * Reordering, by dragging one header onto another.
+   * Reordering, by dragging this header onto another group.
    *
-   * The parent owns the arrangement — it is the only thing that holds the whole
-   * list — so this row reports the gesture and renders whatever order comes
-   * back. `onDragOverGroup` fires continuously while a header is dragged over
-   * this one, which is what makes the list rearrange UNDER the cursor instead
-   * of jumping at the drop; `onDragEnd` is where the arrangement is saved.
+   * Only the two ENDS of the gesture live here. What the pointer passes over is
+   * the SECTION's business (`Chats.tsx`), because a section is header + rail +
+   * rows and a drag has to be answerable anywhere inside it — `dragover`
+   * bubbles, so a handler here would only ever cover the 26px strip.
    */
   onDragStart?: (groupId: string) => void;
-  onDragOverGroup?: (groupId: string) => void;
   onDragEnd?: () => void;
-  /** A chat was dropped on this header — it files itself into this group. */
-  onDropRun?: (groupId: string) => void;
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(group.name);
@@ -196,7 +184,10 @@ export const GroupHeader = memo(function GroupHeader({
   };
 
   return (
-    <li className="group/header list-none">
+    // A DIV, not an `li`: the section around it is the list item (`Chats.tsx`
+    // renders one per group, and it is what carries the drop zone), so a
+    // second `li` here would nest one list item directly inside another.
+    <div className="group/header">
       <div
         role="button"
         tabIndex={0}
@@ -209,9 +200,8 @@ export const GroupHeader = memo(function GroupHeader({
         data-slot="group-header"
         data-group-id={group.id}
         className={cn(
-          'flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-sidebar-accent',
+          'flex w-full cursor-pointer select-none items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-sidebar-accent',
           dragging && 'opacity-40',
-          dropTarget && 'bg-accent ring-2 ring-ring/50',
         )}
         onDragStart={(event) => {
           // Firefox refuses to start a drag with no payload, and the data is
@@ -219,20 +209,6 @@ export const GroupHeader = memo(function GroupHeader({
           event.dataTransfer.setData('text/plain', group.id);
           event.dataTransfer.effectAllowed = 'move';
           onDragStart?.(group.id);
-        }}
-        onDragOver={(event) => {
-          // Without preventDefault this is not a drop target at all, and the
-          // cursor shows the no-entry glyph over every header.
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'move';
-          onDragOverGroup?.(group.id);
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          // A CHAT dropped here files itself into this group; a GROUP dropped
-          // here has already been rearranged live, and only needs saving.
-          onDropRun?.(group.id);
-          onDragEnd?.();
         }}
         onDragEnd={() => onDragEnd?.()}
         onClick={() => onToggle(group.id, !group.collapsed)}
@@ -467,6 +443,6 @@ export const GroupHeader = memo(function GroupHeader({
       {error ? (
         <p className="truncate px-2 text-xs text-destructive">{error}</p>
       ) : null}
-    </li>
+    </div>
   );
 });

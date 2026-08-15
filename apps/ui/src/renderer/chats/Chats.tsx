@@ -3365,7 +3365,6 @@ export function Chats({
                             awaiting={run.awaiting}
                             groups={groups}
                             groupId={run.groupId}
-                            sectionGroupId={sectionId}
                             dragging={
                               drag?.kind === 'run' && drag.id === run.id
                             }
@@ -3375,13 +3374,54 @@ export function Chats({
                             onSetGroup={handleSetRunGroup}
                             onNewGroupWithRun={handleNewGroupWithRun}
                             onDragStartRun={handleRunDragStart}
-                            onDragOverSection={handleSectionDragOver}
-                            onDropInSection={handleDropInSection}
                             onDragEndRun={handleDragEnd}
                           />
                         ));
                         return (
-                          <Fragment key={group?.id ?? 'loose'}>
+                          // The WHOLE section is the drop zone — its header, its
+                          // rail, its rows and the space between them. Hanging
+                          // the target off the header alone left the body of an
+                          // expanded group inert: a chat dragged into it lit
+                          // nothing up and landed nowhere, which is the reported
+                          // "выделяется, но не перетаскивается". `dragover`
+                          // bubbles, so one handler here covers every child and
+                          // the rows need none of their own.
+                          <li
+                            key={group?.id ?? 'loose'}
+                            data-slot="group-section"
+                            data-section-id={sectionId ?? 'loose'}
+                            className={cn(
+                              // The bottom padding is PERMANENT, not part of
+                              // the highlight: it is what keeps the colour rail
+                              // from running flush into the edge below it, and
+                              // adding it only while a drag hovers would shift
+                              // every row down at the moment the user is aiming
+                              // at one.
+                              'list-none rounded-lg pb-1.5',
+                              // Soft and NEUTRAL: `muted` rather than `accent`,
+                              // which is the palette's warm caramel and read as
+                              // a coloured state rather than as a destination —
+                              // and a hairline rather than a 2px ring, since a
+                              // heavy outline on a block this size in a 260px
+                              // sidebar reads as an error.
+                              isDropTarget && 'bg-muted/70 ring-1 ring-border',
+                            )}
+                            onDragOver={(event) => {
+                              // Without preventDefault this is not a drop
+                              // target at all, and the cursor shows the
+                              // no-entry glyph over the whole list.
+                              event.preventDefault();
+                              if (dragRef.current?.kind === 'run') {
+                                event.dataTransfer.dropEffect = 'move';
+                                handleSectionDragOver(sectionId);
+                              } else if (group !== null) {
+                                handleGroupDragOver(group.id);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              handleDropInSection(sectionId);
+                            }}>
                             {group ? (
                               <GroupHeader
                                 group={group}
@@ -3389,47 +3429,34 @@ export function Chats({
                                 dragging={
                                   drag?.kind === 'group' && drag.id === group.id
                                 }
-                                dropTarget={isDropTarget}
                                 autoFocusName={namingGroupId === group.id}
                                 onNameFocused={clearNamingGroup}
                                 onToggle={handleToggleGroup}
                                 onRename={handleRenameGroup}
                                 onCommand={handleGroupCommand}
                                 onDragStart={handleGroupDragStart}
-                                onDragOverGroup={handleGroupDragOver}
                                 onDragEnd={handleDragEnd}
-                                onDropRun={handleDropInSection}
                               />
                             ) : groups.length > 0 && sectionRuns.length > 0 ? (
                               // Only once a group exists: with none, this label
                               // would restate the panel heading directly above
                               // it. The loose runs need a name of their own the
-                              // moment anything sits above them — and a name to
-                              // drop a chat ONTO, to take it out of a group.
-                              <li
+                              // moment anything sits above them.
+                              <p
                                 data-slot="ungrouped-label"
-                                className={cn(
-                                  'list-none rounded-md px-2 pt-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase',
-                                  isDropTarget &&
-                                    'bg-accent ring-2 ring-ring/50',
-                                )}
-                                onDragOver={(event) => {
-                                  event.preventDefault();
-                                  handleSectionDragOver(null);
-                                }}
-                                onDrop={(event) => {
-                                  event.preventDefault();
-                                  handleDropInSection(null);
-                                }}>
+                                className="m-0 px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                 Ungrouped
-                              </li>
+                              </p>
                             ) : null}
                             {group === null ? (
-                              rows
+                              <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                                {rows}
+                              </ul>
                             ) : // An EMPTY group draws no rail: the container
                             // exists to enclose rows, and with none it rendered
-                            // as a 4px orphan tick under the header. The header
-                            // is the drop target either way, so nothing is lost.
+                            // as a 4px orphan tick under the header. The
+                            // section is the drop target either way, so an
+                            // empty group can still be dropped into.
                             group.collapsed || rows.length === 0 ? null : (
                               // The group's chats are ENCLOSED: indented, and
                               // hung off a rail in the group's own colour, so
@@ -3437,18 +3464,16 @@ export function Chats({
                               // begins is visible without counting. Without it
                               // an expanded group ran straight into the one
                               // below and the whole list read as flat.
-                              <li className="list-none">
-                                <ul
-                                  data-slot="group-runs"
-                                  className={cn(
-                                    'm-0 flex list-none flex-col gap-1 border-l-2 py-0.5 pl-2 ml-3',
-                                    GROUP_RAIL_CLASS[group.color],
-                                  )}>
-                                  {rows}
-                                </ul>
-                              </li>
+                              <ul
+                                data-slot="group-runs"
+                                className={cn(
+                                  'm-0 ml-3 flex list-none flex-col gap-1 border-l-2 py-1 pl-2',
+                                  GROUP_RAIL_CLASS[group.color],
+                                )}>
+                                {rows}
+                              </ul>
                             )}
-                          </Fragment>
+                          </li>
                         );
                       })}
                       {runs.length === 0 ? (

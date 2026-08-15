@@ -68,11 +68,8 @@ export const ChatListItem = memo(function ChatListItem({
   onDelete,
   onSetGroup,
   onNewGroupWithRun,
-  sectionGroupId = null,
   dragging = false,
   onDragStartRun,
-  onDragOverSection,
-  onDropInSection,
   onDragEndRun,
 }: {
   runId: string;
@@ -122,19 +119,14 @@ export const ChatListItem = memo(function ChatListItem({
   onSetGroup?: (runId: string, groupId: string | null) => void;
   /** Make a new group and put this run straight into it. */
   onNewGroupWithRun?: (runId: string) => void;
-  /**
-   * The group this row is currently drawn UNDER — the destination a drop onto
-   * this row means. Null for the loose section.
-   *
-   * A prop rather than a bound callback because the row is memoized: a closure
-   * per row would give every one of them a fresh identity on each render.
-   */
-  sectionGroupId?: string | null;
   /** This is the row being dragged — dimmed while it travels. */
   dragging?: boolean;
+  /**
+   * Picked up, and put down. Where it LANDS is the section's business
+   * (`Chats.tsx`): a drop zone has to cover a whole group, including the space
+   * between its rows, and `dragover` bubbles there from here anyway.
+   */
   onDragStartRun?: (runId: string) => void;
-  onDragOverSection?: (groupId: string | null) => void;
-  onDropInSection?: (groupId: string | null) => void;
   onDragEndRun?: () => void;
 }): React.JSX.Element {
   const meta = RUN_STATUS_META[status];
@@ -182,7 +174,10 @@ export const ChatListItem = memo(function ChatListItem({
   return (
     <NavListItem
       active={active}
-      className={cn('group', dragging && 'opacity-40')}
+      // `select-none`: without it a press-and-drag on the row starts a TEXT
+      // selection instead of the drag, which is what "выделяется, но не
+      // перетаскивается" looks like from the other side of the screen.
+      className={cn('group select-none', dragging && 'opacity-40')}
       activateLabel={label}
       suspendActivation={editing}
       // Not while renaming: a text field inside a draggable element cannot be
@@ -194,17 +189,6 @@ export const ChatListItem = memo(function ChatListItem({
         event.dataTransfer.setData('text/plain', runId);
         event.dataTransfer.effectAllowed = 'move';
         onDragStartRun?.(runId);
-      }}
-      onDragOver={(event) => {
-        // Without preventDefault this is not a drop target at all, and the
-        // cursor shows the no-entry glyph over every row.
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
-        onDragOverSection?.(sectionGroupId);
-      }}
-      onDrop={(event) => {
-        event.preventDefault();
-        onDropInSection?.(sectionGroupId);
       }}
       onDragEnd={() => onDragEndRun?.()}
       onActivate={() => onActivate(runId)}>

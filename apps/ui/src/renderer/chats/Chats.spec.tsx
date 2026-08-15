@@ -284,9 +284,12 @@ async function mount(client: DaemonClient): Promise<HTMLElement> {
 }
 
 async function clickRun(container: HTMLElement, title: string): Promise<void> {
-  const li = [...container.querySelectorAll('li')].find((el) =>
-    el.textContent?.includes(title),
-  );
+  // `li[draggable]` is the ROW. Every section — a group, or the loose list — is
+  // itself an `li` wrapping its rows, so a plain `li` search finds the SECTION
+  // first and clicks whichever row happens to be at the top of it.
+  const li = [
+    ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+  ].find((el) => el.textContent?.includes(title));
   // The row's activation surface is its overlay button (the li's first child).
   const activate = li?.querySelector<HTMLButtonElement>('button');
   await act(async () => {
@@ -817,8 +820,8 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     await clickRun(container, 'My chat');
 
     const secondRow = (): HTMLElement =>
-      [...container.querySelectorAll('li')].find((el) =>
-        el.textContent?.includes('Second chat'),
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Second chat'),
       )!;
     expect(secondRow().textContent).toContain('running');
 
@@ -864,8 +867,8 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     const { client } = makeClient();
     const container = await mount(client);
     const row = (): HTMLElement =>
-      [...container.querySelectorAll('li')].find((el) =>
-        el.textContent?.includes('My chat'),
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('My chat'),
       )!;
 
     await clickRun(container, 'My chat');
@@ -897,9 +900,9 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const row = [...container.querySelectorAll('li')].find((el) =>
-      el.textContent?.includes('My chat'),
-    )!;
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('My chat'))!;
     expect(row.textContent).toContain('completed');
     expect(row.textContent).not.toContain('running');
   });
@@ -954,8 +957,8 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     await clickRun(container, 'My chat');
 
     const secondRow = (): HTMLElement =>
-      [...container.querySelectorAll('li')].find((el) =>
-        el.textContent?.includes('Second chat'),
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Second chat'),
       )!;
     expect(secondRow().textContent).toContain('running');
 
@@ -1008,8 +1011,8 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     await clickRun(container, 'My chat');
 
     const secondRow = (): HTMLElement =>
-      [...container.querySelectorAll('li')].find((el) =>
-        el.textContent?.includes('Second chat'),
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Second chat'),
       )!;
     // Straight from the SNAPSHOT — a window that connected after the transition
     // has nothing else to read it off, and no event has fired for this run. The
@@ -1069,8 +1072,8 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     await clickRun(container, 'My chat');
 
     const secondRow = (): HTMLElement =>
-      [...container.querySelectorAll('li')].find((el) =>
-        el.textContent?.includes('Second chat'),
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Second chat'),
       )!;
 
     await act(async () => {
@@ -1719,9 +1722,9 @@ describe('Chats reconnect seam', () => {
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client } = makeClient();
     const container = await mount(client);
-    const li = [...container.querySelectorAll('li')].find((el) =>
-      el.textContent?.includes('My chat'),
-    );
+    const li = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('My chat'));
     // The activation surface is a REAL <button> — Enter/Space fire click as
     // native button behavior (which jsdom does not synthesize), so pin the
     // element identity plus its click-driven activation.
@@ -1731,9 +1734,9 @@ describe('Chats reconnect seam', () => {
       activate?.click();
     });
 
-    const active = [...container.querySelectorAll('li')].find((el) =>
-      el.querySelector('[aria-current="true"]'),
-    );
+    const active = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((el) => el.querySelector('[aria-current="true"]'));
     expect(active?.textContent).toContain('My chat');
     expect(container.textContent).toContain('hi');
   });
@@ -1982,9 +1985,12 @@ describe('Chats workflow runs', () => {
     await clickRun(container, 'Review team');
 
     const sidebarRow = (): string =>
-      [...container.querySelectorAll('aside li')].find((el) =>
-        el.textContent?.includes('Review team'),
-      )?.textContent ?? '';
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('Review team'))?.textContent ??
+      '';
     expect(composerButton(container, 'Stop')).not.toBeNull();
     expect(sidebarRow()).toContain('running');
 
@@ -2084,9 +2090,12 @@ describe('Chats workflow runs', () => {
     await clickRun(container, 'Review team');
 
     const sidebarRow = (): string =>
-      [...container.querySelectorAll('aside li')].find((el) =>
-        el.textContent?.includes('Review team'),
-      )?.textContent ?? '';
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('Review team'))?.textContent ??
+      '';
 
     await act(async () => {
       emitItem({
@@ -4567,9 +4576,9 @@ describe('Chats sidebar list', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    const row = [...container.querySelectorAll('aside li')].find((el) =>
-      el.textContent?.includes('Review team'),
-    );
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('Review team'));
     expect(row).toBeDefined();
     // The slug never shows as the label; the preview line does.
     expect(row!.textContent).not.toContain('review-team');
@@ -4611,9 +4620,9 @@ describe('Chats sidebar list', () => {
       runId: 'r1',
       renameRunDto: { title: 'Auth deep-dive' },
     });
-    const row = [...container.querySelectorAll('aside li')].find((el) =>
-      el.textContent?.includes('Auth deep-dive'),
-    );
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('Auth deep-dive'));
     expect(row).toBeDefined();
     expect(row!.querySelector('input')).toBeNull();
   });
@@ -4642,9 +4651,11 @@ describe('Chats sidebar list', () => {
     });
     expect(api.deleteChat).toHaveBeenCalledWith({ runId: 'r1' });
     expect(
-      [...container.querySelectorAll('aside li')].find((el) =>
-        el.textContent?.includes('My chat'),
-      ),
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('My chat')),
     ).toBeUndefined();
   });
 
@@ -4681,9 +4692,11 @@ describe('Chats sidebar list', () => {
     });
     expect(api.deleteChat).not.toHaveBeenCalled();
     expect(
-      [...container.querySelectorAll('aside li')].find((el) =>
-        el.textContent?.includes('Call Demo'),
-      ),
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('Call Demo')),
     ).toBeUndefined();
   });
 
@@ -4740,9 +4753,11 @@ describe('Chats sidebar list', () => {
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('daemon DELETE failed');
     expect(
-      [...container.querySelectorAll('aside li')].find((el) =>
-        el.textContent?.includes('My chat'),
-      ),
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('My chat')),
     ).toBeDefined();
   });
 
@@ -4755,9 +4770,9 @@ describe('Chats sidebar list', () => {
       emitItem(msg(0, 'assistant', 'Deploy finished cleanly.'));
     });
 
-    const row = [...container.querySelectorAll('aside li')].find((el) =>
-      el.textContent?.includes('My chat'),
-    );
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('My chat'));
     expect(row!.textContent).toContain('Deploy finished cleanly.');
   });
 
@@ -4975,9 +4990,11 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
 
     const rowText = (title: string): string =>
-      [...container.querySelectorAll('aside li')].find((el) =>
-        el.textContent?.includes(title),
-      )!.textContent!;
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes(title))!.textContent!;
     expect(rowText('Done chat')).toContain('5m');
     expect(rowText('Live chat')).not.toContain('5m');
   });
@@ -6152,9 +6169,9 @@ describe('Chats — background sub-agents', () => {
   }
 
   const sidebarRow = (container: HTMLElement): string =>
-    [...container.querySelectorAll('aside li')].find((el) =>
-      el.textContent?.includes('My chat'),
-    )?.textContent ?? '';
+    [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('My chat'))?.textContent ?? '';
 
   it('encloses a delegate and keeps the badge running while it is still out', async () => {
     // The one seam every pure unit in this feature meets: the fold runs inside
@@ -6374,11 +6391,11 @@ describe('Chats — the sidebar groups threads into folders', () => {
   /** The group header row for a named group, or null. */
   function headerOf(container: HTMLElement, name: string): HTMLElement | null {
     return (
-      [...container.querySelectorAll('li')].find(
-        (li) =>
-          li.querySelector('[data-slot="group-dot"]') !== null &&
-          li.textContent?.includes(name) === true,
-      ) ?? null
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          '[data-slot="group-header"]',
+        ),
+      ].find((row) => row.textContent?.includes(name) === true) ?? null
     );
   }
 
@@ -6471,9 +6488,7 @@ describe('Chats — the sidebar groups threads into folders', () => {
 
     expect(container.textContent).toContain('My chat');
     await act(async () => {
-      headerOf(container, 'Work')
-        ?.querySelector<HTMLElement>('[role="button"]')
-        ?.click();
+      headerOf(container, 'Work')?.click();
     });
 
     expect(container.textContent).not.toContain('My chat');
@@ -6504,10 +6519,7 @@ describe('Chats — the sidebar groups threads into folders', () => {
     ]);
     const container = await mount(makeClient().client);
 
-    const rowOf = (name: string): HTMLElement =>
-      headerOf(container, name)!.querySelector<HTMLElement>(
-        '[data-slot="group-header"]',
-      )!;
+    const rowOf = (name: string): HTMLElement => headerOf(container, name)!;
     const transfer = {
       setData: vi.fn(),
       effectAllowed: '',
@@ -6603,19 +6615,85 @@ describe('Chats — the sidebar groups threads into folders', () => {
         el.dispatchEvent(event);
       });
     };
-    // `li[draggable]` is the ROW: a grouped section wraps its rows in a plain
-    // `li`, which comes first in document order and carries the same text.
     const chatRow = [
-      ...container.querySelectorAll('li[draggable="true"]'),
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
     ].find((li) => li.textContent?.includes('My chat'))!;
     const header = container.querySelector('[data-group-id="g1"]')!;
 
     await fire(chatRow, 'dragstart');
     await fire(header, 'dragover');
-    // The destination is visible BEFORE the button comes up.
-    expect(header.className).toContain('ring-2');
+    // The destination is visible BEFORE the button comes up — and it is the
+    // whole SECTION that lights up, not the 26px header strip, because the
+    // whole section is what accepts the drop.
+    expect(
+      container.querySelector('[data-section-id="g1"]')?.className,
+    ).toContain('ring-1');
     await fire(header, 'drop');
 
+    expect(api.setRunGroup).toHaveBeenCalledWith({
+      runId: 'r1',
+      setRunGroupDto: { groupId: 'g1' },
+    });
+  });
+
+  it('accepts a chat dropped anywhere in an EXPANDED group, not just its header', async () => {
+    // The reported bug: a chat dragged into the BODY of an open group lit
+    // nothing up and landed nowhere, because only the header and the rows
+    // themselves were drop targets — the rail, the padding and the gaps
+    // between rows were inert, and they are most of what the eye aims at.
+    api.listChats.mockResolvedValue([run2, { ...run1, groupId: 'g1' }]);
+    groupApi.listRunGroups.mockResolvedValue([work]);
+    api.setRunGroup.mockResolvedValue({ ...run2, groupId: 'g1' });
+    const container = await mount(makeClient().client);
+
+    const transfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+    const fire = async (el: Element, type: string): Promise<void> => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      await act(async () => {
+        el.dispatchEvent(event);
+      });
+    };
+    const looseRow = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((li) => li.textContent?.includes('Second chat'))!;
+    // The RAIL — the group's row container, which is neither the header nor a
+    // row, and which had no handler of its own.
+    const rail = container.querySelector('[data-slot="group-runs"]')!;
+
+    await fire(looseRow, 'dragstart');
+    await fire(rail, 'dragover');
+    expect(
+      container.querySelector('[data-section-id="g1"]')?.className,
+    ).toContain('ring-1');
+    await fire(rail, 'drop');
+
+    expect(api.setRunGroup).toHaveBeenCalledWith({
+      runId: 'r2',
+      setRunGroupDto: { groupId: 'g1' },
+    });
+  });
+
+  it('accepts a chat dropped on an EMPTY group, which has no rows to aim at', async () => {
+    groupApi.listRunGroups.mockResolvedValue([work]);
+    api.setRunGroup.mockResolvedValue({ ...run1, groupId: 'g1' });
+    const container = await mount(makeClient().client);
+
+    const transfer = { setData: vi.fn(), effectAllowed: '', dropEffect: '' };
+    const fire = async (el: Element, type: string): Promise<void> => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      await act(async () => {
+        el.dispatchEvent(event);
+      });
+    };
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((li) => li.textContent?.includes('My chat'))!;
+    const section = container.querySelector('[data-section-id="g1"]')!;
+
+    await fire(row, 'dragstart');
+    await fire(section, 'drop');
     expect(api.setRunGroup).toHaveBeenCalledWith({
       runId: 'r1',
       setRunGroupDto: { groupId: 'g1' },
@@ -6636,10 +6714,8 @@ describe('Chats — the sidebar groups threads into folders', () => {
         el.dispatchEvent(event);
       });
     };
-    // `li[draggable]` is the ROW: a grouped section wraps its rows in a plain
-    // `li`, which comes first in document order and carries the same text.
     const chatRow = [
-      ...container.querySelectorAll('li[draggable="true"]'),
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
     ].find((li) => li.textContent?.includes('My chat'))!;
     const loose = container.querySelector('[data-slot="ungrouped-label"]')!;
 
@@ -6668,10 +6744,8 @@ describe('Chats — the sidebar groups threads into folders', () => {
         el.dispatchEvent(event);
       });
     };
-    // `li[draggable]` is the ROW: a grouped section wraps its rows in a plain
-    // `li`, which comes first in document order and carries the same text.
     const chatRow = [
-      ...container.querySelectorAll('li[draggable="true"]'),
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
     ].find((li) => li.textContent?.includes('My chat'))!;
     await fire(chatRow, 'dragstart');
     await fire(container.querySelector('[data-group-id="g1"]')!, 'drop');

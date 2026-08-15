@@ -258,6 +258,22 @@ const COMMANDS = {
   async fill(rest) { const i = rest.indexOf(' '); const sel = rest.slice(0, i); const val = rest.slice(i + 1); await page.fill(sel, val); log('filled', sel); },
   async click(sel) { try { await page.click(sel, { timeout: 5000 }); log('clicked', sel); } catch { log('click via DOM', await page.evaluate((s) => { const e = document.querySelector(s); if (!e) return 'NOT_FOUND'; e.click(); return 'OK'; }, sel)); } },
   async 'click-text'(text) { log('click-text', JSON.stringify(text), '→', await clickByText(text)); },
+  // Pointer drag between two elements' centres: `mdrag <fromSel> -> <toSel>`.
+  // React Flow wires an edge from pointer events on its handles, which neither
+  // `click` nor an HTML5 drag can express — the handles are not clickable and
+  // carry no dataTransfer. Moves in steps because React Flow only starts a
+  // connection once it has seen the pointer travel.
+  async mdrag(rest) {
+    const [from, to] = rest.split('->').map((s) => s.trim());
+    const a = await page.locator(from).first().boundingBox();
+    const b = await page.locator(to).first().boundingBox();
+    if (!a || !b) return log('mdrag: NOT_FOUND', !a ? from : to);
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
+    await page.mouse.up();
+    log('mdrag', from, '→', to);
+  },
   async send() { log('send →', await page.evaluate(() => { const b = document.querySelector('button[aria-label="Send"], button[aria-label="Start run"]'); if (!b) return 'NOT_FOUND'; b.click(); return 'OK'; })); },
   async approve() { log('approve →', await clickByText('Approve')); },
   async deny() { log('deny →', await clickByText('Deny')); },

@@ -13,11 +13,18 @@ const CUSTOM = '__custom__';
  * (e.g. `claude-fable-5`). Every node names its model explicitly — a node
  * arriving with none (a fresh palette drop, imported YAML) adopts the first
  * alias on mount so the select never shows a model the run wouldn't use. A
- * stored model outside the alias list starts in custom mode showing exactly
+ * stored model outside the alias list shows in custom mode, displaying exactly
  * the value that will be passed to `--model`.
  *
- * Mount with `key={node.id}` — the select/custom mode is derived from the
- * value once per node, so it must not leak across node selections.
+ * Both of those rest on `models` being THIS node's CLI's list, which is the
+ * caller's obligation and was where the real damage came from: the list is
+ * fetched per selection, so the commit that selects a node of the other CLI
+ * still carried the previous one's. `useAgentVocabulary` now resolves during
+ * render and answers `[]` until the right list arrives, which is what makes
+ * "adopt the first alias" safe — see its own note for the measurement.
+ *
+ * Mount with `key={node.id}`: an explicit Custom… choice belongs to one node
+ * and must not leak across selections.
  */
 export function ModelSelect({
   id,
@@ -33,23 +40,45 @@ export function ModelSelect({
   onChange: (model: string | undefined) => void;
 }): React.JSX.Element {
   const options = models.map((model) => model.id);
-  const [custom, setCustom] = useState(
-    () => value !== '' && !options.includes(value),
-  );
+  // Which mode the field is in, or null while nothing has decided yet.
+  //
+  // Decided ONCE — but only once the list has actually arrived, which is the
+  // fix. It used to be decided at mount from whatever `models` held then, and
+  // this node's CLI list is fetched per selection: at mount it is routinely
+  // empty, so `!options.includes(value)` was true of every stored model and
+  // every node re-opened showing "Custom…" over a text input, permanently.
+  const [custom, setCustom] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (custom === null && options.length > 0) {
+      setCustom(value !== '' && !options.includes(value));
+    }
+  }, [custom, options, value]);
+
+  // Undecided reads as list mode: the alternative would open a text input over
+  // a model the list is about to recognise.
+  const customMode = custom ?? false;
 
   // Adopt the first alias for a model-less node — but never while the custom
   // input is open, where a transiently empty value is just mid-typing.
   useEffect(() => {
-    if (value === '' && !custom && options.length > 0) {
+    if (value === '' && !customMode && options.length > 0) {
       onChange(options[0]);
     }
-  }, [value, custom, options, onChange]);
+  }, [value, customMode, options, onChange]);
 
   return (
     <div className="flex flex-col gap-1.5">
       <Select
         id={id}
-        value={custom ? CUSTOM : value}
+        value={customMode ? CUSTOM : value}
+        // While the list is still on its way, the stored id IS the honest
+        // label: with no matching option the trigger would otherwise fall back
+        // to the placeholder and read as though the node had no model.
+        triggerLabel={
+          options.length === 0 && !customMode && value !== ''
+            ? value
+            : undefined
+        }
         side="bottom"
         groups={[
           { items: options.map((model) => ({ value: model, label: model })) },
@@ -67,7 +96,7 @@ export function ModelSelect({
           onChange(next || undefined);
         }}
       />
-      {custom ? (
+      {customMode ? (
         <Input
           aria-label="Custom model id"
           value={value}

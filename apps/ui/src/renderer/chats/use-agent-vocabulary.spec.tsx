@@ -132,6 +132,53 @@ describe('useAgentVocabulary', () => {
     expect(claudeCalls).toBe(1);
   });
 
+  it('never answers a render with the kind it was asked about the render before', async () => {
+    // `act` flushes effects, so the tests above can only ever read the SETTLED
+    // value — which is why an effect-based reset looked correct for two
+    // milestones. What a consumer's own mount effect reads is the value from
+    // the render that switched kinds, one commit earlier, and that render used
+    // to carry the previous CLI's list.
+    //
+    // Measured in the graph builder (2026-08-15): the node inspector adopts the
+    // first model for a model-less node, so adding a cursor node while a claude
+    // node was selected wrote claude's `claude-fable-5[1m]` onto the cursor
+    // node — into the workflow YAML and then into the run, whose transcript
+    // recorded "agent does not offer the model 'claude-fable-5'".
+    const seen: { kind: CliKind | null; items: string[] }[] = [];
+    const fetchFor = (kind: CliKind): Promise<string[]> =>
+      Promise.resolve(kind === 'claude' ? ['opus', 'sonnet'] : ['auto-smart']);
+
+    let kind: CliKind | null = 'claude';
+    function Probe({ current }: { current: CliKind | null }): null {
+      const { items } = useAgentVocabulary(current, fetchFor);
+      seen.push({ kind: current, items });
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const render = (): void => {
+      root?.render(<Probe current={kind} />);
+    };
+    act(render);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    kind = 'cursor-agent';
+    act(render);
+
+    // The FIRST render under the new kind — the one a child mounts in.
+    expect(seen.find((s) => s.kind === 'cursor-agent')).toEqual({
+      kind: 'cursor-agent',
+      items: [],
+    });
+    // And no render, at any point, paired one CLI's kind with another's list.
+    expect(
+      seen.filter((s) => s.kind === 'cursor-agent' && s.items.includes('opus')),
+    ).toEqual([]);
+  });
+
   it('clears the list when the kind goes away entirely', async () => {
     const probe = mount('claude', (): Promise<string[]> =>
       Promise.resolve(['opus']),

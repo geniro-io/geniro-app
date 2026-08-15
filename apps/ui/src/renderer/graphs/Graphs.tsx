@@ -59,6 +59,8 @@ import {
   fromFlow,
   type GraphFlowNode,
   nextNodeId,
+  NODE_HEIGHT,
+  NODE_WIDTH,
   toFlow,
 } from './graph-doc';
 import { ModelSelect } from './model-select';
@@ -91,6 +93,22 @@ const EDGE_TYPES = { call: CallEdge };
 // render (and drags render per frame) defeats its internal memoization.
 const DELETE_KEY_CODES = ['Delete', 'Backspace'];
 const PRO_OPTIONS = { hideAttribution: true };
+/**
+ * The automatic open-the-workflow fit, capped at 1:1.
+ *
+ * The fit exists to bring an EXISTING graph into view, never to magnify: with
+ * no cap it also zooms IN, and React Flow defers the initial fit until nodes
+ * are measured — so on a workflow created moments ago it fires when the FIRST
+ * node lands and scales that one node to fill the pane. Measured 2026-08-15 on
+ * a new workflow: `scale(1)` on the empty canvas, `scale(3.42)` the instant a
+ * node was added, with every later node placed off-screen to its right. The
+ * user's escape was to find the fit-view control, which is what the automatic
+ * fit was supposed to spare them.
+ *
+ * The Controls' own fit button is deliberately NOT capped — pressing "fit" is
+ * asking to fill the screen with what is there.
+ */
+const INITIAL_FIT = { maxZoom: 1 };
 /** How long a one-off outcome (an export path) stays in the status bar. The
  *  bar is now always on screen, so a message with no expiry would sit there
  *  as stale news long after the action. */
@@ -477,8 +495,19 @@ export function Graphs({
             };
       setNodes((prev) => [...prev, node]);
       setSelectedNodeId(id);
+      if (!position && rfInstance) {
+        // A toolbar add lands 260px right of the rightmost node, which after a
+        // few is past the edge of the canvas — five "Add to canvas" clicks put
+        // four nodes off-screen and the builder looked like it had stopped
+        // adding them. A DROP is exempt: it landed where the user aimed.
+        // Panning, never zooming: the zoom is the user's.
+        rfInstance.setCenter(at.x + NODE_WIDTH / 2, at.y + NODE_HEIGHT / 2, {
+          zoom: rfInstance.getZoom(),
+          duration: 200,
+        });
+      }
     },
-    [nodes, setNodes],
+    [nodes, setNodes, rfInstance],
   );
 
   const onCanvasDragOver = useCallback((event: React.DragEvent): void => {
@@ -906,7 +935,7 @@ export function Graphs({
             // the automatic fit. Every finished pan/zoom gesture persists.
             {...(savedViewport
               ? { defaultViewport: savedViewport }
-              : { fitView: true })}
+              : { fitView: true, fitViewOptions: INITIAL_FIT })}
             onMoveEnd={onMoveEnd}
             deleteKeyCode={DELETE_KEY_CODES}
             minZoom={0.1}

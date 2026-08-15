@@ -154,6 +154,31 @@ describe('ModelSelect', () => {
     expect(customInput()?.value).toBe('claude-fable-5');
   });
 
+  it('waits for the CLI list before calling a stored model off-list', () => {
+    // A node's list is fetched when the node is SELECTED, so the field
+    // routinely mounts with none. Deciding then made every stored model look
+    // like free text: re-opening any node showed "Custom…" over a text input,
+    // permanently, because the mode was decided once and never revisited.
+    render(
+      <ModelSelect id="m" models={[]} value="sonnet" onChange={() => {}} />,
+    );
+    expect(trigger().textContent).toContain('sonnet');
+    expect(customInput()).toBeNull();
+
+    // The list lands a second later; it recognises the model, so nothing about
+    // the field changes.
+    render(
+      <ModelSelect
+        id="m"
+        models={CLAUDE_MODELS}
+        value="sonnet"
+        onChange={() => {}}
+      />,
+    );
+    expect(trigger().textContent).toContain('sonnet');
+    expect(customInput()).toBeNull();
+  });
+
   it('Custom… opens free-text entry without erasing the stored model', () => {
     render(<Harness initial="opus" />);
     pickModel('Custom…');

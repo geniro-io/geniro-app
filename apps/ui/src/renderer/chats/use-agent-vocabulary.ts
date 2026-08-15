@@ -9,6 +9,13 @@ export type AgentVocabularyState<T> = {
 };
 
 /**
+ * The "nothing known yet" answer, as ONE array rather than a fresh literal per
+ * render: a consumer whose effect depends on the list would otherwise re-run on
+ * every render of an agent whose vocabulary has not arrived.
+ */
+const NOTHING_YET: never[] = [];
+
+/**
  * One agent CLI's vocabulary for some picker — its models, its reasoning-effort
  * levels — fetched from the daemon and cached per kind for the session.
  *
@@ -37,39 +44,30 @@ export function useAgentVocabulary<T>(
   fetchFor: ((kind: CliKind) => Promise<T[]>) | null,
 ): AgentVocabularyState<T> {
   const cacheRef = useRef(new Map<CliKind, T[]>());
-  const [state, setState] = useState<AgentVocabularyState<T>>({
-    items: [],
-    loading: false,
-  });
+  // What the last finished fetch answered, and WHICH kind it answered for.
+  // Only ever read when it matches the kind being asked about.
+  const [answered, setAnswered] = useState<{
+    kind: CliKind;
+    items: T[];
+  } | null>(null);
 
   useEffect(() => {
-    if (kind === null || fetchFor === null) {
-      setState({ items: [], loading: false });
+    if (kind === null || fetchFor === null || cacheRef.current.has(kind)) {
       return;
     }
-    const cached = cacheRef.current.get(kind);
-    if (cached) {
-      setState({ items: cached, loading: false });
-      return;
-    }
-    // Nothing known about THIS kind yet, so show nothing — never the kind we
-    // were showing a moment ago. Holding the previous list across the switch
-    // offers one CLI's vocabulary under another's name, and the window is not
-    // a flicker: a cursor model probe spawns a real `cursor-agent acp` and
-    // handshakes twice (7.0s cold), so a cursor target sat there offering
-    // claude's models for seconds.
-    setState({ items: [], loading: true });
     let stale = false;
     void fetchFor(kind)
       .then((fetched) => {
         cacheRef.current.set(kind, fetched);
         if (!stale) {
-          setState({ items: fetched, loading: false });
+          setAnswered({ kind, items: fetched });
         }
       })
       .catch(() => {
+        // Deliberately NOT cached: a failed probe is not an answer about the
+        // CLI, and selecting it again should ask again.
         if (!stale) {
-          setState({ items: [], loading: false });
+          setAnswered({ kind, items: [] });
         }
       });
     return () => {
@@ -79,5 +77,27 @@ export function useAgentVocabulary<T>(
     };
   }, [kind, fetchFor]);
 
-  return state;
+  // Resolved DURING RENDER, not in an effect, and that is the whole point: the
+  // answer must belong to the kind being asked about in THIS commit. An
+  // effect-set state is always one commit late, so the render that switches
+  // kinds still read the previous CLI's list — and a consumer that acts on the
+  // list on mount acted on it. Measured in the graph builder (2026-08-15): the
+  // node inspector adopts the first model for a model-less node, so adding a
+  // cursor node while a claude node was selected stamped the cursor node with
+  // claude's `claude-fable-5[1m]`, which then went to disk in the workflow YAML
+  // and to the CLI at run time. Both directions reproduced; the run's own
+  // transcript recorded "agent does not offer the model 'claude-fable-5'".
+  // Holding the previous list is not a flicker either: a cursor model probe
+  // spawns a real `cursor-agent acp` and handshakes twice (7.0s cold).
+  if (kind === null || fetchFor === null) {
+    return { items: NOTHING_YET, loading: false };
+  }
+  const cached = cacheRef.current.get(kind);
+  if (cached) {
+    return { items: cached, loading: false };
+  }
+  if (answered?.kind === kind) {
+    return { items: answered.items, loading: false };
+  }
+  return { items: NOTHING_YET, loading: true };
 }

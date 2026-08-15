@@ -148,8 +148,13 @@ export function nextNodeId(
   return `${prefix}-${n}`;
 }
 
-const NODE_WIDTH = 240;
-const NODE_HEIGHT = 128;
+/**
+ * What a node card measures, for the two callers that must place one before
+ * React Flow has measured it: the auto-layout below, and the canvas centring on
+ * a freshly added node.
+ */
+export const NODE_WIDTH = 240;
+export const NODE_HEIGHT = 128;
 
 /**
  * Auto-layout via ELK (layered, left→right — matches the producer→consumer

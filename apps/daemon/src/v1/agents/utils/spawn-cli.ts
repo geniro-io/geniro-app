@@ -432,8 +432,8 @@ interface TurnState {
   settled: boolean;
   /**
    * Emit at most ONE terminal event per turn, whichever arrives first: a
-   * `result`-line `turn_complete` from the mapper, a signal-kill
-   * `turn_cancelled`, or an `error`. Without this gate a child that prints a
+   * `result`-line `turn_complete` from the mapper, a `turn_cancelled` from a
+   * kill we asked for, or an `error`. Without this gate a child that prints a
    * success `result` AND then exits non-zero (or fires `error` then `close`)
    * would emit two contradictory terminal items for one turn.
    */
@@ -445,6 +445,12 @@ interface TurnState {
    * deliberate stop. So after a cancel an `error` terminal is normalized to
    * `turn_cancelled`; a genuine `turn_complete` that raced it still wins (the
    * turn really finished).
+   *
+   * It is also what separates a stop from a KILL, which is the other direction
+   * of the same mistake — see the signal branch of `settleFromTermination`.
+   * Every deliberate termination sets this (`cancel()` carries Stop and the
+   * shutdown reap; `close()` retires a session), so a signal arriving with it
+   * unset came from outside geniro and is a failure, not a cancellation.
    */
   cancelRequested: boolean;
   resolveDone: () => void;
@@ -1136,8 +1142,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   ): void => {
     buffer.flush();
     if (current && !current.terminalEmitted) {
-      if (signal) {
+      if (signal && current.cancelRequested) {
         emit({ type: 'turn_cancelled' });
+      } else if (signal) {
+        // A signal geniro never asked for. The distinction is the whole point:
+        // `cancelRequested` is set by BOTH deliberate terminations (`cancel()`,
+        // which Stop and the shutdown reap both reach, and `close()`), so
+        // anything left here killed the agent from outside — an OOM kill, a
+        // crash, a `pkill`, a supervisor taking the process down.
+        //
+        // Reading every signal as a cancellation reported that as `cancelled`,
+        // and the damage is not the word: `cancelled` is deliberately the ONE
+        // ending the app does not notify about, because announcing a Stop tells
+        // the user what they just did. So a killed agent settled quietly under
+        // a badge saying the user had stopped it — measured here by SIGKILLing
+        // a live `cursor-agent acp` mid-turn, which left the run `cancelled`
+        // and posted no banner. Nobody had pressed anything.
+        const detail = stderrTail.trim();
+        emit({
+          type: 'error',
+          message: `${opts.command} was terminated by ${signal}${detail ? `: ${detail}` : ''}`,
+        });
       } else if (code !== null && code !== 0) {
         const detail = stderrTail.trim();
         emit({

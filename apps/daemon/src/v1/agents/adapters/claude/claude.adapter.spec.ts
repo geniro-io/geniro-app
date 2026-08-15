@@ -293,6 +293,37 @@ describe('ClaudeAdapter', () => {
     ]);
   });
 
+  it('marks a never-signed-in profile as curable by signing in too', async () => {
+    // The commoner half, and the one the marker list missed: a profile with no
+    // session at all rather than a lapsed one. Captured verbatim from a live
+    // run pointed at an empty configDir — the run settled `failed` correctly
+    // and the row offered nothing, which is precisely the case a Sign-in
+    // control exists for.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    const handle = new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'result',
+        subtype: 'error',
+        is_error: true,
+        result: 'Not logged in · Please run /login',
+      })}\n`,
+    );
+    child.emit('close', 1, null);
+    await handle.done;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        recovery: 'cli-login',
+      }),
+    );
+  });
+
   it.each([
     ['an unrelated failure', 'ENOSPC: no space left on device'],
     // The sharp one. The CLI uses this same prefix for an MCP SERVER it could

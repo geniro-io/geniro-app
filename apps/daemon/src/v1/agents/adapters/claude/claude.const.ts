@@ -641,6 +641,28 @@ export const CLAUDE_LOGIN_CODE_PROMPT_MARKERS: readonly string[] = [
  */
 export const CLAUDE_AUTH_EXPIRED_MARKERS: readonly string[] = [
   'OAuth session expired',
+  /*
+   * The other half, and the commoner one: a profile that is not signed in at
+   * all, rather than one whose session lapsed. Observed verbatim on 2.1.232 as
+   * a run's whole error row, by pointing a chat at an empty `configDir`:
+   *
+   * ```
+   * Not logged in · Please run /login
+   * ```
+   *
+   * The run settled `failed` correctly and offered no cure, which is the case
+   * a Sign-in control exists for — it is exactly reachable by mistyping a
+   * config directory, since the CLI creates whatever path it is handed rather
+   * than refusing an unknown one.
+   *
+   * `Please run /login` and not the bare `Not logged in`, for the reason the
+   * entry above records: `/login` is the CLI's own command for the ACCOUNT,
+   * while "not logged in" is wording that could equally describe an MCP server
+   * — and pointing the user at `claude auth login` for a server only
+   * `claude mcp login <server>` can fix is the misdirection this list must
+   * never introduce.
+   */
+  'Please run /login',
 ];
 
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */

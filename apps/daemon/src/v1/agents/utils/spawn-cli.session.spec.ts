@@ -312,16 +312,51 @@ describe('a run-scoped session outlives its turns', () => {
     expect(second).not.toBeNull();
   });
 
-  it('settles the turn in flight when the process dies underneath it', async () => {
+  it('fails the turn in flight when the process is killed from outside', async () => {
+    // A signal geniro never asked for. It used to settle `turn_cancelled` —
+    // reading every signal as a Stop — which put a killed agent under the one
+    // badge the app deliberately never notifies about, so a crashed turn ended
+    // silently and blamed the user for stopping it.
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
+    child.emit('close', null, 'SIGKILL');
+    await handle?.done;
+
+    expect(events).toEqual([
+      { type: 'error', message: expect.stringContaining('SIGKILL') },
+    ]);
+    expect(session.alive).toBe(false);
+  });
+
+  it('still reads a kill it asked for as a cancellation', async () => {
+    // The other half, and what keeps the fix above from turning every Stop into
+    // a failure: `cancel()` is the path Stop and the shutdown reap both take,
+    // and the SAME signal on that path is still the user's own doing.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    handle?.cancel();
+    child.emit('close', null, 'SIGKILL');
+    await handle?.done;
+
+    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('reads a kill from closing the session as a cancellation too', async () => {
+    // `close()` retires a session the daemon is done with — deliberate, so its
+    // signal is not a failure either.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    session.close();
     child.emit('close', null, 'SIGTERM');
     await handle?.done;
 
     expect(events).toEqual([{ type: 'turn_cancelled' }]);
-    expect(session.alive).toBe(false);
   });
 });
 

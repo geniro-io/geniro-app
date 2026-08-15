@@ -72,8 +72,13 @@ function findChromium() {
   }
   return found[found.length - 1];
 }
-function findClaude() {
-  try { return execSync('command -v claude', { shell: '/bin/bash' }).toString().trim(); } catch { return null; }
+// Both CLIs are resolved the same way. cursor-agent used to be hardcoded as
+// `found: false`, which the renderer renders as "not installed" and refuses to
+// select — so a machine with cursor installed could not drive a cursor chat at
+// all, and anything to be shown about that agent had to be created behind the
+// UI's back (where the chat list never picks it up).
+function findCli(name) {
+  try { return execSync(`command -v ${name}`, { shell: '/bin/bash' }).toString().trim() || null; } catch { return null; }
 }
 // Load playwright-core from a SIDE dir — never the repo's pnpm node_modules
 // (npm-installing into a pnpm workspace prunes hoisted deps and breaks it).
@@ -161,7 +166,9 @@ function startDaemon() {
 function stubScript(handle) {
   const h = JSON.stringify(handle);
   const cwd = JSON.stringify(RUN_CWD);
-  const claude = JSON.stringify(findClaude() || '/usr/bin/claude');
+  const claude = JSON.stringify(findCli('claude') || '/usr/bin/claude');
+  const cursorPath = findCli('cursor-agent');
+  const cursor = JSON.stringify(cursorPath);
   return `window.geniro = {
     getStatus: async () => ({ onboardingComplete: true, daemon: { connected: true, handle: ${h} } }),
     getDaemonHandle: async () => (${h}),
@@ -169,7 +176,7 @@ function stubScript(handle) {
     pickProjectFolder: async () => ${cwd}, pickAgentBinary: async () => null,
     getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false }),
     updateSettings: async (p) => { if (p.notificationsEnabled !== undefined) window.__geniroNotificationsEnabled = p.notificationsEnabled; return { onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...p }; },
-    detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected', loggedIn: null }, { kind: 'cursor-agent', found: false, path: null, version: null, loggedIn: null }]),
+    detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected', loggedIn: null }, { kind: 'cursor-agent', found: ${cursorPath ? 'true' : 'false'}, path: ${cursor}, version: ${cursorPath ? "'detected'" : 'null'}, loggedIn: null }]),
     completeOnboarding: async () => {},
     // Settings' CLI sign-in resolves through the daemon and then hands the
     // invocation here. Without the stub the button throws instead of no-opping,

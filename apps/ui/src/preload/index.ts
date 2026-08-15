@@ -74,6 +74,18 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.toggleDevTools) as ReturnType<
       GeniroApi['toggleDevTools']
     >,
+  notify: (notification) =>
+    ipcRenderer.invoke(IPC.notify, notification) as ReturnType<
+      GeniroApi['notify']
+    >,
+  onNotificationActivated: (listener) => {
+    const handler = (_event: IpcRendererEvent, runId: unknown): void => {
+      listener(runId as string);
+    };
+    ipcRenderer.on(IPC.onNotificationActivated, handler);
+    return () =>
+      ipcRenderer.removeListener(IPC.onNotificationActivated, handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('geniro', api);

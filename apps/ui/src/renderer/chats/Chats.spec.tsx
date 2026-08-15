@@ -380,6 +380,9 @@ async function menuRows(
   return rows;
 }
 
+/** The system-notification channel — asserted on by the notification tests. */
+const notify = vi.fn();
+
 beforeEach(() => {
   // jsdom has no scrollIntoView; the transcript auto-scroll effect calls it.
   Element.prototype.scrollIntoView = vi.fn();
@@ -416,7 +419,10 @@ beforeEach(() => {
         version: '3',
       },
     ]),
+    notify,
+    onNotificationActivated: vi.fn().mockReturnValue(() => {}),
   };
+  notify.mockReset().mockResolvedValue(undefined);
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.setRunGroup.mockReset();
   // No groups by default: the sidebar must look and behave exactly as it did
@@ -1098,6 +1104,156 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
       emitRunStatus({ runId: 'ghost', status: 'failed', activity: null });
     });
     expect(container.textContent).not.toContain('failed');
+  });
+});
+
+describe('Chats — the system notifications a thread earns', () => {
+  /** Two chats, `r2` never activated — the background thread these are about. */
+  function twoChats(): void {
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'running' },
+    ]);
+  }
+
+  it('reports a BACKGROUND thread that finished, naming it', async () => {
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The turn finished.',
+    });
+  });
+
+  it('reports a background thread that parked on a QUESTION', async () => {
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        activity: null,
+        awaiting: 'question',
+      });
+    });
+
+    // The kind comes off the same `awaiting` the sidebar row words its own
+    // phrase from, so the banner and the row cannot describe one parked turn
+    // in two different ways.
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'question',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'Waiting for your answer.',
+    });
+  });
+
+  it('says NOTHING about the chat you are looking at, on a focused window', async () => {
+    // The OPEN chat settles on its own terminal item, not on the broadcast:
+    // for the focused run the live plane outranks the row (`displayRunStatus`),
+    // which is exactly why the hook is fed `sidebarRunStatus` and not
+    // `run.status`.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    twoChats();
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitItem({ ...terminal(1), runId: 'r2' });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+    hasFocus.mockRestore();
+  });
+
+  it('DOES report the open chat when the window is in the background', async () => {
+    // The other half of the rule — suppression is about the user WATCHING, not
+    // about which chat is open. Without both halves, a user who leaves the app
+    // sitting on a running chat is told nothing at all.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    twoChats();
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Second chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitItem({ ...terminal(1), runId: 'r2' });
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', kind: 'turn-end' }),
+    );
+    hasFocus.mockRestore();
+  });
+
+  it('posts nothing for the finished threads already in the list on load', async () => {
+    api.listChats.mockResolvedValue([
+      { ...run1, id: 'r2', title: 'Old chat', status: 'completed' },
+      { ...run1, id: 'r3', title: 'Failed chat', status: 'failed' },
+    ]);
+    const { client } = makeClient();
+    await mount(client);
+
+    // Opening the app must not fire a banner per conversation in the history.
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('says nothing about a turn the user STOPPED', async () => {
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'cancelled', activity: null });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('opens the chat a clicked notification was about', async () => {
+    twoChats();
+    let activate!: (runId: string) => void;
+    (
+      window as unknown as { geniro: Partial<GeniroApi> }
+    ).geniro!.onNotificationActivated = vi.fn(
+      (listener: (runId: string) => void) => {
+        activate = listener;
+        return () => {};
+      },
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      activate('r2');
+    });
+
+    // The banner named `r2`, so clicking it must land on `r2` — a notification
+    // that only raises the window leaves the user hunting for the thread.
+    const active = [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ].find((row) => row.querySelector('[aria-current="true"]'));
+    expect(active?.textContent).toContain('Second chat');
   });
 });
 

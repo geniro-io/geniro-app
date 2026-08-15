@@ -84,6 +84,18 @@ export interface Settings {
   /** Whether to check for app updates on launch (wired in M4). */
   checkForUpdates: boolean;
   /**
+   * Post system notifications — a banner outside the app when an agent stops to
+   * ask something, and when a thread's turn ends.
+   *
+   * ONE switch for both, not one per kind: they are the same interruption seen
+   * from two sides of the same turn, and a user who does not want the app
+   * talking to them outside its window does not want half of it. Defaults ON —
+   * a thread parked on a question nobody sees is the failure this exists to
+   * fix, so the useful state is the default and the switch is there to quiet
+   * it.
+   */
+  notificationsEnabled: boolean;
+  /**
    * Spawn the daemon with a Node inspector on loopback, so real Chrome
    * DevTools can attach to it from `chrome://inspect`.
    *
@@ -119,6 +131,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastEfforts: {},
   cliPaths: {},
   checkForUpdates: true,
+  notificationsEnabled: true,
   daemonInspect: null,
 };
 
@@ -180,6 +193,32 @@ export interface UpdateCheckResult {
   status: 'dev' | 'up-to-date' | 'available' | 'error';
   version: string | null;
   message: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// System notifications (a banner outside the app, for a thread nobody is
+// watching — see main/notify.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Why a thread is worth interrupting the user for.
+ *
+ * The renderer reports the KIND and main decides whether it becomes a banner —
+ * the renderer never reads the toggle. That is what makes a flipped switch take
+ * effect at once instead of whenever a screen last cached its settings, and it
+ * keeps the one place that can post a banner the one place that gates it.
+ */
+export type RunNotificationKind = 'question' | 'turn-end';
+
+/** One notification the renderer asks main to post. */
+export interface RunNotification {
+  kind: RunNotificationKind;
+  /** The run it is about — clicking the banner opens this chat. */
+  runId: string;
+  /** The thread's sidebar label, so the banner names which chat. */
+  title: string;
+  /** One line under the title. */
+  body: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,6 +401,20 @@ export interface GeniroApi {
    * is findable from the place a user already looks when something is wrong.
    */
   toggleDevTools(): Promise<void>;
+  /**
+   * Post a system notification about a run, if the user has that kind switched
+   * on. Resolves either way — a notification the settings suppressed is not a
+   * failure, and the caller has nothing to do about one that was.
+   */
+  notify(notification: RunNotification): Promise<void>;
+  /**
+   * A notification the user CLICKED, carrying the run it was about.
+   *
+   * The other half of `notify`: a banner you cannot act on only tells you to go
+   * looking. Main raises and focuses the window; this is what lets the app open
+   * the thread the banner named.
+   */
+  onNotificationActivated(listener: (runId: string) => void): () => void;
 }
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
@@ -383,4 +436,6 @@ export const IPC = {
   switchBranch: 'geniro:switchBranch',
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
+  notify: 'geniro:notify',
+  onNotificationActivated: 'geniro:onNotificationActivated',
 } as const satisfies Record<keyof GeniroApi, string>;

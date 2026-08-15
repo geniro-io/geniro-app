@@ -33,6 +33,8 @@ const geniro = {
   pickAgentBinary: vi.fn(),
   checkForUpdates: vi.fn(),
   openInTerminal: vi.fn(),
+  notify: vi.fn(),
+  onNotificationActivated: vi.fn().mockReturnValue(() => {}),
 };
 
 // The daemon client is mocked so Settings never issues a real fetch —
@@ -163,8 +165,12 @@ describe('Settings updates section', () => {
       }),
     );
     await mount();
-    const toggle =
-      container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    // BY ID, not "the first switch on the page": the page legitimately grows
+    // switches in other sections, and a positional selector silently retargets
+    // these assertions onto whichever one happens to render first.
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '#settings-check-updates',
+    )!;
 
     await act(async () => {
       toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -188,8 +194,12 @@ describe('Settings updates section', () => {
       ),
     ).toBe(false);
 
-    const toggle =
-      container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    // BY ID, not "the first switch on the page": the page legitimately grows
+    // switches in other sections, and a positional selector silently retargets
+    // these assertions onto whichever one happens to render first.
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '#settings-check-updates',
+    )!;
     await act(async () => {
       toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
@@ -216,8 +226,12 @@ describe('Settings updates section', () => {
         }),
       );
     await mount();
-    const toggle =
-      container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    // BY ID, not "the first switch on the page": the page legitimately grows
+    // switches in other sections, and a positional selector silently retargets
+    // these assertions onto whichever one happens to render first.
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '#settings-check-updates',
+    )!;
 
     await act(async () => {
       toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));

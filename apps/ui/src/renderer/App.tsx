@@ -181,6 +181,16 @@ export function App(): React.JSX.Element {
     return reportUiErrors(apis);
   }, [apis]);
 
+  // A clicked notification is always about a CHAT, so it brings the chat view
+  // with it — main has already raised the window, and landing the user on
+  // Settings with a raised window would be a banner that went nowhere. Which
+  // thread it opens is `Chats`' own listener on the same channel; it is split
+  // that way because the view is app state and the active run is not.
+  useEffect(
+    () => window.geniro.onNotificationActivated(() => setView('chats')),
+    [],
+  );
+
   // ⌥⌘L for the debug drawer. A shortcut and not only a button because the
   // moment you want it is usually the moment something is already misbehaving,
   // and reaching for a control with the pointer is what you do afterwards.

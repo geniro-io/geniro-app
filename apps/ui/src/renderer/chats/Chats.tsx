@@ -28,6 +28,7 @@ import type {
   AgentSkillDto as AgentSkill,
   HandoffTargetDto,
   ItemDto as ChatItem,
+  RunAwaiting,
   RunDto as ChatRun,
   RunGroupDto,
   SendMessageDtoImagesInner,
@@ -54,6 +55,7 @@ import {
 } from '../daemon-api';
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
+import { useRunNotifications } from '../notifications/use-run-notifications';
 import { useCapabilities } from '../use-capabilities';
 import {
   type AgentDisplay,
@@ -228,6 +230,15 @@ function runLabel(run: ChatRun, workflowNames: Map<string, string>): string {
     return workflowNames.get(run.workflowId) ?? run.workflowId;
   }
   return run.agentKind ?? 'chat';
+}
+
+/**
+ * What a run is parked on. Module scope so its identity is stable — it is an
+ * effect dependency of `useRunNotifications`, and a fresh arrow per render
+ * would re-run that effect on every keystroke in the composer.
+ */
+function runAwaiting(run: ChatRun): RunAwaiting | null {
+  return run.awaiting;
 }
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
@@ -3291,6 +3302,34 @@ export function Chats({
             awaitingAnswer: run.awaiting !== null,
           }),
     [activeRunId, activeRunStatus],
+  );
+
+  const notificationLabel = useCallback(
+    (run: ChatRun): string => runLabel(run, workflowNames),
+    [workflowNames],
+  );
+
+  /**
+   * Tell the user, outside the app, when a thread stops to ask something or
+   * ends — reading the SAME status the sidebar badge shows, so a banner and the
+   * row it sends you to can never describe one run differently. Whether it
+   * becomes a banner at all is main's call (the setting).
+   */
+  useRunNotifications({
+    runs,
+    statusOf: sidebarRunStatus,
+    labelOf: notificationLabel,
+    awaitingOf: runAwaiting,
+    activeRunId,
+  });
+
+  /**
+   * Open the thread a clicked notification was about. Main has already raised
+   * the window; this is the half that decides what it shows.
+   */
+  useEffect(
+    () => window.geniro.onNotificationActivated(handleActivateRun),
+    [handleActivateRun],
   );
 
   const sections = useMemo(

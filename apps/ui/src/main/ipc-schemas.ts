@@ -56,6 +56,7 @@ export const settingsPatchSchema = z.strictObject({
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
   checkForUpdates: z.boolean().optional(),
+  notificationsEnabled: z.boolean().optional(),
   // Nullable, not just optional: `null` is the "unchosen, resolve per build"
   // state, and it must be writable so a user can hand the choice back.
   daemonInspect: z.boolean().nullable().optional(),
@@ -91,6 +92,23 @@ export const branchNameSchema = z
   // eslint-disable-next-line no-control-regex -- control characters are precisely what a refname may not contain
   .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
   .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
+
+/**
+ * One system notification the renderer asks main to post.
+ *
+ * Bounded rather than merely typed, because both strings land in an OS surface
+ * this process does not draw and cannot clip: a title is a thread's own name
+ * (which the user typed) and a body is composed from it. The lengths are what
+ * macOS will show anyway — a longer one is truncated by the notification
+ * centre, so nothing is lost by refusing it here, and a renderer that has been
+ * tampered with cannot hand the window server a megabyte.
+ */
+export const notificationSchema = z.strictObject({
+  kind: z.enum(['question', 'turn-end']),
+  runId: z.string().min(1).max(128),
+  title: z.string().min(1).max(120),
+  body: z.string().max(240),
+});
 
 /** Onboarding payload committed in a single IPC call. */
 export const onboardingInputSchema = z.strictObject({

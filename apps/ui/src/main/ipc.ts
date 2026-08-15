@@ -1,4 +1,10 @@
-import { app, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+} from 'electron';
 
 import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
@@ -7,11 +13,13 @@ import { readGitInfo, switchBranch } from './git-info';
 import {
   branchNameSchema,
   gitDirSchema,
+  notificationSchema,
   onboardingInputSchema,
   openTerminalSchema,
   revealPathSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
+import { NotificationService } from './notifications/notifications.service';
 import { openInTerminal } from './open-terminal';
 import { revealPath } from './reveal-path';
 import { readSettings, updateSettings } from './settings';
@@ -23,6 +31,11 @@ import { checkForUpdates } from './updater';
  * contract exposed via the preload.
  */
 export function registerIpc(supervisor: DaemonSupervisor): void {
+  // One instance for the app's lifetime, reading settings through the same
+  // function every other handler here does — so the toggle it consults is
+  // always the file's current state, never a value captured at registration.
+  const notifications = new NotificationService(readSettings);
+
   const restartAndNotify = async (event: IpcMainInvokeEvent): Promise<void> => {
     const handle = await supervisor.restart();
     event.sender.send(IPC.onDaemonRestarted, handle);
@@ -121,6 +134,25 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
   // than on a looked-up window, so this cannot be aimed at another window.
   ipcMain.handle(IPC.toggleDevTools, (event) => {
     event.sender.toggleDevTools();
+  });
+
+  // Whether this becomes a banner is the notifications module's call, reading
+  // the setting at the moment of the post — the renderer reports the event and
+  // never the verdict. Acts on the SENDER's own window, like toggleDevTools: a
+  // notification cannot be aimed at another window, and the click has to raise
+  // the window whose renderer asked for it.
+  ipcMain.handle(IPC.notify, (event, input: unknown) => {
+    notifications.post(notificationSchema.parse(input), {
+      window: BrowserWindow.fromWebContents(event.sender),
+      onActivate: (runId) => {
+        // Back into the same renderer, so it can open the thread the banner
+        // named. Guarded: the window can be gone by the time a banner posted
+        // minutes ago is clicked, and a send into that gap throws.
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(IPC.onNotificationActivated, runId);
+        }
+      },
+    });
   });
 
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     lastEfforts: {},
     cliPaths: {},
     checkForUpdates: true,
+    notificationsEnabled: true,
     daemonInspect: false,
   };
   return {

@@ -57,6 +57,7 @@ export function Settings({
     Partial<Record<CliKind, string>>
   >({});
   const [checkForUpdates, setCheckForUpdates] = useState(true);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   // The STORED tri-state, not the effective one: `null` means "not chosen",
@@ -66,10 +67,12 @@ export function Settings({
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const checkForUpdatesDirtyRef = useRef(false);
+  const notificationsDirtyRef = useRef(false);
   const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
     checkForUpdates: 0,
+    notificationsEnabled: 0,
     daemonInspect: 0,
     other: 0,
   });
@@ -112,6 +115,9 @@ export function Settings({
       setBinaryPaths((prev) => ({ ...s.cliPaths, ...prev }));
       if (!checkForUpdatesDirtyRef.current) {
         setCheckForUpdates(s.checkForUpdates);
+      }
+      if (!notificationsDirtyRef.current) {
+        setNotificationsEnabled(s.notificationsEnabled);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -157,9 +163,11 @@ export function Settings({
           ? 'cliPaths'
           : patch.checkForUpdates !== undefined
             ? 'checkForUpdates'
-            : patch.daemonInspect !== undefined
-              ? 'daemonInspect'
-              : 'other';
+            : patch.notificationsEnabled !== undefined
+              ? 'notificationsEnabled'
+              : patch.daemonInspect !== undefined
+                ? 'daemonInspect'
+                : 'other';
       const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
@@ -327,6 +335,18 @@ export function Settings({
     [persist],
   );
 
+  const onToggleNotifications = useCallback(
+    (next: boolean): void => {
+      notificationsDirtyRef.current = true;
+      setNotificationsEnabled(next);
+      // Nothing to restart and nothing to apply: main reads this setting at the
+      // moment it is about to post, so the flip takes effect on the very next
+      // question or turn end.
+      void persist({ notificationsEnabled: next });
+    },
+    [persist],
+  );
+
   const onToggleInspect = useCallback(
     (next: boolean): void => {
       daemonInspectDirtyRef.current = true;
@@ -430,6 +450,29 @@ export function Settings({
               : null
           }
         />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Notifications</h2>
+        <div className="flex items-center gap-3">
+          <Switch
+            id="settings-notifications"
+            checked={notificationsEnabled}
+            onCheckedChange={onToggleNotifications}
+          />
+          <Label htmlFor="settings-notifications" className="cursor-pointer">
+            Show system notifications
+          </Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          A macOS banner when an agent stops to ask you something and when a
+          thread’s turn ends — so a run parked on a question does not sit
+          unanswered while you are in another app. Clicking one opens that chat.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Nothing is posted for the chat you are already looking at, or for a
+          turn you stopped yourself.
+        </p>
       </section>
 
       <section className="flex flex-col gap-3">

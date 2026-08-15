@@ -32,15 +32,45 @@ fs.mkdirSync(RUN_CWD, { recursive: true });
 const log = (...a) => console.log(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Playwright's Chromium, wherever this host keeps it. Two roots and two layouts
+ * because the harness runs in two places: the Linux container images it at
+ * /opt/pw-browsers, while a macOS checkout has whatever `playwright install`
+ * put in ~/Library/Caches/ms-playwright. Newest build wins — a machine
+ * accumulates one directory per Playwright release and the oldest of them can
+ * predate the protocol playwright-core speaks.
+ */
 function findChromium() {
-  const base = '/opt/pw-browsers';
-  if (fs.existsSync(base)) {
-    for (const d of fs.readdirSync(base)) {
-      const p = path.join(base, d, 'chrome-linux/chrome');
-      if (fs.existsSync(p)) return p;
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    '/opt/pw-browsers',
+    path.join(os.homedir(), 'Library/Caches/ms-playwright'),
+    path.join(os.homedir(), '.cache/ms-playwright'),
+  ].filter(Boolean);
+  const found = [];
+  for (const base of roots) {
+    if (!fs.existsSync(base)) continue;
+    for (const d of fs.readdirSync(base).sort()) {
+      if (!d.startsWith('chromium-')) continue;
+      // Four layouts, because the binary's name and its directory both vary by
+      // platform AND by how Playwright built it: Linux ships a bare `chrome`,
+      // macOS an .app bundle, and recent macOS builds are "Google Chrome for
+      // Testing" under an -arm64 directory rather than "Chromium".
+      for (const rel of [
+        'chrome-linux/chrome',
+        'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
+        'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+        'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      ]) {
+        const p = path.join(base, d, rel);
+        if (fs.existsSync(p)) found.push(p);
+      }
     }
   }
-  throw new Error('Chromium not found under /opt/pw-browsers — is Playwright installed in this container?');
+  if (found.length === 0) {
+    throw new Error(`Chromium not found under ${roots.join(', ')} — run: npx playwright install chromium`);
+  }
+  return found[found.length - 1];
 }
 function findClaude() {
   try { return execSync('command -v claude', { shell: '/bin/bash' }).toString().trim(); } catch { return null; }
@@ -82,12 +112,37 @@ function startStatic() {
     srv.listen(0, '127.0.0.1', () => resolve(srv));
   });
 }
+/**
+ * Electron's own binary, or null to fall back to whatever node is running this.
+ * Resolved from the workspace install rather than PATH — there is no `electron`
+ * on PATH, and the one that matters is the version this repo's native modules
+ * were built against.
+ */
+function ELECTRON_BIN() {
+  for (const rel of ['node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',
+                     'node_modules/electron/dist/electron']) {
+    const p = path.join(APP_DIR, rel);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function startDaemon() {
   return new Promise((resolve, reject) => {
     fs.rmSync(UD, { recursive: true, force: true });
     fs.mkdirSync(path.join(UD, 'workflows'), { recursive: true });
-    const child = spawn(process.execPath, [DAEMON_MAIN], {
-      env: { ...process.env, GENIRO_USER_DATA: UD, GENIRO_PORT: '0', NODE_ENV: 'production' },
+    // Under ELECTRON's node, exactly as `pnpm dev` and the packaged app run it
+    // — NOT host node. `better-sqlite3` is native, so it loads under one ABI or
+    // the other and the repo builds it for Electron (`pnpm rebuild:native`,
+    // which `pnpm install` runs). Spawning host node here meant the harness and
+    // the real app could never both work: whichever ABI was on disk broke the
+    // other, and the symptom is a NODE_MODULE_VERSION error at daemon boot.
+    const electron = ELECTRON_BIN();
+    const child = spawn(electron ?? process.execPath, [DAEMON_MAIN], {
+      env: {
+        ...process.env, GENIRO_USER_DATA: UD, GENIRO_PORT: '0', NODE_ENV: 'production',
+        ...(electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let buf = '';
@@ -112,8 +167,8 @@ function stubScript(handle) {
     getDaemonHandle: async () => (${h}),
     onDaemonRestarted: () => () => {},
     pickProjectFolder: async () => ${cwd}, pickAgentBinary: async () => null,
-    getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false }),
-    updateSettings: async (p) => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, ...p }),
+    getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false }),
+    updateSettings: async (p) => { if (p.notificationsEnabled !== undefined) window.__geniroNotificationsEnabled = p.notificationsEnabled; return { onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...p }; },
     detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected', loggedIn: null }, { kind: 'cursor-agent', found: false, path: null, version: null, loggedIn: null }]),
     completeOnboarding: async () => {},
     // Settings' CLI sign-in resolves through the daemon and then hands the
@@ -125,6 +180,14 @@ function stubScript(handle) {
     // app shell throws to its error boundary before any view renders.
     getGitInfo: async () => ({ isRepo: false, branch: null, branches: [], dirty: false }),
     switchBranch: async () => ({ ok: false, branch: null, reason: 'not a repo in the run-desktop stub' }),
+    // System notifications. There is no main process here, so a real macOS
+    // banner is impossible — the calls are RECORDED instead, which is what
+    // makes the half this harness CAN answer ("which thread earns one, and
+    // when") demonstrable: read them with
+    //   js JSON.stringify(window.__geniroNotifications ?? [])
+    // The banner itself has to be seen in the real Electron app.
+    notify: async (n) => { (window.__geniroNotifications ??= []).push(n); },
+    onNotificationActivated: () => () => {},
   };`;
 }
 

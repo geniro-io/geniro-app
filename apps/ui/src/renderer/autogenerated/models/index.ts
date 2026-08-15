@@ -639,6 +639,33 @@ export interface CreateChatDto {
 /**
  * 
  * @export
+ * @interface CreateRunGroupDto
+ */
+export interface CreateRunGroupDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateRunGroupDto
+     */
+    name: string;
+    /**
+     * 
+     * @type {RunGroupColor}
+     * @memberof CreateRunGroupDto
+     */
+    color?: RunGroupColor;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateRunGroupDto
+     */
+    autoCwd?: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface CreateWorkflowDto
  */
 export interface CreateWorkflowDto {
@@ -1394,6 +1421,19 @@ export interface RenameRunDto {
      */
     title: string;
 }
+/**
+ * 
+ * @export
+ * @interface ReorderRunGroupsDto
+ */
+export interface ReorderRunGroupsDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ReorderRunGroupsDto
+     */
+    ids: Array<string>;
+}
 
 /**
  * 
@@ -1482,6 +1522,12 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
+    groupId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
     createdAt: string;
     /**
      * The run's last-activity time
@@ -1495,6 +1541,87 @@ export interface RunDto {
      * @memberof RunDto
      */
     lastMessage: string | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const RunGroupColor = {
+    Blue: 'blue',
+    Purple: 'purple',
+    Green: 'green',
+    Orange: 'orange',
+    Pink: 'pink',
+    Indigo: 'indigo',
+    Teal: 'teal',
+    Red: 'red'
+} as const;
+export type RunGroupColor = typeof RunGroupColor[keyof typeof RunGroupColor];
+
+/**
+ * 
+ * @export
+ * @interface RunGroupDeletedDto
+ */
+export interface RunGroupDeletedDto {
+    /**
+     * True when the group row was removed
+     * @type {boolean}
+     * @memberof RunGroupDeletedDto
+     */
+    deleted: boolean;
+    /**
+     * How many runs moved out of the group — they are kept, never deleted with it
+     * @type {number}
+     * @memberof RunGroupDeletedDto
+     */
+    released: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunGroupDto
+ */
+export interface RunGroupDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGroupDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGroupDto
+     */
+    name: string;
+    /**
+     * 
+     * @type {RunGroupColor}
+     * @memberof RunGroupDto
+     */
+    color: RunGroupColor;
+    /**
+     * Sidebar order, ascending and contiguous from 0
+     * @type {number}
+     * @memberof RunGroupDto
+     */
+    position: number;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunGroupDto
+     */
+    collapsed: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGroupDto
+     */
+    autoCwd: string | null;
 }
 
 
@@ -1617,6 +1744,19 @@ export interface SetMcpServerEnabledDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface SetRunGroupDto
+ */
+export interface SetRunGroupDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof SetRunGroupDto
+     */
+    groupId: string | null;
+}
 
 /**
  * 
@@ -1678,6 +1818,39 @@ export interface UpdateChatSettingsDto {
      * @memberof UpdateChatSettingsDto
      */
     effort?: string | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface UpdateRunGroupDto
+ */
+export interface UpdateRunGroupDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateRunGroupDto
+     */
+    name?: string;
+    /**
+     * 
+     * @type {RunGroupColor}
+     * @memberof UpdateRunGroupDto
+     */
+    color?: RunGroupColor;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof UpdateRunGroupDto
+     */
+    collapsed?: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateRunGroupDto
+     */
+    autoCwd?: string | null;
 }
 
 

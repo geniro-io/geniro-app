@@ -72,6 +72,21 @@
   --avatar-7: #14b8a6;
   --avatar-8: #ef4444;
   --avatar-user: #6b7280;
+
+  /* Sidebar group palette. ALIASES of the avatar hues above rather than a
+     second set of values: a group's dot and an agent's avatar sit inches apart
+     in the same window, and two independently-maintained blues would drift.
+     They are named by COLOUR because that is what the daemon stores — a group
+     row carries `color: 'blue'`, never a hex, since the renderer may not hold
+     a colour literal anywhere outside this file. */
+  --group-blue: var(--avatar-1);
+  --group-purple: var(--avatar-2);
+  --group-green: var(--avatar-3);
+  --group-orange: var(--avatar-4);
+  --group-pink: var(--avatar-5);
+  --group-indigo: var(--avatar-6);
+  --group-teal: var(--avatar-7);
+  --group-red: var(--avatar-8);
   --border: #ddd4c8;
   --input: transparent;
   --input-background: #fdfcfa;
@@ -164,6 +179,14 @@
   --color-avatar-7: var(--avatar-7);
   --color-avatar-8: var(--avatar-8);
   --color-avatar-user: var(--avatar-user);
+  --color-group-blue: var(--group-blue);
+  --color-group-purple: var(--group-purple);
+  --color-group-green: var(--group-green);
+  --color-group-orange: var(--group-orange);
+  --color-group-pink: var(--group-pink);
+  --color-group-indigo: var(--group-indigo);
+  --color-group-teal: var(--group-teal);
+  --color-group-red: var(--group-red);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);

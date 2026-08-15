@@ -57,6 +57,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
 
@@ -171,6 +172,7 @@ export class ChatService {
     private readonly teardown: RunTeardownService,
     private readonly efforts: EffortsService,
     private readonly seqs: ItemSeqAllocator,
+    private readonly groups: RunGroupsService,
   ) {}
 
   /**
@@ -341,6 +343,12 @@ export class ChatService {
     // reaching the child, where claude would CREATE it and report a login
     // failure about a directory nobody meant to name.
     const configDir = this.resolveConfigDir(input.agentKind, input.configDir);
+    // Which sidebar group claims a chat opened in this folder. Resolved HERE
+    // rather than by the caller so the rule holds for every chat the daemon
+    // creates, and against the CANONICAL cwd above rather than the one the
+    // request spelled — a group's folder is canonical too, so a symlinked path
+    // matches the rule the user actually set.
+    const groupId = await this.groups.resolveAutoGroupId(cwd);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -351,6 +359,7 @@ export class ChatService {
         model: input.model ?? null,
         effort: input.effort ?? null,
         configDir,
+        groupId,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -615,6 +624,34 @@ export class ChatService {
     }
     await this.runDao.updateById(runId, { title }, em);
     run.title = title;
+    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    return this.toRunWire(run, previews.get(runId) ?? null);
+  }
+
+  /**
+   * File a run into a sidebar group, or (null) out of every group.
+   *
+   * Kind-blind for the same reason `rename` is: the sidebar lists chat and
+   * workflow runs together and a group holds either, so this is a run-row
+   * property rather than an execution command that has to reach the right
+   * engine.
+   *
+   * The group is checked BEFORE the write. A dangling id would degrade
+   * quietly — the sidebar files an unmatched run into the loose list, which
+   * looks exactly like "nothing happened" — so the honest answer to a group
+   * that does not exist is a 404, not a run that silently stayed put.
+   */
+  async setGroup(runId: string, groupId: string | null): Promise<RunWire> {
+    if (groupId !== null) {
+      await this.groups.assertExists(groupId);
+    }
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    await this.runDao.updateById(runId, { groupId }, em);
+    run.groupId = groupId;
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }

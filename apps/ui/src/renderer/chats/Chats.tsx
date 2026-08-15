@@ -2,6 +2,7 @@ import {
   ArrowUp,
   Clock,
   FolderOpen,
+  FolderPlus,
   Plus,
   Square,
   Trash2,
@@ -9,6 +10,7 @@ import {
   Zap,
 } from 'lucide-react';
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -28,6 +30,7 @@ import type {
   HandoffTargetDto,
   ItemDto as ChatItem,
   RunDto as ChatRun,
+  RunGroupDto,
   SendMessageDtoImagesInner,
   WorkflowAgentNode,
   WorkflowSummaryDto as WorkflowSummary,
@@ -78,6 +81,7 @@ import { ContextMeter } from './context-meter';
 import { folderName } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
+import { type GroupCommand, GroupHeader } from './group-header';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   applyLiveText,
@@ -91,7 +95,16 @@ import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
-import { displayRunStatus, isSettledRunStatus } from './run-status';
+import {
+  GROUP_RAIL_CLASS,
+  runGroupSections,
+  runGroupSummary,
+} from './run-group';
+import {
+  displayRunStatus,
+  isSettledRunStatus,
+  type RunStatusKind,
+} from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import {
@@ -235,6 +248,7 @@ export function Chats({
     chats: chatApi,
     agents: agentsApi,
     workflows: workflowApi,
+    groups: groupApi,
     capabilities: capabilitiesApi,
     handoff: handoffApi,
   } = useMemo(() => createDaemonApis(handle), [handle]);
@@ -696,6 +710,315 @@ export function Chats({
     [chatApi],
   );
 
+  /**
+   * The sidebar's groups, in the order they are drawn.
+   *
+   * Held here rather than fetched by each header because every group-level
+   * answer the daemon gives is a whole-list one — a move swaps two rows, a
+   * delete releases runs into the loose section — so one array is the only
+   * shape in which the sidebar can be right about all of them at once.
+   */
+  const [groups, setGroups] = useState<RunGroupDto[]>([]);
+  /**
+   * A group just created that should open with its name selected, so naming it
+   * is typing rather than a second trip through the menu. The header reports
+   * back when it has taken the focus and this clears — otherwise a later
+   * re-mount would drop the row into edit mode again, out of nowhere.
+   */
+  const [namingGroupId, setNamingGroupId] = useState<string | null>(null);
+
+  /**
+   * What the pointer is currently carrying, or null.
+   *
+   * ONE piece of state for both drags the sidebar supports, because a drop
+   * target has to know which it is being offered: a group dragged onto a header
+   * REORDERS, a chat dragged onto the same header FILES ITSELF into it, and the
+   * two must not be told apart by guessing from an id.
+   */
+  const [drag, setDrag] = useState<{
+    kind: 'group' | 'run';
+    id: string;
+  } | null>(null);
+  /**
+   * The section a dragged CHAT would land in — a group id, or null for the
+   * loose list. `undefined` is "none", which is a third state and not the same
+   * as null: null is a real destination.
+   */
+  const [dropSectionId, setDropSectionId] = useState<string | null | undefined>(
+    undefined,
+  );
+
+  /**
+   * Read by the drag handlers, which must stay referentially stable: they are
+   * passed to memoized rows and headers, and a fresh identity per render would
+   * rebuild every one of them on every `dragover` — several times a second,
+   * mid-drag.
+   */
+  const groupsRef = useRef<RunGroupDto[]>([]);
+  groupsRef.current = groups;
+  const handleSetRunGroupRef = useRef<
+    (runId: string, groupId: string | null) => void
+  >(() => undefined);
+  const dragRef = useRef<{ kind: 'group' | 'run'; id: string } | null>(null);
+  dragRef.current = drag;
+
+  const refreshGroups = useCallback((): void => {
+    void groupApi
+      .listRunGroups()
+      .then(setGroups)
+      .catch((err: unknown) => setError(String(err)));
+  }, [groupApi]);
+
+  /**
+   * Reordering happens LIVE, in `groups`, as the cursor passes over each
+   * header — the list rearranges under the pointer rather than jumping when the
+   * button comes up, which is the difference between a drag that feels
+   * connected to the mouse and one that feels like a form submission. The
+   * daemon is told once, at the end (`handleDragEnd`), because the intermediate
+   * arrangements are not decisions.
+   */
+  const handleGroupDragStart = useCallback(
+    (groupId: string): void => setDrag({ kind: 'group', id: groupId }),
+    [],
+  );
+
+  const handleRunDragStart = useCallback(
+    (runId: string): void => setDrag({ kind: 'run', id: runId }),
+    [],
+  );
+
+  /**
+   * The pointer is over a group's header.
+   *
+   * Two gestures land here and they do different things: a GROUP being dragged
+   * rearranges the list under the cursor, a CHAT lights the header up as the
+   * place it would land.
+   */
+  const handleGroupDragOver = useCallback((overGroupId: string): void => {
+    const dragging = dragRef.current;
+    if (dragging === null) {
+      return;
+    }
+    if (dragging.kind === 'run') {
+      setDropSectionId(overGroupId);
+      return;
+    }
+    setGroups((prev) => {
+      if (dragging.id === overGroupId) {
+        return prev;
+      }
+      const from = prev.findIndex((group) => group.id === dragging.id);
+      const to = prev.findIndex((group) => group.id === overGroupId);
+      if (from === -1 || to === -1) {
+        return prev;
+      }
+      const next = [...prev];
+      next.splice(to, 0, next.splice(from, 1)[0]!);
+      // Positions are restated so nothing downstream re-sorts the array back
+      // into the order it had a moment ago — `runGroupSections` sorts by
+      // `position`, and leaving them stale would undo the drag on every
+      // render.
+      return next.map((group, position) => ({ ...group, position }));
+    });
+  }, []);
+
+  /** The pointer is over a SECTION — a chat row, or the loose list's label. */
+  const handleSectionDragOver = useCallback((groupId: string | null): void => {
+    if (dragRef.current?.kind === 'run') {
+      setDropSectionId(groupId);
+    }
+  }, []);
+
+  /** A chat was dropped into a section. A drop in its own section is a no-op. */
+  const handleDropInSection = useCallback((groupId: string | null): void => {
+    const dragging = dragRef.current;
+    setDropSectionId(undefined);
+    setDrag(null);
+    if (dragging?.kind !== 'run') {
+      return;
+    }
+    const run = runsRef.current.find((r) => r.id === dragging.id);
+    if (run === undefined || run.groupId === groupId) {
+      return;
+    }
+    handleSetRunGroupRef.current(dragging.id, groupId);
+  }, []);
+
+  const handleDragEnd = useCallback((): void => {
+    const dragging = dragRef.current;
+    setDrag(null);
+    setDropSectionId(undefined);
+    if (dragging?.kind !== 'group') {
+      return;
+    }
+    void groupApi
+      // The whole arrangement, not a displacement: the daemon renumbers from
+      // this list, so replaying it lands on the same rows.
+      .reorderRunGroups({
+        reorderRunGroupsDto: { ids: groupsRef.current.map((g) => g.id) },
+      })
+      .then(setGroups)
+      .catch((err: unknown) => setError(String(err)));
+  }, [groupApi]);
+
+  const handleToggleGroup = useCallback(
+    (groupId: string, collapsed: boolean): void => {
+      // Optimistic: folding is the one group action a user does repeatedly, and
+      // waiting a round trip to see a chevron move reads as a dropped click.
+      // The write is a fire-and-forget PATCH — a failure leaves the fold state
+      // to be corrected by the next list fetch rather than snapping the row
+      // back under a finger that is already moving away.
+      setGroups((prev) =>
+        prev.map((group) =>
+          group.id === groupId ? { ...group, collapsed } : group,
+        ),
+      );
+      void groupApi
+        .updateRunGroup({ groupId, updateRunGroupDto: { collapsed } })
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [groupApi],
+  );
+
+  /** Rejects on failure, so the header keeps the typed name and shows why. */
+  const handleRenameGroup = useCallback(
+    async (groupId: string, name: string): Promise<void> => {
+      const updated = await groupApi.updateRunGroup({
+        groupId,
+        updateRunGroupDto: { name },
+      });
+      setGroups((prev) =>
+        prev.map((group) => (group.id === groupId ? updated : group)),
+      );
+    },
+    [groupApi],
+  );
+
+  const handleGroupCommand = useCallback(
+    (groupId: string, command: GroupCommand): void => {
+      const fail = (err: unknown): void => setError(String(err));
+      if (command.kind === 'color') {
+        void groupApi
+          .updateRunGroup({
+            groupId,
+            updateRunGroupDto: { color: command.color },
+          })
+          .then((updated) =>
+            setGroups((prev) =>
+              prev.map((group) => (group.id === groupId ? updated : group)),
+            ),
+          )
+          .catch(fail);
+        return;
+      }
+      if (command.kind === 'auto-folder') {
+        void window.geniro
+          .pickProjectFolder()
+          .then((chosen) =>
+            chosen === null
+              ? undefined
+              : groupApi
+                  .updateRunGroup({
+                    groupId,
+                    updateRunGroupDto: { autoCwd: chosen },
+                  })
+                  .then((updated) =>
+                    setGroups((prev) =>
+                      prev.map((group) =>
+                        group.id === groupId ? updated : group,
+                      ),
+                    ),
+                  ),
+          )
+          .catch(fail);
+        return;
+      }
+      if (command.kind === 'auto-clear') {
+        void groupApi
+          .updateRunGroup({ groupId, updateRunGroupDto: { autoCwd: null } })
+          .then((updated) =>
+            setGroups((prev) =>
+              prev.map((group) => (group.id === groupId ? updated : group)),
+            ),
+          )
+          .catch(fail);
+        return;
+      }
+      // Delete. Deliberately NOT behind a confirm dialog, unlike a chat's:
+      // nothing is destroyed. The daemon releases the group's runs into the
+      // loose section and every one of them keeps its whole transcript, which
+      // is what the menu row's own hint says while the user is deciding.
+      void groupApi
+        .deleteRunGroup({ groupId })
+        .then(() => {
+          setGroups((prev) => prev.filter((group) => group.id !== groupId));
+          setRuns((prev) =>
+            prev.map((run) =>
+              run.groupId === groupId ? { ...run, groupId: null } : run,
+            ),
+          );
+        })
+        .catch(fail);
+    },
+    [groupApi],
+  );
+
+  const handleSetRunGroup = useCallback(
+    (runId: string, groupId: string | null): void => {
+      void chatApi
+        // On the RUN's route — and so on the CHATS client: the run is what
+        // changed, so the run is the answer and the sidebar replaces the row it
+        // already holds.
+        .setRunGroup({ runId, setRunGroupDto: { groupId } })
+        .then((updated) =>
+          setRuns((prev) =>
+            prev.map((run) =>
+              run.id === updated.id
+                ? { ...run, groupId: updated.groupId }
+                : run,
+            ),
+          ),
+        )
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [chatApi],
+  );
+
+  // Read by the drop handler above, which is declared first because the drag
+  // handlers belong together — a ref keeps the order from mattering.
+  handleSetRunGroupRef.current = handleSetRunGroup;
+
+  /**
+   * Make a group and, when a run asked for it, put that run straight in.
+   *
+   * The name is a placeholder the header immediately opens for editing —
+   * there is no text-prompt dialog in this app, and adding one to name a
+   * folder would be a modal for a two-word answer.
+   */
+  const handleNewGroup = useCallback(
+    (runId?: string): void => {
+      void groupApi
+        .createRunGroup({ createRunGroupDto: { name: 'New group' } })
+        .then(async (created) => {
+          setGroups((prev) => [...prev, created]);
+          setNamingGroupId(created.id);
+          if (runId !== undefined) {
+            handleSetRunGroup(runId, created.id);
+          }
+        })
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [groupApi, handleSetRunGroup],
+  );
+
+  /** Stable, so the memoized headers do not re-render on every keystroke. */
+  const clearNamingGroup = useCallback(() => setNamingGroupId(null), []);
+
+  const handleNewGroupWithRun = useCallback(
+    (runId: string): void => handleNewGroup(runId),
+    [handleNewGroup],
+  );
+
   // The run queued for deletion (null = no confirm open). Deleting is
   // IRREVERSIBLE — rows, attachments and PTY sessions all go — so it is the
   // one row action that asks first.
@@ -1001,6 +1324,7 @@ export function Chats({
     // failed only AFTER a run had been created, as "exited with code 1".
     void window.geniro.detectClis().then(setCliDetections);
     refreshRuns();
+    refreshGroups();
     // Wrapped, not passed bare: this is the one site that means LIVE, and an
     // arrow pins the arity so a future emitter argument cannot land on the
     // `live` flag.
@@ -1133,7 +1457,7 @@ export function Chats({
         client.leaveRun(active);
       }
     };
-  }, [client, chatApi, addItem, activateRun, refreshRuns]);
+  }, [client, chatApi, addItem, activateRun, refreshRuns, refreshGroups]);
 
   useEffect(() => {
     // Follow the tail only when the user is already AT it. Scrolling them back
@@ -2935,6 +3259,35 @@ export function Chats({
     mcpOpen,
   );
 
+  /**
+   * The badge a sidebar row shows for a run — the ONE reading, so a group
+   * header's "something in here is working" cannot contradict the rows under
+   * it.
+   *
+   * The focused run answers from the live plane (`activeRunStatus`); every
+   * other one goes through the same rule with `streaming` false, because items
+   * only ever arrive for the focused run. Its "parked on you" comes from the
+   * row instead — the daemon's approval registry publishes it there — which is
+   * what stops a chat sitting on an unanswered question from showing a spinner
+   * for as long as the user is looking elsewhere.
+   */
+  const sidebarRunStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      run.id === activeRunId
+        ? activeRunStatus
+        : displayRunStatus({
+            status: run.status,
+            streaming: false,
+            awaitingAnswer: run.awaiting !== null,
+          }),
+    [activeRunId, activeRunStatus],
+  );
+
+  const sections = useMemo(
+    () => runGroupSections(groups, runs),
+    [groups, runs],
+  );
+
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
   // content width, or a long cwd path widens the grid past the window. The
   // third `auto` column appears only while the agents panel is open (the
@@ -2956,63 +3309,154 @@ export function Chats({
                   <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                     Chats
                   </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-7"
-                    aria-label="New chat"
-                    title="New chat"
-                    onClick={newChat}>
-                    <Plus className="shrink-0" />
-                  </Button>
+                  <span className="flex items-center gap-0.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      aria-label="New group"
+                      title="New group"
+                      onClick={() => handleNewGroup()}>
+                      <FolderPlus className="shrink-0" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      aria-label="New chat"
+                      title="New chat"
+                      onClick={newChat}>
+                      <Plus className="shrink-0" />
+                    </Button>
+                  </span>
                 </div>
                 <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
                   {!runsLoaded && runs.length === 0 ? (
                     <li className="px-2 py-1.5 text-sm text-muted-foreground">
                       Loading chats…
                     </li>
-                  ) : runs.length === 0 ? (
-                    <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                      No chats yet
-                    </li>
                   ) : (
-                    runs.map((run) => (
-                      <ChatListItem
-                        key={run.id}
-                        runId={run.id}
-                        active={run.id === activeRunId}
-                        label={runLabel(run, workflowNames)}
-                        isWorkflow={run.workflowId != null}
-                        status={
-                          run.id === activeRunId
-                            ? activeRunStatus
-                            : // A run the user is NOT looking at, through the
-                              // same badge rule — its "parked on you" comes from
-                              // the row (the daemon's registry) rather than from
-                              // items, which only ever arrive for the focused
-                              // run. That asymmetry is the bug this fixes: a
-                              // chat sitting on an unanswered question showed a
-                              // spinner for as long as the user was elsewhere,
-                              // and a spinner is exactly the wrong thing to show
-                              // for the one state that will not advance on its
-                              // own. `streaming` stays false because this run's
-                              // live plane is not subscribed.
-                              displayRunStatus({
-                                status: run.status,
-                                streaming: false,
-                                awaitingAnswer: run.awaiting !== null,
-                              })
-                        }
-                        lastMessage={run.lastMessage}
-                        lastActivityAt={run.updatedAt}
-                        activity={activities.get(run.id) ?? null}
-                        awaiting={run.awaiting}
-                        onActivate={handleActivateRun}
-                        onRename={handleRenameRun}
-                        onDelete={handleDeleteRun}
-                      />
-                    ))
+                    <>
+                      {sections.map(({ group, runs: sectionRuns }) => {
+                        // From the statuses the ROWS are showing, never from
+                        // the daemon column: a header computed from the row
+                        // would contradict its own children in exactly the
+                        // cases that matter (a live turn under a stale
+                        // `completed`, a parked question).
+                        const summary = runGroupSummary(
+                          sectionRuns.map(sidebarRunStatus),
+                        );
+                        const sectionId = group?.id ?? null;
+                        const isDropTarget =
+                          drag?.kind === 'run' && dropSectionId === sectionId;
+                        const rows = sectionRuns.map((run) => (
+                          <ChatListItem
+                            key={run.id}
+                            runId={run.id}
+                            active={run.id === activeRunId}
+                            label={runLabel(run, workflowNames)}
+                            isWorkflow={run.workflowId != null}
+                            status={sidebarRunStatus(run)}
+                            lastMessage={run.lastMessage}
+                            lastActivityAt={run.updatedAt}
+                            activity={activities.get(run.id) ?? null}
+                            awaiting={run.awaiting}
+                            groups={groups}
+                            groupId={run.groupId}
+                            sectionGroupId={sectionId}
+                            dragging={
+                              drag?.kind === 'run' && drag.id === run.id
+                            }
+                            onActivate={handleActivateRun}
+                            onRename={handleRenameRun}
+                            onDelete={handleDeleteRun}
+                            onSetGroup={handleSetRunGroup}
+                            onNewGroupWithRun={handleNewGroupWithRun}
+                            onDragStartRun={handleRunDragStart}
+                            onDragOverSection={handleSectionDragOver}
+                            onDropInSection={handleDropInSection}
+                            onDragEndRun={handleDragEnd}
+                          />
+                        ));
+                        return (
+                          <Fragment key={group?.id ?? 'loose'}>
+                            {group ? (
+                              <GroupHeader
+                                group={group}
+                                summary={summary}
+                                dragging={
+                                  drag?.kind === 'group' && drag.id === group.id
+                                }
+                                dropTarget={isDropTarget}
+                                autoFocusName={namingGroupId === group.id}
+                                onNameFocused={clearNamingGroup}
+                                onToggle={handleToggleGroup}
+                                onRename={handleRenameGroup}
+                                onCommand={handleGroupCommand}
+                                onDragStart={handleGroupDragStart}
+                                onDragOverGroup={handleGroupDragOver}
+                                onDragEnd={handleDragEnd}
+                                onDropRun={handleDropInSection}
+                              />
+                            ) : groups.length > 0 && sectionRuns.length > 0 ? (
+                              // Only once a group exists: with none, this label
+                              // would restate the panel heading directly above
+                              // it. The loose runs need a name of their own the
+                              // moment anything sits above them — and a name to
+                              // drop a chat ONTO, to take it out of a group.
+                              <li
+                                data-slot="ungrouped-label"
+                                className={cn(
+                                  'list-none rounded-md px-2 pt-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase',
+                                  isDropTarget &&
+                                    'bg-accent ring-2 ring-ring/50',
+                                )}
+                                onDragOver={(event) => {
+                                  event.preventDefault();
+                                  handleSectionDragOver(null);
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  handleDropInSection(null);
+                                }}>
+                                Ungrouped
+                              </li>
+                            ) : null}
+                            {group === null ? (
+                              rows
+                            ) : // An EMPTY group draws no rail: the container
+                            // exists to enclose rows, and with none it rendered
+                            // as a 4px orphan tick under the header. The header
+                            // is the drop target either way, so nothing is lost.
+                            group.collapsed || rows.length === 0 ? null : (
+                              // The group's chats are ENCLOSED: indented, and
+                              // hung off a rail in the group's own colour, so
+                              // where one group's threads end and the next
+                              // begins is visible without counting. Without it
+                              // an expanded group ran straight into the one
+                              // below and the whole list read as flat.
+                              <li className="list-none">
+                                <ul
+                                  data-slot="group-runs"
+                                  className={cn(
+                                    'm-0 flex list-none flex-col gap-1 border-l-2 py-0.5 pl-2 ml-3',
+                                    GROUP_RAIL_CLASS[group.color],
+                                  )}>
+                                  {rows}
+                                </ul>
+                              </li>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                      {runs.length === 0 ? (
+                        <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                          No chats yet
+                        </li>
+                      ) : null}
+                    </>
                   )}
                 </ul>
               </aside>

@@ -20,6 +20,13 @@ export interface MenuItem {
    */
   action?: boolean;
   /**
+   * A row whose action is destructive, toned to say so.
+   *
+   * A tone rather than a caller-supplied class: "the dangerous row" is one
+   * decision, and every menu that has one should read the same.
+   */
+  tone?: 'destructive';
+  /**
    * Visible but not choosable — an option that exists and cannot be taken.
    *
    * Shown rather than dropped so the absence is explained instead of leaving
@@ -68,6 +75,7 @@ export function Menu({
   onSelect,
   onClose,
   labelledBy,
+  className,
 }: {
   open: boolean;
   groups: MenuGroup[];
@@ -81,6 +89,18 @@ export function Menu({
   onSelect: (value: string) => void;
   onClose: () => void;
   labelledBy?: string;
+  /**
+   * Panel overrides — in practice its WIDTH, for a menu that opens inside a
+   * container narrower than the default.
+   *
+   * The default sizing suits the composer, which has the whole window to grow
+   * into. The chat sidebar does not: measured at 260px, an options menu sized
+   * by its longest row came out 257px wide inside a 235px slot and was clipped
+   * by the list's own scroll container. A caller that knows its container caps
+   * the panel (`min-w-0 w-52`) and lets the rows truncate, which they already
+   * do.
+   */
+  className?: string;
 }): React.JSX.Element | null {
   const [query, setQuery] = React.useState('');
   const [highlight, setHighlight] = React.useState(0);
@@ -227,9 +247,10 @@ export function Menu({
         'min-w-56 max-w-96 overflow-hidden',
         side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
         align === 'start' && !flipped ? 'left-0' : 'right-0',
+        className,
       )}>
       {searchPlaceholder !== undefined ? (
-        <div className="border-b border-border px-3 py-1">
+        <div className="border-b border-border px-3 py-1.5">
           <input
             ref={searchRef}
             value={query}
@@ -243,9 +264,9 @@ export function Menu({
           />
         </div>
       ) : null}
-      <div className="max-h-80 overflow-y-auto">
+      <div className="max-h-80 overflow-y-auto p-1">
         {selectable.length === 0 ? (
-          <p className="px-3 py-2 text-sm text-muted-foreground">
+          <p className="px-2.5 py-2 text-sm text-muted-foreground">
             {emptyLabel}
           </p>
         ) : (
@@ -263,9 +284,15 @@ export function Menu({
             return (
               <div
                 key={group.label ?? `group-${groupIndex}`}
-                className={cn(groupIndex > 0 && 'border-t border-border')}>
+                // A HAIRLINE between blocks rather than a full border on the
+                // block itself: with the rows inset, an edge-to-edge rule cut
+                // across the padding and made the panel look like two stacked
+                // boxes.
+                className={cn(
+                  groupIndex > 0 && 'mt-1 border-t border-border/70 pt-1',
+                )}>
                 {group.label !== undefined ? (
-                  <p className="px-3 pb-0.5 pt-1.5 text-xs font-medium text-muted-foreground">
+                  <p className="px-2.5 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                     {group.label}
                   </p>
                 ) : null}
@@ -282,11 +309,15 @@ export function Menu({
                       aria-selected={selected}
                       disabled={item.disabled}
                       className={cn(
-                        'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground',
+                        'flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-foreground transition-colors',
                         '[&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
+                        item.tone === 'destructive' &&
+                          'text-destructive [&>svg]:text-destructive',
                         active &&
                           !item.disabled &&
-                          'bg-accent text-accent-foreground',
+                          (item.tone === 'destructive'
+                            ? 'bg-destructive/10'
+                            : 'bg-accent text-accent-foreground'),
                         item.disabled &&
                           'cursor-not-allowed text-muted-foreground opacity-60',
                       )}
@@ -302,7 +333,7 @@ export function Menu({
                         </span>
                       ) : null}
                       {selected ? (
-                        <Check className="size-4 shrink-0 text-muted-foreground" />
+                        <Check className="size-4 shrink-0 text-primary" />
                       ) : null}
                     </button>
                   );

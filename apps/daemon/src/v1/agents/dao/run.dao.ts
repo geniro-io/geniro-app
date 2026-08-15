@@ -31,6 +31,24 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
+  /**
+   * Release every run filed under a group — used when the group is deleted.
+   *
+   * The runs are UNTOUCHED apart from the column: a folder disappearing must
+   * never take a conversation with it, which is the whole reason this exists
+   * instead of a cascade. Both run kinds are swept, since the sidebar files
+   * chats and workflow runs into the same groups.
+   */
+  async clearGroup(groupId: string, txEm?: EntityManager): Promise<number> {
+    const em = txEm ?? this.em;
+    const runs = await this.getRepo(txEm).find({ groupId });
+    for (const run of runs) {
+      run.groupId = null;
+    }
+    await em.flush();
+    return runs.length;
+  }
+
   /** Workflow runs (graph executions), newest first. */
   async listWorkflowRuns(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(

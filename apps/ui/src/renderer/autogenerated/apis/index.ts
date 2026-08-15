@@ -5,5 +5,6 @@ export * from './CapabilitiesApi';
 export * from './ChatsApi';
 export * from './CliAuthApi';
 export * from './DiagnosticsApi';
+export * from './GroupsApi';
 export * from './HandoffApi';
 export * from './WorkflowsApi';

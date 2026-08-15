@@ -566,6 +566,64 @@ export const RunAwaitingSchema = z
   .meta({ id: 'RunAwaiting' });
 export type RunAwaiting = z.infer<typeof RunAwaitingSchema>;
 
+/**
+ * The hues a sidebar group can wear.
+ *
+ * NAMES, not colour values, and that is a hard constraint rather than a style
+ * preference: the renderer's eslint config makes a literal hex/rgb/hsl an ERROR
+ * anywhere under `apps/ui/src/renderer/**`, so a colour sent over the wire
+ * would arrive at a call site that is forbidden to use it. Each name resolves
+ * to a design token in `styles/global.css`, which is the one place colour
+ * values are allowed to exist.
+ *
+ * The eight are the palette the app already ships (`--avatar-1..8`, mirrored
+ * from geniro web) rather than a second set invented here, so a group and an
+ * agent avatar can never drift into two different blues.
+ */
+export const RUN_GROUP_COLORS = [
+  'blue',
+  'purple',
+  'green',
+  'orange',
+  'pink',
+  'indigo',
+  'teal',
+  'red',
+] as const;
+export const RunGroupColorSchema = z
+  .enum(RUN_GROUP_COLORS)
+  .meta({ id: 'RunGroupColor' });
+export type RunGroupColor = z.infer<typeof RunGroupColorSchema>;
+
+/** How long a group's name may be — a sidebar label, not a description. */
+export const RUN_GROUP_NAME_MAX = 60;
+
+/**
+ * One sidebar group on the wire.
+ *
+ * No `.meta({ id })` on this ROOT: it backs an array response DTO, and an id
+ * here would register the component under that name while the array response
+ * still points at the DTO class — the dangling `$ref` `setupSwagger` fails the
+ * boot on.
+ */
+export const RunGroupWireSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  color: RunGroupColorSchema,
+  position: z
+    .number()
+    .int()
+    .describe('Sidebar order, ascending and contiguous from 0'),
+  collapsed: z.boolean(),
+  autoCwd: z
+    .string()
+    .nullable()
+    .describe(
+      'Canonical project folder whose new chats file themselves here — a run started in it, or anywhere inside it, matches; null for a group filled by hand',
+    ),
+});
+export type RunGroupWire = z.infer<typeof RunGroupWireSchema>;
+
 /** A run projected to the wire (chat and workflow runs share the shape). */
 export const RunWireSchema = z.object({
   id: z.string(),
@@ -604,6 +662,12 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe(
       "Canonical agent config directory this chat runs under — which account/profile its CLI uses; null = the CLI's default. Fixed at creation, like cwd — the settings PATCH does not carry it",
+    ),
+  groupId: z
+    .string()
+    .nullable()
+    .describe(
+      'Sidebar group this run is filed under; null for one sitting loose. Both run kinds carry it — the sidebar lists chats and workflow runs together',
     ),
   createdAt: z.string(),
   /**

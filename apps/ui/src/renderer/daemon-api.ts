@@ -6,6 +6,7 @@ import {
   CliAuthApi,
   Configuration,
   DiagnosticsApi,
+  GroupsApi,
   HandoffApi,
   type Middleware,
   WorkflowsApi,
@@ -191,6 +192,8 @@ export interface DaemonApis {
   chats: ChatsApi;
   agents: AgentsApi;
   workflows: WorkflowsApi;
+  /** The sidebar's groups (`/v1/groups`) — filing ONE run lives on `chats`. */
+  groups: GroupsApi;
   capabilities: CapabilitiesApi;
   handoff: HandoffApi;
   /**
@@ -231,6 +234,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     chats: new ChatsApi(config),
     agents: new AgentsApi(config),
     workflows: new WorkflowsApi(config),
+    groups: new GroupsApi(config),
     capabilities: new CapabilitiesApi(config),
     handoff: new HandoffApi(config),
     cliAuth: new CliAuthApi(config),

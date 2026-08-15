@@ -42,6 +42,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 
@@ -393,7 +394,12 @@ async function drain(): Promise<void> {
 }
 
 function setup(
-  opts: { claudeModes?: ClaudeModesCapability; mcpSettingsFile?: string } = {},
+  opts: {
+    claudeModes?: ClaudeModesCapability;
+    mcpSettingsFile?: string;
+    /** What the sidebar's auto-filing rule answers for a new chat's cwd. */
+    autoGroupId?: string | null;
+  } = {},
 ) {
   const runDao = new FakeRunDao();
   const itemDao = new FakeItemDao();
@@ -479,6 +485,16 @@ function setup(
     attachments,
     seqs,
   );
+  // A double rather than the real service: what THIS spec pins is that the
+  // group the rule names lands on the created run, not how the rule reads a
+  // directory tree — `run-groups.service.spec.ts` owns that, over its own rows.
+  const assertedGroups: string[] = [];
+  const groups = {
+    resolveAutoGroupId: async () => opts.autoGroupId ?? null,
+    assertExists: async (groupId: string) => {
+      assertedGroups.push(groupId);
+    },
+  } as unknown as RunGroupsService;
   const service = new ChatService(
     em,
     runDao as unknown as RunDao,
@@ -497,6 +513,7 @@ function setup(
     teardown,
     efforts,
     seqs,
+    groups,
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -520,6 +537,7 @@ function setup(
     claudeProbe,
     skillHarvest,
     mcpHarvest,
+    assertedGroups,
   };
 }
 
@@ -542,6 +560,39 @@ describe('ChatService', () => {
     expect(run.agentKind).toBe('claude');
     expect(run.status).toBe('pending');
     expect(run.cwd).toBe(realpathSync(dir));
+  });
+
+  it('files a new chat into the group whose folder claims it', async () => {
+    const { service, runDao } = setup({ autoGroupId: 'g-work' });
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    expect(run.groupId).toBe('g-work');
+    // On the ROW, not just the answer — the sidebar reads it back from a list
+    // fetch on the next launch, not from this response.
+    expect(runDao.runs.get(run.id)?.groupId).toBe('g-work');
+  });
+
+  it('leaves a new chat loose when no group claims its folder', async () => {
+    const { service } = setup();
+    expect(
+      (await service.createChat({ agentKind: 'claude', cwd: dir })).groupId,
+    ).toBeNull();
+  });
+
+  it('setGroup files a run, and null takes it back out', async () => {
+    const { service, assertedGroups } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    expect((await service.setGroup(run.id, 'g-work')).groupId).toBe('g-work');
+    // The group is CHECKED before the write: a dangling id renders exactly like
+    // a run that never moved, so the refusal has to happen here or not at all.
+    expect(assertedGroups).toEqual(['g-work']);
+    expect((await service.setGroup(run.id, null)).groupId).toBeNull();
+    // Null names no group, so there is nothing to check — one assertion still.
+    expect(assertedGroups).toEqual(['g-work']);
+  });
+
+  it('setGroup 404s for a run that does not exist', async () => {
+    const { service } = setup();
+    await expect(service.setGroup('nope', null)).rejects.toThrow(/not found/);
   });
 
   it('persists the user message then streams the reply with monotonic seq', async () => {

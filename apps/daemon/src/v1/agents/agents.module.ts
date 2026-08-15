@@ -13,10 +13,12 @@ import {
 } from './adapters/cursor-acp/cursor-acp.const';
 import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
+import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
+import { RunGroupDao } from './dao/run-group.dao';
 import { AgentAdapterRegistry } from './services/agent-adapter.registry';
 import { AgentEventBus } from './services/agent-events.bus';
 import { AgentMcpService } from './services/agent-mcp.service';
@@ -33,6 +35,7 @@ import { McpHarvestStore } from './services/mcp-harvest.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
+import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -55,7 +58,12 @@ import { defaultSpawn } from './utils/spawn-cli';
  * makes the probe run once.
  */
 @Module({
-  controllers: [ChatController, McpController, SkillsController],
+  controllers: [
+    ChatController,
+    McpController,
+    RunGroupsController,
+    SkillsController,
+  ],
   providers: [
     ChatService,
     AgentAdapterRegistry,
@@ -131,10 +139,12 @@ import { defaultSpawn } from './utils/spawn-cli';
         ),
     },
     RunTeardownService,
+    RunGroupsService,
     ItemSeqAllocator,
     ItemDao,
     NodeStateDao,
     RunDao,
+    RunGroupDao,
     {
       provide: ClaudeAdapter,
       // Per-turn --mcp-config files live under the daemon's own userData tmp

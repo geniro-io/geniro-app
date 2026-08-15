@@ -78,6 +78,7 @@ export function runToWire(
     approval: run.approval,
     effort: run.effort,
     configDir: run.configDir,
+    groupId: run.groupId,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     lastMessage,

@@ -73,4 +73,18 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'string', nullable: true })
   configDir: string | null = null;
+
+  /**
+   * The sidebar group this run is filed under ({@link RunGroup.id}), or null
+   * for one sitting loose at the bottom of the list.
+   *
+   * A plain id column rather than a MikroORM relation, the same shape
+   * `workflowId` uses: the group owns nothing about the run, and the direction
+   * that matters is the one this column already expresses. Deleting a group
+   * nulls this on its runs (`RunDao.clearGroup`) instead of cascading, because
+   * a folder disappearing must never take a conversation with it. TEXT so the
+   * `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'string', nullable: true })
+  groupId: string | null = null;
 }

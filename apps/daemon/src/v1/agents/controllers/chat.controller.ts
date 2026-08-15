@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -31,6 +32,7 @@ import {
   SendMessageDto,
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
+import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ChatService } from '../services/chat.service';
 import { LocalImageService } from '../services/local-image.service';
 
@@ -83,6 +85,23 @@ export class ChatController {
     @Body() dto: UpdateChatSettingsDto,
   ): Promise<RunWire> {
     return this.chatService.updateSettings(runId, dto);
+  }
+
+  /**
+   * File this run into a sidebar group, or out of every group (`null`).
+   *
+   * On the RUN's route rather than the group's because the run is what changes
+   * and what the answer is — the sidebar replaces the row it already holds. The
+   * group routes own the groups themselves (`/v1/groups`).
+   */
+  @Put(':runId/group')
+  @ApiOperation({ operationId: 'setRunGroup' })
+  @ZodResponse({ status: 200, type: RunDto })
+  setGroup(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunGroupDto,
+  ): Promise<RunWire> {
+    return this.chatService.setGroup(runId, dto.groupId);
   }
 
   @Get(':runId/items')

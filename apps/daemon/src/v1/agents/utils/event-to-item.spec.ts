@@ -187,6 +187,9 @@ describe('mapEventToItem', () => {
         usage: {
           inputTokens: 12,
           outputTokens: 3,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
           contextTokens: 1012,
           contextWindowTokens: 1_000_000,
           contextModel: 'claude-sonnet-4-5',
@@ -209,6 +212,9 @@ describe('mapEventToItem', () => {
         usage: {
           inputTokens: 12,
           outputTokens: 3,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
           contextTokens: 1012,
           contextWindowTokens: 1_000_000,
           contextModel: 'claude-sonnet-4-5',

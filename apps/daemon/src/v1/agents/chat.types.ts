@@ -149,6 +149,77 @@ export interface LocalImageWire {
 }
 
 /**
+ * What one chat's context window holds right now, plus what the whole thread
+ * has cost — the readout behind the composer's context ring.
+ *
+ * Two halves with two different sources, deliberately answered by ONE route so
+ * the panel cannot show a breakdown from one moment beside a spend from
+ * another. The breakdown is ASKED of the live CLI process, so it exists only
+ * while the run holds one; the totals are summed from the thread's own
+ * persisted turns and are always there.
+ */
+export interface ChatMetricsWire {
+  /** Null when the breakdown could not be taken — see {@link breakdownReason}. */
+  context: ContextBreakdownWire | null;
+  /**
+   * Why {@link context} is null, in the CLI's own terms, or null when it is
+   * present.
+   *
+   * The distinction the field exists for: a CLI with no such channel at all
+   * (cursor) reads differently to a claude chat whose process has since been
+   * reaped for idleness, and the second is fixed by sending a message while
+   * the first never will be. A panel showing an empty space for both answered
+   * the user's "why is there nothing here" with silence.
+   */
+  breakdownReason: string | null;
+  totals: ChatTotalsWire;
+}
+
+/** The context window's contents, as the agent's own CLI accounts for them. */
+export interface ContextBreakdownWire {
+  categories: {
+    name: string;
+    tokens: number;
+    /** Available but not loaded, and so OUTSIDE {@link totalTokens}. */
+    deferred: boolean;
+  }[];
+  totalTokens: number | null;
+  maxTokens: number | null;
+  model: string | null;
+  autoCompactAtTokens: number | null;
+  autoCompactEnabled: boolean | null;
+  memoryFiles: { path: string; kind: string | null; tokens: number }[];
+  servers: {
+    name: string;
+    tokens: number;
+    toolCount: number;
+    loadedToolCount: number;
+  }[];
+}
+
+/**
+ * What the whole thread has spent, summed over its finished turns.
+ *
+ * Summed on the DAEMON rather than in the renderer, though the renderer holds
+ * the same items: a chat's history is paged behind an `afterSeq` cursor, so a
+ * client that has only scrolled back through part of it would total part of
+ * it — and silently, since a smaller number looks exactly like a cheaper
+ * conversation.
+ */
+export interface ChatTotalsWire {
+  /** Turns that reported usage — the denominator of every figure here. */
+  turns: number;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  thinkingTokens: number | null;
+  /** The CLI's own working time across those turns, where it reported one. */
+  workedMs: number | null;
+}
+
+/**
  * One image attached to a user message. Only the METADATA lives in the item
  * payload (and therefore SQLite) — the bytes are a file under
  * `<userData>/attachments/<runId>/`, per the storage split: SQLite holds

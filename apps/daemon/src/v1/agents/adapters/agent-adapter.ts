@@ -12,6 +12,7 @@ import {
   type BetweenTurnApproval,
   type CliSession,
   runCliSession,
+  type SessionAsk,
   type SessionLogger,
   type SpawnFn,
 } from '../utils/spawn-cli';
@@ -20,6 +21,7 @@ import type {
   AdapterQuestion,
   AgentApprovalMode,
   AgentCommandOptions,
+  AgentContextUsage,
   AgentEffort,
   AgentErrorRecovery,
   AgentEvent,
@@ -1396,6 +1398,24 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The out-of-band question that asks this CLI what its context window
+   * currently holds, or undefined when it has no such channel.
+   *
+   * A MECHANISM and so a method, not a config field: the request line, the
+   * correlation and the reply's whole shape are that CLI's own protocol. The
+   * matching config field is `usage.breakdownUnavailableReason`, which is the
+   * VALUE half — what to tell the user when this returns undefined. The two
+   * must agree, and `agent-adapter.spec.ts` pins that they do.
+   *
+   * Called once per question rather than cached, because a correlation id may
+   * only be used once: two readouts open at the same time would otherwise both
+   * settle on whichever reply arrived first.
+   */
+  protected buildContextUsageAsk(): SessionAsk<AgentContextUsage> | undefined {
+    return undefined;
+  }
+
+  /**
    * Open a CLI process for this run and return the session that owns it.
    *
    * The single spawn path. A CLI that answers false to {@link canHostSession}
@@ -1480,6 +1500,14 @@ export abstract class AgentAdapter {
 
     let firstTurnTaken = false;
     return {
+      readContextUsage: () => {
+        const ask = this.buildContextUsageAsk();
+        // Undefined is this CLI declaring it has no such channel, which is the
+        // same "no answer" a live one gives when it will not say — the caller
+        // reads `usage.breakdownUnavailableReason` for the difference rather
+        // than getting two null shapes to tell apart.
+        return ask ? session.ask(ask) : Promise.resolve(null);
+      },
       startTurn: (turnInput, onEvent) => {
         // A turn needing different argv cannot run on this process, whatever
         // its stdin can carry. Checked before anything is written, so the

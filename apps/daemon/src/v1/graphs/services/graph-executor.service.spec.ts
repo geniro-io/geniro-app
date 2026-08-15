@@ -1034,6 +1034,9 @@ describe('GraphExecutorService', () => {
         usage: {
           inputTokens: null,
           outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
           contextTokens: null,
           contextWindowTokens: window,
           contextModel: nodeModel,

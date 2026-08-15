@@ -104,6 +104,9 @@ describe('ClaudeAdapter', () => {
         usage: {
           inputTokens: 1,
           outputTokens: 1,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
           contextTokens: 1,
           contextWindowTokens: null,
           contextModel: null,

@@ -28,6 +28,45 @@ const SIX_TOOL_CALLS = {
 };
 
 describe('readClaudeUsage', () => {
+  it('reports the cache split as the CUMULATIVE roll-up, beside the input count', () => {
+    // The pair is what makes a turn's cost explicable: 14 fresh input tokens
+    // beside 181,832 cache reads is not "almost nothing was sent". Deliberately
+    // the roll-up and NOT the last request's 158/28,123 — that reading is
+    // `contextTokens`, and conflating the two is what this file exists to stop.
+    const usage = readClaudeUsage({ usage: SIX_TOOL_CALLS });
+
+    expect(usage.inputTokens).toBe(14);
+    expect(usage.cacheCreationTokens).toBe(10_061);
+    expect(usage.cacheReadTokens).toBe(181_832);
+  });
+
+  it('reads the thinking share of the output when the CLI breaks it down', () => {
+    const usage = readClaudeUsage({
+      usage: {
+        ...SIX_TOOL_CALLS,
+        output_tokens_details: { thinking_tokens: 412 },
+      },
+    });
+
+    expect(usage.thinkingTokens).toBe(412);
+  });
+
+  it('reads a turn that reported a thinking share of ZERO as zero, not unknown', () => {
+    // The distinction the null exists for, from the other side: a build that
+    // breaks output down and says 0 is a turn that did not think, which is a
+    // reading — while a build that says nothing has not been measured.
+    const withZero = readClaudeUsage({
+      usage: {
+        ...SIX_TOOL_CALLS,
+        output_tokens_details: { thinking_tokens: 0 },
+      },
+    });
+    const withNothing = readClaudeUsage({ usage: SIX_TOOL_CALLS });
+
+    expect(withZero.thinkingTokens).toBe(0);
+    expect(withNothing.thinkingTokens).toBeNull();
+  });
+
   it('reports the LAST request as context, not the turn-wide roll-up', () => {
     const usage = readClaudeUsage({
       usage: SIX_TOOL_CALLS,
@@ -126,6 +165,9 @@ describe('readClaudeUsage', () => {
     expect(readClaudeUsage({})).toEqual({
       inputTokens: null,
       outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
       contextTokens: null,
       contextWindowTokens: null,
       contextModel: null,

@@ -1251,6 +1251,9 @@ describe('AcpTurnDriver turn completion', () => {
         usage: {
           inputTokens: null,
           outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
           contextTokens: null,
           contextWindowTokens: null,
           contextModel: null,
@@ -1306,6 +1309,9 @@ describe('AcpTurnDriver turn completion', () => {
       usage: {
         inputTokens: 100,
         outputTokens: 20,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
         contextTokens: 4200,
         contextWindowTokens: null,
         contextModel: null,

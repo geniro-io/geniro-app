@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -11,11 +12,13 @@ import {
   CLAUDE_CREDENTIAL_KEYS,
   claudeCredentialEnv,
 } from '../../utils/child-env';
+import type { SessionAsk } from '../../utils/spawn-cli';
 import type {
   AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
   AgentCommandOptions,
+  AgentContextUsage,
   AgentEvent,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
@@ -41,6 +44,7 @@ import {
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
+  CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
@@ -76,6 +80,10 @@ import {
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
 import { ClaudeTurnDriver } from './claude-turn.driver';
+import {
+  contextUsageRequestLine,
+  readContextUsageReply,
+} from './utils/claude-context-usage.utils';
 import { buildImageBlocks } from './utils/claude-images.utils';
 import {
   definesGeniroServer,
@@ -358,6 +366,12 @@ export class ClaudeAdapter extends AgentAdapter {
          * maps — so the meter has a numerator, a denominator and a spend.
          */
         unavailableReason: null,
+        /**
+         * Answers the breakdown too, over `get_context_usage` — see
+         * {@link ClaudeAdapter.buildContextUsageAsk} and the probe block at
+         * `CLAUDE_CONTEXT_USAGE_SUBTYPE` in `claude.const.ts`.
+         */
+        breakdownUnavailableReason: null,
       },
       handoff: {
         kind: 'resume-command',
@@ -460,6 +474,25 @@ export class ClaudeAdapter extends AgentAdapter {
    * turn is built, so writing it here means argv can never point at a file a
    * toggle in another window has since rewritten.
    */
+  /**
+   * Ask this CLI what its window currently holds, over the undocumented
+   * `get_context_usage` control request — see the probe block at
+   * `CLAUDE_CONTEXT_USAGE_SUBTYPE` in `claude.const.ts`.
+   *
+   * A fresh id per question, which the base's doc block requires and this is
+   * the reason for: the reader matches on it, so two readouts opened together
+   * would otherwise both take the first reply — and the CLI serialises them,
+   * so the second answer describes a later moment than the first.
+   */
+  protected override buildContextUsageAsk(): SessionAsk<AgentContextUsage> {
+    const requestId = randomUUID();
+    return {
+      line: contextUsageRequestLine(requestId),
+      read: (obj) => readContextUsageReply(obj, requestId),
+      timeoutMs: CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
+    };
+  }
+
   protected override prepareTurn(
     input: AgentTurnInput,
   ): (() => void) | undefined {

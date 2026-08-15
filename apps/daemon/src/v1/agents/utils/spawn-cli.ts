@@ -254,7 +254,48 @@ export interface SessionLogger {
  * every caller that predates run-scoped sessions. A `session` one stays alive
  * between turns, idle, holding its MCP servers up.
  */
+/**
+ * One question put to a live CLI over its own stdin control channel, OUTSIDE
+ * any turn — see {@link CliSession.ask}.
+ *
+ * The reader is the whole contract: it is offered every parsed stdout object
+ * until one of them answers, so it owns the correlation (matching the request
+ * id it just wrote) and this module never learns a CLI's control vocabulary.
+ */
+export interface SessionAsk<T> {
+  /** The stdin line to write, newline-terminated by its author. */
+  line: string;
+  /**
+   * Reads one parsed stdout object. Non-null ends the wait and is the answer;
+   * null means "not my reply, keep waiting".
+   */
+  read: (obj: unknown) => T | null;
+  /**
+   * How long to wait before giving up with null. Required rather than
+   * defaulted: what counts as too slow is a property of the question, and the
+   * caller is the only side that knows it.
+   */
+  timeoutMs: number;
+}
+
 export interface CliSession {
+  /**
+   * Ask the CLI something on its own stdin control channel, out of band of any
+   * turn.
+   *
+   * Additive by construction: the reader is offered each parsed stdout object
+   * BEFORE the mapper sees it, and neither can consume the other's lines — a
+   * control reply maps to no event, and an event line answers no ask. So this
+   * cannot perturb a turn in flight, which is the point: the one caller today
+   * asks a chat what its context window currently holds, and the user may well
+   * be mid-turn when they open the readout.
+   *
+   * Resolves null rather than throwing on every failure — a stdin that is
+   * closed, a process that is gone, a CLI that does not know the subtype and
+   * says nothing, or the deadline passing. All four mean "no answer", and a
+   * readout has nothing different to do about any of them.
+   */
+  ask<T>(request: SessionAsk<T>): Promise<T | null>;
   /**
    * Open a turn on this process. Null when the process cannot take one: it is
    * gone, its stdin has been closed, or a turn is already in flight. Callers
@@ -1002,8 +1043,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     isGone: () => processGone,
   });
 
+  /**
+   * The out-of-band questions waiting on a reply — see {@link CliSession.ask}.
+   *
+   * A set and not one slot: two readouts opened at once is an ordinary thing
+   * for a user to do, and the second must not silently steal the first's
+   * answer. Each entry removes itself, whichever way it ends.
+   */
+  const pendingAsks = new Set<(obj: unknown) => void>();
+
   const buffer = new NdjsonBuffer({
     onObject: (obj) => {
+      // Offered to the askers FIRST and to every one of them, then handed to
+      // the mapper unchanged. Neither side consumes the object: a control
+      // reply maps to no event, and an ask's reader recognises only its own
+      // request id — so this stays additive to the turn's event stream rather
+      // than a fork in it.
+      for (const offer of [...pendingAsks]) {
+        offer(obj);
+      }
       for (const event of opts.mapper(obj)) {
         emit(event);
       }
@@ -1482,6 +1540,52 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   return {
+    ask: <T>(request: SessionAsk<T>): Promise<T | null> =>
+      new Promise<T | null>((resolve) => {
+        // Written FIRST: a stdin that will not take the line means there is no
+        // question to wait on, and registering the reader before finding that
+        // out would leave it parked for the whole deadline.
+        if (!sessionWrite(request.line)) {
+          resolve(null);
+          return;
+        }
+        let done = false;
+        const finish = (answer: T | null): void => {
+          if (done) {
+            return;
+          }
+          done = true;
+          pendingAsks.delete(offer);
+          clearTimeout(timer);
+          resolve(answer);
+        };
+        const offer = (obj: unknown): void => {
+          if (done) {
+            return;
+          }
+          // A reader throwing is the reader's bug, not the session's: it must
+          // not take down the stdout parse loop that every turn depends on.
+          let answer: T | null;
+          try {
+            answer = request.read(obj);
+          } catch (err) {
+            opts.logger?.warn(
+              `${opts.command}: an out-of-band reply reader threw: ${errorMessage(err)}`,
+            );
+            finish(null);
+            return;
+          }
+          if (answer !== null) {
+            finish(answer);
+          }
+        };
+        const timer = setTimeout(() => finish(null), request.timeoutMs);
+        timer.unref?.();
+        pendingAsks.add(offer);
+        // The process can end while the question is out — nothing else would
+        // then ever call `offer`, and the deadline would be the only way out.
+        void closed.then(() => finish(null));
+      }),
     startTurn,
     get idle() {
       return !processGone && !processExited && !stdinEnded && current === null;
@@ -1524,6 +1628,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
 function deadSession(message: string): CliSession {
   let used = false;
   return {
+    // No process, so no channel to ask on — the same null a live session gives
+    // for a question it could not get an answer to.
+    ask: () => Promise.resolve(null),
     startTurn: (turnOptions) => {
       if (used) {
         return null;

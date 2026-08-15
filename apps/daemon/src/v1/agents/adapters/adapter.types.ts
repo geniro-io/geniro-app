@@ -40,6 +40,29 @@ export interface AgentUsage {
   inputTokens: number | null;
   outputTokens: number | null;
   /**
+   * Of the turn's billed input, how much was READ from the prompt cache and
+   * how much was WRITTEN to it.
+   *
+   * The pair is the whole point and neither half is useful alone: on a
+   * conversation past its first turn nearly the entire prompt is a cache read
+   * (billed at a tenth), so `inputTokens` on its own — 2, on a turn that sent
+   * 37,000 — reads as though almost nothing was sent. Together they are what
+   * makes the cost figure explicable, which is the question a session-metrics
+   * readout is opened to answer.
+   *
+   * Cumulative across the turn's requests, like {@link inputTokens} beside
+   * them, and NOT a measure of context — that is {@link contextTokens}, and
+   * the distinction is the one `claude-usage.utils.ts` exists to keep.
+   */
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  /**
+   * Of {@link outputTokens}, how many were spent thinking rather than on the
+   * answer. Null for a CLI that does not break its output down — never 0,
+   * which is a real reading meaning "this turn did not think".
+   */
+  thinkingTokens: number | null;
+  /**
    * How full the window is NOW — the prompt of the turn's LAST request, which
    * is the whole conversation as the model last saw it.
    *
@@ -106,6 +129,97 @@ export interface AgentUsage {
    * rather than printing a negative "own work" figure.
    */
   apiMs: number | null;
+}
+
+// ── What the window currently HOLDS ─────────────────────────────────────────
+//
+// {@link AgentUsage} answers "what did that turn cost"; everything below
+// answers "what is in the window right now, and what put it there". They are
+// different questions with different sources: usage is read off a turn's own
+// result line, while this is ASKED of a live process (see
+// `AgentSession.readContextUsage`) and so has no turn attached to it at all.
+
+/**
+ * One line item of the context window, as the CLI itself accounts for it.
+ *
+ * The names are the CLI's OWN and are deliberately not normalized into a
+ * geniro vocabulary: they are what that CLI's own `/context` prints, so a user
+ * comparing the two surfaces sees the same words, and a CLI that invents a new
+ * category next month shows it rather than dropping it into "other".
+ */
+export interface AgentContextCategory {
+  name: string;
+  tokens: number;
+  /**
+   * This category is AVAILABLE but not loaded — claude's deferred tool
+   * surface, which costs nothing until something searches for a tool in it.
+   *
+   * Excluded from {@link AgentContextUsage.totalTokens} by the CLI (verified
+   * by arithmetic on a live reading: the non-deferred rows sum exactly to the
+   * total, and free space is the window minus it). A consumer that renders
+   * these in the same bar as the rest reports a window several times fuller
+   * than it is — measured, 273,876 deferred MCP tokens against a 98,598 total.
+   */
+  deferred: boolean;
+}
+
+/** One file the agent loaded as standing instructions, and what it costs. */
+export interface AgentContextMemoryFile {
+  path: string;
+  /** The CLI's own word for where it came from (`Project`, `AutoMem`, …). */
+  kind: string | null;
+  tokens: number;
+}
+
+/**
+ * One MCP server's whole tool surface, summed.
+ *
+ * Per SERVER and never per tool, which is the difference between a readout and
+ * a data dump: a live reading here carried 371 tools across 46 servers, and
+ * the actionable fact in it — one server accounting for 109k of the 274k — is
+ * visible only once they are summed. The per-tool rows are dropped at the
+ * adapter rather than sent and hidden, because the wire cost is the point (the
+ * raw reply is ~80KB, most of it tool descriptions the user cannot act on).
+ */
+export interface AgentContextServer {
+  name: string;
+  tokens: number;
+  toolCount: number;
+  /** How many of those tools are actually loaded into the window right now. */
+  loadedToolCount: number;
+}
+
+/**
+ * What one agent's context window holds at the moment it was asked.
+ *
+ * A SNAPSHOT and not an accumulation: it is read from a live process, so it
+ * describes that conversation as it stands, including work done inside a turn
+ * that has not finished. Every field is nullable because a CLI reports what it
+ * reports — a reading missing `maxTokens` still has categories worth showing,
+ * and inventing a denominator is the defect `ContextMeter` already documents.
+ */
+export interface AgentContextUsage {
+  /** In the CLI's own order, which is the order its own readout uses. */
+  categories: AgentContextCategory[];
+  /** What the non-deferred categories sum to, as the CLI itself totals them. */
+  totalTokens: number | null;
+  /** The window {@link totalTokens} is measured against. */
+  maxTokens: number | null;
+  /** Which model that window belongs to, when the CLI named one. */
+  model: string | null;
+  /**
+   * The token count at which this CLI would compact the conversation by
+   * itself, and whether it is switched on — null when the CLI says nothing.
+   *
+   * Worth surfacing because it is the number that actually bounds a
+   * conversation: `maxTokens` is where the model stops, but this is where the
+   * agent's own history gets rewritten, and it is what a user watching a long
+   * session is really counting down to.
+   */
+  autoCompactAtTokens: number | null;
+  autoCompactEnabled: boolean | null;
+  memoryFiles: AgentContextMemoryFile[];
+  servers: AgentContextServer[];
 }
 
 /**
@@ -1174,6 +1288,16 @@ export interface AgentSession {
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
   ): AgentTurnHandle | null;
+  /**
+   * Ask this live process what its context window currently holds. Null when
+   * the CLI has no such channel, or would not answer in time.
+   *
+   * On the SESSION and not on a turn, because the question is about the
+   * process: it is answerable before the first prompt, between turns, and in
+   * the middle of one — and the answer moves with the conversation rather than
+   * belonging to any single turn's accounting.
+   */
+  readContextUsage(): Promise<AgentContextUsage | null>;
   /** Alive, with no turn in flight — ready to take another one. */
   readonly idle: boolean;
   /** The process has not been observed to end. */
@@ -1867,6 +1991,17 @@ export interface AdapterConfig {
      * reason as the fields above: it is what the meter says when pointed at.
      */
     readonly unavailableReason: string | null;
+    /**
+     * Why this CLI cannot be asked what its window currently HOLDS — the
+     * category breakdown behind `AgentSession.readContextUsage` — or `null`
+     * when it can.
+     *
+     * Its own field beside the one above rather than folded into it, because
+     * the two are genuinely independent: a CLI can report a turn's token
+     * totals perfectly and still have no channel for "what is in the window
+     * and what put it there", which is exactly where cursor stands.
+     */
+    readonly breakdownUnavailableReason: string | null;
   };
 
   // ── Handing the conversation to the user ────────────────────────────────

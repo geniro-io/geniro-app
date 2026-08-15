@@ -14,6 +14,7 @@ import { ZodResponse } from 'nestjs-zod';
 
 import type {
   AttachmentDataWire,
+  ChatMetricsWire,
   ItemWire,
   LocalImageWire,
   RunWire,
@@ -21,6 +22,7 @@ import type {
 import {
   AttachmentDataDto,
   CancelledDto,
+  ChatMetricsDto,
   CreateChatDto,
   DeletedDto,
   HistoryQueryDto,
@@ -34,6 +36,7 @@ import {
 } from '../dto/chat.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ChatService } from '../services/chat.service';
+import { ChatMetricsService } from '../services/chat-metrics.service';
 import { LocalImageService } from '../services/local-image.service';
 
 /**
@@ -51,6 +54,7 @@ export class ChatController {
   constructor(
     private readonly chatService: ChatService,
     private readonly localImages: LocalImageService,
+    private readonly metrics: ChatMetricsService,
   ) {}
 
   @Post()
@@ -147,6 +151,22 @@ export class ChatController {
     @Query() query: LocalImageQueryDto,
   ): Promise<LocalImageWire> {
     return this.localImages.read(runId, query.path);
+  }
+
+  /**
+   * What this chat's context window holds, and what the thread has cost.
+   *
+   * A GET with a real cost behind it — the breakdown is a round trip to the
+   * live CLI, measured at 1.2–3.3s — so it is fetched when the readout is
+   * OPENED and never polled. Absent figures are an answer here, not an error:
+   * a CLI with no such channel and a chat whose process has been reaped both
+   * come back 200 with `breakdownReason` saying which.
+   */
+  @Get(':runId/metrics')
+  @ApiOperation({ operationId: 'readChatMetrics' })
+  @ZodResponse({ status: 200, type: ChatMetricsDto })
+  readMetrics(@Param('runId') runId: string): Promise<ChatMetricsWire> {
+    return this.metrics.read(runId);
   }
 
   @Post(':runId/cancel')

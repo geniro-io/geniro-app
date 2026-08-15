@@ -72,6 +72,30 @@ export class ItemDao extends BaseDao<Item> {
     return previews;
   }
 
+  /**
+   * Every `turn_complete` payload of a run, oldest first — what the thread's
+   * spend is summed from.
+   *
+   * Its own query rather than a filter over `getByRun`: a long conversation's
+   * transcript is thousands of rows of text and tool payloads, and the totals
+   * need the handful that carry usage. Projected to `payload` alone for the
+   * same reason.
+   */
+  async turnCompletePayloads(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { runId, kind: 'turn_complete' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['payload'],
+        disableIdentityMap: true,
+      },
+    );
+    return rows.map((row) => row.payload);
+  }
+
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full

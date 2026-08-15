@@ -285,6 +285,9 @@ describe('CursorAcpAdapter spawn', () => {
         usage: {
           inputTokens: null,
           outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          thinkingTokens: null,
           contextTokens: null,
           contextWindowTokens: null,
           contextModel: null,

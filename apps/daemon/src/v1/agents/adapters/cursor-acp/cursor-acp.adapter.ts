@@ -497,6 +497,22 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         unavailableReason:
           'cursor-agent reports no token or cost usage over ACP — it sends no usage_update and its prompt reply carries no usage, so there is no context figure to show',
+        /**
+         * No breakdown either, and for a structural reason rather than a
+         * missing field: the claude channel is an out-of-band control request
+         * on that CLI's own stdin dialogue, and ACP has no equivalent. Its
+         * client→agent methods are the ones in the spec plus whatever the
+         * vendor adds, and nothing in either enumerates the window's contents
+         * — the closest, `UsageUpdate`, is a single occupancy number and
+         * was never observed on the wire at all (see the reason above).
+         *
+         * RE-CHECK the way `cursor/ask_question` and `cursor/task` were found:
+         * by enumerating the shipped bundle's own method names, not by reading
+         * the ACP schema. Both of those were real vendor extensions this
+         * adapter was declining while declaring they did not exist.
+         */
+        breakdownUnavailableReason:
+          'cursor-agent has no channel for a context breakdown — ACP carries no such request, and the CLI publishes none of its own',
       },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a

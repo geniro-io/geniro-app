@@ -549,6 +549,86 @@ export type ChatApprovalMode = typeof ChatApprovalMode[keyof typeof ChatApproval
 /**
  * 
  * @export
+ * @interface ChatMetricsDto
+ */
+export interface ChatMetricsDto {
+    /**
+     * 
+     * @type {ContextBreakdown}
+     * @memberof ChatMetricsDto
+     */
+    context: ContextBreakdown | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatMetricsDto
+     */
+    breakdownReason: string | null;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof ChatMetricsDto
+     */
+    totals: ChatTotals;
+}
+/**
+ * 
+ * @export
+ * @interface ChatTotals
+ */
+export interface ChatTotals {
+    /**
+     * turns that reported usage
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    turns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    inputTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    outputTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    cacheReadTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    cacheCreationTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    thinkingTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    workedMs: number | null;
+}
+/**
+ * 
+ * @export
  * @interface ClaudeModesCapability
  */
 export interface ClaudeModesCapability {
@@ -585,6 +665,142 @@ export interface ClaudeModesCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface ContextBreakdown
+ */
+export interface ContextBreakdown {
+    /**
+     * 
+     * @type {Array<ContextCategory>}
+     * @memberof ContextBreakdown
+     */
+    categories: Array<ContextCategory>;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextBreakdown
+     */
+    totalTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextBreakdown
+     */
+    maxTokens: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ContextBreakdown
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextBreakdown
+     */
+    autoCompactAtTokens: number | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ContextBreakdown
+     */
+    autoCompactEnabled: boolean | null;
+    /**
+     * 
+     * @type {Array<ContextMemoryFile>}
+     * @memberof ContextBreakdown
+     */
+    memoryFiles: Array<ContextMemoryFile>;
+    /**
+     * 
+     * @type {Array<ContextServer>}
+     * @memberof ContextBreakdown
+     */
+    servers: Array<ContextServer>;
+}
+/**
+ * 
+ * @export
+ * @interface ContextCategory
+ */
+export interface ContextCategory {
+    /**
+     * the CLI's own name for this part of the window
+     * @type {string}
+     * @memberof ContextCategory
+     */
+    name: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextCategory
+     */
+    tokens: number;
+    /**
+     * available but not loaded, and so NOT counted in totalTokens — rendering it in the same bar reports a window several times fuller than it is
+     * @type {boolean}
+     * @memberof ContextCategory
+     */
+    deferred: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface ContextMemoryFile
+ */
+export interface ContextMemoryFile {
+    /**
+     * 
+     * @type {string}
+     * @memberof ContextMemoryFile
+     */
+    path: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ContextMemoryFile
+     */
+    kind: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextMemoryFile
+     */
+    tokens: number;
+}
+/**
+ * 
+ * @export
+ * @interface ContextServer
+ */
+export interface ContextServer {
+    /**
+     * 
+     * @type {string}
+     * @memberof ContextServer
+     */
+    name: string;
+    /**
+     * this server's whole tool surface, summed
+     * @type {number}
+     * @memberof ContextServer
+     */
+    tokens: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextServer
+     */
+    toolCount: number;
+    /**
+     * how many of them are actually in the window right now
+     * @type {number}
+     * @memberof ContextServer
+     */
+    loadedToolCount: number;
+}
 /**
  * 
  * @export

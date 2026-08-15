@@ -35,6 +35,10 @@ class FakeSession implements AgentSession {
   retired = false;
   private settle: (() => void) | null = null;
 
+  readContextUsage(): Promise<null> {
+    return Promise.resolve(null);
+  }
+
   startTurn(): AgentTurnHandle | null {
     if (this.refuse || !this.idle) {
       return null;

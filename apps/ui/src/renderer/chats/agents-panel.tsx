@@ -21,7 +21,11 @@ import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
-import { type AgentDisplay, type AgentThread } from './agent-activity';
+import {
+  type AgentDisplay,
+  type AgentThread,
+  CHAT_AGENT_KEY,
+} from './agent-activity';
 import { ContextMeter } from './context-meter';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import { TaskCount, TaskIcon, TaskRows } from './task-list';
@@ -362,9 +366,20 @@ export function AgentsPanel({
   onResolveHandoff,
   terminalReasons,
   usageReasons,
+  metricsRunId = null,
   onClose,
 }: {
   agents: AgentDisplay[];
+  /**
+   * The chat whose expanded context readout this panel may offer, or null.
+   *
+   * Null for a workflow run, and that is the whole reason it is a prop rather
+   * than read off each card: the breakdown is asked of the ONE process a chat
+   * run holds, and a workflow's nodes each hold their own — so offering it
+   * there would report one node's window under every node's name. It is
+   * therefore only ever given to the chat agent's own card.
+   */
+  metricsRunId?: string | null;
   /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
@@ -690,6 +705,8 @@ export function AgentsPanel({
                   */}
                   <span className="ml-auto flex shrink-0 items-center gap-0.5">
                     <ContextMeter
+                      // Only the chat agent's own card: see `metricsRunId`.
+                      runId={agent.id === CHAT_AGENT_KEY ? metricsRunId : null}
                       contextTokens={agent.contextTokens}
                       contextWindowTokens={agent.contextWindowTokens}
                       spentUsd={agent.spentUsd}

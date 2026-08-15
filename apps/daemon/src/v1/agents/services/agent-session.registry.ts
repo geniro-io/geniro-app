@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 
 import type {
+  AgentContextUsage,
   AgentEvent,
   AgentSession,
   AgentTurnHandle,
@@ -188,6 +189,26 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /** Runs currently holding a process — for diagnostics and the specs. */
   get liveCount(): number {
     return this.entries.size;
+  }
+
+  /**
+   * Ask this run's live process what its context window holds, or null when it
+   * has no process to ask.
+   *
+   * Deliberately does NOT touch `lastUsedAt`, so opening the readout cannot
+   * keep an abandoned chat's CLI — and its MCP servers — alive indefinitely.
+   * Reading what a session is doing is not using it.
+   *
+   * Nor does it spawn one. A CLI boot costs seconds and starts every MCP
+   * server the folder defines; doing that because a user hovered a ring would
+   * be a readout with a side effect bigger than the thing it reports on.
+   */
+  readContextUsage(runId: string): Promise<AgentContextUsage | null> {
+    const entry = this.entries.get(runId);
+    if (!entry || !entry.session.alive) {
+      return Promise.resolve(null);
+    }
+    return entry.session.readContextUsage();
   }
 
   /**

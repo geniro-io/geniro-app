@@ -1257,6 +1257,13 @@ export class AcpTurnDriver implements TurnDriver {
     return {
       inputTokens: this.usage.inputTokens,
       outputTokens: this.usage.outputTokens,
+      // ACP has no prompt-cache accounting on the wire — `UsageUpdate` carries
+      // occupancy and a price and nothing about caching — and no output
+      // breakdown, so an agent's thinking is inside `outputTokens` with no way
+      // to separate it. Null rather than 0: the reading does not exist.
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
       // ACP reports context occupancy directly (`UsageUpdate.used`), so unlike
       // the claude adapter there are no cache counters to sum. Fall back to the
       // plain input count when the agent never sent a usage_update.

@@ -27,6 +27,7 @@ import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
+import { ChatMetricsService } from './services/chat-metrics.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { EffortsService } from './services/efforts.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
@@ -68,6 +69,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatService,
     AgentAdapterRegistry,
     AgentVersionService,
+    ChatMetricsService,
     LocalImageService,
     // Factories because the trailing options bags are test seams, not DI tokens.
     { provide: SkillHarvestStore, useFactory: () => new SkillHarvestStore() },

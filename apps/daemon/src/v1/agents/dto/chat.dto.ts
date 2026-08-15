@@ -181,3 +181,96 @@ export class DeletedDto extends createZodDto(
       .describe('True when the chat and everything it owned were removed'),
   }),
 ) {}
+
+/**
+ * One line item of the context window — named components so the generated
+ * client gets real types instead of an inline anonymous shape per field.
+ */
+const ContextCategorySchema = z
+  .object({
+    name: z.string().describe("the CLI's own name for this part of the window"),
+    tokens: z.number(),
+    deferred: z
+      .boolean()
+      .describe(
+        'available but not loaded, and so NOT counted in totalTokens — rendering it in the same bar reports a window several times fuller than it is',
+      ),
+  })
+  .meta({ id: 'ContextCategory' });
+
+const ContextMemoryFileSchema = z
+  .object({
+    path: z.string(),
+    kind: z
+      .string()
+      .nullable()
+      .describe(
+        "the CLI's own word for where it came from (Project, AutoMem…)",
+      ),
+    tokens: z.number(),
+  })
+  .meta({ id: 'ContextMemoryFile' });
+
+const ContextServerSchema = z
+  .object({
+    name: z.string(),
+    tokens: z.number().describe("this server's whole tool surface, summed"),
+    toolCount: z.number(),
+    loadedToolCount: z
+      .number()
+      .describe('how many of them are actually in the window right now'),
+  })
+  .meta({ id: 'ContextServer' });
+
+const ContextBreakdownSchema = z
+  .object({
+    categories: z.array(ContextCategorySchema),
+    totalTokens: z.number().nullable(),
+    maxTokens: z.number().nullable(),
+    model: z.string().nullable(),
+    autoCompactAtTokens: z
+      .number()
+      .nullable()
+      .describe('where this CLI would compact the conversation by itself'),
+    autoCompactEnabled: z.boolean().nullable(),
+    memoryFiles: z.array(ContextMemoryFileSchema),
+    servers: z.array(ContextServerSchema),
+  })
+  .meta({ id: 'ContextBreakdown' });
+
+const ChatTotalsSchema = z
+  .object({
+    turns: z.number().describe('turns that reported usage'),
+    costUsd: z.number().nullable(),
+    inputTokens: z.number().nullable(),
+    outputTokens: z.number().nullable(),
+    cacheReadTokens: z.number().nullable(),
+    cacheCreationTokens: z.number().nullable(),
+    thinkingTokens: z.number().nullable(),
+    workedMs: z
+      .number()
+      .nullable()
+      .describe("the CLI's own working time, where it reported one"),
+  })
+  .meta({ id: 'ChatTotals' });
+
+/**
+ * What one chat's window holds and what the thread has cost.
+ *
+ * The root schema carries no `.meta({ id })` — a response DTO's does not, or
+ * nestjs-zod registers the component under the id while the DTO class name is
+ * still what array responses `$ref`, and `setupSwagger` fails the boot on the
+ * dangling reference.
+ */
+export class ChatMetricsDto extends createZodDto(
+  z.object({
+    context: ContextBreakdownSchema.nullable(),
+    breakdownReason: z
+      .string()
+      .nullable()
+      .describe(
+        'why there is no breakdown — a CLI without the channel, or a chat with no running agent to ask',
+      ),
+    totals: ChatTotalsSchema,
+  }),
+) {}

@@ -1822,3 +1822,141 @@ describe('a turn whose prompt is held back until the CLI is ready', () => {
     await handle?.done;
   });
 });
+
+describe('asking a live session something out of band', () => {
+  /** A reader matching one control reply by its request id. */
+  const readReply =
+    (id: string) =>
+    (obj: unknown): string | null => {
+      const row = obj as { reply?: string; total?: string };
+      return row.reply === id ? (row.total ?? null) : null;
+    };
+
+  it('writes the question and resolves with the reply that answers it', async () => {
+    const { session, child } = openSession();
+
+    const answer = session.ask({
+      line: '{"ask":"ctx-1"}\n',
+      read: readReply('ctx-1'),
+      timeoutMs: 1000,
+    });
+    expect(child.stdin.written).toContain('{"ask":"ctx-1"}');
+    line(child, { reply: 'ctx-1', total: '98598' });
+
+    expect(await answer).toBe('98598');
+  });
+
+  it('does not disturb the turn the reply arrived alongside', async () => {
+    // The whole safety claim of this seam: the readout can be opened mid-turn,
+    // so the control dialogue and the event stream must not consume each
+    // other's lines.
+    const { session, child } = openSession();
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    const answer = session.ask({
+      line: '{"ask":"ctx-1"}\n',
+      read: readReply('ctx-1'),
+      timeoutMs: 1000,
+    });
+    line(child, { reply: 'ctx-1', total: '5' });
+    line(child, { tool: 't1' });
+    line(child, { done: true });
+
+    expect(await answer).toBe('5');
+    await handle?.done;
+    expect(events.map((e) => e.type)).toEqual(['tool_result', 'turn_complete']);
+  });
+
+  it('gives each open question its OWN reply rather than the first to arrive', async () => {
+    // Two readouts open at once is ordinary. Without per-question matching the
+    // second would settle on the first's snapshot — a reading of a different
+    // moment, silently.
+    const { session, child } = openSession();
+
+    const first = session.ask({
+      line: '{"ask":"a"}\n',
+      read: readReply('a'),
+      timeoutMs: 1000,
+    });
+    const second = session.ask({
+      line: '{"ask":"b"}\n',
+      read: readReply('b'),
+      timeoutMs: 1000,
+    });
+    line(child, { reply: 'b', total: 'B' });
+    line(child, { reply: 'a', total: 'A' });
+
+    expect(await first).toBe('A');
+    expect(await second).toBe('B');
+  });
+
+  it('gives up with null when the deadline passes unanswered', async () => {
+    vi.useFakeTimers();
+    const { session } = openSession();
+
+    const answer = session.ask({
+      line: '{"ask":"a"}\n',
+      read: readReply('a'),
+      timeoutMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await answer).toBeNull();
+  });
+
+  it('answers null the moment the process dies, without waiting out the clock', async () => {
+    // Nothing would ever call the reader again, so the deadline would be the
+    // only way out — and it is deliberately generous.
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+
+    const answer = session.ask({
+      line: '{"ask":"a"}\n',
+      read: readReply('a'),
+      timeoutMs: 60_000,
+    });
+    child.emit('exit', 0, null);
+    child.emit('close', 0, null);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(await answer).toBeNull();
+  });
+
+  it('answers null without waiting when stdin will not take the question', async () => {
+    const { session, child } = openSession();
+    child.stdin.writable = false;
+
+    expect(
+      await session.ask({
+        line: '{"ask":"a"}\n',
+        read: readReply('a'),
+        timeoutMs: 60_000,
+      }),
+    ).toBeNull();
+  });
+
+  it('survives a reader that throws, and keeps the turn stream alive', async () => {
+    // A reader is adapter code parsing a version-volatile reply; a throw there
+    // must not take down the stdout loop every turn depends on.
+    const warn = vi.fn();
+    const { session, child } = openSession(undefined, { warn });
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    const answer = session.ask({
+      line: '{"ask":"a"}\n',
+      read: () => {
+        throw new Error('bad reply');
+      },
+      timeoutMs: 1000,
+    });
+    line(child, { reply: 'a' });
+
+    expect(await answer).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('bad reply'));
+    line(child, { done: true });
+    await handle?.done;
+    expect(events.map((e) => e.type)).toEqual(['turn_complete']);
+  });
+});

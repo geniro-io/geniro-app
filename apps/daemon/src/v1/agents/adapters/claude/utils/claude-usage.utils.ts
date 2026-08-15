@@ -32,6 +32,15 @@ export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
     // Cumulative by nature and labelled as such — the turn's billed input.
     inputTokens: usage ? asNumber(usage.input_tokens) : null,
     outputTokens: usage ? asNumber(usage.output_tokens) : null,
+    // The other two thirds of the same roll-up, and what makes it explicable:
+    // a turn billing 2 fresh input tokens beside 17,950 cache reads and 19,473
+    // cache writes did not send almost nothing, which is what `input_tokens`
+    // alone says (probed on 2.1.232, a one-line "say hi" turn).
+    cacheReadTokens: usage ? asNumber(usage.cache_read_input_tokens) : null,
+    cacheCreationTokens: usage
+      ? asNumber(usage.cache_creation_input_tokens)
+      : null,
+    thinkingTokens: readThinkingTokens(usage),
     contextTokens: promptSideTokens(lastRequest),
     contextWindowTokens: context.window,
     contextModel: context.model,
@@ -45,6 +54,21 @@ export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
     durationMs: asNumber(root.duration_ms),
     apiMs: asNumber(root.duration_api_ms),
   };
+}
+
+/**
+ * Of the turn's output, how much was thinking — `usage.output_tokens_details.
+ * thinking_tokens` (probed on 2.1.232; `0` on a turn that did not think).
+ *
+ * Absent means the build does not break output down, which is not the same as
+ * a turn that thought nothing — so a missing block reads null and the readout
+ * withholds the split rather than reporting a zero nobody stated.
+ */
+function readThinkingTokens(
+  usage: Record<string, unknown> | null,
+): number | null {
+  const details = usage ? asRecord(usage.output_tokens_details) : null;
+  return details ? asNumber(details.thinking_tokens) : null;
 }
 
 /**

@@ -905,3 +905,65 @@ export const CLAUDE_TASK_CREATED_RESULT =
 
 /** One `TaskList` row: `#2 [in_progress] Edit the file`. @see CLAUDE_TASK_CREATED_RESULT */
 export const CLAUDE_TASK_LIST_ROW = /^#(\d+) \[([a-z_]+)\] (.+)$/;
+
+// ── What the window currently HOLDS ─────────────────────────────────────────
+//
+// The second undocumented control request this adapter drives, found the same
+// way as `mcp_status` — by enumerating the shipped binary's subtypes — and then
+// probed live on 2.1.232. The CLI's own description of it, lifted from the
+// bundle's SDK types, is "Requests a breakdown of current context window usage
+// by category": it is the wire behind that CLI's own `/context` screen.
+//
+//     --> {"type":"control_request","request_id":"…",
+//          "request":{"subtype":"get_context_usage"}}
+//     <-- {"type":"control_response","response":{"subtype":"success",
+//          "request_id":"…","response":{
+//            "categories":[{"name":"System prompt","tokens":3386,…},
+//                          {"name":"Memory files","tokens":59058,…},
+//                          {"name":"MCP tools (deferred)","tokens":273876,
+//                           "isDeferred":true,…},
+//                          {"name":"Free space","tokens":901402,…}],
+//            "totalTokens":98598,"maxTokens":1000000,"model":"claude-opus-5[1m]",
+//            "memoryFiles":[{"path":"…/CLAUDE.md","type":"Project","tokens":45947}],
+//            "mcpTools":[{"name":"mcp__x__y","serverName":"x","tokens":730,
+//                         "isLoaded":false}, …371 rows],
+//            "autoCompactThreshold":967000,"isAutoCompactEnabled":true,
+//            "skills":{…},"agents":[…],"slashCommands":{…},
+//            "messageBreakdown":{…},"apiUsage":{…},"gridRows":[…]}}}
+//
+// Three measured facts the projection depends on, each of which would be a
+// defect to guess at:
+//
+//  - `isDeferred` rows are OUTSIDE `totalTokens`. Verified by arithmetic on a
+//    live reading: the non-deferred, non-free rows sum to exactly 98598, and
+//    `Free space` is `maxTokens - totalTokens`. Rendering the deferred MCP row
+//    in the same bar would have reported a window nearly four times fuller than
+//    it was.
+//  - It is answerable at ANY point on the stdin dialogue — before the first
+//    prompt, mid-turn, and between turns — which is what lets the readout be a
+//    live question rather than a per-turn snapshot.
+//  - It is NOT instant, and the reply is large. Measured at 1.2s cold, 1.3s
+//    mid-turn, and 2.2s/3.3s for two asked back to back (the CLI serialises
+//    them); the reply ran 41–84KB, nearly all of it `gridRows` (TUI squares)
+//    and 371 per-tool rows. Both numbers are why this is asked ON DEMAND and
+//    never on the turn's critical path, and why the projection drops those two
+//    fields at the adapter instead of sending them to a renderer that would
+//    hide them.
+//
+// Same expiry warning as the `mcp_status` block above: an observation of one
+// build, not a contract. A renamed subtype or a reshaped reply degrades to "no
+// breakdown", which is exactly what a CLI without the channel already shows.
+
+/** The control subtype that reports the context window's category breakdown. */
+export const CLAUDE_CONTEXT_USAGE_SUBTYPE = 'get_context_usage';
+
+/**
+ * How long one breakdown question waits for its answer.
+ *
+ * Well clear of the 1.2–3.3s measured above, because the cost of waiting is a
+ * readout that opens a moment later while the cost of giving up early is a
+ * panel that says the CLI cannot answer when it was about to. Nothing is
+ * blocked behind it — no turn, no user input — so the ceiling only needs to be
+ * short enough that a CLI which will never answer stops being waited for.
+ */
+export const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 8_000;

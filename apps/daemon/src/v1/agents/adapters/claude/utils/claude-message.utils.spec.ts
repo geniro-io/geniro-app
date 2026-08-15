@@ -402,6 +402,15 @@ describe('mapClaudeMessage', () => {
         usage: {
           inputTokens: 12,
           outputTokens: 3,
+          // The other two thirds of the same roll-up, cumulative like the
+          // input count beside them — NOT the last request's 12/996, which is
+          // what `contextTokens` below is built from.
+          cacheReadTokens: 2_700,
+          cacheCreationTokens: 100,
+          // This fixture's result carries no `output_tokens_details`, and a
+          // build that reports none must read as unknown rather than as a turn
+          // that thought nothing.
+          thinkingTokens: null,
           // The final request's prompt (4 + 12 + 996), not the 2_812 roll-up.
           contextTokens: 1012,
           contextWindowTokens: 1_000_000,

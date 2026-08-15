@@ -1671,6 +1671,9 @@ describe('ChatService — approval modes (parity M1)', () => {
       usage: {
         inputTokens: null,
         outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
         contextTokens: 1_000,
         contextWindowTokens: 1_000_000,
         contextModel: 'claude-opus-5[1m]',

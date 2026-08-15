@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentsPanel } from './agents-panel';
 import { ChatHeader } from './chat-header';
+import {
+  type ChatMetricsLoader,
+  ChatMetricsLoaderContext,
+} from './chat-metrics';
 import { ContextMeter } from './context-meter';
 
 (
@@ -301,5 +305,193 @@ describe('where the meter lives', () => {
     );
 
     expect(meterLabel()).toBe('Context 25% full — 250k of 1M');
+  });
+});
+
+describe('the expanded readout the meter opens onto', () => {
+  const TOTALS = {
+    turns: 3,
+    costUsd: 0.42,
+    inputTokens: 24,
+    outputTokens: 1_200,
+    cacheReadTokens: 1_300_000,
+    cacheCreationTokens: 210_000,
+    thinkingTokens: 300,
+    workedMs: 252_000,
+  };
+  const METRICS = {
+    context: {
+      categories: [
+        { name: 'System prompt', tokens: 3386, deferred: false },
+        { name: 'Memory files', tokens: 59_058, deferred: false },
+        { name: 'MCP tools (deferred)', tokens: 273_876, deferred: true },
+      ],
+      totalTokens: 62_444,
+      maxTokens: 1_000_000,
+      model: 'claude-opus-5[1m]',
+      autoCompactAtTokens: 967_000,
+      autoCompactEnabled: true,
+      memoryFiles: [
+        { path: '/proj/CLAUDE.md', kind: 'Project', tokens: 45_947 },
+      ],
+      servers: [
+        {
+          name: 'amplitude',
+          tokens: 109_284,
+          toolCount: 33,
+          loadedToolCount: 0,
+        },
+      ],
+    },
+    breakdownReason: null,
+    totals: TOTALS,
+  };
+
+  /** A never-settling loader, for the states BEFORE a reply lands. */
+  function pending(): ChatMetricsLoader {
+    return () => new Promise(() => {});
+  }
+
+  function renderWithLoader(
+    load: ChatMetricsLoader,
+    runId: string | null = 'run-1',
+  ): void {
+    render(
+      <ChatMetricsLoaderContext.Provider value={load}>
+        <ContextMeter
+          contextTokens={62_444}
+          contextWindowTokens={1_000_000}
+          runId={runId}
+        />
+      </ChatMetricsLoaderContext.Provider>,
+    );
+  }
+
+  it('asks for the breakdown only once the readout is OPENED', async () => {
+    // It is a multi-second round trip to the user's own running agent. Fetching
+    // it on mount would put that question to every chat in the list.
+    const load = vi.fn().mockResolvedValue(METRICS);
+    renderWithLoader(load);
+
+    expect(load).not.toHaveBeenCalled();
+    openMeter();
+    await act(async () => {});
+
+    expect(load).toHaveBeenCalledWith('run-1');
+  });
+
+  it('shows what the window holds, by category and with its own figures', async () => {
+    renderWithLoader(() => Promise.resolve(METRICS));
+    openMeter();
+    await act(async () => {});
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('System prompt');
+    expect(text).toContain('Memory files');
+    expect(text).toContain('59.1k');
+    expect(text).toContain('claude-opus-5[1m]');
+    expect(text).toContain('Auto-compacts at 967k');
+  });
+
+  it('keeps a deferred category OUT of the used total and its bar', async () => {
+    // The pin: the deferred MCP surface is four times the whole window's
+    // contents. Counted in, the readout reports a window that is full.
+    renderWithLoader(() => Promise.resolve(METRICS));
+    openMeter();
+    await act(async () => {});
+
+    const text = container.textContent ?? '';
+    // The used figure is the CLI's own total, not total + deferred (336k).
+    expect(text).toContain('62.4k');
+    expect(text).not.toContain('336');
+    // It is still SHOWN, under its own heading — dropping it would hide the
+    // biggest thing the user could act on.
+    expect(text).toContain('Available, not loaded');
+    expect(text).toContain('273.9k');
+  });
+
+  it('names the instructions and the MCP servers that are filling the window', async () => {
+    renderWithLoader(() => Promise.resolve(METRICS));
+    openMeter();
+    await act(async () => {});
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('proj/CLAUDE.md');
+    expect(text).toContain('45.9k');
+    expect(text).toContain('amplitude');
+    expect(text).toContain('109.3k');
+  });
+
+  it('reports what the whole thread has cost, not just the last turn', async () => {
+    renderWithLoader(() => Promise.resolve(METRICS));
+    openMeter();
+    await act(async () => {});
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('$0.42');
+    expect(text).toContain('3 turns');
+    expect(text).toContain('cache read 1.3M');
+  });
+
+  it('shows the daemon’s own sentence when there is no breakdown to take', async () => {
+    renderWithLoader(() =>
+      Promise.resolve({
+        context: null,
+        breakdownReason: 'cursor-agent has no channel for one',
+        totals: TOTALS,
+      }),
+    );
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain(
+      'cursor-agent has no channel for one',
+    );
+    // The spend is history and is always there — losing it with the live
+    // reading would blank the readout on every idle chat.
+    expect(container.textContent).toContain('$0.42');
+  });
+
+  it('surfaces a failed fetch instead of an empty panel', async () => {
+    renderWithLoader(() =>
+      Promise.reject(new Error('daemon GET failed (500)')),
+    );
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('daemon GET failed (500)');
+  });
+
+  it('says it is reading while the agent has not answered yet', () => {
+    renderWithLoader(pending());
+    openMeter();
+
+    expect(container.textContent).toContain('Reading the agent');
+  });
+
+  it('offers no readout at all for a meter with no run', async () => {
+    const load = vi.fn().mockResolvedValue(METRICS);
+    renderWithLoader(load, null);
+    openMeter();
+    await act(async () => {});
+
+    expect(load).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain('This thread');
+  });
+
+  it('keeps the summary alone when nothing provided a loader', async () => {
+    // The meter predates this panel and must still work outside its provider.
+    render(
+      <ContextMeter
+        contextTokens={62_444}
+        contextWindowTokens={1_000_000}
+        runId="run-1"
+      />,
+    );
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('62.4k / 1M');
+    expect(container.textContent).not.toContain('This thread');
   });
 });

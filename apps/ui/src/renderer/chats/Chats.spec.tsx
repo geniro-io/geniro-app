@@ -36,6 +36,7 @@ const api = vi.hoisted(() => ({
   deleteChat: vi.fn(),
   updateChatSettings: vi.fn(),
   setRunGroup: vi.fn(),
+  readChatMetrics: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -439,6 +440,20 @@ beforeEach(() => {
   api.renameRun.mockReset();
   api.deleteChat.mockReset();
   api.updateChatSettings.mockReset();
+  api.readChatMetrics.mockReset().mockResolvedValue({
+    context: null,
+    breakdownReason: 'no live agent',
+    totals: {
+      turns: 0,
+      costUsd: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      workedMs: null,
+    },
+  });
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
   agentsApi.listAgentMcpServers.mockReset().mockResolvedValue({
     servers: [],

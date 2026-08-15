@@ -67,6 +67,7 @@ function setOrDelete(map: YAMLMap, key: string, value: unknown): void {
 const AGENT_ONLY_FIELDS = [
   'agent',
   'model',
+  'effort',
   'description',
   'role',
   'approval',

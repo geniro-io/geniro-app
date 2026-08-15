@@ -2144,6 +2144,12 @@ export interface WorkflowAgentNode {
      */
     model?: string;
     /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof WorkflowAgentNode
+     */
+    effort?: string;
+    /**
      * What this agent does — shown to agents wired to call it
      * @type {string}
      * @memberof WorkflowAgentNode

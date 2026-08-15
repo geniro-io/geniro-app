@@ -66,6 +66,7 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'name',
       'agent',
       'model',
+      'effort',
       'description',
       'role',
       'approval',

@@ -294,6 +294,12 @@ class FakeAdapter {
   getConfig(): AdapterConfig {
     return this.real.getConfig();
   }
+  /** Delegated for the same reason `getConfig` is: the executor checks a
+   *  node's effort against the SHIPPED vocabulary, so a restated list here
+   *  would let it pass against levels the real CLI does not accept. */
+  listEfforts(): ReturnType<AgentAdapter['listEfforts']> {
+    return this.real.listEfforts();
+  }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);
   }
@@ -882,6 +888,82 @@ describe('GraphExecutorService', () => {
     // a sentence composed here could not stay true as the config changes.
     expect(message).toContain('Reviewer');
     expect(message).toContain(cursor.getConfig().configDir.unavailableReason);
+  });
+
+  it('hands a node’s reasoning effort to its turn', async () => {
+    // Per node, like the model: two agents in one graph are meant to be able
+    // to think at different depths, and before this the field did not exist —
+    // every workflow node ran at whatever its CLI defaults to.
+    const { service, claude } = setup();
+    const level = new ClaudeAdapter().listEfforts()[0]!.id;
+
+    await service.startRun({
+      slug: 'effort',
+      workflow: triggered({
+        name: 'effort',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            effort: level,
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.effort).toBe(level);
+  });
+
+  it('drops an effort the node’s CLI does not list, and SAYS so', async () => {
+    // The same hazard `configDir` has, and it costs more: claude warns and
+    // runs on its default, but cursor answers `-32602` and the turn is lost.
+    // A workflow arriving as YAML can name any level — the builder only ever
+    // offers the ones the CLI reported.
+    const { service, claude, itemDao } = setup();
+
+    await service.startRun({
+      slug: 'bogus-effort',
+      workflow: triggered({
+        name: 'bogus-effort',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Scout',
+            effort: 'ludicrous',
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    // Nothing unsupported reaches the CLI …
+    expect(claude.starts[0]!.input.effort).toBeNull();
+    // … and the drop is not silent.
+    const notice = [...itemDao.items.values()]
+      .flat()
+      .find(
+        (item) =>
+          item.kind === 'system' &&
+          String(JSON.parse(item.payload).message).includes('reasoning effort'),
+      );
+    expect(notice).toBeDefined();
+    const message = String(JSON.parse(notice!.payload).message);
+    expect(message).toContain('Scout');
+    expect(message).toContain('ludicrous');
+    // The levels it WOULD accept, so the sentence is actionable.
+    expect(message).toContain(new ClaudeAdapter().listEfforts()[0]!.id);
   });
 
   it('runs a linear chain, feeding A output into B prompt', async () => {

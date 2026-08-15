@@ -118,19 +118,30 @@ function hasProbedApprovalMode(
 }
 
 /**
- * One node whose `configDir` was dropped because its CLI cannot load one.
+ * One node setting that was dropped because its CLI cannot honour it — a
+ * `configDir` on a CLI with no such mechanism, an `effort` level the CLI does
+ * not list.
  *
- * Private to this file (only `withCanonicalConfigDirs` produces it and only
+ * ONE type for both, and one system-item template, because the two are the
+ * same event: a value the builder would have refused, arriving on a workflow
+ * that came in as YAML, dropped rather than passed to a CLI that would either
+ * ignore it or fail on it. A second parallel struct and loop is how the two
+ * would drift into wording only one of them explains.
+ *
+ * Private to this file (only `withResolvedNodeSettings` produces it and only
  * `driveResolved` reads it), so it stays here rather than in `graphs.types.ts`
  * — it is not part of the module's shared vocabulary and nothing on the wire
  * carries it.
  */
-interface IgnoredConfigDir {
+interface DroppedNodeSetting {
   nodeId: string;
   /** The node's own name, or its id when unnamed — the same fallback every
    * other user-facing mention of a node uses. */
   name: string;
-  configDir: string;
+  /** What the setting is called in the sentence, e.g. `a config directory`. */
+  setting: string;
+  /** What the node asked for, quoted back so the user can find it. */
+  value: string;
   /** The adapter's own sentence, shown to the user unchanged. */
   reason: string;
 }
@@ -160,29 +171,59 @@ interface IgnoredConfigDir {
  * the node had never named one. The caller turns each entry into a run-level
  * system item carrying the adapter's own reason.
  */
-function withCanonicalConfigDirs(
+function withResolvedNodeSettings(
   workflow: Workflow,
   adapterFor: (kind: AgentKind) => AgentAdapter,
-): { workflow: Workflow; ignoredConfigDirs: IgnoredConfigDir[] } {
-  const ignoredConfigDirs: IgnoredConfigDir[] = [];
+): { workflow: Workflow; dropped: DroppedNodeSetting[] } {
+  const dropped: DroppedNodeSetting[] = [];
   const nodes = workflow.nodes.map((node) => {
-    if (node.kind !== 'agent' || !node.configDir) {
+    if (node.kind !== 'agent') {
       return node;
     }
-    const reason = adapterFor(node.agent).getConfig().configDir
-      .unavailableReason;
-    if (reason !== null) {
-      ignoredConfigDirs.push({
-        nodeId: node.id,
-        name: node.name ?? node.id,
-        configDir: node.configDir,
-        reason,
-      });
-      return { ...node, configDir: undefined };
+    let resolved = node;
+    if (resolved.configDir) {
+      const reason = adapterFor(resolved.agent).getConfig().configDir
+        .unavailableReason;
+      if (reason === null) {
+        resolved = {
+          ...resolved,
+          configDir: resolveValidConfigDir(resolved.configDir),
+        };
+      } else {
+        dropped.push({
+          nodeId: resolved.id,
+          name: resolved.name ?? resolved.id,
+          setting: 'a config directory',
+          value: resolved.configDir,
+          reason,
+        });
+        resolved = { ...resolved, configDir: undefined };
+      }
     }
-    return { ...node, configDir: resolveValidConfigDir(node.configDir) };
+    if (resolved.effort) {
+      // Asked of the ADAPTER, never of a list here: the levels are the CLI's
+      // own, and `listEfforts` is already the one answer the composer's picker
+      // and this run agree on.
+      const adapter = adapterFor(resolved.agent);
+      const levels = adapter.listEfforts();
+      if (!levels.some((level) => level.id === resolved.effort)) {
+        dropped.push({
+          nodeId: resolved.id,
+          name: resolved.name ?? resolved.id,
+          setting: 'a reasoning effort',
+          value: resolved.effort,
+          reason:
+            adapter.getConfig().effortsUnavailableReason ??
+            (levels.length === 0
+              ? `${resolved.agent} lists no reasoning-effort levels`
+              : `${resolved.agent} accepts only ${levels.map((level) => level.id).join(', ')}`),
+        });
+        resolved = { ...resolved, effort: undefined };
+      }
+    }
+    return resolved;
   });
-  return { workflow: { ...workflow, nodes }, ignoredConfigDirs };
+  return { workflow: { ...workflow, nodes }, dropped };
 }
 
 /**
@@ -296,7 +337,7 @@ export class GraphExecutorService {
     // that is what was actually checked. The CLI itself would say nothing: it
     // ignores an unusable --plugin-dir silently (probe-verified), which reads
     // as "this node has no MCP servers".
-    const { workflow, ignoredConfigDirs } = withCanonicalConfigDirs(
+    const { workflow, dropped } = withResolvedNodeSettings(
       input.workflow,
       (kind) => this.adapterFor(kind),
     );
@@ -342,7 +383,7 @@ export class GraphExecutorService {
         'daemon shutdown started before the workflow could launch',
       );
     }
-    this.drive(em, run.id, workflow, cwd, input.prompt, ignoredConfigDirs);
+    this.drive(em, run.id, workflow, cwd, input.prompt, dropped);
 
     return runToWire(run);
   }
@@ -506,7 +547,7 @@ export class GraphExecutorService {
     workflow: Workflow,
     cwd: string,
     seedPrompt: string,
-    ignoredConfigDirs: IgnoredConfigDir[],
+    dropped: DroppedNodeSetting[],
   ): void {
     void (async () => {
       let claudeModes: ClaudeModesCapability;
@@ -549,7 +590,7 @@ export class GraphExecutorService {
         cwd,
         seedPrompt,
         claudeModes,
-        ignoredConfigDirs,
+        dropped,
       );
     })();
   }
@@ -561,7 +602,7 @@ export class GraphExecutorService {
     cwd: string,
     seedPrompt: string,
     claudeModes: ClaudeModesCapability,
-    ignoredConfigDirs: IgnoredConfigDir[],
+    dropped: DroppedNodeSetting[],
   ): void {
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
@@ -989,6 +1030,10 @@ export class GraphExecutorService {
         prompt,
         cwd,
         model: node.model ?? null,
+        // Per NODE like the model, and already checked against this CLI's own
+        // `listEfforts` at run start — a level it does not accept was dropped
+        // there with a system item, so nothing unsupported reaches argv.
+        effort: node.effort ?? null,
         resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: node.role ?? null,
         callSurfacePrompt: callSurfaceFor(node),
@@ -1667,18 +1712,18 @@ export class GraphExecutorService {
       );
     }
 
-    // Ahead of the seed, because it is a fact about the run's configuration
-    // rather than about anything an agent did: a node named a config directory
-    // its CLI cannot load. The value is dropped either way (see
-    // `withCanonicalConfigDirs`) — this is what stops the drop being silent
+    // Ahead of the seed, because these are facts about the run's CONFIGURATION
+    // rather than about anything an agent did: a node named a setting its CLI
+    // cannot honour. The value is dropped either way (see
+    // `withResolvedNodeSettings`) — this is what stops the drop being silent
     // for a workflow that arrived as YAML, where the builder never had the
     // chance to refuse the field.
-    for (const ignored of ignoredConfigDirs) {
+    for (const setting of dropped) {
       enqueue(async () => {
         await persistItem(null, 'system', null, {
           message:
-            `'${ignored.name}' names a config directory (${ignored.configDir}) ` +
-            `that will be ignored: ${ignored.reason}`,
+            `'${setting.name}' names ${setting.setting} (${setting.value}) ` +
+            `that will be ignored: ${setting.reason}`,
         });
       });
     }

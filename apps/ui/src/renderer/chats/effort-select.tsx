@@ -44,6 +44,8 @@ export function EffortSelect({
   unavailableReason,
   onChange,
   className,
+  variant = 'ghost',
+  id,
 }: {
   efforts: AgentEffort[];
   /** The chosen level, or null for the CLI's default. */
@@ -58,6 +60,16 @@ export function EffortSelect({
   unavailableReason?: string | null;
   onChange: (effort: string | null) => void;
   className?: string;
+  /**
+   * `ghost` is the composer's flat chip, `default` the bordered form field the
+   * graph builder's node inspector uses. One component for both rather than a
+   * second picker in `graphs/`: the rows, the default sentinel and the
+   * add-back row for a level the CLI no longer lists are the parts worth
+   * getting right once, and they are identical wherever the control appears.
+   */
+  variant?: 'ghost' | 'default';
+  /** Ties the form-field variant to its `Field` label. */
+  id?: string;
 }): React.JSX.Element | null {
   if (efforts.length === 0) {
     return unavailableReason ? (
@@ -74,7 +86,8 @@ export function EffortSelect({
   ];
   return (
     <Select
-      variant="ghost"
+      variant={variant}
+      id={id}
       aria-label="Reasoning effort"
       title={
         nextTurnOnly

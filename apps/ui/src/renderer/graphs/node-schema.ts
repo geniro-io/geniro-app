@@ -58,6 +58,13 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
       description: 'Model alias; empty = the CLI default.',
     },
     {
+      key: 'effort',
+      type: 'string',
+      required: false,
+      description:
+        "How hard this agent thinks, in its own CLI's vocabulary; empty = the CLI default.",
+    },
+    {
       key: 'description',
       type: 'string',
       required: false,

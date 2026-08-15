@@ -131,6 +131,24 @@ export const WorkflowAgentNodeSchema = z
       .optional()
       .describe('Model alias; omitted = CLI default'),
     /**
+     * How hard this node's CLI is asked to think, in that CLI's own vocabulary
+     * (`AgentAdapter.listEfforts`) — never an enum here, for the same reason
+     * `model` is a free string: the levels belong to the CLI, and a CLI that
+     * gains one must not need an app release to offer it.
+     *
+     * A level the node's CLI does not list is DROPPED at run start with a
+     * system item naming it, exactly as an unusable `configDir` is: the two
+     * fail the same way (a workflow arriving as YAML carries a value the
+     * builder never had a chance to refuse) and the cost of passing it through
+     * differs per CLI — claude warns and runs on its default, cursor answers
+     * `-32602` and the turn is lost.
+     */
+    effort: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Reasoning-effort level; omitted = CLI default'),
+    /**
      * The node's PUBLIC blurb: what this agent is for, written for the agents
      * wired to call it. It is the only thing a caller is told about a callee
      * (see `calleeSummary`) — it rides the call_agent tool description and the

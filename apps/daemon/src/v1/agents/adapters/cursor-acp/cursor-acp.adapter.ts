@@ -498,21 +498,45 @@ export class CursorAcpAdapter extends AgentAdapter {
         unavailableReason:
           'cursor-agent reports no token or cost usage over ACP — it sends no usage_update and its prompt reply carries no usage, so there is no context figure to show',
         /**
-         * No breakdown either, and for a structural reason rather than a
-         * missing field: the claude channel is an out-of-band control request
-         * on that CLI's own stdin dialogue, and ACP has no equivalent. Its
-         * client→agent methods are the ones in the spec plus whatever the
-         * vendor adds, and nothing in either enumerates the window's contents
-         * — the closest, `UsageUpdate`, is a single occupancy number and
-         * was never observed on the wire at all (see the reason above).
+         * No breakdown either — RE-MEASURED 2026-08-15 on 2026.08.11-e8db854,
+         * because "the CLI shows a percentage, so it must send one" is a
+         * reasonable thing to expect and the old note rested on an older
+         * capture.
          *
-         * RE-CHECK the way `cursor/ask_question` and `cursor/task` were found:
-         * by enumerating the shipped bundle's own method names, not by reading
-         * the ACP schema. Both of those were real vendor extensions this
-         * adapter was declining while declaring they did not exist.
+         * What was actually checked this time:
+         *
+         * - A full raw frame capture of a real TOOL-USING turn (read a file,
+         *   answer, end) through the daemon's own `agent-stdio` channel. The
+         *   `sessionUpdate` variants sent were `user_message_chunk`,
+         *   `agent_message_chunk`, `available_commands_update`, `tool_call`
+         *   and `tool_call_update`. `session/prompt` answered
+         *   `{"stopReason":"end_turn"}` and nothing else. Grepping the whole
+         *   capture for any key matching token/usage/cost/context found
+         *   exactly three, all of them the word "context" inside
+         *   `promptCapabilities.embeddedContext`. There is no usage on this
+         *   wire, at all.
+         * - The shipped bundle: `usage_update` appears ONLY in the ACP schema
+         *   module (`8096.index.js`, the protocol's own type definitions) and
+         *   in no module that sends anything — the schema knows the shape, the
+         *   agent never emits it.
+         * - The CLI DOES count tokens, which is why its TUI can show a
+         *   percentage: `tokenDelta` carries a running `tokens`, and
+         *   `GetEffectiveTokenLimitResponse{token_limit}` is a server call it
+         *   makes. Both live on its own internal interaction stream — the one
+         *   the TUI renders — and neither is forwarded to an ACP client.
+         * - Cursor's CLI docs list no `/context`, `/usage` or `/tokens`
+         *   command and no output-format field carrying any of it. The one
+         *   related command, `/summarize`, FREES context rather than reporting
+         *   it.
+         *
+         * So the gap is real and structural, not a field this adapter is
+         * failing to read. RE-CHECK by re-running that capture — a single
+         * `usage_update` frame appearing is all it would take, since
+         * `AcpTurnDriver` already reads one; and `readContextUsage` below is
+         * where a breakdown would be assembled if the picture changes.
          */
         breakdownUnavailableReason:
-          'cursor-agent has no channel for a context breakdown — ACP carries no such request, and the CLI publishes none of its own',
+          'cursor-agent reports nothing about its context window over ACP — the CLI counts tokens for its own TUI, but does not forward them to a client',
       },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
@@ -869,6 +893,29 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   protected override canHostSession(_input: AgentTurnInput): boolean {
     return false;
+  }
+
+  /**
+   * Nothing to report: this CLI tells an ACP client nothing about its window.
+   *
+   * Overridden rather than left to the base's default, and the difference is
+   * for the reader: an inherited default is indistinguishable from an adapter
+   * nobody has got to yet, while this is a MEASUREMENT — see the capture
+   * recorded at `usage.breakdownUnavailableReason` above, re-run on
+   * 2026-08-15 against a real tool-using turn.
+   *
+   * There is a second reason it is written out here. A CLI's answer does not
+   * have to come from the process — this one's could plausibly be assembled
+   * from what the turn driver saw go past — so this is the seam where that
+   * would be built, and an empty inherited slot is a worse place to discover
+   * that than a method saying so. What is NOT acceptable here is an estimate
+   * dressed as a reading: geniro can count the characters it sent, but that
+   * omits this CLI's own system prompt, tools and rules entirely, and a
+   * figure that disagrees with the CLI's own screen is worse than an honest
+   * blank.
+   */
+  protected override readContextUsage(): Promise<null> {
+    return Promise.resolve(null);
   }
 
   /**

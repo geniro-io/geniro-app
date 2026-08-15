@@ -12,7 +12,6 @@ import {
   type BetweenTurnApproval,
   type CliSession,
   runCliSession,
-  type SessionAsk,
   type SessionLogger,
   type SpawnFn,
 } from '../utils/spawn-cli';
@@ -1398,21 +1397,31 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * The out-of-band question that asks this CLI what its context window
-   * currently holds, or undefined when it has no such channel.
+   * What this CLI's live process says its context window currently holds, or
+   * null when it has no way to say.
    *
-   * A MECHANISM and so a method, not a config field: the request line, the
-   * correlation and the reply's whole shape are that CLI's own protocol. The
-   * matching config field is `usage.breakdownUnavailableReason`, which is the
-   * VALUE half — what to tell the user when this returns undefined. The two
-   * must agree, and `agent-adapter.spec.ts` pins that they do.
+   * A MECHANISM and so a method with one implementation per adapter — and the
+   * mechanism is deliberately NOT presupposed. An earlier draft of this hook
+   * asked the adapter for a request LINE and a reply reader, which quietly made
+   * "an out-of-band question on stdin" the only shape an answer could take;
+   * that is claude's shape, and it is not the only one. A CLI could just as
+   * well answer from a subcommand, a file it keeps, or state its own turn
+   * driver accumulated as the conversation went by — none of which can be
+   * expressed as a line to write. The session is handed in so a stdin dialogue
+   * stays available to whoever wants it (`session.ask`), not because it is the
+   * expected route.
    *
-   * Called once per question rather than cached, because a correlation id may
-   * only be used once: two readouts open at the same time would otherwise both
-   * settle on whichever reply arrived first.
+   * The VALUE half is `AdapterConfig.usage.breakdownUnavailableReason`: what to
+   * tell the user when this returns null. The two must agree, and
+   * `agent-adapter.spec.ts` pins that they do.
+   *
+   * Default null — "this CLI has no such channel" — which is the honest answer
+   * for any adapter that has not measured otherwise.
    */
-  protected buildContextUsageAsk(): SessionAsk<AgentContextUsage> | undefined {
-    return undefined;
+  protected readContextUsage(
+    _session: CliSession,
+  ): Promise<AgentContextUsage | null> {
+    return Promise.resolve(null);
   }
 
   /**
@@ -1500,14 +1509,11 @@ export abstract class AgentAdapter {
 
     let firstTurnTaken = false;
     return {
-      readContextUsage: () => {
-        const ask = this.buildContextUsageAsk();
-        // Undefined is this CLI declaring it has no such channel, which is the
-        // same "no answer" a live one gives when it will not say — the caller
-        // reads `usage.breakdownUnavailableReason` for the difference rather
-        // than getting two null shapes to tell apart.
-        return ask ? session.ask(ask) : Promise.resolve(null);
-      },
+      // Delegated to the adapter, which owns both whether there is an answer
+      // and how it is obtained. Null from here and null from a CLI that would
+      // not say are the same to the caller; it reads
+      // `usage.breakdownUnavailableReason` for the difference.
+      readContextUsage: () => this.readContextUsage(session),
       startTurn: (turnInput, onEvent) => {
         // A turn needing different argv cannot run on this process, whatever
         // its stdin can carry. Checked before anything is written, so the

@@ -226,7 +226,17 @@ const COMMANDS = {
     const capUrl = `http://${handle.host}:${handle.port}/v1/capabilities`;
     const auth = { headers: { authorization: `Bearer ${handle.token}` } };
     for (let i = 0; i < 20; i++) { try { const j = await (await fetch(capUrl, auth)).json(); if (j.claudeModes.acceptEdits !== 'unknown') { log('capabilities:', JSON.stringify(j)); break; } } catch {} await sleep(2000); }
-    browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox', '--disable-web-security', '--disable-gpu', '--force-color-profile=srgb'] });
+    // Headless by default (the Linux container has no display), but a real
+    // window on request: `GENIRO_HEADED=1` is how a human on a Mac watches the
+    // same session the driver is scripting, instead of reading screenshots of
+    // it afterwards. `--disable-gpu` is dropped when headed — with it the
+    // window renders but paints nothing on macOS.
+    const headed = process.env.GENIRO_HEADED === '1';
+    browser = await chromium.launch({
+      executablePath: findChromium(),
+      headless: !headed,
+      args: ['--no-sandbox', '--disable-web-security', '--force-color-profile=srgb', ...(headed ? [] : ['--disable-gpu'])],
+    });
     ctx = await browser.newContext({ bypassCSP: true, viewport: { width: 1360, height: 900 }, deviceScaleFactor: 2 });
     page = await ctx.newPage();
     page.on('pageerror', (e) => log('PAGEERROR', e.message));

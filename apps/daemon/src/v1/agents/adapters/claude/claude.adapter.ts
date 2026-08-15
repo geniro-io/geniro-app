@@ -12,7 +12,7 @@ import {
   CLAUDE_CREDENTIAL_KEYS,
   claudeCredentialEnv,
 } from '../../utils/child-env';
-import type { SessionAsk } from '../../utils/spawn-cli';
+import type { CliSession } from '../../utils/spawn-cli';
 import type {
   AdapterConfig,
   AdapterQuestion,
@@ -484,13 +484,19 @@ export class ClaudeAdapter extends AgentAdapter {
    * would otherwise both take the first reply — and the CLI serialises them,
    * so the second answer describes a later moment than the first.
    */
-  protected override buildContextUsageAsk(): SessionAsk<AgentContextUsage> {
+  protected override readContextUsage(
+    session: CliSession,
+  ): Promise<AgentContextUsage | null> {
+    // A fresh id per question, which matters because the reader matches on it:
+    // two readouts opened together would otherwise both take the first reply,
+    // and the CLI serialises them, so the second answer describes a later
+    // moment than the first.
     const requestId = randomUUID();
-    return {
+    return session.ask({
       line: contextUsageRequestLine(requestId),
       read: (obj) => readContextUsageReply(obj, requestId),
       timeoutMs: CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
-    };
+    });
   }
 
   protected override prepareTurn(

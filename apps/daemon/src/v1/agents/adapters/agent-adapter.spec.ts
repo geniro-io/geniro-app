@@ -357,6 +357,65 @@ describe('AgentAdapter effort vocabulary and its reason agree', () => {
   });
 });
 
+describe('AgentAdapter context breakdown — the seam is per adapter', () => {
+  /**
+   * The readout has two halves that must agree: whether this adapter can
+   * ANSWER "what is in the window", and the sentence shown when it cannot. A
+   * declared channel with a reason beside it renders a panel that contradicts
+   * itself; a silent adapter with no reason is the blank space the whole
+   * `unavailableReason` family exists to replace.
+   */
+  // Fresh instances, because each needs its own stand-in child; the shared
+  // ADAPTERS list above is built without one.
+  const BREAKDOWN_ADAPTERS: {
+    name: string;
+    build: (spawn: SpawnFn) => AgentAdapter;
+  }[] = [
+    { name: 'claude', build: (spawn) => new ClaudeAdapter({ spawn }) },
+    { name: 'cursor-agent', build: (spawn) => new CursorAcpAdapter({ spawn }) },
+  ];
+
+  for (const { name, build } of BREAKDOWN_ADAPTERS) {
+    it(`${name} declares a reason exactly when it cannot answer`, async () => {
+      const { spawn, child } = fakeSpawn();
+      const probe = build(spawn);
+      const reason = probe.getConfig().usage.breakdownUnavailableReason;
+      const session = probe.startSession({ prompt: 'p', cwd: '/proj' });
+
+      // Reached through the SESSION, which is where every consumer reaches it:
+      // this is what pins that the base actually wires the adapter's own
+      // method to `AgentSession.readContextUsage`.
+      const answered = session.readContextUsage();
+      // The stand-in child never replies, so a CLI with a channel is left
+      // waiting — which is itself the observable: it WROTE a question.
+      const asked = child.stdin.written.length > 0;
+
+      expect(asked).toBe(reason === null);
+      if (reason !== null) {
+        expect(await answered).toBeNull();
+        expect(reason.trim().length).toBeGreaterThan(0);
+      }
+      session.close();
+    });
+  }
+
+  it('a CLI with no channel answers null without writing anything to stdin', async () => {
+    // The point of the method living on the ADAPTER rather than the base
+    // building a request on its behalf: an adapter with no answer must not
+    // have a question written for it. Cursor is the standing case — measured,
+    // not assumed; see its own doc block.
+    const { spawn, child } = fakeSpawn();
+    const cursor = new CursorAcpAdapter({ spawn });
+    const session = cursor.startSession({ prompt: 'p', cwd: '/proj' });
+    const before = child.stdin.written;
+
+    expect(await session.readContextUsage()).toBeNull();
+    expect(child.stdin.written).toBe(before);
+
+    session.close();
+  });
+});
+
 describe('AgentAdapter.mcpLoginTarget', () => {
   /** A CLI with no sign-in command — the shape neither shipped adapter has. */
   class NoLoginAdapter extends ClaudeAdapter {

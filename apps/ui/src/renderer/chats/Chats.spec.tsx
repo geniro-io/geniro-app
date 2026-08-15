@@ -6399,6 +6399,22 @@ describe('Chats — the sidebar groups threads into folders', () => {
     );
   }
 
+  /** A plain button by its visible label, anywhere on the page. */
+  async function clickText(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    // `document.body`, not `container`: the options panel is placed `fixed`
+    // to escape the chat list's scroll container, so it is not inside the
+    // mounted tree's sidebar.
+    const button = [...document.body.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === label,
+    );
+    await act(async () => {
+      button?.click();
+    });
+  }
+
   /** A menu row by its visible label, inside whichever menu is open. */
   async function pickMenuRow(
     container: HTMLElement,
@@ -6562,7 +6578,7 @@ describe('Chats — the sidebar groups threads into folders', () => {
     expect(row().getAttribute('draggable')).toBe('true');
 
     await openMenu(container, 'Group options for Work');
-    await pickMenuRow(container, 'Rename group');
+    await clickText(container, 'Rename group');
     expect(row().getAttribute('draggable')).toBe('false');
   });
 
@@ -6585,14 +6601,27 @@ describe('Chats — the sidebar groups threads into folders', () => {
     ).toBe('green');
   });
 
-  it('DELETING a group keeps its chats — they move to the loose list', async () => {
+  it('DELETING a group asks first, and says what is NOT deleted', async () => {
     api.listChats.mockResolvedValue([{ ...run1, groupId: 'g1' }]);
     groupApi.listRunGroups.mockResolvedValue([work]);
     groupApi.deleteRunGroup.mockResolvedValue({ deleted: true, released: 1 });
     const container = await mount(makeClient().client);
 
     await openMenu(container, 'Group options for Work');
-    await pickMenuRow(container, 'Delete group');
+    await clickText(container, 'Delete group');
+    // Nothing has happened yet — the word "delete" reads as final, so the
+    // difference between removing a folder and removing conversations is
+    // stated before anything is written.
+    expect(groupApi.deleteRunGroup).not.toHaveBeenCalled();
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('1 chat is kept');
+    expect(dialog.textContent).toContain('Ungrouped');
+
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete group')
+        ?.click();
+    });
 
     expect(groupApi.deleteRunGroup).toHaveBeenCalledWith({ groupId: 'g1' });
     expect(headerOf(container, 'Work')).toBeNull();
@@ -6600,6 +6629,26 @@ describe('Chats — the sidebar groups threads into folders', () => {
     // behaviour rests on: the group is a folder, not an owner.
     expect(container.textContent).toContain('My chat');
     expect(api.deleteChat).not.toHaveBeenCalled();
+  });
+
+  it('cancelling the delete leaves the group alone', async () => {
+    groupApi.listRunGroups.mockResolvedValue([work]);
+    const container = await mount(makeClient().client);
+
+    await openMenu(container, 'Group options for Work');
+    await clickText(container, 'Delete group');
+    await act(async () => {
+      [
+        ...document.body.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((b) => b.textContent === 'Cancel')
+        ?.click();
+    });
+
+    expect(groupApi.deleteRunGroup).not.toHaveBeenCalled();
+    expect(headerOf(container, 'Work')).not.toBeNull();
   });
 
   it('files a chat into a group by dragging it onto the header', async () => {
@@ -6752,37 +6801,6 @@ describe('Chats — the sidebar groups threads into folders', () => {
     expect(api.setRunGroup).not.toHaveBeenCalled();
   });
 
-  it('files a chat into a group from its own row', async () => {
-    groupApi.listRunGroups.mockResolvedValue([work]);
-    api.setRunGroup.mockResolvedValue({ ...run1, groupId: 'g1' });
-    const container = await mount(makeClient().client);
-
-    await openMenu(container, 'Move My chat to a group');
-    await pickMenuRow(container, 'Work');
-
-    expect(api.setRunGroup).toHaveBeenCalledWith({
-      runId: 'r1',
-      setRunGroupDto: { groupId: 'g1' },
-    });
-    const text = container.textContent ?? '';
-    expect(text.indexOf('Work')).toBeLessThan(text.indexOf('My chat'));
-  });
-
-  it('takes a chat back out of every group', async () => {
-    api.listChats.mockResolvedValue([{ ...run1, groupId: 'g1' }]);
-    groupApi.listRunGroups.mockResolvedValue([work]);
-    api.setRunGroup.mockResolvedValue({ ...run1, groupId: null });
-    const container = await mount(makeClient().client);
-
-    await openMenu(container, 'Move My chat to a group');
-    await pickMenuRow(container, 'No group');
-
-    expect(api.setRunGroup).toHaveBeenCalledWith({
-      runId: 'r1',
-      setRunGroupDto: { groupId: null },
-    });
-  });
-
   it('creates a group and opens its name for typing', async () => {
     groupApi.createRunGroup.mockResolvedValue({ ...work, name: 'New group' });
     const container = await mount(makeClient().client);
@@ -6811,7 +6829,7 @@ describe('Chats — the sidebar groups threads into folders', () => {
     const container = await mount(makeClient().client);
 
     await openMenu(container, 'Group options for Work');
-    await pickMenuRow(container, 'Rename group');
+    await clickText(container, 'Rename group');
     const field = container.querySelector<HTMLInputElement>(
       '[aria-label="Rename Work"]',
     )!;
@@ -6846,19 +6864,37 @@ describe('Chats — the sidebar groups threads into folders', () => {
     const container = await mount(makeClient().client);
 
     await openMenu(container, 'Group options for Work');
-    await pickMenuRow(container, 'File them here…');
+    // The panel SAYS what the rule does before the folder is chosen — a path
+    // on its own never explained what it was for.
+    expect(document.body.textContent).toContain(
+      'every new chat you start in it lands in this group',
+    );
+    await clickText(container, 'Choose folder…');
 
     expect(groupApi.updateRunGroup).toHaveBeenCalledWith({
       groupId: 'g1',
       updateRunGroupDto: { autoCwd: '/proj/app' },
     });
-    // The rule is then stated ON the row, so a group with one is tellable from
-    // a group without.
-    await openMenu(container, 'Group options for Work');
+    // The panel STAYS open, so the rule that was just set is visible where it
+    // was set. With one, the path becomes a LABEL and the two things that can
+    // be done to it become two buttons that say what they do — the old row was
+    // itself the picker, so choosing the same folder again read as nothing
+    // happening at all.
     expect(
-      [...container.querySelectorAll('[role="option"]')].some((o) =>
-        o.textContent?.includes('Stop filing them here'),
+      document.body.querySelector(
+        '[aria-label="Choose another folder for Work"]',
       ),
-    ).toBe(true);
+    ).not.toBeNull();
+    await act(async () => {
+      document.body
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Stop filing new chats into Work"]',
+        )
+        ?.click();
+    });
+    expect(groupApi.updateRunGroup).toHaveBeenLastCalledWith({
+      groupId: 'g1',
+      updateRunGroupDto: { autoCwd: null },
+    });
   });
 });

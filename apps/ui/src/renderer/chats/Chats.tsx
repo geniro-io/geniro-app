@@ -10,7 +10,6 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -944,24 +943,45 @@ export function Chats({
           .catch(fail);
         return;
       }
-      // Delete. Deliberately NOT behind a confirm dialog, unlike a chat's:
-      // nothing is destroyed. The daemon releases the group's runs into the
-      // loose section and every one of them keeps its whole transcript, which
-      // is what the menu row's own hint says while the user is deciding.
-      void groupApi
-        .deleteRunGroup({ groupId })
-        .then(() => {
-          setGroups((prev) => prev.filter((group) => group.id !== groupId));
-          setRuns((prev) =>
-            prev.map((run) =>
-              run.groupId === groupId ? { ...run, groupId: null } : run,
-            ),
-          );
-        })
-        .catch(fail);
+      // Delete ASKS first. Nothing is destroyed — the chats are released, not
+      // removed — but "delete" is a word a user reads as final, so the dialog
+      // is where the difference gets stated instead of being squeezed into a
+      // menu row's hint.
+      setDeletingGroup(groupsRef.current.find((g) => g.id === groupId) ?? null);
+      setDeleteGroupError(null);
     },
     [groupApi],
   );
+
+  /** The group queued for deletion (null = no confirm open). */
+  const [deletingGroup, setDeletingGroup] = useState<RunGroupDto | null>(null);
+  const [deleteGroupBusy, setDeleteGroupBusy] = useState(false);
+  const [deleteGroupError, setDeleteGroupError] = useState<string | null>(null);
+
+  const confirmDeleteGroup = useCallback(async (): Promise<void> => {
+    const group = deletingGroup;
+    if (group === null) {
+      return;
+    }
+    setDeleteGroupBusy(true);
+    setDeleteGroupError(null);
+    try {
+      await groupApi.deleteRunGroup({ groupId: group.id });
+      setGroups((prev) => prev.filter((row) => row.id !== group.id));
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.groupId === group.id ? { ...run, groupId: null } : run,
+        ),
+      );
+      setDeletingGroup(null);
+    } catch (err) {
+      // Kept open carrying the reason, like every other confirm here: closing
+      // would report a delete that did not happen.
+      setDeleteGroupError(String(err));
+    } finally {
+      setDeleteGroupBusy(false);
+    }
+  }, [deletingGroup, groupApi]);
 
   const handleSetRunGroup = useCallback(
     (runId: string, groupId: string | null): void => {
@@ -989,35 +1009,25 @@ export function Chats({
   handleSetRunGroupRef.current = handleSetRunGroup;
 
   /**
-   * Make a group and, when a run asked for it, put that run straight in.
+   * Make a group.
    *
    * The name is a placeholder the header immediately opens for editing —
    * there is no text-prompt dialog in this app, and adding one to name a
-   * folder would be a modal for a two-word answer.
+   * folder would be a modal for a two-word answer. Chats are dragged in
+   * afterwards; nothing files itself here.
    */
-  const handleNewGroup = useCallback(
-    (runId?: string): void => {
-      void groupApi
-        .createRunGroup({ createRunGroupDto: { name: 'New group' } })
-        .then(async (created) => {
-          setGroups((prev) => [...prev, created]);
-          setNamingGroupId(created.id);
-          if (runId !== undefined) {
-            handleSetRunGroup(runId, created.id);
-          }
-        })
-        .catch((err: unknown) => setError(String(err)));
-    },
-    [groupApi, handleSetRunGroup],
-  );
+  const handleNewGroup = useCallback((): void => {
+    void groupApi
+      .createRunGroup({ createRunGroupDto: { name: 'New group' } })
+      .then((created) => {
+        setGroups((prev) => [...prev, created]);
+        setNamingGroupId(created.id);
+      })
+      .catch((err: unknown) => setError(String(err)));
+  }, [groupApi]);
 
   /** Stable, so the memoized headers do not re-render on every keystroke. */
   const clearNamingGroup = useCallback(() => setNamingGroupId(null), []);
-
-  const handleNewGroupWithRun = useCallback(
-    (runId: string): void => handleNewGroup(runId),
-    [handleNewGroup],
-  );
 
   // The run queued for deletion (null = no confirm open). Deleting is
   // IRREVERSIBLE — rows, attachments and PTY sessions all go — so it is the
@@ -3288,6 +3298,15 @@ export function Chats({
     [groups, runs],
   );
 
+  /** How many chats the group awaiting confirmation holds. */
+  const deletingGroupCount = useMemo(
+    () =>
+      deletingGroup === null
+        ? 0
+        : runs.filter((run) => run.groupId === deletingGroup.id).length,
+    [deletingGroup, runs],
+  );
+
   // minmax(0,1fr): the transcript column must be allowed to shrink below its
   // content width, or a long cwd path widens the grid past the window. The
   // third `auto` column appears only while the agents panel is open (the
@@ -3317,7 +3336,7 @@ export function Chats({
                       className="size-7"
                       aria-label="New group"
                       title="New group"
-                      onClick={() => handleNewGroup()}>
+                      onClick={handleNewGroup}>
                       <FolderPlus className="shrink-0" />
                     </Button>
                     <Button
@@ -3363,16 +3382,12 @@ export function Chats({
                             lastActivityAt={run.updatedAt}
                             activity={activities.get(run.id) ?? null}
                             awaiting={run.awaiting}
-                            groups={groups}
-                            groupId={run.groupId}
                             dragging={
                               drag?.kind === 'run' && drag.id === run.id
                             }
                             onActivate={handleActivateRun}
                             onRename={handleRenameRun}
                             onDelete={handleDeleteRun}
-                            onSetGroup={handleSetRunGroup}
-                            onNewGroupWithRun={handleNewGroupWithRun}
                             onDragStartRun={handleRunDragStart}
                             onDragEndRun={handleDragEnd}
                           />
@@ -4301,6 +4316,29 @@ export function Chats({
                   {deleting?.workflowId
                     ? ' The workflow itself stays in your library.'
                     : ''}
+                </>
+              </ConfirmDialog>
+
+              <ConfirmDialog
+                open={deletingGroup !== null}
+                busy={deleteGroupBusy}
+                error={deleteGroupError}
+                title="Delete group"
+                confirmLabel="Delete group"
+                busyLabel="Deleting…"
+                onCancel={() => setDeletingGroup(null)}
+                onConfirm={() => void confirmDeleteGroup()}>
+                <>
+                  Delete the group <strong>{deletingGroup?.name}</strong>?
+                  {/* What is NOT deleted is the whole point, and it is said
+                      first: "delete" reads as final, and the chats are the
+                      thing a user would be afraid of losing. */}
+                  <span className="mt-2 block">
+                    {deletingGroupCount === 0
+                      ? 'It holds no chats.'
+                      : `Its ${deletingGroupCount} ${deletingGroupCount === 1 ? 'chat is' : 'chats are'} kept — they move to Ungrouped with all their history.`}{' '}
+                    Only the group itself is removed.
+                  </span>
                 </>
               </ConfirmDialog>
             </div>

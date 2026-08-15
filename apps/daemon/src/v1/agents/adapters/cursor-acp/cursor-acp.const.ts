@@ -592,3 +592,12 @@ export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
   'cursor-agent reports the delegation but not the work inside it — the ' +
   'sub-agent runs as its own conversation and none of its steps reach this ' +
   'client, so there is nothing to show but what it was asked and what it took';
+
+/**
+ * The SQLite file the CLI keeps one conversation's state in, inside that
+ * session's directory under the store — see
+ * `utils/cursor-context-store.utils.ts` for what is in it and how it was
+ * probed. Named here rather than inline because the adapter spells the path
+ * and its spec spells it back.
+ */
+export const CURSOR_SESSION_STORE_DB_NAME = 'store.db';

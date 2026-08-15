@@ -365,8 +365,6 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
    * itself; a silent adapter with no reason is the blank space the whole
    * `unavailableReason` family exists to replace.
    */
-  // Fresh instances, because each needs its own stand-in child; the shared
-  // ADAPTERS list above is built without one.
   const BREAKDOWN_ADAPTERS: {
     name: string;
     build: (spawn: SpawnFn) => AgentAdapter;
@@ -376,40 +374,54 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
   ];
 
   for (const { name, build } of BREAKDOWN_ADAPTERS) {
-    it(`${name} declares a reason exactly when it cannot answer`, async () => {
-      const { spawn, child } = fakeSpawn();
-      const probe = build(spawn);
-      const reason = probe.getConfig().usage.breakdownUnavailableReason;
-      const session = probe.startSession({ prompt: 'p', cwd: '/proj' });
+    it(`${name} declares a reason exactly when it cannot answer`, () => {
+      const { spawn } = fakeSpawn();
 
-      // Reached through the SESSION, which is where every consumer reaches it:
-      // this is what pins that the base actually wires the adapter's own
-      // method to `AgentSession.readContextUsage`.
-      const answered = session.readContextUsage();
-      // The stand-in child never replies, so a CLI with a channel is left
-      // waiting — which is itself the observable: it WROTE a question.
-      const asked = child.stdin.written.length > 0;
-
-      expect(asked).toBe(reason === null);
-      if (reason !== null) {
-        expect(await answered).toBeNull();
-        expect(reason.trim().length).toBeGreaterThan(0);
-      }
-      session.close();
+      expect(
+        build(spawn).getConfig().usage.breakdownUnavailableReason,
+      ).toBeNull();
     });
   }
 
-  it('a CLI with no channel answers null without writing anything to stdin', async () => {
-    // The point of the method living on the ADAPTER rather than the base
-    // building a request on its behalf: an adapter with no answer must not
-    // have a question written for it. Cursor is the standing case — measured,
-    // not assumed; see its own doc block.
+  it('claude asks its LIVE process, and answers null when there is none', async () => {
+    // Its whole channel is a question on the running stdin dialogue, so a
+    // session id buys it nothing: the conversation lives in the CLI's own
+    // store, which publishes no reading of itself.
     const { spawn, child } = fakeSpawn();
-    const cursor = new CursorAcpAdapter({ spawn });
+    const claude = new ClaudeAdapter({ spawn });
+    const session = claude.startSession({ prompt: 'p', cwd: '/proj' });
+
+    expect(
+      await claude.readContextUsage({ live: null, sessionId: 'sess-1' }),
+    ).toBeNull();
+    expect(child.stdin.written).not.toContain('get_context_usage');
+
+    void claude.readContextUsage({ live: session, sessionId: null });
+    expect(child.stdin.written).toContain('get_context_usage');
+
+    session.close();
+  });
+
+  it('cursor reads its own store, and never writes to a process', async () => {
+    // The case that forced the input to carry both channels: a cursor process
+    // does not outlive its turn, so by the time a readout is opened there is
+    // nothing running to ask — and its figures are on disk regardless.
+    const { spawn, child } = fakeSpawn();
+    const cursor = new CursorAcpAdapter({
+      spawn,
+      sessionStoreDir: mkdtempSync(join(tmpdir(), 'cursor-store-')),
+    });
     const session = cursor.startSession({ prompt: 'p', cwd: '/proj' });
     const before = child.stdin.written;
 
-    expect(await session.readContextUsage()).toBeNull();
+    // No session id: nothing to look up, and nothing asked of the process.
+    expect(
+      await cursor.readContextUsage({ live: session, sessionId: null }),
+    ).toBeNull();
+    // A session id with no store behind it: the same null, still no write.
+    expect(
+      await cursor.readContextUsage({ live: session, sessionId: 'missing' }),
+    ).toBeNull();
     expect(child.stdin.written).toBe(before);
 
     session.close();

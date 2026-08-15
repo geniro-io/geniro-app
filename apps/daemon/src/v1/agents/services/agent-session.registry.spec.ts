@@ -35,7 +35,7 @@ class FakeSession implements AgentSession {
   retired = false;
   private settle: (() => void) | null = null;
 
-  readContextUsage(): Promise<null> {
+  ask(): Promise<null> {
     return Promise.resolve(null);
   }
 

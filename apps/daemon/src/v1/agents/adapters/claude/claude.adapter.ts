@@ -12,13 +12,13 @@ import {
   CLAUDE_CREDENTIAL_KEYS,
   claudeCredentialEnv,
 } from '../../utils/child-env';
-import type { CliSession } from '../../utils/spawn-cli';
 import type {
   AdapterConfig,
   AdapterQuestion,
   AgentApprovalMode,
   AgentCommandOptions,
   AgentContextUsage,
+  AgentContextUsageInput,
   AgentEvent,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
@@ -484,15 +484,22 @@ export class ClaudeAdapter extends AgentAdapter {
    * would otherwise both take the first reply — and the CLI serialises them,
    * so the second answer describes a later moment than the first.
    */
-  protected override readContextUsage(
-    session: CliSession,
+  override readContextUsage(
+    input: AgentContextUsageInput,
   ): Promise<AgentContextUsage | null> {
+    // This CLI answers from its RUNNING process — the control request is a
+    // question on the live stdin dialogue — so with no process there is
+    // nothing to ask. Its session id is no help here: claude keeps its
+    // conversation in its own store and publishes no reading of it.
+    if (!input.live) {
+      return Promise.resolve(null);
+    }
     // A fresh id per question, which matters because the reader matches on it:
     // two readouts opened together would otherwise both take the first reply,
     // and the CLI serialises them, so the second answer describes a later
     // moment than the first.
     const requestId = randomUUID();
-    return session.ask({
+    return input.live.ask({
       line: contextUsageRequestLine(requestId),
       read: (obj) => readContextUsageReply(obj, requestId),
       timeoutMs: CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,

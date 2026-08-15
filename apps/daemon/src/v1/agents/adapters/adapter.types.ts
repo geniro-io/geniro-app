@@ -2,6 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 
 import type { AgentKind } from '../../runs/runs.types';
 import type { ClaudeModesCapability } from '../chat.types';
+import type { SessionAsk } from '../utils/spawn-cli';
 
 // ── Geniro's own MCP server (agent-to-agent calls) ──────────────────────────
 // The two names that identify OUR server and OUR tools inside a CLI's config
@@ -220,6 +221,26 @@ export interface AgentContextUsage {
   autoCompactEnabled: boolean | null;
   memoryFiles: AgentContextMemoryFile[];
   servers: AgentContextServer[];
+}
+
+/**
+ * What a caller can offer an adapter that is being asked about a window.
+ *
+ * BOTH channels, because the two shipped CLIs answer from different places and
+ * neither shape covers the other: claude answers from its RUNNING process, and
+ * cursor answers from the session store it wrote to DISK — which is readable
+ * with no process at all, and is its only route, since a cursor process does
+ * not outlive its turn. An input carrying only a live session would make the
+ * second unimplementable; one carrying only an id would make the first.
+ */
+export interface AgentContextUsageInput {
+  /**
+   * The run's live CLI process, or null when it holds none — idle, reaped, or
+   * a CLI that never keeps one.
+   */
+  live: AgentSession | null;
+  /** That conversation's CLI session id, or null before the CLI names one. */
+  sessionId: string | null;
 }
 
 /**
@@ -1289,15 +1310,12 @@ export interface AgentSession {
     onEvent: (event: AgentEvent) => void,
   ): AgentTurnHandle | null;
   /**
-   * Ask this live process what its context window currently holds. Null when
-   * the CLI has no such channel, or would not answer in time.
-   *
-   * On the SESSION and not on a turn, because the question is about the
-   * process: it is answerable before the first prompt, between turns, and in
-   * the middle of one — and the answer moves with the conversation rather than
-   * belonging to any single turn's accounting.
+   * Put a question to this live process on its own stdin control channel,
+   * outside any turn — the session-level half of `CliSession.ask`, exposed
+   * because an adapter may need it to answer about the PROCESS rather than
+   * about a turn.
    */
-  readContextUsage(): Promise<AgentContextUsage | null>;
+  ask<T>(request: SessionAsk<T>): Promise<T | null>;
   /** Alive, with no turn in flight — ready to take another one. */
   readonly idle: boolean;
   /** The process has not been observed to end. */

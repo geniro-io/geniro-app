@@ -8,7 +8,9 @@ import type {
   ChatTotalsWire,
   ContextBreakdownWire,
 } from '../chat.types';
+import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
+import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { asNumber, asRecord } from '../utils/json-util';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -37,6 +39,7 @@ export class ChatMetricsService {
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
+    private readonly nodeStateDao: NodeStateDao,
     private readonly sessions: AgentSessionRegistry,
     private readonly adapters: AgentAdapterRegistry,
   ) {}
@@ -56,7 +59,7 @@ export class ChatMetricsService {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
     const [context, payloads] = await Promise.all([
-      this.readBreakdown(runId, run.agentKind),
+      this.readBreakdown(runId, run.agentKind, em),
       this.itemDao.turnCompletePayloads(runId, em),
     ]);
     return {
@@ -77,16 +80,28 @@ export class ChatMetricsService {
   private async readBreakdown(
     runId: string,
     agentKind: AgentKind | null,
+    em: EntityManager,
   ): Promise<ContextBreakdownWire | null> {
     // Only the DECLARED reason short-circuits. `breakdownReason` also answers
-    // for the run that simply has no process right now, and testing THAT here
-    // would mean never asking a live session at all — the whole feature, off,
+    // for the run that simply has nothing to read right now, and testing THAT
+    // here would mean never asking an adapter at all — the whole feature, off,
     // with a plausible sentence in its place.
     if (agentKind === null || this.declaredReason(agentKind) !== null) {
       return null;
     }
     try {
-      return await this.sessions.readContextUsage(runId);
+      // BOTH channels are offered and the adapter takes what it needs: claude
+      // answers from the live process, cursor from the session store it wrote
+      // to disk — which is why the id is fetched even when a process exists.
+      const state = await this.nodeStateDao.getByRunNode(
+        runId,
+        SINGLE_AGENT_NODE,
+        em,
+      );
+      return await this.adapters.for(agentKind).readContextUsage({
+        live: this.sessions.peek(runId),
+        sessionId: state?.agentSessionId ?? null,
+      });
     } catch (err) {
       this.logger.warn(
         `context breakdown for run ${runId} failed: ${

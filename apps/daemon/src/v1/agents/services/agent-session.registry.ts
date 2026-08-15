@@ -1,7 +1,6 @@
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 
 import type {
-  AgentContextUsage,
   AgentEvent,
   AgentSession,
   AgentTurnHandle,
@@ -192,23 +191,21 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Ask this run's live process what its context window holds, or null when it
-   * has no process to ask.
+   * This run's live process, or null when it holds none.
    *
-   * Deliberately does NOT touch `lastUsedAt`, so opening the readout cannot
+   * Handed OUT rather than questioned here, because what to ask it is the
+   * adapter's business and not this registry's — and because the answer to
+   * "what is in the window" does not always need a process at all (cursor
+   * reads its own store off disk). Callers must not hold on to it: it is
+   * reaped by the idle window and by eviction.
+   *
+   * Deliberately does NOT touch `lastUsedAt`. Reading what a session is doing
+   * is not using it, and refreshing the clock here would let an open readout
    * keep an abandoned chat's CLI — and its MCP servers — alive indefinitely.
-   * Reading what a session is doing is not using it.
-   *
-   * Nor does it spawn one. A CLI boot costs seconds and starts every MCP
-   * server the folder defines; doing that because a user hovered a ring would
-   * be a readout with a side effect bigger than the thing it reports on.
    */
-  readContextUsage(runId: string): Promise<AgentContextUsage | null> {
+  peek(runId: string): AgentSession | null {
     const entry = this.entries.get(runId);
-    if (!entry || !entry.session.alive) {
-      return Promise.resolve(null);
-    }
-    return entry.session.readContextUsage();
+    return entry && entry.session.alive ? entry.session : null;
   }
 
   /**

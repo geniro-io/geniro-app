@@ -6,6 +6,7 @@ import { AgentKind } from '../../runs/runs.types';
 import type { AgentContextUsage } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { ItemDao } from '../dao/item.dao';
+import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentSessionRegistry } from './agent-session.registry';
@@ -54,7 +55,10 @@ function build(opts: {
     {
       turnCompletePayloads: () => Promise.resolve(opts.payloads ?? []),
     } as unknown as ItemDao,
-    { readContextUsage } as unknown as AgentSessionRegistry,
+    {
+      getByRunNode: () => Promise.resolve({ agentSessionId: 'sess-1' }),
+    } as unknown as NodeStateDao,
+    { peek: () => null } as unknown as AgentSessionRegistry,
     {
       for: () =>
         ({
@@ -65,6 +69,7 @@ function build(opts: {
                 opts.breakdownUnavailableReason ?? null,
             },
           }),
+          readContextUsage,
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry,
   );

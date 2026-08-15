@@ -21,6 +21,7 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentContextUsage,
+  AgentContextUsageInput,
   AgentEffort,
   AgentErrorRecovery,
   AgentEvent,
@@ -1397,29 +1398,24 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * What this CLI's live process says its context window currently holds, or
-   * null when it has no way to say.
+   * What this CLI says its context window currently holds, or null when it has
+   * no way to say.
    *
-   * A MECHANISM and so a method with one implementation per adapter — and the
-   * mechanism is deliberately NOT presupposed. An earlier draft of this hook
-   * asked the adapter for a request LINE and a reply reader, which quietly made
-   * "an out-of-band question on stdin" the only shape an answer could take;
-   * that is claude's shape, and it is not the only one. A CLI could just as
-   * well answer from a subcommand, a file it keeps, or state its own turn
-   * driver accumulated as the conversation went by — none of which can be
-   * expressed as a line to write. The session is handed in so a stdin dialogue
-   * stays available to whoever wants it (`session.ask`), not because it is the
-   * expected route.
+   * PUBLIC, and a method with one implementation per adapter — the mechanism is
+   * deliberately not presupposed. Two earlier drafts of this seam each baked in
+   * one CLI's shape and would have made the other unimplementable: asking the
+   * adapter for a request LINE assumed the answer comes back over stdin (it is
+   * claude's shape), and hanging it off the live session assumed a process
+   * exists to ask (cursor's does not outlive its turn — its figures are on
+   * disk). {@link AgentContextUsageInput} therefore offers BOTH channels and
+   * each adapter takes what it needs.
    *
    * The VALUE half is `AdapterConfig.usage.breakdownUnavailableReason`: what to
    * tell the user when this returns null. The two must agree, and
    * `agent-adapter.spec.ts` pins that they do.
-   *
-   * Default null — "this CLI has no such channel" — which is the honest answer
-   * for any adapter that has not measured otherwise.
    */
-  protected readContextUsage(
-    _session: CliSession,
+  readContextUsage(
+    _input: AgentContextUsageInput,
   ): Promise<AgentContextUsage | null> {
     return Promise.resolve(null);
   }
@@ -1509,11 +1505,9 @@ export abstract class AgentAdapter {
 
     let firstTurnTaken = false;
     return {
-      // Delegated to the adapter, which owns both whether there is an answer
-      // and how it is obtained. Null from here and null from a CLI that would
-      // not say are the same to the caller; it reads
-      // `usage.breakdownUnavailableReason` for the difference.
-      readContextUsage: () => this.readContextUsage(session),
+      // The out-of-band question channel, forwarded as-is: an adapter that
+      // answers from its running process reaches it through here.
+      ask: (request) => session.ask(request),
       startTurn: (turnInput, onEvent) => {
         // A turn needing different argv cannot run on this process, whatever
         // its stdin can carry. Checked before anything is written, so the

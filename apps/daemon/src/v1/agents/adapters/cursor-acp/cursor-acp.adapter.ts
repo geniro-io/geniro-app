@@ -14,6 +14,8 @@ import type {
   AdapterConfig,
   AdapterQuestion,
   AgentCommandOptions,
+  AgentContextUsage,
+  AgentContextUsageInput,
   AgentMcpListingResult,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
@@ -43,6 +45,7 @@ import {
   CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_PROFILE_DIR_NAME,
+  CURSOR_SESSION_STORE_DB_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
   CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON,
@@ -50,6 +53,7 @@ import {
   CURSOR_TASK_METHOD,
   CURSOR_TODOS_METHOD,
 } from './cursor-acp.const';
+import { readCursorContextUsage } from './utils/cursor-context-store.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import { cursorModelSelection } from './utils/cursor-model.utils';
@@ -535,8 +539,13 @@ export class CursorAcpAdapter extends AgentAdapter {
          * `AcpTurnDriver` already reads one; and `readContextUsage` below is
          * where a breakdown would be assembled if the picture changes.
          */
-        breakdownUnavailableReason:
-          'cursor-agent reports nothing about its context window over ACP — the CLI counts tokens for its own TUI, but does not forward them to a client',
+        /**
+         * It DOES report a breakdown — just not over ACP. It writes a full
+         * per-category accounting into its own session store for every turn,
+         * and `readContextUsage` below reads it from there. See that method
+         * and `utils/cursor-context-store.utils.ts`.
+         */
+        breakdownUnavailableReason: null,
       },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
@@ -896,26 +905,43 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * Nothing to report: this CLI tells an ACP client nothing about its window.
+   * What this CLI's own accounting says the window holds, read out of the
+   * session store it keeps on disk.
    *
-   * Overridden rather than left to the base's default, and the difference is
-   * for the reader: an inherited default is indistinguishable from an adapter
-   * nobody has got to yet, while this is a MEASUREMENT — see the capture
-   * recorded at `usage.breakdownUnavailableReason` above, re-run on
-   * 2026-08-15 against a real tool-using turn.
+   * NOT from the process, and it could not be: a cursor turn is one process
+   * ({@link canHostSession}), so by the time anyone opens a readout there is
+   * nothing running to ask. That is the whole reason
+   * {@link AgentContextUsageInput} carries a session id beside a live session
+   * — this adapter uses only the id.
    *
-   * There is a second reason it is written out here. A CLI's answer does not
-   * have to come from the process — this one's could plausibly be assembled
-   * from what the turn driver saw go past — so this is the seam where that
-   * would be built, and an empty inherited slot is a worse place to discover
-   * that than a method saying so. What is NOT acceptable here is an estimate
-   * dressed as a reading: geniro can count the characters it sent, but that
-   * omits this CLI's own system prompt, tools and rules entirely, and a
-   * figure that disagrees with the CLI's own screen is worse than an honest
-   * blank.
+   * The figures are the CLI's OWN, not an estimate: it writes a full
+   * per-category breakdown for every turn, which is what its own TUI renders.
+   * The parser, the probe evidence and the expiry warning are in
+   * `utils/cursor-context-store.utils.ts`.
+   *
+   * Reading is READ-ONLY and failure-swallowing by construction. This is
+   * another program's private store — geniro already owns the directory (the
+   * per-turn profile symlinks into it) but not the format — so every way it
+   * can go wrong (no session yet, no file, a schema that has moved, a locked
+   * database) is one answer: null, and the panel says the breakdown could not
+   * be taken.
    */
-  protected override readContextUsage(): Promise<null> {
-    return Promise.resolve(null);
+  override readContextUsage(
+    input: AgentContextUsageInput,
+  ): Promise<AgentContextUsage | null> {
+    if (!input.sessionId) {
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(
+      readCursorContextUsage(
+        join(
+          this.sessionStoreDir(),
+          input.sessionId,
+          CURSOR_SESSION_STORE_DB_NAME,
+        ),
+        (message: string) => this.options.logger?.warn(message),
+      ),
+    );
   }
 
   /**

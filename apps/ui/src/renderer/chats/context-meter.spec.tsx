@@ -338,6 +338,7 @@ describe('where the meter lives', () => {
 describe('the expanded readout the meter opens onto', () => {
   const TOTALS = {
     turns: 3,
+    costedTurns: 3,
     costUsd: 0.42,
     inputTokens: 24,
     outputTokens: 1_200,

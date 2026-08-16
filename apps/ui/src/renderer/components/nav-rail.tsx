@@ -1,4 +1,5 @@
 import {
+  ChartColumn,
   type LucideIcon,
   MessageSquare,
   PanelLeftClose,
@@ -14,7 +15,7 @@ import { StatusDot } from './status-dot';
 import { cn } from './ui/utils';
 
 /** The top-level views the nav rail switches between. */
-export type AppView = 'chats' | 'graphs' | 'settings';
+export type AppView = 'chats' | 'graphs' | 'stats' | 'settings';
 
 interface NavItem {
   view: AppView;
@@ -26,6 +27,7 @@ interface NavItem {
 const PRIMARY_ITEMS: readonly NavItem[] = [
   { view: 'chats', label: 'Chats', icon: MessageSquare },
   { view: 'graphs', label: 'Graphs', icon: Workflow },
+  { view: 'stats', label: 'Stats', icon: ChartColumn },
 ];
 
 /** Utility destinations (pinned to the bottom). */
@@ -70,7 +72,7 @@ function NavButton({
 
 /**
  * The app's persistent left navigation. The single home for switching between
- * the top-level surfaces (Chats, Graphs, Settings) plus the Geniro mark and the
+ * the top-level surfaces (Chats, Graphs, Stats, Settings) plus the Geniro mark and the
  * live daemon-connection indicator. Collapses to an icon-only rail (state kept
  * for the session); collapsed items expose their label as a tooltip + aria-label.
  */

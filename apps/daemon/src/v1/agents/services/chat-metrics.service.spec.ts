@@ -217,6 +217,7 @@ describe('ChatMetricsService', () => {
 
     expect((await service.read('run-1')).totals).toEqual({
       turns: 2,
+      costedTurns: 2,
       costUsd: 0.5,
       inputTokens: 5,
       outputTokens: 40,

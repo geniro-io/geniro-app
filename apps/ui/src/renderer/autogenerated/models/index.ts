@@ -640,6 +640,12 @@ export interface ChatTotals {
      */
     turns: number;
     /**
+     * of those, how many reported a COST — the denominator for an average spend, since a turn on a CLI that reports no cost would otherwise dilute it
+     * @type {number}
+     * @memberof ChatTotals
+     */
+    costedTurns: number;
+    /**
      * 
      * @type {number}
      * @memberof ChatTotals
@@ -2132,6 +2138,93 @@ export interface UpdateRunGroupDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UsageBucket
+ */
+export interface UsageBucket {
+    /**
+     * calendar day, YYYY-MM-DD, in local time
+     * @type {string}
+     * @memberof UsageBucket
+     */
+    date: string;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof UsageBucket
+     */
+    totals: ChatTotals;
+}
+/**
+ * 
+ * @export
+ * @interface UsageGroup
+ */
+export interface UsageGroup {
+    /**
+     * 
+     * @type {string}
+     * @memberof UsageGroup
+     */
+    key: string | null;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof UsageGroup
+     */
+    totals: ChatTotals;
+}
+/**
+ * 
+ * @export
+ * @interface UsageStatsDto
+ */
+export interface UsageStatsDto {
+    /**
+     * ISO-8601, inclusive
+     * @type {string}
+     * @memberof UsageStatsDto
+     */
+    from: string;
+    /**
+     * ISO-8601, exclusive
+     * @type {string}
+     * @memberof UsageStatsDto
+     */
+    to: string;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof UsageStatsDto
+     */
+    totals: ChatTotals;
+    /**
+     * every day in the range, including days with no activity
+     * @type {Array<UsageBucket>}
+     * @memberof UsageStatsDto
+     */
+    days: Array<UsageBucket>;
+    /**
+     * 
+     * @type {Array<UsageGroup>}
+     * @memberof UsageStatsDto
+     */
+    byAgent: Array<UsageGroup>;
+    /**
+     * 
+     * @type {Array<UsageGroup>}
+     * @memberof UsageStatsDto
+     */
+    byModel: Array<UsageGroup>;
+    /**
+     * 
+     * @type {Array<UsageGroup>}
+     * @memberof UsageStatsDto
+     */
+    byProject: Array<UsageGroup>;
+}
 /**
  * 
  * @export

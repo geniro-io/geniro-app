@@ -17,6 +17,7 @@ import { HandoffModule } from './v1/handoff/handoff.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
 import { RunsModule } from './v1/runs/runs.module';
+import { StatsModule } from './v1/stats/stats.module';
 
 export interface AppModuleOptions {
   runtime: RuntimeInfo;
@@ -47,6 +48,7 @@ export class AppModule {
         NotificationsModule,
         HandoffModule,
         AuthModule,
+        StatsModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

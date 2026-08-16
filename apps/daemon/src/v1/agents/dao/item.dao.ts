@@ -96,6 +96,42 @@ export class ItemDao extends BaseDao<Item> {
     return rows.map((row) => row.payload);
   }
 
+  /**
+   * Every `turn_complete` row in the database, across all runs — what the usage
+   * ledger's boot backfill sweeps to recover history recorded before it existed.
+   *
+   * Cross-run and carrying its row's identity, unlike {@link turnCompletePayloads},
+   * which answers for ONE run and projects the payload alone. The backfill needs
+   * `runId` + `seq` to key each turn idempotently and `createdAt` to date it, so
+   * it cannot be expressed as a loop over that method.
+   *
+   * Projected to those five fields and filtered to the one kind that carries
+   * usage: this runs once per boot, and hydrating full rows would pull every
+   * conversation's text through memory to read a handful of integers. The kind
+   * filter rides `Item`'s own `kind` index — added FOR this query, since every
+   * other read here is scoped by `runId` and rides the composite index instead.
+   */
+  async allTurnCompleteRows(
+    since?: Date,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<Item, 'runId' | 'nodeId' | 'seq' | 'payload' | 'createdAt'>[]
+  > {
+    return this.getRepo(txEm).find(
+      {
+        kind: 'turn_complete',
+        // `since` bounds the sweep to turns the ledger cannot already hold.
+        // Without it every launch read the user's whole history to learn it had
+        // nothing to do, so start-up cost grew forever.
+        ...(since === undefined ? {} : { createdAt: { $gte: since } }),
+      },
+      {
+        fields: ['runId', 'nodeId', 'seq', 'payload', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full

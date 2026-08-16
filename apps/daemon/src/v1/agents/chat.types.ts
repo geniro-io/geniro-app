@@ -223,6 +223,11 @@ export type ContextBreakdownWire = z.infer<typeof ContextBreakdownWireSchema>;
 export const ChatTotalsWireSchema = z
   .object({
     turns: z.number().describe('turns that reported usage'),
+    costedTurns: z
+      .number()
+      .describe(
+        'of those, how many reported a COST — the denominator for an average spend, since a turn on a CLI that reports no cost would otherwise dilute it',
+      ),
     costUsd: z.number().nullable(),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),

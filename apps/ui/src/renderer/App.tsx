@@ -29,6 +29,9 @@ const Graphs = lazy(() =>
 const Settings = lazy(() =>
   import('./settings/Settings').then((m) => ({ default: m.Settings })),
 );
+const Stats = lazy(() =>
+  import('./stats/Stats').then((m) => ({ default: m.Stats })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -263,6 +266,15 @@ export function App(): React.JSX.Element {
           <div className={cn('min-h-0 flex-1', view !== 'graphs' && 'hidden')}>
             {graphsMounted ? <Graphs handle={handle} /> : null}
           </div>
+          {/* Unmounted when hidden, like Settings and unlike Chats/Graphs:
+              the page holds no unsaved edit and no live subscription, and a
+              fresh mount is how a revisit gets figures that are current
+              rather than however stale the last visit left them. */}
+          {view === 'stats' ? (
+            <div className="min-h-0 flex-1">
+              <Stats handle={handle} />
+            </div>
+          ) : null}
           {view === 'settings' ? (
             <div className="min-h-0 flex-1">
               <Settings handle={handle} />

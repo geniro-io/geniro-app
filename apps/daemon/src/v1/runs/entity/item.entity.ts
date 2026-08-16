@@ -13,6 +13,13 @@ import type { ItemKind } from '../runs.types';
 /** A persisted transcript item belonging to a run. */
 @Entity({ tableName: 'items' })
 @Index({ properties: ['runId', 'seq'] })
+// Every OTHER query here is scoped by run and rides the index above. The usage
+// ledger's boot backfill is the one that is not: it asks for `turn_complete`
+// rows across every run, once per launch, before the daemon reports ready.
+// Without this index that is a full scan of a table whose rows are message and
+// tool-result payloads — so launch time would grow with the user's entire
+// transcript history rather than with how many turns they have finished.
+@Index({ properties: ['kind'] })
 export class Item extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();

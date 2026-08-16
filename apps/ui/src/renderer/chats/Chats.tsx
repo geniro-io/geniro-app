@@ -4557,7 +4557,8 @@ export function Chats({
                       {deleting ? runLabel(deleting, workflowNames) : ''}
                     </strong>
                     ? Its transcript, attachments and any live terminal go with
-                    it. This cannot be undone.
+                    it. This cannot be undone. Its token and cost totals stay on
+                    the Stats page.
                     {deleting?.workflowId
                       ? ' The workflow itself stays in your library.'
                       : ''}

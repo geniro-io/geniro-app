@@ -3,16 +3,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
 import type { AgentKind } from '../../runs/runs.types';
-import type {
-  ChatMetricsWire,
-  ChatTotalsWire,
-  ContextBreakdownWire,
-} from '../chat.types';
+import type { ChatMetricsWire, ContextBreakdownWire } from '../chat.types';
 import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
-import { asNumber, asRecord } from '../utils/json-util';
+import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentSessionRegistry } from './agent-session.registry';
 
@@ -66,7 +62,13 @@ export class ChatMetricsService {
       context,
       breakdownReason:
         context === null ? this.breakdownReason(run.agentKind) : null,
-      totals: sumTurns(payloads),
+      // The rule every figure obeys — null until SOME turn reported it, so a
+      // chat on a CLI that reports no usage reads as "not measured" and never
+      // as "cost nothing" — lives once in `utils/usage-figures`, which the
+      // Stats page's cross-run aggregation folds with too. Two copies of that
+      // rule is how the panel and the page come to disagree about the same
+      // turns.
+      totals: sumUsagePayloads(payloads),
     };
   }
 
@@ -155,68 +157,3 @@ export class ChatMetricsService {
  */
 const NO_LIVE_PROCESS_REASON =
   'the breakdown is read from the running agent — send a message in this chat to take a fresh reading';
-
-/**
- * Sum the thread's finished turns.
- *
- * Every figure is null until SOME turn reported it, and a turn that reported
- * none contributes nothing rather than a zero: a chat on a CLI that reports no
- * usage at all must read as "not measured", never as "cost nothing". That is
- * why each total is accumulated separately instead of being seeded at 0.
- *
- * TWIN PARSER: `apps/ui/src/renderer/chats/agent-activity.ts` reads the same
- * `usage` object out of a `turn_complete` item payload for the per-turn row.
- * The payload is `z.unknown()` on the wire BY DESIGN — each item kind carries
- * a different shape — so no generated type reaches either side, and a field
- * added to `AgentUsage` has to be read in both places.
- */
-function sumTurns(payloads: readonly string[]): ChatTotalsWire {
-  const totals: ChatTotalsWire = {
-    turns: 0,
-    costUsd: null,
-    inputTokens: null,
-    outputTokens: null,
-    cacheReadTokens: null,
-    cacheCreationTokens: null,
-    thinkingTokens: null,
-    workedMs: null,
-  };
-  const add = (
-    key: keyof Omit<ChatTotalsWire, 'turns'>,
-    value: number | null,
-  ): void => {
-    if (value !== null) {
-      totals[key] = (totals[key] ?? 0) + value;
-    }
-  };
-  for (const raw of payloads) {
-    const usage = readUsage(raw);
-    if (!usage) {
-      continue;
-    }
-    totals.turns += 1;
-    add('costUsd', asNumber(usage.costUsd));
-    add('inputTokens', asNumber(usage.inputTokens));
-    add('outputTokens', asNumber(usage.outputTokens));
-    add('cacheReadTokens', asNumber(usage.cacheReadTokens));
-    add('cacheCreationTokens', asNumber(usage.cacheCreationTokens));
-    add('thinkingTokens', asNumber(usage.thinkingTokens));
-    // The CLI's OWN working time where it reports one, and NO wall-clock
-    // fallback here — the renderer already owns that substitution for the
-    // per-turn row, and a total mixing the two would be a figure with no
-    // single meaning.
-    add('workedMs', asNumber(usage.durationMs));
-  }
-  return totals;
-}
-
-/** One stored `turn_complete` payload's `usage`, or null when it has none. */
-function readUsage(raw: string): Record<string, unknown> | null {
-  try {
-    return asRecord(asRecord(JSON.parse(raw))?.usage);
-  } catch {
-    // A payload that will not parse is one row's worth of accounting lost, not
-    // a reason to fail the whole readout.
-    return null;
-  }
-}

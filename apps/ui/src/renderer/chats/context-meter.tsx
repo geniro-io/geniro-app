@@ -18,6 +18,36 @@ const WARN_AT = 0.6;
 const ALARM_AT = 0.9;
 
 /**
+ * How long a pointer must REST on the ring before the readout opens.
+ *
+ * Opening is not free: it fetches the breakdown, which for claude is a control
+ * write onto the live agent's stdin measured at 1.2–3.3s. Without a delay every
+ * pointer that merely crossed the ring on its way to Send put that question to
+ * the user's agent — five sweeps across the composer queued five of them, and
+ * the CLI serialises them, so the latency compounds. `useChatMetrics` documents
+ * the readout as fetched when OPENED and never polled; this is what keeps a
+ * hover from being a poll.
+ *
+ * Only the HOVER path waits. A press and a keyboard focus are both deliberate,
+ * and open at once.
+ */
+const HOVER_OPEN_DELAY_MS = 250;
+
+/**
+ * How long an open readout survives the pointer leaving it.
+ *
+ * The panel is anchored 6px clear of the trigger (`Popover`'s viewport box), so
+ * the path from the ring to the thing the ring opened crosses 6px that belong
+ * to neither. Closing on that crossing is what made the breakdown unreachable:
+ * a `max-h-[26rem]` scrolling panel that unmounts before the pointer arrives can
+ * only ever be read by pinning it, and nothing on screen says a click pins.
+ *
+ * Short enough that a pointer merely passing THROUGH the region does not leave a
+ * panel hanging behind it, long enough to cross the gap at any hand speed.
+ */
+const HOVER_CLOSE_GRACE_MS = 120;
+
+/**
  * A ring with a readout behind it: the shell BOTH ring branches are drawn on —
  * the one showing how full the window is, and the one saying the CLI never
  * reports it.
@@ -48,16 +78,70 @@ function MeterReadout({
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const open = pinned || hovered;
   const metrics = useChatMetrics(runId ?? null, open);
+  // Every path OUT of the open state cancels the pending hover, including the
+  // two that close an already-open panel: a timer left running fires after the
+  // close and reopens the panel the user just dismissed.
+  const cancelHoverOpen = useCallback(() => {
+    if (hoverTimer.current !== null) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
+  const cancelHoverClose = useCallback(() => {
+    if (closeTimer.current !== null) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, []);
+  useEffect(
+    () => () => {
+      cancelHoverOpen();
+      cancelHoverClose();
+    },
+    [cancelHoverOpen, cancelHoverClose],
+  );
   const close = useCallback(() => {
+    cancelHoverOpen();
+    cancelHoverClose();
     setPinned(false);
     setHovered(false);
-  }, []);
+  }, [cancelHoverOpen, cancelHoverClose]);
   return (
     <span
       data-slot="context-meter"
-      className={cn('relative flex items-center', className)}>
+      className={cn('relative flex items-center', className)}
+      // The pointer handlers belong to the SPAN, not to the 14px ring inside
+      // it: the panel is a DOM child of this span (`Popover` renders in place
+      // and positions itself `fixed`), so moving from the ring onto the panel
+      // stays inside this element's subtree, and only the 6px anchor gap
+      // between them registers as a leave — which the close grace covers.
+      // Hung off the button instead, every reading of the breakdown ended the
+      // moment the pointer left a ring smaller than the cursor.
+      onMouseEnter={() => {
+        cancelHoverClose();
+        // Already open on the hover term — re-arming would queue a second
+        // timer per crossing between the ring and the panel.
+        if (hovered) {
+          return;
+        }
+        cancelHoverOpen();
+        hoverTimer.current = setTimeout(() => {
+          hoverTimer.current = null;
+          setHovered(true);
+        }, HOVER_OPEN_DELAY_MS);
+      }}
+      onMouseLeave={() => {
+        cancelHoverOpen();
+        cancelHoverClose();
+        closeTimer.current = setTimeout(() => {
+          closeTimer.current = null;
+          setHovered(false);
+        }, HOVER_CLOSE_GRACE_MS);
+      }}>
       <button
         ref={triggerRef}
         type="button"
@@ -75,19 +159,25 @@ function MeterReadout({
         // the gaps equal — a nudge margin would have to be re-tuned the moment
         // either size changes.
         className="flex size-full items-center justify-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-        onBlur={() => setHovered(false)}
+        onBlur={() => {
+          cancelHoverOpen();
+          cancelHoverClose();
+          setHovered(false);
+        }}
         // A press on an UNPINNED panel pins it; a press on a pinned one closes
         // it, clearing the hover term too.
         //
-        // Both halves matter. A pointer never presses a control it has not
-        // first entered, so the first press always arrives with `hovered`
-        // already true — treating it as a toggle of `pinned` alone would close
-        // what the user was reaching for. And on the way back out, unpinning
-        // without clearing `hovered` leaves `pinned || hovered` true, so the
-        // press the user reads as "close this" does nothing until the pointer
-        // wanders off. A jsdom `.click()` neither hovers nor focuses, which is
-        // why the first spec written here missed both.
+        // Both halves matter. A press that beats `HOVER_OPEN_DELAY_MS` arrives
+        // with `hovered` still false, and one that follows a resting pointer
+        // arrives with it true — so a toggle of `pinned` alone would close what
+        // the user was reaching for in the second case. And on the way back out,
+        // unpinning without clearing `hovered` leaves `pinned || hovered` true,
+        // so the press the user reads as "close this" does nothing until the
+        // pointer wanders off. A jsdom `.click()` neither hovers nor focuses,
+        // which is why the first spec written here missed both.
         onClick={() => {
+          cancelHoverOpen();
+          cancelHoverClose();
           if (pinned) {
             setPinned(false);
             setHovered(false);
@@ -95,9 +185,9 @@ function MeterReadout({
           }
           setPinned(true);
         }}
-        onFocus={() => setHovered(true)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}>
+        // Focus is the keyboard's press, not its hover: it is already
+        // deliberate, so it opens without the delay a pointer has to earn.
+        onFocus={() => setHovered(true)}>
         {ring}
       </button>
       <Popover
@@ -146,10 +236,26 @@ function MeterReadout({
 
 /** What one open readout knows about the chat it is reporting on. */
 interface MetricsState {
+  /**
+   * Which chat this reading was taken from.
+   *
+   * Carried WITH the reading rather than assumed from the current props: the
+   * component is not unmounted across a chat switch (the composer keeps one
+   * meter and `activateRun` only swaps the run beneath it), so without this the
+   * state that survives the switch is indistinguishable from a fresh one.
+   */
+  runId: string | null;
   data: ChatMetricsDto | null;
   loading: boolean;
   error: string | null;
 }
+
+/** A readout that knows nothing yet — the shape a chat starts on. */
+const NO_READING: Omit<MetricsState, 'runId'> = {
+  data: null,
+  loading: false,
+  error: null,
+};
 
 /**
  * Fetch a chat's metrics while the readout is OPEN, and never otherwise.
@@ -175,9 +281,8 @@ function useChatMetrics(
 ): MetricsState | null {
   const load = useContext(ChatMetricsLoaderContext);
   const [state, setState] = useState<MetricsState>({
-    data: null,
-    loading: false,
-    error: null,
+    runId: null,
+    ...NO_READING,
   });
   useEffect(() => {
     if (!open || load === null || runId === null) {
@@ -188,17 +293,25 @@ function useChatMetrics(
     // readout mid-request and reopening it on another chat showed the first
     // chat's window under the second chat's name.
     let live = true;
-    setState((previous) => ({ ...previous, loading: true, error: null }));
+    setState((previous) =>
+      // Re-reading the SAME chat keeps what is already on screen, so a refetch
+      // costs no blank panel. A DIFFERENT chat keeps nothing: those figures
+      // describe a conversation the user has left.
+      previous.runId === runId
+        ? { ...previous, loading: true, error: null }
+        : { runId, ...NO_READING, loading: true },
+    );
     void load(runId)
       .then((data) => {
         if (live) {
-          setState({ data, loading: false, error: null });
+          setState({ runId, data, loading: false, error: null });
         }
       })
       .catch((err: unknown) => {
         if (live) {
           setState((previous) => ({
             ...previous,
+            runId,
             loading: false,
             error: err instanceof Error ? err.message : String(err),
           }));
@@ -211,7 +324,15 @@ function useChatMetrics(
   if (load === null || runId === null) {
     return null;
   }
-  return state;
+  // The effect covers the switch it can SEE; this covers the one it cannot. It
+  // is skipped entirely while the readout is closed, so a chat switched in the
+  // meantime leaves the previous chat's reading in state until the next open —
+  // and an effect runs after that open has painted, so without this the first
+  // frame of the new chat's panel is the old chat's window, totals and spend,
+  // with `{metrics?.data?.context ? null : children}` suppressing the summary
+  // that would have been right. One frame rather than forever, and the same
+  // wrong figures under the same wrong name.
+  return state.runId === runId ? state : { runId, ...NO_READING };
 }
 
 /**
@@ -366,6 +487,13 @@ export function ContextMeter({
       side={side}
       className={className}
       runId={runId}
+      // Deliberately still the bare reading, with no "which measurement"
+      // qualifier: this is the control's accessible NAME, and a name that
+      // explains itself stops being one — it is announced on every focus, and
+      // it is what a screen-reader user navigates by. The distinction between
+      // this fraction (the prompt side of the last request) and the panel's
+      // (the agent's own `/context` reply) is stated in the panel, as TEXT, so
+      // it reaches that user through the same route as the figures it explains.
       label={
         `Context ${percent}% full — ${formatTokens(contextTokens)} of ${formatTokens(windowTokens)}` +
         (spentUsd === null ? '' : `, ${formatUsd(spentUsd)} spent`)

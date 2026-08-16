@@ -1,6 +1,8 @@
 import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
+import { isPlainSessionId } from '../../../utils/session-id';
 import type {
   AgentEvent,
   AgentSessionHistory,
@@ -89,6 +91,16 @@ interface SessionFile {
   updatedAt: number;
 }
 
+/**
+ * How many session heads are opened at once.
+ *
+ * Eight because that is where the measured curve flattens on the real profile
+ * (400 heads: 155ms sequential, 11ms at this width) and because each open head
+ * is a file handle — the point of a batch rather than one `Promise.all` over
+ * every file is that the second is unbounded in the size of the user's history.
+ */
+const HEAD_READ_BATCH = 8;
+
 /** What one file's opening lines say about itself. */
 interface SessionHead {
   cwd: string | null;
@@ -117,40 +129,86 @@ export async function listClaudeSessions(input: {
   const rows: AgentSessionRecord[] = [];
   /** Folder per project directory, learned from its first readable file. */
   const dirCwd = new Map<string, string | null>();
-  for (const file of files) {
-    if (rows.length >= input.limit) {
-      break;
-    }
-    if (wanted !== null && dirCwd.get(file.dir) === null) {
-      // Already established that this directory is some other folder's.
-      continue;
-    }
-    const head = await readSessionHead(file.path);
-    if (head === null) {
-      continue;
-    }
-    if (wanted !== null && (await canonical(head.cwd)) !== wanted) {
-      // Only mark the directory rejected on a file that actually stated a
-      // folder — a line-less file says nothing about its neighbours.
-      if (head.cwd !== null) {
-        dirCwd.set(file.dir, null);
+  // Heads are read a BATCH at a time and then decided over IN ORDER. Both
+  // halves matter: reading them one await at a time cost 155ms of the 183ms a
+  // real 563-session listing took, while deciding out of order would break the
+  // newest-first result AND the `dirCwd` short-circuit, which depends on a
+  // rejected directory being known before its remaining files are reached.
+  //
+  // The map is consulted TWICE, and the second time is not redundant. The read
+  // inside the batch runs against the state as of the batch's START, so it can
+  // only spare a read; the read in the decision loop below runs against the
+  // state as of that row, which is what makes the ANSWER the same however the
+  // boundary falls. Without it, a directory rejected mid-batch still admits the
+  // rows behind it in that batch — and a project directory genuinely can hold
+  // two folders' sessions, because the directory name is the cwd with its
+  // separators flattened and that is lossy (`/a/b-c` and `/a-b/c` collide, as
+  // the file's own doc block records). A matching session in such a directory
+  // would then appear or vanish from the picker depending only on how many
+  // unrelated sessions happened to sort ahead of it.
+  //
+  // Concurrency is bounded rather than unleashed over `files`: a profile of
+  // this size would otherwise open thousands of file handles at once.
+  for (
+    let start = 0;
+    start < files.length && rows.length < input.limit;
+    start += HEAD_READ_BATCH
+  ) {
+    const batch = files.slice(start, start + HEAD_READ_BATCH);
+    const probed = await Promise.all(
+      batch.map(async (file) => {
+        if (wanted !== null && dirCwd.get(file.dir) === null) {
+          // Already established that this directory is some other folder's.
+          return null;
+        }
+        const head = await readSessionHead(file.path);
+        if (head === null) {
+          return null;
+        }
+        return {
+          head,
+          cwd: wanted === null ? null : await canonical(head.cwd),
+        };
+      }),
+    );
+    for (const [index, file] of batch.entries()) {
+      if (rows.length >= input.limit) {
+        break;
       }
-      continue;
+      if (wanted !== null && dirCwd.get(file.dir) === null) {
+        // Re-read, against the state as of THIS row: an earlier row in this
+        // same batch may have rejected the directory after the batch's own
+        // check had already let this one through.
+        continue;
+      }
+      const found = probed[index];
+      if (found === undefined || found === null) {
+        continue;
+      }
+      const { head } = found;
+      if (wanted !== null && found.cwd !== wanted) {
+        // Only mark the directory rejected on a file that actually stated a
+        // folder — a line-less file says nothing about its neighbours.
+        if (head.cwd !== null) {
+          dirCwd.set(file.dir, null);
+        }
+        continue;
+      }
+      if (head.title === null) {
+        // No user message in the file's opening budget: a session with nothing
+        // said in it is not one anybody meant to carry on. Skipped rather than
+        // listed under its id, which would offer the user a row that means
+        // nothing and resumes nothing.
+        continue;
+      }
+      dirCwd.set(file.dir, head.cwd);
+      rows.push({
+        id: file.id,
+        cwd: head.cwd,
+        title: head.title,
+        updatedAt: file.updatedAt,
+      });
     }
-    if (head.title === null) {
-      // No user message in the file's opening budget: a session with nothing
-      // said in it is not one anybody meant to carry on. Skipped rather than
-      // listed under its id, which would offer the user a row that means
-      // nothing and resumes nothing.
-      continue;
-    }
-    dirCwd.set(file.dir, head.cwd);
-    rows.push({
-      id: file.id,
-      cwd: head.cwd,
-      title: head.title,
-      updatedAt: file.updatedAt,
-    });
   }
   return rows;
 }
@@ -311,46 +369,100 @@ async function collectSessionFiles(profileDir: string): Promise<SessionFile[]> {
     // No profile, or no conversations in it yet.
     return [];
   }
-  const files: SessionFile[] = [];
-  for (const dir of dirs) {
-    const dirPath = join(root, dir);
-    let names: string[];
-    try {
-      names = await readdir(dirPath);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      if (!name.endsWith(CLAUDE_SESSION_FILE_SUFFIX)) {
-        continue;
-      }
-      const path = join(dirPath, name);
-      try {
-        const info = await stat(path);
-        if (!info.isFile()) {
-          continue;
-        }
-        files.push({
-          id: name.slice(0, -CLAUDE_SESSION_FILE_SUFFIX.length),
-          path,
-          dir,
-          updatedAt: Math.round(info.mtimeMs),
-        });
-      } catch {
-        // Vanished between readdir and stat.
-      }
-    }
+  // Concurrent rather than one await at a time: these are independent round
+  // trips to the same disk with nothing between them, and awaiting each in turn
+  // made the cost linear in the profile's SIZE — measured on a real profile
+  // (380 directories, 563 sessions) the sequential scan took 28ms warm against
+  // 5ms this way, and the picker pays it on every open, the listing being
+  // deliberately uncached beyond its in-flight join.
+  //
+  // BOUNDED, at the same width the head reads use, and for the same reason: a
+  // `Promise.all` over `dirs` opens one `readdir` per project directory and
+  // then one `stat` per file inside it, so on the author's own profile (2,448
+  // sessions) the unbounded form has thousands of descriptors outstanding at
+  // once. Bounding the outer loop bounds the inner one with it, since each
+  // directory's stats only run while that directory holds a slot.
+  const perDir: SessionFile[][] = [];
+  for (let start = 0; start < dirs.length; start += HEAD_READ_BATCH) {
+    perDir.push(
+      ...(await Promise.all(
+        dirs.slice(start, start + HEAD_READ_BATCH).map(async (dir) => {
+          const dirPath = join(root, dir);
+          let names: string[];
+          try {
+            names = await readdir(dirPath);
+          } catch {
+            return [];
+          }
+          const stats = await Promise.all(
+            names
+              .filter((name) => name.endsWith(CLAUDE_SESSION_FILE_SUFFIX))
+              .map(async (name): Promise<SessionFile | null> => {
+                const path = join(dirPath, name);
+                try {
+                  const info = await stat(path);
+                  if (!info.isFile()) {
+                    return null;
+                  }
+                  return {
+                    id: name.slice(0, -CLAUDE_SESSION_FILE_SUFFIX.length),
+                    path,
+                    dir,
+                    updatedAt: Math.round(info.mtimeMs),
+                  };
+                } catch {
+                  // Vanished between readdir and stat.
+                  return null;
+                }
+              }),
+          );
+          return stats.filter((file): file is SessionFile => file !== null);
+        }),
+      )),
+    );
   }
-  return files;
+  return perDir.flat();
 }
 
-/** Where one session id lives, or null when this profile does not hold it. */
+/**
+ * Where one session id lives, or null when this profile does not hold it.
+ *
+ * The id is a FILENAME, so the answer is one `stat` per project directory
+ * rather than a full listing: the caller already knows which session it wants,
+ * and re-scanning every file in the profile — plus mtime-ing each — to rediscover
+ * a name it was handed is work with no result to show for it.
+ *
+ * The id therefore reaches a path, which the scan it replaced never let it do,
+ * so a separator in it is refused rather than joined. It arrives over HTTP.
+ */
 async function findSessionFile(
   profileDir: string,
   sessionId: string,
 ): Promise<string | null> {
-  const files = await collectSessionFiles(profileDir);
-  return files.find((file) => file.id === sessionId)?.path ?? null;
+  if (!isPlainSessionId(sessionId)) {
+    return null;
+  }
+  const name = `${sessionId}${CLAUDE_SESSION_FILE_SUFFIX}`;
+  const root = join(profileDir, CLAUDE_SESSIONS_DIR_NAME);
+  let dirs: string[];
+  try {
+    dirs = (await readdir(root, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return null;
+  }
+  const hits = await Promise.all(
+    dirs.map(async (dir) => {
+      const path = join(root, dir, name);
+      try {
+        return (await stat(path)).isFile() ? path : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return hits.find((path) => path !== null) ?? null;
 }
 
 /**
@@ -420,6 +532,17 @@ async function eachJsonLine(
   }
   try {
     const chunk = Buffer.alloc(64 * 1024);
+    // Decoded ACROSS reads, never per read. A 64KB boundary falls wherever the
+    // byte count lands, so it routinely lands INSIDE a multi-byte character —
+    // and `Buffer.toString('utf8')` on a chunk ending mid-character yields
+    // U+FFFD for it and drops the trailing bytes, so the next chunk starts on
+    // the remainder and mangles that too. The damage is silent, because JSON's
+    // own syntax is all ASCII: the line still parses, and the corruption lands
+    // in the transcript as a replacement character in whatever the user or the
+    // agent actually wrote. A session of the size this file is built for (11MB)
+    // crosses ~170 of those boundaries. `StringDecoder` holds the partial bytes
+    // back until the read that completes them.
+    const decoder = new StringDecoder('utf8');
     let rest = '';
     let read = 0;
     for (;;) {
@@ -428,7 +551,7 @@ async function eachJsonLine(
         break;
       }
       read += bytesRead;
-      rest += chunk.subarray(0, bytesRead).toString('utf8');
+      rest += decoder.write(chunk.subarray(0, bytesRead));
       let cut = rest.indexOf('\n');
       while (cut >= 0) {
         const line = rest.slice(0, cut);
@@ -442,6 +565,12 @@ async function eachJsonLine(
         break;
       }
     }
+    // Whatever the decoder is still holding: bytes of a character the file (or
+    // the byte budget) ended in the middle of. `end()` renders them as U+FFFD,
+    // which is the honest reading of a genuinely truncated character — unlike
+    // the per-chunk decode above, where the rest of the character was in the
+    // very next read.
+    rest += decoder.end();
     // The last line of a file the CLI is still appending to has no newline yet.
     if (rest.trim() !== '') {
       feed(rest, onLine);

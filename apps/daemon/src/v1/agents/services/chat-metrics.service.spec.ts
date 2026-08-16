@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentKind } from '../../runs/runs.types';
 import type { AgentContextUsage } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import { ChatMetricsWireSchema } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
@@ -12,15 +13,29 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import { ChatMetricsService } from './chat-metrics.service';
 
+/**
+ * Every NAMED component of the wire shape populated, not just the top level.
+ *
+ * `memoryFiles` and `servers` were empty here, and the wire round-trip below
+ * reads whatever this fixture produces — so `ContextMemoryFile` and
+ * `ContextServer` were never entered, and dropping a field from either passed
+ * the whole suite AND the type gate while losing that field on the way to the
+ * renderer. A fixture that skips an arm cannot pin the arm.
+ */
 const BREAKDOWN: AgentContextUsage = {
-  categories: [{ name: 'System prompt', tokens: 3386, deferred: false }],
+  categories: [
+    { name: 'System prompt', tokens: 3386, deferred: false },
+    { name: 'MCP tools', tokens: 273_876, deferred: true },
+  ],
   totalTokens: 3386,
   maxTokens: 1_000_000,
   model: 'claude-opus-5[1m]',
   autoCompactAtTokens: 967_000,
   autoCompactEnabled: true,
-  memoryFiles: [],
-  servers: [],
+  memoryFiles: [{ path: '/proj/CLAUDE.md', kind: 'Project', tokens: 45_947 }],
+  servers: [
+    { name: 'amplitude', tokens: 109_284, toolCount: 33, loadedToolCount: 0 },
+  ],
 };
 
 /** One stored `turn_complete` payload, as the transcript holds it. */
@@ -84,6 +99,44 @@ describe('ChatMetricsService', () => {
       context: BREAKDOWN,
       breakdownReason: null,
     });
+  });
+
+  it('answers something the wire schema accepts UNCHANGED', async () => {
+    // The route serializes this reply THROUGH `ChatMetricsWireSchema`
+    // (`@ZodResponse` → `ChatMetricsDto`), and zod strips what the schema does
+    // not name — silently, so a field the service produces and the schema
+    // omits vanishes between here and the renderer with nothing failing. The
+    // strict parse is what makes that a test failure instead; comparing the
+    // parsed value back against the original is what catches a DROPPED field,
+    // which a bare `.parse()` would let through.
+    //
+    // Driven with every named component populated AND with real totals: the
+    // check can only reach the arms the fixture reaches, so an empty
+    // `memoryFiles` left `ContextMemoryFile` unverified, and all-null totals
+    // left every `ChatTotals` field's non-null arm unverified.
+    const { service } = build({
+      payloads: [
+        turn({
+          costUsd: 0.42,
+          inputTokens: 24,
+          outputTokens: 1_200,
+          cacheReadTokens: 1_300_000,
+          cacheCreationTokens: 210_000,
+          thinkingTokens: 300,
+          durationMs: 252_000,
+        }),
+      ],
+    });
+
+    const metrics = await service.read('run-1');
+
+    // The fixture actually reached the nested arms — otherwise this test
+    // certifies the top level alone while reading as though it covered all of
+    // it, which is what it did before.
+    expect(metrics.context?.memoryFiles).toHaveLength(1);
+    expect(metrics.context?.servers).toHaveLength(1);
+    expect(metrics.totals.costUsd).not.toBeNull();
+    expect(ChatMetricsWireSchema.parse(metrics)).toEqual(metrics);
   });
 
   it('names the CLI’s OWN reason when it has no such channel', async () => {

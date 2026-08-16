@@ -5,7 +5,9 @@ import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
+  ChatMetricsWireSchema,
   ItemWireSchema,
+  LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
   RunWireSchema,
 } from '../chat.types';
@@ -161,13 +163,7 @@ export class LocalImageQueryDto extends createZodDto(
  * PATH rather than an id because that is the only handle the caller has — the
  * daemon minted nothing here.
  */
-export class LocalImageDto extends createZodDto(
-  z.object({
-    path: z.string(),
-    mediaType: AttachmentMediaTypeSchema,
-    data: z.string().describe('base64-encoded image bytes'),
-  }),
-) {}
+export class LocalImageDto extends createZodDto(LocalImageWireSchema) {}
 
 /**
  * Acknowledgement of a cancel request. Shared with the workflow routes — the
@@ -195,94 +191,15 @@ export class DeletedDto extends createZodDto(
 ) {}
 
 /**
- * One line item of the context window — named components so the generated
- * client gets real types instead of an inline anonymous shape per field.
- */
-const ContextCategorySchema = z
-  .object({
-    name: z.string().describe("the CLI's own name for this part of the window"),
-    tokens: z.number(),
-    deferred: z
-      .boolean()
-      .describe(
-        'available but not loaded, and so NOT counted in totalTokens — rendering it in the same bar reports a window several times fuller than it is',
-      ),
-  })
-  .meta({ id: 'ContextCategory' });
-
-const ContextMemoryFileSchema = z
-  .object({
-    path: z.string(),
-    kind: z
-      .string()
-      .nullable()
-      .describe(
-        "the CLI's own word for where it came from (Project, AutoMem…)",
-      ),
-    tokens: z.number(),
-  })
-  .meta({ id: 'ContextMemoryFile' });
-
-const ContextServerSchema = z
-  .object({
-    name: z.string(),
-    tokens: z.number().describe("this server's whole tool surface, summed"),
-    toolCount: z.number(),
-    loadedToolCount: z
-      .number()
-      .describe('how many of them are actually in the window right now'),
-  })
-  .meta({ id: 'ContextServer' });
-
-const ContextBreakdownSchema = z
-  .object({
-    categories: z.array(ContextCategorySchema),
-    totalTokens: z.number().nullable(),
-    maxTokens: z.number().nullable(),
-    model: z.string().nullable(),
-    autoCompactAtTokens: z
-      .number()
-      .nullable()
-      .describe('where this CLI would compact the conversation by itself'),
-    autoCompactEnabled: z.boolean().nullable(),
-    memoryFiles: z.array(ContextMemoryFileSchema),
-    servers: z.array(ContextServerSchema),
-  })
-  .meta({ id: 'ContextBreakdown' });
-
-const ChatTotalsSchema = z
-  .object({
-    turns: z.number().describe('turns that reported usage'),
-    costUsd: z.number().nullable(),
-    inputTokens: z.number().nullable(),
-    outputTokens: z.number().nullable(),
-    cacheReadTokens: z.number().nullable(),
-    cacheCreationTokens: z.number().nullable(),
-    thinkingTokens: z.number().nullable(),
-    workedMs: z
-      .number()
-      .nullable()
-      .describe("the CLI's own working time, where it reported one"),
-  })
-  .meta({ id: 'ChatTotals' });
-
-/**
  * What one chat's window holds and what the thread has cost.
  *
- * The root schema carries no `.meta({ id })` — a response DTO's does not, or
- * nestjs-zod registers the component under the id while the DTO class name is
- * still what array responses `$ref`, and `setupSwagger` fails the boot on the
- * dangling reference.
+ * The schema itself lives in `chat.types.ts` beside the type it derives, like
+ * every other wire shape in this module. Re-stating it here is what the
+ * metrics types used to do — a hand-written `ChatMetricsWire` interface on one
+ * side and an independent schema on the other — and a field added to only one
+ * of them type-checks, serializes away, and never reaches this client: the
+ * compile-time half constrains the handler's return to the schema's INPUT
+ * type, and excess-property checks do not apply to a value that is not an
+ * object literal.
  */
-export class ChatMetricsDto extends createZodDto(
-  z.object({
-    context: ContextBreakdownSchema.nullable(),
-    breakdownReason: z
-      .string()
-      .nullable()
-      .describe(
-        'why there is no breakdown — a CLI without the channel, or a chat with no running agent to ask',
-      ),
-    totals: ChatTotalsSchema,
-  }),
-) {}
+export class ChatMetricsDto extends createZodDto(ChatMetricsWireSchema) {}

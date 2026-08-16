@@ -55,6 +55,24 @@ export function useAgentVocabulary<T>(
     if (kind === null || fetchFor === null || cacheRef.current.has(kind)) {
       return;
     }
+    // An existing answer for the kind we are about to fetch can only be a
+    // FAILED one: a success is cached, and a cached kind returned above. Drop
+    // it, or the retry this effect is starting renders as `loading: false` with
+    // an empty list — the exact shape of a CLI that genuinely offers no models,
+    // so a probe that is recovering looks like a permanent absence for the
+    // several seconds a cursor probe takes.
+    //
+    // Cleared HERE and not resolved during render, unlike the sibling reading
+    // in `useChatMetrics`. The render has no way to tell a failure that is
+    // about to be retried from one that has settled and is not, and the only
+    // distinguishing fact — that this effect is about to run — is the effect
+    // itself. Gating the branch on the cache instead spins the chip forever:
+    // a success is already served by the cache above, so that branch would
+    // only ever see failures, and a failure nothing retries has no later render
+    // to correct it. The cost of clearing here is one frame of the stale
+    // reading before this commits, against the multi-second window the CLI
+    // takes to answer.
+    setAnswered((previous) => (previous?.kind === kind ? null : previous));
     let stale = false;
     void fetchFor(kind)
       .then((fetched) => {

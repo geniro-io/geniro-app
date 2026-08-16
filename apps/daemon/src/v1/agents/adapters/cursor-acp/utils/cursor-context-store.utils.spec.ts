@@ -145,6 +145,49 @@ describe('parseCursorContextBlob', () => {
       deferred: false,
     });
   });
+
+  it('stops descending past its depth ceiling', () => {
+    // These bytes are FOREIGN and the walk is synchronous on a request path. A
+    // length-delimited field is only a nested message by GUESS — any run of
+    // bytes can look like one — so a corrupt or hostile blob can present
+    // nesting without bound.
+    //
+    // The ceiling itself is what is asserted, rather than a crash: a stack
+    // limit is environment-dependent and slow to reach, while burying the real
+    // breakdown one layer too deep observes exactly the bound and nothing else.
+    // The two depths STRADDLE the cap with nothing between them: measured
+    // against this fixture, 10 wrappings is the deepest that still resolves and
+    // 11 the shallowest that does not (the breakdown sits two levels inside
+    // ROOT, so those are depths 12 and 13). Raising OR lowering
+    // `MAX_BLOB_DEPTH` by one therefore fails this test — a wider margin would
+    // have pinned only one side of the bound, or neither.
+    const shallow = bury(ROOT, 10);
+    const deep = bury(ROOT, 11);
+
+    expect(parseCursorContextBlob(shallow)?.totalTokens).toBe(119_801);
+    expect(parseCursorContextBlob(deep)).toBeNull();
+  });
+
+  it('leaves the window null when the store reports one of zero', () => {
+    // A window of 0 is not a window, and this is the one place the figure is
+    // divided by. The rest of the blob is the real one, so nothing else about
+    // the reading changes — only the denominator the meter would have used.
+    const zeroed = new Uint8Array(ROOT);
+    for (const at of allOf(WINDOW_TOTAL)) {
+      // Re-encoded as zero at the SAME WIDTH (`80 80 00` is a legal three-byte
+      // varint for 0). Writing a short `00` instead would truncate the varint
+      // and desynchronize every field after it — the false pin the tamper above
+      // documents, where the parser answers null for an unrelated reason.
+      zeroed[at + 1] = 0x80;
+      zeroed[at + 2] = 0x80;
+      zeroed[at + 3] = 0x00;
+    }
+
+    const usage = parseCursorContextBlob(zeroed);
+
+    expect(usage?.totalTokens).toBe(119_801);
+    expect(usage?.maxTokens).toBeNull();
+  });
 });
 
 describe('readCursorContextUsage', () => {
@@ -222,8 +265,32 @@ describe('readCursorContextUsage', () => {
   });
 });
 
+/**
+ * Wrap `payload` in `layers` nested `{field 1: <message>}` envelopes.
+ *
+ * The length is a real varint rather than one byte, which is the whole reason
+ * this helper exists: a single-byte prefix caps a payload at 127 bytes, so a
+ * naive nesting stops long before any depth bound and pins nothing.
+ */
+function bury(payload: Uint8Array, layers: number): Uint8Array {
+  let bytes = payload;
+  for (let i = 0; i < layers; i += 1) {
+    const length: number[] = [];
+    let rest = bytes.length;
+    do {
+      const byte = rest & 0x7f;
+      rest >>>= 7;
+      length.push(rest > 0 ? byte | 0x80 : byte);
+    } while (rest > 0);
+    bytes = new Uint8Array([0x0a, ...length, ...bytes]);
+  }
+  return bytes;
+}
+
 /** `{field 1: varint}` opening the used/window pair — 119801, twice over. */
 const USED_TOTAL = [0x08, 0xf9, 0xa7, 0x07];
+/** `{field 2: varint}` closing it — the window, 300000, likewise twice. */
+const WINDOW_TOTAL = [0x10, 0xe0, 0xa7, 0x12];
 /** `{field 3: varint}` of the System prompt category — 5214. */
 const SYSTEM_PROMPT_TOKENS = [0x18, 0xde, 0x28];
 

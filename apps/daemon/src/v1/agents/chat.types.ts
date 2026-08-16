@@ -140,13 +140,102 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 export const MAX_LOCAL_IMAGE_BYTES = 20 * 1024 * 1024;
 
 /** One markdown-referenced image, read off disk for display. */
-export interface LocalImageWire {
-  /** The reference exactly as the agent wrote it — the renderer's cache key. */
-  path: string;
-  mediaType: AttachmentMediaType;
-  /** base64-encoded bytes. */
-  data: string;
-}
+export const LocalImageWireSchema = z.object({
+  path: z
+    .string()
+    .describe(
+      'the reference exactly as the agent wrote it — the renderer’s cache key',
+    ),
+  mediaType: AttachmentMediaTypeSchema,
+  data: z.string().describe('base64-encoded image bytes'),
+});
+// No `.meta({ id })`: this is a response DTO ROOT — same rule, and same reason,
+// as `ChatMetricsWireSchema` below.
+export type LocalImageWire = z.infer<typeof LocalImageWireSchema>;
+
+/**
+ * One line item of the context window — a NAMED component, so the generated
+ * client gets a real type rather than an inline anonymous shape per field.
+ */
+const ContextCategorySchema = z
+  .object({
+    name: z.string().describe("the CLI's own name for this part of the window"),
+    tokens: z.number(),
+    deferred: z
+      .boolean()
+      .describe(
+        'available but not loaded, and so NOT counted in totalTokens — rendering it in the same bar reports a window several times fuller than it is',
+      ),
+  })
+  .meta({ id: 'ContextCategory' });
+
+const ContextMemoryFileSchema = z
+  .object({
+    path: z.string(),
+    kind: z
+      .string()
+      .nullable()
+      .describe(
+        "the CLI's own word for where it came from (Project, AutoMem…)",
+      ),
+    tokens: z.number(),
+  })
+  .meta({ id: 'ContextMemoryFile' });
+
+const ContextServerSchema = z
+  .object({
+    name: z.string(),
+    tokens: z.number().describe("this server's whole tool surface, summed"),
+    toolCount: z.number(),
+    loadedToolCount: z
+      .number()
+      .describe('how many of them are actually in the window right now'),
+  })
+  .meta({ id: 'ContextServer' });
+
+/** The context window's contents, as the agent's own CLI accounts for them. */
+export const ContextBreakdownWireSchema = z
+  .object({
+    categories: z.array(ContextCategorySchema),
+    totalTokens: z.number().nullable(),
+    maxTokens: z.number().nullable(),
+    model: z.string().nullable(),
+    autoCompactAtTokens: z
+      .number()
+      .nullable()
+      .describe('where this CLI would compact the conversation by itself'),
+    autoCompactEnabled: z.boolean().nullable(),
+    memoryFiles: z.array(ContextMemoryFileSchema),
+    servers: z.array(ContextServerSchema),
+  })
+  .meta({ id: 'ContextBreakdown' });
+export type ContextBreakdownWire = z.infer<typeof ContextBreakdownWireSchema>;
+
+/**
+ * What the whole thread has spent, summed over its finished turns.
+ *
+ * Summed on the DAEMON rather than in the renderer, though the renderer holds
+ * the same items: a chat's history is paged behind an `afterSeq` cursor, so a
+ * client that has only scrolled back through part of it would total part of
+ * it — and silently, since a smaller number looks exactly like a cheaper
+ * conversation.
+ */
+export const ChatTotalsWireSchema = z
+  .object({
+    turns: z.number().describe('turns that reported usage'),
+    costUsd: z.number().nullable(),
+    inputTokens: z.number().nullable(),
+    outputTokens: z.number().nullable(),
+    cacheReadTokens: z.number().nullable(),
+    cacheCreationTokens: z.number().nullable(),
+    thinkingTokens: z.number().nullable(),
+    workedMs: z
+      .number()
+      .nullable()
+      .describe("the CLI's own working time, where it reported one"),
+  })
+  .meta({ id: 'ChatTotals' });
+export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
 
 /**
  * What one chat's context window holds right now, plus what the whole thread
@@ -158,66 +247,21 @@ export interface LocalImageWire {
  * while the run holds one; the totals are summed from the thread's own
  * persisted turns and are always there.
  */
-export interface ChatMetricsWire {
-  /** Null when the breakdown could not be taken — see {@link breakdownReason}. */
-  context: ContextBreakdownWire | null;
-  /**
-   * Why {@link context} is null, in the CLI's own terms, or null when it is
-   * present.
-   *
-   * The distinction the field exists for: a CLI with no such channel at all
-   * (cursor) reads differently to a claude chat whose process has since been
-   * reaped for idleness, and the second is fixed by sending a message while
-   * the first never will be. A panel showing an empty space for both answered
-   * the user's "why is there nothing here" with silence.
-   */
-  breakdownReason: string | null;
-  totals: ChatTotalsWire;
-}
-
-/** The context window's contents, as the agent's own CLI accounts for them. */
-export interface ContextBreakdownWire {
-  categories: {
-    name: string;
-    tokens: number;
-    /** Available but not loaded, and so OUTSIDE {@link totalTokens}. */
-    deferred: boolean;
-  }[];
-  totalTokens: number | null;
-  maxTokens: number | null;
-  model: string | null;
-  autoCompactAtTokens: number | null;
-  autoCompactEnabled: boolean | null;
-  memoryFiles: { path: string; kind: string | null; tokens: number }[];
-  servers: {
-    name: string;
-    tokens: number;
-    toolCount: number;
-    loadedToolCount: number;
-  }[];
-}
-
-/**
- * What the whole thread has spent, summed over its finished turns.
- *
- * Summed on the DAEMON rather than in the renderer, though the renderer holds
- * the same items: a chat's history is paged behind an `afterSeq` cursor, so a
- * client that has only scrolled back through part of it would total part of
- * it — and silently, since a smaller number looks exactly like a cheaper
- * conversation.
- */
-export interface ChatTotalsWire {
-  /** Turns that reported usage — the denominator of every figure here. */
-  turns: number;
-  costUsd: number | null;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  cacheReadTokens: number | null;
-  cacheCreationTokens: number | null;
-  thinkingTokens: number | null;
-  /** The CLI's own working time across those turns, where it reported one. */
-  workedMs: number | null;
-}
+export const ChatMetricsWireSchema = z.object({
+  context: ContextBreakdownWireSchema.nullable(),
+  breakdownReason: z
+    .string()
+    .nullable()
+    .describe(
+      'why there is no breakdown — a CLI without the channel, or a chat with no running agent to ask',
+    ),
+  totals: ChatTotalsWireSchema,
+});
+// No `.meta({ id })` on this one: it is a RESPONSE DTO ROOT, and nestjs-zod
+// would then register the component under the id while the route still points
+// at the DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
+// The nested shapes above carry ids precisely because they are not roots.
+export type ChatMetricsWire = z.infer<typeof ChatMetricsWireSchema>;
 
 /**
  * One image attached to a user message. Only the METADATA lives in the item

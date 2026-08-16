@@ -27,6 +27,7 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
+import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -190,13 +191,19 @@ class FakeNodeStateDao {
   async getByRunNode(): Promise<NodeState | null> {
     return this.state;
   }
+  /**
+   * The full call, for the assertions that care WHERE the id landed rather
+   * than only that one did — `saved` above keeps its bare-id shape so the
+   * turn-lifecycle tests read as they did.
+   */
+  readonly savedFor: { runId: string; nodeId: string; sessionId: string }[] =
+    [];
   async saveSessionId(
     runId: string,
     nodeId: string,
     sessionId: string,
   ): Promise<void> {
-    void runId;
-    void nodeId;
+    this.savedFor.push({ runId, nodeId, sessionId });
     this.saved.push(sessionId);
     this.state = { agentSessionId: sessionId } as unknown as NodeState;
   }
@@ -400,6 +407,13 @@ function setup(
     mcpSettingsFile?: string;
     /** What the sidebar's auto-filing rule answers for a new chat's cwd. */
     autoGroupId?: string | null;
+    /**
+     * Overrides for the CLI-sessions double, for the tests that DO create a
+     * chat from a conversation the CLI already holds.
+     */
+    cliSessions?: Partial<
+      Pick<CliSessionsService, 'prepare' | 'importHistory'>
+    >;
   } = {},
 ) {
   const runDao = new FakeRunDao();
@@ -515,12 +529,19 @@ function setup(
     efforts,
     seqs,
     groups,
-    // A double: nothing in this spec creates a chat FROM an existing CLI
-    // session, and the real service would reach the adapters to do it.
-    // `cli-sessions.service.spec.ts` owns that path.
+    // A double, because the real service would reach the adapters — but a
+    // CONFIGURABLE one: what the adapters answer belongs to
+    // `cli-sessions.service.spec.ts`, while what `createChat` does with the
+    // answer is this spec's, and nothing else drives `createChat` at all.
+    //
+    // `notice: null` and not `''`: the contract is `string | null`, and the
+    // service gates the system row on `notice !== null`, so an empty string is
+    // TRUTHY there — a double returning one can never reach the no-notice
+    // branch, and would have written a blank system row into every import.
     {
       prepare: async () => undefined,
-      importHistory: async () => ({ events: [], notice: '' }),
+      importHistory: async () => ({ events: [], notice: null }),
+      ...opts.cliSessions,
     } as unknown as CliSessionsService,
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
@@ -568,6 +589,151 @@ describe('ChatService', () => {
     expect(run.agentKind).toBe('claude');
     expect(run.status).toBe('pending');
     expect(run.cwd).toBe(realpathSync(dir));
+  });
+
+  describe('createChat taking over a conversation the CLI already holds', () => {
+    /** The three ordering invariants the adoption path states about itself. */
+    it('leaves NO run behind when the CLI refuses the session', async () => {
+      // The whole reason `prepare` runs before `runDao.create`. A CLI can
+      // refuse — the session was deleted, or it lives under another profile —
+      // and the user must get that sentence rather than a chat whose first
+      // message dies on a session nobody can find. Move `prepare` below the
+      // create and this is the only assertion that notices.
+      const { service, runDao } = setup({
+        cliSessions: {
+          prepare: async () => {
+            throw new Error('no such session');
+          },
+        },
+      });
+
+      await expect(
+        service.createChat({
+          agentKind: 'claude',
+          cwd: dir,
+          resumeSessionId: 'sess-1',
+        }),
+      ).rejects.toThrow('no such session');
+      expect([...runDao.runs.values()]).toEqual([]);
+    });
+
+    it('writes the notice FIRST, then the conversation, in one ascending run of seqs', async () => {
+      const { service, itemDao } = setup({
+        cliSessions: {
+          importHistory: async () => ({
+            events: [
+              { type: 'user_message', text: 'what is 2+2?' },
+              { type: 'text', text: '4' },
+            ],
+            notice: 'Older messages were left out.',
+          }),
+        },
+      });
+
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        resumeSessionId: 'sess-1',
+      });
+
+      const items = itemDao.items.filter((item) => item.runId === run.id);
+      expect(
+        items.map((item) => [item.kind, item.role, JSON.parse(item.payload)]),
+      ).toEqual([
+        [
+          'system',
+          null,
+          { message: 'Older messages were left out.', severity: 'info' },
+        ],
+        ['message', 'user', { text: 'what is 2+2?' }],
+        ['message', 'assistant', { text: '4' }],
+      ]);
+      // The notice is at the transcript's HEAD, and the imported turns follow
+      // it in the order they were said — an allocator handing out seqs in a
+      // different order would put the explanation in the middle of the
+      // conversation it is explaining.
+      expect(items.map((item) => item.seq)).toEqual([0, 1, 2]);
+    });
+
+    it('writes no system row at all when there is nothing to report', async () => {
+      // The happy path's own rule: the transcript is its own evidence that the
+      // import worked, so only what the transcript cannot show earns a line.
+      const { service, itemDao } = setup({
+        cliSessions: {
+          importHistory: async () => ({
+            events: [{ type: 'text', text: 'carried over' }],
+            notice: null,
+          }),
+        },
+      });
+
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        resumeSessionId: 'sess-1',
+      });
+
+      const items = itemDao.items.filter((item) => item.runId === run.id);
+      expect(items.map((item) => item.kind)).toEqual(['message']);
+    });
+
+    it('skips an event that maps to no row rather than writing a blank one', async () => {
+      // `mapEventToItem` answers null for the ephemeral live plane, which a
+      // history read has no business carrying — but the loop's `continue` is
+      // reachable and unpinned otherwise, and dropping it writes rows with no
+      // kind into an imported transcript.
+      const { service, itemDao } = setup({
+        cliSessions: {
+          importHistory: async () => ({
+            events: [
+              { type: 'text_delta', text: 'par' },
+              { type: 'text', text: 'the only row' },
+            ],
+            notice: null,
+          }),
+        },
+      });
+
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        resumeSessionId: 'sess-1',
+      });
+
+      const items = itemDao.items.filter((item) => item.runId === run.id);
+      expect(items.map((item) => JSON.parse(item.payload))).toEqual([
+        { text: 'the only row' },
+      ]);
+      // Seqs are allocated per PERSISTED row, so the skipped event leaves no
+      // hole for a later `afterSeq` cursor to stall on.
+      expect(items.map((item) => item.seq)).toEqual([0]);
+    });
+
+    it('records the session id where the next turn already looks for one', async () => {
+      // The import is not a second kind of thread: the id goes on `node_state`,
+      // the same row a live turn writes and reads, so nothing about resuming
+      // has to know this chat began as an import.
+      const { service, nodeDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        resumeSessionId: 'sess-1',
+      });
+
+      expect(nodeDao.savedFor).toEqual([
+        { runId: run.id, nodeId: SINGLE_AGENT_NODE, sessionId: 'sess-1' },
+      ]);
+    });
+
+    it('touches none of it for an ordinary new chat', async () => {
+      const prepare = vi.fn(async () => undefined);
+      const { service, itemDao } = setup({ cliSessions: { prepare } });
+
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      expect(prepare).not.toHaveBeenCalled();
+      expect(itemDao.items.filter((item) => item.runId === run.id)).toEqual([]);
+    });
   });
 
   it('files a new chat into the group whose folder claims it', async () => {

@@ -1065,8 +1065,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // reply maps to no event, and an ask's reader recognises only its own
       // request id — so this stays additive to the turn's event stream rather
       // than a fork in it.
-      for (const offer of [...pendingAsks]) {
-        offer(obj);
+      //
+      // The copy is what makes it safe to remove an entry from inside `offer`,
+      // which each one does whichever way it ends. Skipped while the set is
+      // empty, which is every moment no readout is open.
+      if (pendingAsks.size > 0) {
+        for (const offer of [...pendingAsks]) {
+          offer(obj);
+        }
       }
       for (const event of opts.mapper(obj)) {
         emit(event);

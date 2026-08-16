@@ -1,10 +1,14 @@
 import { existsSync } from 'node:fs';
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, rename, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
 import { resolveAgentBinary } from '../../utils/agent-binary';
+import {
+  isPlainSessionId,
+  SESSION_ID_INVALID_MESSAGE,
+} from '../../utils/session-id';
 import type { AcpToolCall } from '../acp/acp.types';
 import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
 import {
@@ -1165,25 +1169,64 @@ export class CursorAcpAdapter extends AgentAdapter {
    * Throws when the source is not there, because the alternative is a thread
    * whose first turn fails on a session the CLI cannot find — a failure the user
    * would meet one message later with nothing connecting it to the import.
+   *
+   * The copy is STAGED beside the store and renamed into place, mirroring
+   * `utils/atomic-file.ts` one level up at directory granularity. A `cp` that
+   * dies partway — ENOSPC, EACCES, the daemon SIGKILLed — otherwise leaves a
+   * populated directory at the destination, and the `existsSync` guard above
+   * then short-circuits onto it for good: every later import of that id returns
+   * at once, `session/load` replays a truncated store, and that conversation's
+   * history is permanently lost with only a notice to show for it. Staging is
+   * what makes the destination appear whole or not at all.
    */
   override async prepareSessionImport(
     input: AgentSessionImportInput,
   ): Promise<void> {
+    // BEFORE any join. The id reaches three paths here — the source read from
+    // the user's own profile, the destination, and a staging directory the
+    // `finally` below removes recursively — so a separator in it walks all
+    // three out of the directories they name. Refused here as well as at the
+    // service seam because this method is reachable without that service.
+    if (!isPlainSessionId(input.sessionId)) {
+      throw new Error(SESSION_ID_INVALID_MESSAGE);
+    }
+    const store = this.sessionStoreDir();
     const from = join(
       this.userSessionStoreDir(input.configDir),
       input.sessionId,
     );
-    const to = join(this.sessionStoreDir(), input.sessionId);
+    const to = join(store, input.sessionId);
     if (existsSync(to)) {
       return;
     }
     if (!existsSync(from)) {
       throw new Error(CURSOR_SESSION_MISSING_MESSAGE);
     }
-    await mkdir(this.sessionStoreDir(), { recursive: true });
-    // `force: false` so a directory that appeared between the check and here is
-    // an error rather than a silent overwrite of a live conversation.
-    await cp(from, to, { recursive: true, force: false });
+    await mkdir(store, { recursive: true });
+    // Beside the destination, because a rename is only atomic within one
+    // filesystem — and under a name no concurrent import could pick.
+    const staging = join(
+      store,
+      `.${input.sessionId}.${process.pid}.${process.hrtime.bigint()}.tmp`,
+    );
+    try {
+      // Belt-and-braces on a path that cannot pre-exist: the `pid`+`hrtime`
+      // suffix already makes `staging` unique. The flags are kept as the honest
+      // spelling of "never merge into an existing directory" — `force: false`
+      // alone does not give that, since probed on node v24 it merges per entry
+      // with the default `errorOnExist: false`, neither raising nor
+      // overwriting. That probe is what the destination guard below rests on.
+      await cp(from, staging, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      });
+      // A directory that appeared between the guard above and here makes this
+      // fail with ENOTEMPTY rather than replacing a live conversation.
+      await rename(staging, to);
+    } finally {
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   /**

@@ -92,6 +92,33 @@ describe('CliSessionsService.list', () => {
     });
     const listing = await service.list(AgentKind.Claude, null, null);
     expect(listing.partialReason).toMatch(/most recent sessions/);
+    // The overflow row is asked for so the two cases can be told apart, and
+    // dropped before the answer goes out — the cap is still the cap.
+    expect(listing.sessions).toHaveLength(400);
+  });
+
+  it('says nothing about a profile holding EXACTLY the cap', async () => {
+    // The off-by-one. Asking for exactly the cap makes a full page and an
+    // overflowing one identical, so a user looking at every session they have
+    // was told the list had been cut. The extra row asked for above is what
+    // separates them, and it must not leak into the answer either.
+    const { service } = setup({
+      listSessions: () =>
+        Promise.resolve({
+          sessions: Array.from({ length: 400 }, (_unused, index) => ({
+            id: `s${index}`,
+            cwd: '/w',
+            title: null,
+            updatedAt: null,
+          })),
+          unavailableReason: null,
+        }),
+    });
+
+    const listing = await service.list(AgentKind.Claude, null, null);
+
+    expect(listing.sessions).toHaveLength(400);
+    expect(listing.partialReason).toBeNull();
   });
 
   it('claims nothing about a list that fitted', async () => {

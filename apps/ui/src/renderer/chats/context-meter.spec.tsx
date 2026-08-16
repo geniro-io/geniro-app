@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
+import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -55,10 +56,36 @@ function ring(): SVGElement | null {
 }
 
 function openMeter(): void {
-  const trigger = container.querySelector<HTMLButtonElement>(
-    'button[aria-expanded]',
-  );
-  act(() => trigger?.click());
+  act(() => meterTrigger()?.click());
+}
+
+function meterTrigger(): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>('button[aria-expanded]');
+}
+
+/** The opened readout, or null while it is closed. */
+function panel(): HTMLElement | null {
+  return container.querySelector<HTMLElement>('[role="dialog"]');
+}
+
+/**
+ * A pointer arriving at / leaving an element.
+ *
+ * `mouseover` / `mouseout` rather than `mouseenter` / `mouseleave`: React
+ * derives the enter/leave pair from the bubbling ones, so these are what a
+ * real pointer actually dispatches — and dispatching the non-bubbling pair
+ * directly reaches no React handler at all.
+ */
+function hoverIn(el: Element | null): void {
+  act(() => {
+    el?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  });
+}
+
+function hoverOut(el: Element | null): void {
+  act(() => {
+    el?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  });
 }
 
 describe('ContextMeter', () => {
@@ -352,20 +379,222 @@ describe('the expanded readout the meter opens onto', () => {
     return () => new Promise(() => {});
   }
 
-  function renderWithLoader(
+  function tree(
     load: ChatMetricsLoader,
-    runId: string | null = 'run-1',
-  ): void {
-    render(
+    runId: string | null,
+  ): React.ReactNode {
+    return (
       <ChatMetricsLoaderContext.Provider value={load}>
         <ContextMeter
           contextTokens={62_444}
           contextWindowTokens={1_000_000}
           runId={runId}
         />
-      </ChatMetricsLoaderContext.Provider>,
+      </ChatMetricsLoaderContext.Provider>
     );
   }
+
+  function renderWithLoader(
+    load: ChatMetricsLoader,
+    runId: string | null = 'run-1',
+  ): void {
+    render(tree(load, runId));
+  }
+
+  it('asks nothing for a pointer that merely CROSSED the ring', async () => {
+    // Opening fetches, and for claude that fetch is a control write onto the
+    // live agent's stdin measured at 1.2–3.3s. The ring is 14px in the composer
+    // row, so a pointer on its way to Send crosses it constantly — without the
+    // rest delay every crossing put that question to the user's agent, and the
+    // CLI serialises them, so five sweeps cost five compounding round trips.
+    vi.useFakeTimers();
+    try {
+      const load = vi.fn().mockResolvedValue(METRICS);
+      renderWithLoader(load);
+
+      // Across and away again, faster than the delay.
+      hoverIn(meterTrigger());
+      act(() => vi.advanceTimersByTime(120));
+      hoverOut(meterTrigger());
+      act(() => vi.advanceTimersByTime(5_000));
+      expect(load).not.toHaveBeenCalled();
+
+      // Resting on it IS the ask — the delay defers the fetch, never cancels it.
+      hoverIn(meterTrigger());
+      act(() => vi.advanceTimersByTime(300));
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays open while the pointer travels from the ring onto the panel', () => {
+    // The reported defect. `Popover` anchors the panel 6px clear of the trigger,
+    // so the journey from the ring to the thing the ring opened leaves BOTH of
+    // them for a moment — and the panel it opens onto is a `max-h-[26rem]`
+    // scrolling surface with a dozen rows in it. Closing on that moment left the
+    // breakdown readable only by clicking, which nothing on screen advertises.
+    vi.useFakeTimers();
+    try {
+      renderWithLoader(() => Promise.resolve(METRICS));
+      hoverIn(meterTrigger());
+      act(() => vi.advanceTimersByTime(300));
+      expect(panel()).not.toBeNull();
+
+      // Off the ring, across the gap, onto the panel. The panel is a DOM child
+      // of the meter's own span, so the span sees this arrival — the button the
+      // handlers used to hang off never could, the two being siblings.
+      hoverOut(meterTrigger());
+      hoverIn(panel());
+      act(() => vi.advanceTimersByTime(5_000));
+
+      expect(panel()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still closes once the pointer leaves for good', () => {
+    // The counterweight to the grace above: without this, a panel that never
+    // closed at all would satisfy it.
+    vi.useFakeTimers();
+    try {
+      renderWithLoader(() => Promise.resolve(METRICS));
+      hoverIn(meterTrigger());
+      act(() => vi.advanceTimersByTime(300));
+      expect(panel()).not.toBeNull();
+
+      hoverOut(meterTrigger());
+      act(() => vi.advanceTimersByTime(5_000));
+
+      expect(panel()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reopen a panel dismissed while a hover was still pending', () => {
+    // The branch the press-path cancel exists for. A press that BEATS the rest
+    // delay leaves the open timer armed, so without the cancel it fires after
+    // the second press and puts back the panel the user had just dismissed.
+    vi.useFakeTimers();
+    try {
+      renderWithLoader(() => Promise.resolve(METRICS));
+      hoverIn(meterTrigger());
+      // Quicker than the rest delay: the open timer is still pending.
+      act(() => vi.advanceTimersByTime(100));
+
+      act(() => meterTrigger()?.click());
+      expect(panel()).not.toBeNull();
+      act(() => meterTrigger()?.click());
+      expect(panel()).toBeNull();
+
+      act(() => vi.advanceTimersByTime(5_000));
+      expect(panel()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves no timer behind when the meter unmounts mid-hover', () => {
+    // The unmount cleanup, which nothing else can observe: React no longer warns
+    // about a state write on an unmounted tree, and the fetch is gated on the
+    // effect that just tore down — so a leaked timer is invisible in the DOM and
+    // in the loader alike. The pending-timer count is what it actually changes.
+    vi.useFakeTimers();
+    try {
+      renderWithLoader(() => Promise.resolve(METRICS));
+      hoverIn(meterTrigger());
+      const armed = vi.getTimerCount();
+      expect(armed).toBeGreaterThan(0);
+
+      act(() => root.render(null));
+
+      expect(vi.getTimerCount()).toBeLessThan(armed);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never shows one chat’s breakdown under another chat’s name', async () => {
+    // The meter is NOT unmounted across a chat switch — the composer keeps one
+    // and `activateRun` only swaps the run beneath it — so a reading survives
+    // into a conversation it does not describe unless it is discarded on
+    // purpose. Both halves of the defect are here: the stale breakdown itself,
+    // and the summary it suppresses, which belongs to the chat now on screen.
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(METRICS)
+      // The second chat's reading never lands, which is the whole window the
+      // defect was visible in — and indefinitely so on a failed fetch.
+      .mockReturnValueOnce(new Promise(() => {}));
+    renderWithLoader(load, 'run-1');
+    openMeter();
+    await act(async () => {});
+    expect(container.textContent).toContain('System prompt');
+
+    // Same meter, still open, different chat.
+    renderWithLoader(load, 'run-2');
+    await act(async () => {});
+
+    expect(container.textContent).not.toContain('System prompt');
+    expect(container.textContent).not.toContain('claude-opus-5[1m]');
+    expect(container.textContent).toContain('62.4k / 1M');
+  });
+
+  it('does not paint the old chat’s breakdown for even ONE frame', async () => {
+    // The other half of the runId fix, and the half the sibling test above
+    // cannot reach. The effect-side clear runs AFTER the commit, so the first
+    // frame of the new chat is painted from whatever state survived the switch;
+    // only the render-time guard covers it.
+    //
+    // `act()` is what hid this: it flushes passive effects with the render, so
+    // every assertion inside it reads a state the effect has already corrected.
+    // `flushSync` commits without flushing them, which is the frame a user
+    // actually sees. (I had recorded this branch as unobservable in jsdom. It
+    // is not — that was a limit of the harness I reached for, not of jsdom.)
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(METRICS)
+      .mockReturnValueOnce(new Promise(() => {}));
+    renderWithLoader(load, 'run-1');
+    openMeter();
+    await act(async () => {});
+    expect(container.textContent).toContain('System prompt');
+
+    flushSync(() => {
+      root.render(tree(load, 'run-2'));
+    });
+
+    expect(container.textContent).not.toContain('System prompt');
+    expect(container.textContent).not.toContain('claude-opus-5[1m]');
+
+    // Let the deferred effect land, so the shared afterEach unmounts a settled
+    // tree rather than one mid-commit.
+    await act(async () => {});
+  });
+
+  it('keeps the reading on screen while the SAME chat is re-read', async () => {
+    // The counterweight: discarding on every fetch would blank the panel the
+    // user is mid-sentence about, which is why the re-fetch was written to cost
+    // no blank panel in the first place.
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(METRICS)
+      .mockReturnValueOnce(new Promise(() => {}));
+    renderWithLoader(load, 'run-1');
+    openMeter();
+    await act(async () => {});
+    expect(container.textContent).toContain('System prompt');
+
+    // Closed and reopened on the same chat — a second fetch, same run.
+    openMeter();
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('System prompt');
+    expect(container.textContent).toContain('Reading the agent');
+  });
 
   it('asks for the breakdown only once the readout is OPENED', async () => {
     // It is a multi-second round trip to the user's own running agent. Fetching
@@ -452,7 +681,7 @@ describe('the expanded readout the meter opens onto', () => {
     expect(container.textContent).toContain('$0.42');
   });
 
-  it('surfaces a failed fetch instead of an empty panel', async () => {
+  it('surfaces a failed fetch instead of an empty panel, and ANNOUNCES it', async () => {
     renderWithLoader(() =>
       Promise.reject(new Error('daemon GET failed (500)')),
     );
@@ -460,6 +689,12 @@ describe('the expanded readout the meter opens onto', () => {
     await act(async () => {});
 
     expect(container.textContent).toContain('daemon GET failed (500)');
+    // The failure lands on a panel that is already open, so it reaches a screen
+    // reader only through a live region — and the sole role above it is the
+    // popover's `dialog`, which is not one. A red line the sighted user can see
+    // and nobody else is told about is the defect this pins.
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('daemon GET failed (500)');
   });
 
   it('says it is reading while the agent has not answered yet', () => {

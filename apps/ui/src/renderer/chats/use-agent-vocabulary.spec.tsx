@@ -179,6 +179,59 @@ describe('useAgentVocabulary', () => {
     ).toEqual([]);
   });
 
+  it('shows a RETRY after a failed probe as in flight, not as an empty CLI', async () => {
+    // A failed probe is deliberately not cached, so re-selecting that CLI asks
+    // again. But the failure left `{ items: [], loading: false }` behind, which
+    // is byte-for-byte what a CLI with no models of its own answers — so the
+    // second attempt rendered as a settled absence and the chip stayed hidden
+    // for the several seconds a cursor probe takes, then appeared out of
+    // nowhere. A recovering probe has to read as recovering.
+    const retry = deferred<string[]>();
+    let cursorCalls = 0;
+    const fetchFor = (kind: CliKind): Promise<string[]> => {
+      if (kind !== 'cursor-agent') {
+        return Promise.resolve(['opus']);
+      }
+      cursorCalls += 1;
+      return cursorCalls === 1
+        ? Promise.reject(new Error('probe failed'))
+        : retry.promise;
+    };
+
+    // Claude first, so it is CACHED. That is what makes the round trip back to
+    // cursor reach the stale failure: a cached kind's effect returns before it
+    // fetches, so nothing overwrites the failed answer on the way past. Start on
+    // cursor instead and claude's own reply clears it in passing, which is why
+    // the defect survived a spec that switched between two uncached CLIs.
+    const probe = mount('claude', fetchFor);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    probe.setKind('cursor-agent');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(probe.latest()).toEqual({ items: [], loading: false });
+
+    probe.setKind('claude');
+    probe.setKind('cursor-agent');
+
+    expect(probe.latest()).toEqual({ items: [], loading: true });
+    // Asked again, exactly once — the failure was never cached, and the retry
+    // is not a duplicate of it.
+    expect(cursorCalls).toBe(2);
+
+    await act(async () => {
+      retry.resolve(['composer-2.5']);
+      await retry.promise;
+    });
+    expect(probe.latest()).toEqual({
+      items: ['composer-2.5'],
+      loading: false,
+    });
+  });
+
   it('clears the list when the kind goes away entirely', async () => {
     const probe = mount('claude', (): Promise<string[]> =>
       Promise.resolve(['opus']),

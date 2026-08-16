@@ -1,5 +1,16 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
-import { lstatSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +22,12 @@ import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
-import { CURSOR_SILENTLY_DECLINED_METHODS } from './cursor-acp.const';
+import {
+  CURSOR_ACP_SESSIONS_DIR_NAME,
+  CURSOR_HOME_DIR_NAME,
+  CURSOR_SESSION_MISSING_MESSAGE,
+  CURSOR_SILENTLY_DECLINED_METHODS,
+} from './cursor-acp.const';
 
 /** The frames the adapter wrote to the child's stdin, parsed. */
 function framesOn(child: FakeChild): Record<string, unknown>[] {
@@ -1443,6 +1459,149 @@ describe('CursorAcpAdapter misuse', () => {
       // does. Naming `linear` alone is the one answer that denies a server
       // the CLI printed.
       expect(answer).not.toEqual(['linear']);
+    });
+  });
+
+  describe('bringing a conversation across into geniro’s own store', () => {
+    /** A user profile holding one session dir, plus geniro's empty store. */
+    function stores(): { home: string; store: string; source: string } {
+      const home = mkdtempSync(join(tmpdir(), 'cursor-home-'));
+      const store = mkdtempSync(join(tmpdir(), 'cursor-store-'));
+      dirs.push(home, store);
+      const source = join(
+        home,
+        CURSOR_HOME_DIR_NAME,
+        CURSOR_ACP_SESSIONS_DIR_NAME,
+        'sess-1',
+      );
+      mkdirSync(source, { recursive: true });
+      return { home, store, source };
+    }
+
+    function importSession(home: string, store: string): Promise<void> {
+      return new CursorAcpAdapter({
+        homeDir: home,
+        sessionStoreDir: store,
+      }).prepareSessionImport({
+        sessionId: 'sess-1',
+        configDir: null,
+        cwd: home,
+      });
+    }
+
+    it('leaves NOTHING at the destination when the copy dies partway', async () => {
+      // The defect this pins. The destination is guarded by an `existsSync`
+      // early return, so a copy that failed halfway used to leave a populated
+      // directory every LATER import short-circuits onto — `session/load` then
+      // replays a truncated store and that conversation's history is gone for
+      // good, with a notice as the only trace.
+      const { home, store, source } = stores();
+      writeFileSync(join(source, 'store.db'), 'the whole conversation');
+      // A subdirectory the copy cannot read, so `cp` throws mid-walk. Which
+      // entry it reaches first does not matter — either way the copy is
+      // incomplete when it fails.
+      const locked = join(source, 'blobs');
+      mkdirSync(locked);
+      writeFileSync(join(locked, 'blob-1'), 'x');
+      chmodSync(locked, 0o000);
+
+      try {
+        await expect(importSession(home, store)).rejects.toThrow();
+
+        expect(existsSync(join(store, 'sess-1'))).toBe(false);
+        // And no staging litter either — a `.sess-1.<pid>.<n>.tmp` left behind
+        // would accumulate one directory per failed import.
+        expect(readdirSync(store)).toEqual([]);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+
+      // Now that the source can be read, the SAME id imports whole — which the
+      // early return would have refused had the partial copy survived.
+      await importSession(home, store);
+      expect(readFileSync(join(store, 'sess-1', 'store.db'), 'utf8')).toBe(
+        'the whole conversation',
+      );
+      expect(existsSync(join(store, 'sess-1', 'blobs', 'blob-1'))).toBe(true);
+    });
+
+    it('leaves a session already in the store alone', async () => {
+      // The same id can be imported twice, and the second must not put a stale
+      // copy over the turns this app has since added to it.
+      const { home, store, source } = stores();
+      writeFileSync(join(source, 'store.db'), 'as it was in the user profile');
+      const destination = join(store, 'sess-1');
+      mkdirSync(destination, { recursive: true });
+      writeFileSync(join(destination, 'store.db'), 'with geniro’s turns in it');
+
+      await importSession(home, store);
+
+      expect(readFileSync(join(destination, 'store.db'), 'utf8')).toBe(
+        'with geniro’s turns in it',
+      );
+    });
+
+    it('refuses a session the user profile does not hold', async () => {
+      const { home, store } = stores();
+      rmSync(join(home, CURSOR_HOME_DIR_NAME, CURSOR_ACP_SESSIONS_DIR_NAME), {
+        recursive: true,
+        force: true,
+      });
+
+      await expect(importSession(home, store)).rejects.toThrow(
+        CURSOR_SESSION_MISSING_MESSAGE,
+      );
+      expect(existsSync(join(store, 'sess-1'))).toBe(false);
+    });
+
+    it('keeps a session id carrying a separator inside the store it names', async () => {
+      // The id is JOINED into two paths here, and it arrives over HTTP:
+      // `POST /v1/chats` validates `resumeSessionId` as `z.string().min(1)`
+      // and nothing else. The claude half of this same feature refuses a
+      // separator outright — `findSessionFile` compares the assembled name
+      // against its own `basename` — so an id that reaches a path is a case
+      // this feature has already decided about once.
+      //
+      // A `..` walks BOTH ends of the copy out of the directories they name:
+      // the source out of the CLI's `acp-sessions`, and the destination out of
+      // geniro's session store, into whatever sits beside it.
+      const home = mkdtempSync(join(tmpdir(), 'cursor-home-'));
+      const beside = mkdtempSync(join(tmpdir(), 'cursor-beside-'));
+      dirs.push(home, beside);
+      const store = join(beside, 'cursor-sessions');
+      // Something of the user's under `~/.cursor` that is NOT one of the CLI's
+      // ACP conversations, and so is not this app's to move anywhere.
+      const stray = join(home, CURSOR_HOME_DIR_NAME, 'not-a-session');
+      mkdirSync(stray, { recursive: true });
+      writeFileSync(join(stray, 'private'), 'never asked to be copied');
+
+      await new CursorAcpAdapter({ homeDir: home, sessionStoreDir: store })
+        .prepareSessionImport({
+          sessionId: '../not-a-session',
+          configDir: null,
+          cwd: home,
+        })
+        // Refusing and doing nothing are both correct answers; landing the
+        // copy outside the store is the one that is not.
+        .catch(() => undefined);
+
+      expect(existsSync(join(beside, 'not-a-session', 'private'))).toBe(false);
+      expect(existsSync(join(beside, 'not-a-session'))).toBe(false);
+
+      // And the ordinary id still imports, so the guard above is a guard and
+      // not the method having stopped working.
+      const source = join(
+        home,
+        CURSOR_HOME_DIR_NAME,
+        CURSOR_ACP_SESSIONS_DIR_NAME,
+        'sess-1',
+      );
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, 'store.db'), 'the whole conversation');
+      await importSession(home, store);
+      expect(readFileSync(join(store, 'sess-1', 'store.db'), 'utf8')).toBe(
+        'the whole conversation',
+      );
     });
   });
 });

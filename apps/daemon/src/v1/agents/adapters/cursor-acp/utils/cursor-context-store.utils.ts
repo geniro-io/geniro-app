@@ -151,13 +151,34 @@ export function parseCursorContextBlob(
   return null;
 }
 
+/**
+ * How deep the walk goes before it stops looking.
+ *
+ * The real root blob nests three levels; the ceiling is generous enough that a
+ * vendor moving the block cannot fall foul of it, and low enough that a blob
+ * this parser did not write cannot drive the walk into the stack. Which matters
+ * because the bytes are FOREIGN: a length-delimited field is only "a nested
+ * message" by guess — any run of bytes can look like one — so a corrupt or
+ * hostile blob can present arbitrarily deep nesting, and the walk is
+ * synchronous on a request path.
+ *
+ * A RangeError would be CAUGHT: `readCursorContextUsage` wraps this whole call
+ * and answers null. So the cap is not the difference between a crash and a
+ * degrade — it bounds the work spent reaching that degrade, on a path the panel
+ * opens on demand.
+ */
+const MAX_BLOB_DEPTH = 12;
+
 /** Every length-delimited payload in the tree, outermost first. */
-function* walkMessages(bytes: Uint8Array): Generator<ProtoField[]> {
+function* walkMessages(bytes: Uint8Array, depth = 0): Generator<ProtoField[]> {
   const fields = readProtoFields(bytes);
   yield fields;
+  if (depth >= MAX_BLOB_DEPTH) {
+    return;
+  }
   for (const field of fields) {
     if (field.value instanceof Uint8Array && field.value.length > 4) {
-      yield* walkMessages(field.value);
+      yield* walkMessages(field.value, depth + 1);
     }
   }
 }

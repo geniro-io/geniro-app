@@ -26,13 +26,22 @@ const PATH_SEGMENTS = 3;
  * identifies it: `/var/folders/rr/dcr7_c0x1037…` names nothing at all. The head
  * is what the rows share, so the head is what gives way; the full path stays on
  * the row's tooltip.
+ *
+ * `segments` is how much tail a caller needs to tell its rows apart, and the
+ * only thing that ever differed between this and the copy the context panel
+ * used to keep: a 22rem panel listing memory files wants two, since three
+ * CLAUDE.md rows are told apart by their parent directory alone. Everything
+ * else about eliding a path — that the head gives way, and that it says so with
+ * a leading `…` rather than silently — is one rule, and a second copy of it was
+ * one chance to write that rule differently. It was: the copy dropped the
+ * marker, so a shortened path was indistinguishable from a genuinely short one.
  */
-export function shortenPath(path: string): string {
+export function shortenPath(path: string, segments = PATH_SEGMENTS): string {
   const parts = path.split('/').filter(Boolean);
-  if (parts.length <= PATH_SEGMENTS) {
+  if (parts.length <= segments) {
     return path;
   }
-  return `…/${parts.slice(-PATH_SEGMENTS).join('/')}`;
+  return `…/${parts.slice(-segments).join('/')}`;
 }
 
 /**

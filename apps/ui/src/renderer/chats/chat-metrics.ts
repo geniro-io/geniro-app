@@ -54,16 +54,3 @@ export function contextCategoryColor(index: number): string {
     'bg-muted'
   );
 }
-
-/**
- * The last path segment, for a memory file whose full path is far too long for
- * a 22rem panel.
- *
- * Basename alone would render three `CLAUDE.md` rows with nothing to tell them
- * apart — which is the ordinary case, since a project's own file, the user's
- * and a rules directory's all share the name — so the PARENT comes with it.
- */
-export function shortenPath(path: string): string {
-  const parts = path.split('/').filter((part) => part.length > 0);
-  return parts.slice(-2).join('/') || path;
-}

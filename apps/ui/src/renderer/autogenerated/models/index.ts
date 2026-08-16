@@ -1484,7 +1484,7 @@ export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
  */
 export interface LocalImageDto {
     /**
-     * 
+     * the reference exactly as the agent wrote it — the renderer’s cache key
      * @type {string}
      * @memberof LocalImageDto
      */

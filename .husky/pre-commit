@@ -1,0 +1,55 @@
+# Refuse to commit a TypeScript source git would classify as BINARY.
+#
+# git decides that on a NUL in the blob's first 8000 bytes, and it decides once,
+# at commit time. The cost lands on everyone after: no diff, no inline review
+# comments, no three-way merge — and a file ADDED in such a commit reaches the
+# range diff as zero reviewable lines, however many it has. Neither the test
+# suite nor the type checker can catch it, because ` ` and the raw byte are
+# the same code unit at runtime and the app behaves identically either way. This
+# hook is the only gate that can.
+#
+# The test is git's OWN rule, applied to the STAGED blob: take its first 8000
+# bytes and see whether deleting NULs changes the byte count. Three things about
+# that are deliberate.
+#
+# `tr` rather than `grep`: `grep` is `ugrep` on some developers' PATH, which
+# skips binary input and never sees the NUL at all — leaving the gate inert with
+# nothing to show it did nothing. `tr -d` is byte-exact and has no such mode.
+#
+# The STAGED blob rather than the pair diff: `--numstat` prints `-` when EITHER
+# side is binary, so a hook built on it refuses the very commit that repairs an
+# already-binary file. Judging the new blob alone lets a fix through and still
+# stops a regression.
+#
+# The INDEX rather than the worktree (`:0:` — the stage, spelled explicitly so a
+# path beginning `<digit>:` cannot be read as a stage number): a partially staged
+# file is committed as its index version, so that is the version to judge.
+#
+# `--diff-filter=d` is everything except deletions, so a RENAME counts too: a
+# rename plus an edit is the ordinary shape of a refactor commit here, and the
+# `ACM` filter this replaced excluded it silently.
+set -u
+
+offenders=$(
+	git diff --cached --name-only --diff-filter=d -z -- '*.ts' '*.tsx' |
+		xargs -0 -I{} sh -c '
+			path=$1
+			if ! git cat-file -e ":0:$path" 2>/dev/null; then
+				# Fail CLOSED: a path the index will not resolve is reported
+				# rather than passed, so the gate can never go quiet on one.
+				printf "  %s (could not read from the index)\n" "$path"
+				exit 0
+			fi
+			size=$(git show ":0:$path" | head -c 8000 | wc -c)
+			text=$(git show ":0:$path" | head -c 8000 | tr -d "\000" | wc -c)
+			[ "$size" -eq "$text" ] || printf "  %s\n" "$path"
+		' _ {}
+)
+
+if [ -n "$offenders" ]; then
+	printf 'Refusing to commit: git would treat these TypeScript sources as binary.\n\n%s\n' "$offenders"
+	printf 'A binary blob has no diff, no review comments and no 3-way merge.\n'
+	printf 'Write the byte as an escape (\\u0000) instead — it is the identical\n'
+	printf 'code unit at runtime.\n'
+	exit 1
+fi

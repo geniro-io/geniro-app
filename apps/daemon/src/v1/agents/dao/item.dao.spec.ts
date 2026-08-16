@@ -189,4 +189,56 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect((await dao.latestMessageTextPerRun([])).size).toBe(0);
     });
   });
+
+  describe('turnCompletePayloads', () => {
+    it('takes only the turn_complete rows, and only this run’s', async () => {
+      // The kind filter and the run scoping are the whole query, and neither
+      // ever executed against a real driver: the metrics service stubs this
+      // method wholesale. A regression yields an empty list, which `sumTurns`
+      // turns into `turns: 0` with every figure null — the shape its own doc
+      // block defines as "not measured", so a broken query is indistinguishable
+      // from a CLI that reports no usage.
+      await insert('run-a', 0, 'message', JSON.stringify({ text: 'hello' }));
+      await insert(
+        'run-a',
+        1,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 0.1 } }),
+      );
+      await insert('run-a', 2, 'tool_call', JSON.stringify({ name: 'ls' }));
+      await insert(
+        'run-a',
+        3,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 0.2 } }),
+      );
+      await insert(
+        'run-b',
+        0,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 99 } }),
+      );
+
+      const payloads = await dao.turnCompletePayloads('run-a');
+
+      expect(payloads.map((raw) => JSON.parse(raw))).toEqual([
+        { usage: { costUsd: 0.1 } },
+        { usage: { costUsd: 0.2 } },
+      ]);
+      // Deliberately NOT asserted: that the rows come back ascending by seq.
+      // `sumTurns` adds them, so it is order-independent — an assertion on the
+      // order would pin nothing and read as though it did.
+    });
+
+    it('answers an empty list for a run that has completed no turns', async () => {
+      await insert(
+        'run-a',
+        0,
+        'message',
+        JSON.stringify({ text: 'still going' }),
+      );
+
+      expect(await dao.turnCompletePayloads('run-a')).toEqual([]);
+    });
+  });
 });

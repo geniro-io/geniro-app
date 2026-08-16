@@ -104,6 +104,8 @@ pnpm commit             # conventional commit via commitizen
 ```
 Commit messages must be **conventional** (`type(scope): subject`) — the `commit-msg` husky hook runs commitlint and rejects anything else, so a plain `git commit -m "..."` message that doesn't fit the format fails at commit time. `pnpm commit` (commitizen) is the easy way to get the format right.
 
+Two husky hooks gate a commit. `commit-msg` is the one above; **`pre-commit`** refuses any staged `.ts`/`.tsx` whose blob git would classify as **binary** — a NUL in its first 8000 bytes. Such a file has no diff, no inline review comments and no three-way merge, and nothing else can catch it, because the raw byte and its `\u0000` escape are the identical code unit at runtime: tests and types pass either way. If it fires, find the control byte and write it as the escape. It reads the INDEX, so a partially staged file is judged by the version being committed.
+
 > Database: the daemon **syncs the SQLite schema additively on launch** (`orm.schema.update({ safe: true })` in `main.ts` — never destructive). There is still **no Migrator / migration files**: `db/mikro-orm.config.ts` declares no `migrations` key, and the versioned migration workflow remains deferred past v1. Do not hand-write migrations.
 
 ---

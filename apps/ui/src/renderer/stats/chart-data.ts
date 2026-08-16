@@ -46,15 +46,29 @@ export function toDayPoints(
   let running = 0;
   return days.map(({ date, totals }) => {
     running += totals.costUsd ?? 0;
+    // A day on which NOTHING RAN is a measured zero, not a hole. The daemon
+    // reports every figure as null for such a day simply because it had no
+    // events to sum, and reading that as "not measured" broke the line across
+    // every quiet weekend — drawing an idle day as an unknown one.
+    //
+    // The two are genuinely different claims and only the turn count can tell
+    // them apart: zero turns means nothing ran, so nothing was spent. A day
+    // WITH turns whose cost nobody reported is still unmeasured, still a gap,
+    // and that is the case the whole null rule exists for.
+    const idle = totals.turns === 0;
+    const measured = (value: number | null): number | null =>
+      idle ? (value ?? 0) : value;
     return {
       date,
       label: formatDayLabel(date),
       title: formatDayTitle(date),
       turns: totals.turns,
-      costUsd: totals.costUsd,
-      inputTokens: totals.inputTokens,
-      outputTokens: totals.outputTokens,
-      totalTokens: sumMeasured(totals.inputTokens, totals.outputTokens),
+      costUsd: measured(totals.costUsd),
+      inputTokens: measured(totals.inputTokens),
+      outputTokens: measured(totals.outputTokens),
+      totalTokens: idle
+        ? 0
+        : sumMeasured(totals.inputTokens, totals.outputTokens),
       cumulativeUsd: running,
     };
   });

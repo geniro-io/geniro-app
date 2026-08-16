@@ -24,13 +24,35 @@ const day = (date: string, overrides: Partial<ChatTotals> = {}) => ({
 });
 
 describe('toDayPoints', () => {
+  it('draws a day on which nothing ran as a measured zero', () => {
+    // The gap complaint. A quiet weekend broke the line, because the daemon
+    // reports every figure as null for a day it had no events to sum — which
+    // this read as "not measured" when it means "nothing ran, so nothing was
+    // spent". The turn count is the only thing that can tell the two apart.
+    const [point] = toDayPoints([
+      day('2026-08-10', {
+        turns: 0,
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+      }),
+    ]);
+
+    expect(point!.costUsd).toBe(0);
+    expect(point!.totalTokens).toBe(0);
+    expect(point!.inputTokens).toBe(0);
+  });
+
   it('carries an unreported figure through as null, never as zero', () => {
     // The one substitution this page exists not to make. It matters especially
     // HERE: Recharts draws a null as a gap and a 0 as a point sitting on the
     // axis, so coalescing on the way in would draw a day nobody measured as a
     // day that cost nothing.
     const [point] = toDayPoints([
+      // Turns HAPPENED here — they simply reported no cost, which is the
+      // cursor-agent shape and the case the gap must survive for.
       day('2026-08-10', {
+        turns: 3,
         costUsd: null,
         inputTokens: null,
         outputTokens: null,
@@ -66,7 +88,7 @@ describe('toDayPoints', () => {
     // whereas what actually happened is that this day added nothing to it.
     const points = toDayPoints([
       day('2026-08-10', { costUsd: 2 }),
-      day('2026-08-11', { costUsd: null }),
+      day('2026-08-11', { turns: 3, costUsd: null }),
       day('2026-08-12', { costUsd: 1 }),
     ]);
 

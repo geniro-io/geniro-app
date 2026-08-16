@@ -167,6 +167,29 @@ export function Stats({
               <DailySeriesChart points={points} metric={metric} />
             </ChartPanel>
 
+            <section className="grid gap-4 lg:grid-cols-3">
+              <BreakdownCard
+                title="By agent"
+                groups={data.byAgent}
+                labelOf={(key) => key ?? 'Unattributed'}
+                emptyLabel="No agent activity in this period."
+              />
+              <BreakdownCard
+                title="By model"
+                groups={data.byModel}
+                labelOf={(key) => key ?? 'CLI default'}
+                emptyLabel="No model activity in this period."
+              />
+              <BreakdownCard
+                title="By project"
+                groups={data.byProject}
+                labelOf={(key) =>
+                  key === null ? 'Unknown folder' : shortenPath(key, 2)
+                }
+                emptyLabel="No project activity in this period."
+              />
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-2">
               <ChartPanel
                 title="Cumulative spend"
@@ -233,29 +256,6 @@ export function Stats({
                     ? undefined
                     : `over ${totals.costedTurns} costed turns`
                 }
-              />
-            </section>
-
-            <section className="grid gap-4 lg:grid-cols-3">
-              <BreakdownCard
-                title="By agent"
-                groups={data.byAgent}
-                labelOf={(key) => key ?? 'Unattributed'}
-                emptyLabel="No agent activity in this period."
-              />
-              <BreakdownCard
-                title="By model"
-                groups={data.byModel}
-                labelOf={(key) => key ?? 'CLI default'}
-                emptyLabel="No model activity in this period."
-              />
-              <BreakdownCard
-                title="By project"
-                groups={data.byProject}
-                labelOf={(key) =>
-                  key === null ? 'Unknown folder' : shortenPath(key, 2)
-                }
-                emptyLabel="No project activity in this period."
               />
             </section>
           </>

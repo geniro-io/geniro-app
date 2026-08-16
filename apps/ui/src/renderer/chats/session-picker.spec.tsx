@@ -52,9 +52,6 @@ function mount(over: Partial<Parameters<typeof SessionPicker>[0]> = {}): {
       open
       agent="claude"
       onAgentChange={vi.fn()}
-      folder="/work/app"
-      folderOnly
-      onFolderOnlyChange={vi.fn()}
       configDir={null}
       listing={listing()}
       loading={false}
@@ -120,6 +117,40 @@ describe('SessionPicker', () => {
     expect(onResume).toHaveBeenCalledWith(
       expect.objectContaining({ id: 's1' }),
     );
+  });
+
+  it('tells two same-named folders apart, which a leaf name cannot', () => {
+    // With the folder-scope control gone, this line is the only thing on the
+    // row that says WHICH project — and a machine holding `~/a/work/app` and
+    // `~/b/work/app` gets two identical rows from a bare basename.
+    const { container } = mount({
+      listing: listing({
+        sessions: [
+          session({ id: 'a', cwd: '/a/work/app' }),
+          session({ id: 'b', cwd: '/b/work/app' }),
+        ],
+      }),
+    });
+    const folders = [...container.querySelectorAll('li button')].map(
+      (row) => row.querySelectorAll('span')[2]?.textContent,
+    );
+    expect(folders[0]).not.toEqual(folders[1]);
+    expect(folders[0]).toContain('/a/');
+  });
+
+  it('opens the agent menu BELOW its trigger, not over the dialog title', () => {
+    // The picker sits at the top of a dialog; `Menu`'s default side is upward,
+    // which is the composer's geometry and covered this dialog's own header.
+    const { container } = mount();
+    const trigger = container.querySelector(
+      '[data-menu-trigger]',
+    ) as HTMLButtonElement;
+    act(() => {
+      trigger.click();
+    });
+    const panel = container.querySelector('[role="listbox"]') as HTMLElement;
+    expect(panel.className).toContain('top-full');
+    expect(panel.className).not.toContain('bottom-full');
   });
 
   it("shows the CLI's own reason instead of an empty list that explains nothing", () => {

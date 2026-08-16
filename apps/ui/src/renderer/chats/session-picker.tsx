@@ -1,4 +1,4 @@
-import { Folder, History, Search } from 'lucide-react';
+import { Folder, Search } from 'lucide-react';
 import * as React from 'react';
 
 import type { CliKind } from '../../shared/contracts';
@@ -12,6 +12,7 @@ import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { shortenPath } from './directory-select';
 import { formatRelativeTime } from './relative-time';
 
 /**
@@ -22,19 +23,19 @@ import { formatRelativeTime } from './relative-time';
  * one-click new thread: this one has a question to ask (which conversation?)
  * and the other must never grow one.
  *
- * The three controls across the top are the three ways a list of hundreds
- * becomes the one row somebody is looking for — which CLI, which folder, and
- * free text. Folder scope defaults to the folder the composer is already
- * pointed at, because "carry on what I was doing here" is the common case and
- * "everything I have ever worked on" is the fallback, not the other way round.
+ * Two controls, not three. A folder-scope picker sat beside the agent one and
+ * was removed once the dialog was wide enough to show each row's whole path:
+ * scoping and searching answered the same question, and the scope was the
+ * worse half of the pair — it could only ever be the ONE folder the composer
+ * happened to point at, so continuing something from a different project meant
+ * first setting the composer to a folder the user was not going to work in.
+ * The search matches the path as well as the title, which covers the scope's
+ * whole job and every folder besides.
  */
 export function SessionPicker({
   open,
   agent,
   onAgentChange,
-  folder,
-  folderOnly,
-  onFolderOnlyChange,
   configDir,
   listing,
   loading,
@@ -46,11 +47,6 @@ export function SessionPicker({
   open: boolean;
   agent: CliKind;
   onAgentChange: (agent: CliKind) => void;
-  /** The composer's current folder, or null when none is chosen yet. */
-  folder: string | null;
-  /** Whether the listing is narrowed to {@link folder}. */
-  folderOnly: boolean;
-  onFolderOnlyChange: (folderOnly: boolean) => void;
   /** Shown so the user can see which profile the list came from. */
   configDir: string | null;
   listing: AgentSessionListingDto | null;
@@ -80,7 +76,12 @@ export function SessionPicker({
       open={open}
       onClose={onClose}
       title="Continue a session"
-      className="w-[min(44rem,calc(100vw-2rem))]">
+      // Wide enough for a row to state its path, which is what replaced the
+      // folder-scope control: a leaf name alone ("app", "src") does not
+      // identify a project among the several checkouts a machine holds.
+      // `max-w-none` is load-bearing — Dialog's own `max-w-md` caps the card at
+      // 28rem, so a width alone changed nothing on screen.
+      className="w-[min(60rem,calc(100vw-3rem))] max-w-none">
       <div className="flex min-h-0 flex-col gap-3">
         <p className="text-sm text-muted-foreground">
           Threads you already have with these CLIs on this machine. Picking one
@@ -88,50 +89,33 @@ export function SessionPicker({
         </p>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Select
-            aria-label="Agent"
-            value={agent}
-            onValueChange={(value: string) => onAgentChange(value as CliKind)}
-            groups={[
-              {
-                items: CLI_KINDS.map((kind) => ({ value: kind, label: kind })),
-              },
-            ]}
-          />
           {/*
-            Scope, not a filter over what already arrived: a narrowed listing is
-            a narrower QUESTION put to the CLI, which for cursor is a process
-            spawn — so the choice belongs here, before the fetch, rather than in
-            the search box below.
+            Opens DOWNWARD. `Menu`'s default is upward, which is right for the
+            composer's chips at the bottom of the window and wrong for a control
+            at the top of a dialog — measured on screen, the panel covered the
+            dialog's own title bar.
           */}
-          <Select
-            aria-label="Folder scope"
-            value={folderOnly ? 'folder' : 'all'}
-            onValueChange={(value: string) =>
-              onFolderOnlyChange(value === 'folder')
-            }
-            groups={[
-              {
-                items: [
-                  {
-                    value: 'folder',
-                    label:
-                      folder === null
-                        ? 'This folder'
-                        : `In ${basename(folder)}`,
-                    icon: <Folder />,
-                    // Nothing to narrow to. Refused rather than hidden, so the
-                    // control does not appear and disappear as the composer's
-                    // folder is chosen.
-                    ...(folder === null
-                      ? { disabled: true, hint: 'no folder chosen yet' }
-                      : {}),
-                  },
-                  { value: 'all', label: 'All folders', icon: <History /> },
-                ],
-              },
-            ]}
-          />
+          {/*
+            Boxed to its own width: the `default` trigger is `w-full` by design
+            (it is a form field), which in this row made it a full-width line of
+            its own and pushed the search box onto a second one.
+          */}
+          <div className="w-44 shrink-0">
+            <Select
+              aria-label="Agent"
+              side="bottom"
+              value={agent}
+              onValueChange={(value: string) => onAgentChange(value as CliKind)}
+              groups={[
+                {
+                  items: CLI_KINDS.map((kind) => ({
+                    value: kind,
+                    label: kind,
+                  })),
+                },
+              ]}
+            />
+          </div>
           <label className="relative flex min-w-[12rem] flex-1 items-center">
             <Search
               className="pointer-events-none absolute left-2 size-4 text-muted-foreground"
@@ -158,7 +142,12 @@ export function SessionPicker({
 
         {error ? <ErrorText>{error}</ErrorText> : null}
 
-        <div className="min-h-[16rem] overflow-y-auto rounded-md border border-border">
+        {/*
+          The LIST scrolls, not the dialog body around it: hundreds of rows
+          otherwise push the search field off the top of the card, so filtering
+          a long list means scrolling back up to reach the control that does it.
+        */}
+        <div className="max-h-[52vh] min-h-[16rem] overflow-y-auto rounded-md border border-border">
           {loading ? (
             <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
               <Spinner /> Asking {agent} what it has…
@@ -169,9 +158,7 @@ export function SessionPicker({
             <EmptyState className="flex-col gap-1">
               <span className="text-foreground">
                 {query === ''
-                  ? `No ${agent} sessions${
-                      folderOnly && folder !== null ? ' in this folder' : ''
-                    }`
+                  ? `No ${agent} sessions`
                   : 'Nothing matches that search'}
               </span>
               <span>
@@ -243,10 +230,15 @@ function SessionRow({
         </span>
         <span className="flex w-full items-center gap-1.5 text-xs text-muted-foreground">
           {busy ? <Spinner /> : <Folder className="size-3 shrink-0" />}
-          <span className="truncate">
+          {/*
+            The path, elided from the FRONT by the composer's own helper — with
+            no folder scope left, this line is how one project is told from
+            another, and CSS truncation would eat the only end that says which.
+          */}
+          <span className="truncate" title={session.cwd ?? undefined}>
             {session.cwd === null
               ? 'folder not recorded'
-              : basename(session.cwd)}
+              : shortenPath(session.cwd)}
           </span>
           {session.updatedAt === null ? null : (
             <>
@@ -283,10 +275,4 @@ export function filterSessions(
       `${session.title ?? ''} ${session.cwd ?? ''}`.toLowerCase();
     return terms.every((term) => haystack.includes(term));
   });
-}
-
-/** Last path segment, which is what identifies a project at a glance. */
-function basename(path: string): string {
-  const trimmed = path.replace(/\/+$/, '');
-  return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }

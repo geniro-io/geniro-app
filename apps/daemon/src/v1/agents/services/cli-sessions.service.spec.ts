@@ -74,6 +74,33 @@ describe('CliSessionsService.list', () => {
     });
   });
 
+  it('says so when the cap cut the list, rather than passing it off as all', async () => {
+    // The picker asks ONE unfiltered question and searches what came back, so a
+    // session past the cut cannot be found at all — a short list that looks
+    // complete is the whole failure mode.
+    const { service } = setup({
+      listSessions: (input) =>
+        Promise.resolve({
+          sessions: Array.from({ length: input.limit }, (_unused, index) => ({
+            id: `s${index}`,
+            cwd: '/w',
+            title: null,
+            updatedAt: null,
+          })),
+          unavailableReason: null,
+        }),
+    });
+    const listing = await service.list(AgentKind.Claude, null, null);
+    expect(listing.partialReason).toMatch(/most recent sessions/);
+  });
+
+  it('claims nothing about a list that fitted', async () => {
+    const { service } = setup();
+    await expect(
+      service.list(AgentKind.Claude, null, null),
+    ).resolves.toMatchObject({ partialReason: null });
+  });
+
   it('joins two callers onto ONE listing', async () => {
     // cursor's listing SPAWNS a process; a picker re-asking as its folder
     // filter changes must not launch one per keystroke.

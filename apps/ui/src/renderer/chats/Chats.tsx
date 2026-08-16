@@ -289,7 +289,6 @@ export function Chats({
   // anyway.
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionAgent, setSessionAgent] = useState<CliKind>('claude');
-  const [sessionFolderOnly, setSessionFolderOnly] = useState(true);
   const [sessionListing, setSessionListing] =
     useState<AgentSessionListingDto | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -1861,7 +1860,11 @@ export function Chats({
 
   /**
    * Ask the picked CLI what conversations it holds, whenever the question
-   * changes — which CLI, which folder, and which profile.
+   * changes — which CLI, and under which profile.
+   *
+   * Every folder, deliberately: the picker searches paths as well as titles, so
+   * narrowing the QUESTION to the composer's own folder would only hide the
+   * conversations the user came here to find in some other project.
    *
    * Only while the dialog is OPEN. The listing spawns a cursor process, so a
    * hook that ran on mount would launch one for a control nobody has pressed.
@@ -1876,7 +1879,6 @@ export function Chats({
     void agentsApi
       .listAgentSessions({
         agent: sessionAgent,
-        ...(sessionFolderOnly && folder ? { cwd: folder } : {}),
         // The profile THIS CLI takes, so the list and the resume agree about
         // which account they are talking about — an id listed under one
         // profile is not resumable under another.
@@ -1901,14 +1903,7 @@ export function Chats({
     return () => {
       stale = true;
     };
-  }, [
-    sessionPickerOpen,
-    sessionAgent,
-    sessionFolderOnly,
-    folder,
-    sessionConfigDir,
-    agentsApi,
-  ]);
+  }, [sessionPickerOpen, sessionAgent, sessionConfigDir, agentsApi]);
 
   /**
    * Take over one of those conversations: create a chat bound to it and open
@@ -4595,9 +4590,6 @@ export function Chats({
                   open={sessionPickerOpen}
                   agent={sessionAgent}
                   onAgentChange={setSessionAgent}
-                  folder={folder}
-                  folderOnly={sessionFolderOnly}
-                  onFolderOnlyChange={setSessionFolderOnly}
                   configDir={sessionConfigDir}
                   listing={sessionListing}
                   loading={sessionsLoading}

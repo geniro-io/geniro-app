@@ -83,6 +83,17 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         role: 'assistant',
         payload: { text: event.text },
       };
+    case 'user_message':
+      // The same row the chat service writes for a message typed into the
+      // composer, deliberately — an imported conversation must be
+      // indistinguishable from one held here, or scrolling back through a
+      // resumed thread crosses a visible seam where the app changed its mind
+      // about what a user message looks like.
+      return {
+        kind: 'message',
+        role: 'user',
+        payload: { text: event.text },
+      };
     case 'reasoning':
       return {
         kind: 'reasoning',

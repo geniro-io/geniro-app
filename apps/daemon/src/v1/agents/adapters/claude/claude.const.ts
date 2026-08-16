@@ -36,6 +36,36 @@ export const CLAUDE_PARTIAL_MESSAGES_FLAG = '--include-partial-messages';
 export const CLAUDE_MODEL_FLAG = '--model';
 export const CLAUDE_EFFORT_FLAG = '--effort';
 export const CLAUDE_RESUME_FLAG = '--resume';
+
+// ── The conversations this CLI keeps on disk ───────────────────────────────
+/**
+ * Where a profile stores them: `<configDir>/projects/<flattened cwd>/<id>.jsonl`.
+ * Named because the listing and the transcript read both walk it, and a second
+ * spelling is how one of them would come to look in the wrong place.
+ */
+export const CLAUDE_SESSIONS_DIR_NAME = 'projects';
+/**
+ * Where this CLI keeps its profile when no `CLAUDE_CONFIG_DIR` names one —
+ * `~/.claude`. The same directory `skillRoots` and the settings reader reach
+ * into; named here because the session scan needs it as a ROOT rather than as
+ * the first segment of a path to one file.
+ */
+export const CLAUDE_DEFAULT_PROFILE_DIR = '.claude';
+/** One session is one file, and the id is the file name without this. */
+export const CLAUDE_SESSION_FILE_SUFFIX = '.jsonl';
+/**
+ * How far into a session file the listing reads to find its folder and its
+ * opening prompt.
+ *
+ * A budget rather than a line count, because the first lines are not small: a
+ * session opens with hook output and system-reminder blocks, and in this
+ * profile's own files the first real user message routinely sits 20–40KB in.
+ * 256KB clears that with room to spare while keeping a 2,448-session profile to
+ * a listing measured in hundreds of milliseconds.
+ */
+export const CLAUDE_SESSION_HEAD_BUDGET_BYTES = 256 * 1024;
+/** How much of that prompt a picker row shows before it is elided. */
+export const CLAUDE_SESSION_TITLE_MAX_CHARS = 120;
 export const CLAUDE_APPEND_SYSTEM_PROMPT_FLAG = '--append-system-prompt';
 export const CLAUDE_PERMISSION_MODE_FLAG = '--permission-mode';
 export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';

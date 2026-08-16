@@ -26,6 +26,13 @@ export const ACP_AGENT_METHODS = {
   sessionSetModel: 'session/set_model',
   sessionSetConfigOption: 'session/set_config_option',
   sessionPrompt: 'session/prompt',
+  /**
+   * Enumerate the conversations the agent holds under the profile it is running
+   * as. Advertised by `agentCapabilities.sessionCapabilities.list`; an agent
+   * without it answers `-32601`, which {@link acpSessionListSettled} treats as a
+   * settled empty answer rather than as something to wait out.
+   */
+  sessionList: 'session/list',
 } as const;
 
 /** Client-side methods the agent calls on US. */

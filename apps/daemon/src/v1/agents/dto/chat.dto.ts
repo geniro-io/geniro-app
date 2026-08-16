@@ -49,6 +49,18 @@ export const createChatSchema = z.object({
    * `AdapterConfig.configDir.unavailableReason`.
    */
   configDir: z.string().min(1).optional(),
+  /**
+   * A conversation this CLI already holds (`GET /v1/agents/sessions`), taken
+   * over by the new thread instead of a fresh session being started.
+   *
+   * Opaque here: only the adapter that listed it may interpret it, so the
+   * schema checks nothing but that a value was sent. What it MEANS for `cwd`
+   * is worth stating — the folder must be the session's own, which the picker
+   * takes from the listing rather than from the composer, since resuming a
+   * conversation about one project inside another is how a resumed thread
+   * starts reasoning about the wrong tree.
+   */
+  resumeSessionId: z.string().min(1).optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 

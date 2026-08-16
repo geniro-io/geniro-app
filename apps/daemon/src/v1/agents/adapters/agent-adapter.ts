@@ -32,6 +32,10 @@ import type {
   AgentMcpServersInput,
   AgentModel,
   AgentSession,
+  AgentSessionHistory,
+  AgentSessionImportInput,
+  AgentSessionListing,
+  AgentSessionsInput,
   AgentSkillEntry,
   AgentSkillsInput,
   AgentSpawnInfo,
@@ -661,6 +665,81 @@ export abstract class AgentAdapter {
           `${this.getConfig().kind} cannot be told which MCP servers to load`,
       ),
     );
+  }
+
+  /**
+   * The conversations this CLI already holds on this machine, newest first —
+   * what the user can carry on inside geniro instead of only in a terminal.
+   *
+   * A MECHANISM, not a value: claude keeps a JSONL transcript per session under
+   * its profile and is read off disk, cursor answers the ACP `session/list`
+   * method. The default is the honest answer for a CLI with neither, and it
+   * degrades to a VISIBLE reason rather than to a confident "you have no
+   * history" — the same rule {@link listMcpServers} follows, and for the same
+   * reason: both look like an empty array from outside.
+   *
+   * Must NEVER throw or hang. This feeds a picker, so a CLI that is missing,
+   * signed out or wedged costs the user a list, not the request.
+   */
+  listSessions(
+    _input: AgentSessionsInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<AgentSessionListing> {
+    const config = this.getConfig();
+    return Promise.resolve({
+      sessions: [],
+      unavailableReason:
+        config.sessions.listingUnavailableReason ??
+        `${config.kind} cannot list the conversations it holds`,
+    });
+  }
+
+  /**
+   * Make one of those conversations resumable by geniro, or throw saying why
+   * it cannot be.
+   *
+   * Whether this does anything at all is a per-CLI fact, which is why it is a
+   * method and not a flag. claude needs nothing — its sessions are keyed by id
+   * inside the profile the run already carries, so listing and resuming read
+   * the same store. cursor needs a COPY: geniro's turns run under a throwaway
+   * profile whose `acp-sessions` is a symlink to geniro's own store, so a
+   * session sitting in the user's profile is invisible to `session/load` until
+   * it is brought across (probed 2026-08-16 both ways — not found before the
+   * copy, loads and replays its whole transcript after).
+   *
+   * Called ONCE, when the thread is created. Throwing is the way to refuse: the
+   * chat is not created, and the user is told rather than handed a thread whose
+   * first turn will fail on a session the CLI cannot find.
+   */
+  prepareSessionImport(_input: AgentSessionImportInput): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /**
+   * The conversation as this CLI recorded it, mapped to geniro's own events —
+   * or null when it keeps no record a reader can open.
+   *
+   * This is what puts the prior messages ON SCREEN. Resuming without it works
+   * (the AGENT has its context either way) but shows the user an empty thread,
+   * which is indistinguishable from an import that did nothing.
+   *
+   * Null is not the end of the road: a CLI that replays its conversation when
+   * a session is loaded gets its history through `AgentTurnInput`'s
+   * `importSessionHistory` on the first turn instead — cursor's whole import.
+   * A CLI with neither declares `sessions.historyUnavailableReason`.
+   *
+   * `limit` bounds the ROWS returned, newest kept: a real claude session here
+   * runs to 11MB, and a thread nobody can scroll is its own failure. An
+   * implementation that truncates says so through the returned
+   * {@link AgentSessionHistory.droppedBefore}.
+   *
+   * Must NEVER throw — a record that cannot be parsed costs the transcript, not
+   * the import.
+   */
+  readSessionHistory(
+    _input: AgentSessionImportInput & { limit: number },
+  ): Promise<AgentSessionHistory | null> {
+    return Promise.resolve(null);
   }
 
   /**

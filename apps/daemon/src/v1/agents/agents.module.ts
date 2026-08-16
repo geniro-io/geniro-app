@@ -28,6 +28,7 @@ import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { ChatService } from './services/chat.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
+import { CliSessionsService } from './services/cli-sessions.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { EffortsService } from './services/efforts.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
@@ -121,6 +122,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
+    CliSessionsService,
     EffortsService,
     AgentEventBus,
     ApprovalRegistry,

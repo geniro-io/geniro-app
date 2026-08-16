@@ -52,6 +52,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
+import { CliSessionsService } from './cli-sessions.service';
 import { EffortsService } from './efforts.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
@@ -173,6 +174,7 @@ export class ChatService {
     private readonly efforts: EffortsService,
     private readonly seqs: ItemSeqAllocator,
     private readonly groups: RunGroupsService,
+    private readonly cliSessions: CliSessionsService,
   ) {}
 
   /**
@@ -332,6 +334,11 @@ export class ChatService {
     approval?: ChatApprovalMode;
     effort?: string;
     configDir?: string;
+    /**
+     * A conversation this CLI already holds, taken over instead of started —
+     * the new thread resumes it, and opens on the transcript it already had.
+     */
+    resumeSessionId?: string;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
@@ -349,6 +356,19 @@ export class ChatService {
     // request spelled — a group's folder is canonical too, so a symlinked path
     // matches the rule the user actually set.
     const groupId = await this.groups.resolveAutoGroupId(cwd);
+    // BEFORE the run row exists. A CLI that has to bring the conversation
+    // across can refuse (it was deleted, it is under another profile), and a
+    // refusal must leave no half-made thread behind — the user gets the CLI's
+    // own sentence instead of a chat whose first message dies on a session
+    // nobody can find.
+    if (input.resumeSessionId !== undefined) {
+      await this.cliSessions.prepare(
+        input.agentKind,
+        input.resumeSessionId,
+        cwd,
+        configDir,
+      );
+    }
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -367,7 +387,87 @@ export class ChatService {
       },
       em,
     );
+    if (input.resumeSessionId !== undefined) {
+      await this.adoptSession(em, run.id, input, cwd, configDir);
+    }
     return this.toRunWire(run);
+  }
+
+  /**
+   * Bind a fresh run to a conversation the CLI already holds, and fill the
+   * thread with what was said in it.
+   *
+   * The session id goes on `node_state` — the same row a live turn writes and
+   * reads — so nothing about resuming has to know that this thread began as an
+   * import: the next turn finds a session id where it always looks and passes
+   * it as `resumeSessionId`.
+   *
+   * The notice is written FIRST, at the transcript's head, and its wording is
+   * the service's. Everything after it is the imported conversation, written
+   * through the same `mapEventToItem` a live turn's events pass through — so an
+   * imported message and a message this app watched arrive are the same row,
+   * which is the whole point of doing it this way rather than with a second
+   * row builder.
+   *
+   * Awaited rather than backgrounded: the POST is what the picker is waiting
+   * on, and a thread that opens empty and fills in a few seconds later is
+   * indistinguishable from one that failed. It also keeps the ordering safe —
+   * the user cannot send a message into a transcript that is still being
+   * written.
+   */
+  private async adoptSession(
+    em: EntityManager,
+    runId: string,
+    input: { agentKind: AgentKind; resumeSessionId?: string },
+    cwd: string,
+    configDir: string | null,
+  ): Promise<void> {
+    const sessionId = input.resumeSessionId;
+    if (sessionId === undefined) {
+      return;
+    }
+    await this.nodeStateDao.saveSessionId(
+      runId,
+      SINGLE_AGENT_NODE,
+      sessionId,
+      em,
+    );
+    const { events, notice } = await this.cliSessions.importHistory(
+      input.agentKind,
+      sessionId,
+      cwd,
+      configDir,
+    );
+    if (notice !== null) {
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'system',
+        null,
+        // `severity: 'info'`, which is what keeps this out of the failure
+        // chrome every other daemon-written notice earns. The rows this path
+        // writes are the import REPORTING ITSELF — history left out, a record
+        // that could not be read — not something going wrong, and dressing a
+        // successful import in red is the exact complaint `isInfoNotice` was
+        // added for.
+        { message: notice, severity: 'info' },
+      );
+    }
+    for (const event of events) {
+      const item = mapEventToItem(event);
+      if (item === null) {
+        continue;
+      }
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        item.kind,
+        item.role,
+        item.payload,
+      );
+    }
   }
 
   /**

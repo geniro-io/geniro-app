@@ -89,6 +89,13 @@ ss approved
 The chat's cwd is a throwaway (`~/.tmp` via `GENIRO_RUN_CWD`, default
 `$TMPDIR/geniro-run-cwd`), so tool calls never touch the repo.
 
+**`GENIRO_RUN_CONFIG_DIR=<path>`** points every chat at a different agent CONFIG
+directory — the profile holding that CLI's credentials, so a run can be driven
+against a second account. Reach for it when the default profile is rate-limited:
+the turn otherwise comes back as "You've hit your weekly limit" and proves
+nothing about the code under test. It seeds the stubbed settings, so the
+composer's profile chip shows it and every run created carries it.
+
 ## Gotchas
 
 - **Electron shell won't launch — by policy.** The Electron binary download is

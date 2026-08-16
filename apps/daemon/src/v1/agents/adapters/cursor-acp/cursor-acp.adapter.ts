@@ -1,4 +1,6 @@
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
+import { cp, mkdir } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
@@ -10,6 +12,14 @@ import {
   acpModelProbeSettled,
   readAcpModelProbe,
 } from '../acp/acp-models';
+import {
+  acpSessionListFrames,
+  acpSessionListSettled,
+  acpSessionLoadFrames,
+  acpSessionLoadSettled,
+  readAcpSessionList,
+  readAcpSessionReplay,
+} from '../acp/acp-sessions';
 import type {
   AdapterConfig,
   AdapterQuestion,
@@ -21,6 +31,10 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentSessionHistory,
+  AgentSessionImportInput,
+  AgentSessionListing,
+  AgentSessionsInput,
   AgentTurnInput,
   TurnDriver,
 } from '../adapter.types';
@@ -29,9 +43,10 @@ import {
   CURSOR_ACP_ARGS,
   CURSOR_ACP_CLIENT_META,
   CURSOR_ACP_CLIENT_NAME,
+  CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
-  CURSOR_EFFORT_PARAMETER_ID,
+  CURSOR_HOME_DIR_NAME,
   CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
   CURSOR_MCP_ENABLE_ARGS,
@@ -45,6 +60,9 @@ import {
   CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_PROFILE_DIR_NAME,
+  CURSOR_SESSION_LIST_TIMEOUT_MS,
+  CURSOR_SESSION_LOAD_TIMEOUT_MS,
+  CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SESSION_STORE_DB_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
   CURSOR_SILENTLY_DECLINED_METHODS,
@@ -428,6 +446,37 @@ export class CursorAcpAdapter extends AgentAdapter {
          * the user's Cursor credential to the claude agent.
          */
         inheritedEnvKeys: ['CURSOR_API_KEY'],
+      },
+      sessions: {
+        /**
+         * ACP has a first-class answer for this: `session/list`, which this
+         * agent advertises (`sessionCapabilities.list`) and answers with
+         * `{sessionId, cwd, title, updatedAt}` — including a GENERATED title,
+         * which no disk scan could produce. Probed 2026-08-16 on
+         * 2026.08.11-e8db854, with and without a `cwd` filter.
+         */
+        listingUnavailableReason: null,
+        /**
+         * The listing is complete for one store and this CLI keeps TWO. Probed
+         * the same day: `session/list` returns only what lives in
+         * `<configDir>/acp-sessions` (a fresh empty config dir answers with
+         * zero rows, so it is profile-scoped, not a global index), while the
+         * chats started by the interactive `cursor-agent` TUI live in
+         * `~/.cursor/chats/<project>/<chatId>/` — a separate namespace the same
+         * server refuses: `session/load` with one of those ids, under its own
+         * recorded cwd, answers `-32602 … Session "…" not found`.
+         *
+         * Said out loud because the alternative is a user with months of
+         * terminal history seeing four rows and concluding the import is
+         * broken. Their route to those chats is `cursor-agent --resume`, in a
+         * terminal, which is the handoff button and not this picker.
+         */
+        listingPartialReason:
+          'only sessions started over ACP are listed — the chats you started with the interactive `cursor-agent` are kept in a separate store its ACP server reports no sessions for, and answers "not found" when asked to load one',
+        // `session/load` streams the whole prior conversation back before the
+        // turn's prompt can be sent, so the history arrives on the first turn
+        // via `AgentTurnInput.importSessionHistory` rather than off disk.
+        historyUnavailableReason: null,
       },
       configDir: {
         /**
@@ -1028,6 +1077,193 @@ export class CursorAcpAdapter extends AgentAdapter {
       this.turnProfiles.delete(input);
       removeCursorProfile(dir);
     };
+  }
+
+  /**
+   * The conversations this CLI holds, asked of the CLI over ACP `session/list`.
+   *
+   * Read under a THROWAWAY profile whose `acp-sessions` is linked at the store
+   * being listed — the user's own — for the same reason every other cursor
+   * invocation gets one: a handshake writes into its config directory, and a
+   * listing must not change what the user's `cursor-agent` opens with.
+   *
+   * The store it points at is deliberately NOT geniro's own. geniro's store
+   * holds the threads this app already created, which are already in the
+   * sidebar; what a user means by "resume an old session" is the one their
+   * terminal made. An id from there is not resumable until it is brought
+   * across, which is exactly what {@link prepareSessionImport} does.
+   *
+   * Never throws: a missing binary, a signed-out CLI or a `-32601` from an agent
+   * that does not implement the method all come back as an empty list. That is
+   * safe here in a way it would not be for the MCP panel, because a cursor
+   * listing has a second half — `sessions.listingPartialReason` — that already
+   * tells the user this list is not everything they have.
+   */
+  override async listSessions(
+    input: AgentSessionsInput,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentSessionListing> {
+    let cwd = '';
+    let profile = '';
+    try {
+      cwd = this.makeProbeRoot('sessions');
+      profile = seedCursorProfile({
+        baseDir: this.profileBaseDir(),
+        sessionStoreDir: this.userSessionStoreDir(input.configDir),
+        homeDir: this.cursorOptions.homeDir,
+      });
+      const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
+        ...options,
+        // The probe root, never `input.cwd`: the FILTER travels in the
+        // `session/list` params, and rooting the server at the user's folder
+        // would have it trust and scan a directory to answer a question about
+        // conversations.
+        cwd,
+        stdinWrites: acpSessionListFrames({
+          cwd: input.cwd,
+          clientName: CURSOR_ACP_CLIENT_NAME,
+          clientVersion: this.clientVersion,
+          clientMeta: CURSOR_ACP_CLIENT_META,
+        }),
+        settleWhen: acpSessionListSettled,
+        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
+        timeoutMs: options.timeoutMs ?? CURSOR_SESSION_LIST_TIMEOUT_MS,
+      });
+      return {
+        sessions:
+          stdout === null
+            ? []
+            : readAcpSessionList(stdout).slice(0, input.limit),
+        unavailableReason: null,
+      };
+    } catch {
+      return { sessions: [], unavailableReason: null };
+    } finally {
+      if (cwd !== '') {
+        this.removeProbeRoot(cwd);
+      }
+      if (profile !== '') {
+        removeCursorProfile(profile);
+      }
+    }
+  }
+
+  /**
+   * Bring one conversation across into the store geniro's turns resume from.
+   *
+   * A COPY is what this CLI needs and claude does not: geniro's turns run under
+   * a throwaway profile whose `acp-sessions` is a symlink to its own store, so a
+   * session sitting in the user's profile is simply not there as far as
+   * `session/load` is concerned. Probed 2026-08-16 on 2026.08.11-e8db854, both
+   * directions — the id answers `-32602 … not found` before the copy, and after
+   * it loads and replays its entire transcript.
+   *
+   * A session already in geniro's store is left ALONE rather than overwritten:
+   * the same id can be imported twice, and the second import must not put a
+   * stale copy over the turns this app has since added to it.
+   *
+   * Throws when the source is not there, because the alternative is a thread
+   * whose first turn fails on a session the CLI cannot find — a failure the user
+   * would meet one message later with nothing connecting it to the import.
+   */
+  override async prepareSessionImport(
+    input: AgentSessionImportInput,
+  ): Promise<void> {
+    const from = join(
+      this.userSessionStoreDir(input.configDir),
+      input.sessionId,
+    );
+    const to = join(this.sessionStoreDir(), input.sessionId);
+    if (existsSync(to)) {
+      return;
+    }
+    if (!existsSync(from)) {
+      throw new Error(CURSOR_SESSION_MISSING_MESSAGE);
+    }
+    await mkdir(this.sessionStoreDir(), { recursive: true });
+    // `force: false` so a directory that appeared between the check and here is
+    // an error rather than a silent overwrite of a live conversation.
+    await cp(from, to, { recursive: true, force: false });
+  }
+
+  /**
+   * The conversation itself, taken from the agent by LOADING it and reading
+   * what it replays.
+   *
+   * This CLI keeps its transcript in a private per-session SQLite store whose
+   * blobs are protobuf — geniro reads one block of it for the context meter and
+   * has no business reading the rest — but ACP hands the whole conversation
+   * back for free: `session/load` streams every message, thought and tool call
+   * as `session/update` notifications before it replies. So the record is read
+   * through the protocol rather than through the file, which also means a
+   * change to that file's encoding costs nothing here.
+   *
+   * Run under a profile linked at GENIRO's store, deliberately, and therefore
+   * only after {@link prepareSessionImport} has brought the session across:
+   * loading it under the user's own profile would be the copy's job done twice
+   * and would leave the imported thread depending on a store geniro does not
+   * own.
+   *
+   * `cwd` is the session's own, which the caller took from the listing — a load
+   * roots the agent somewhere, and rooting a conversation about one project in
+   * another is how a resumed thread starts reasoning about the wrong tree.
+   */
+  override async readSessionHistory(
+    input: AgentSessionImportInput & { limit: number },
+  ): Promise<AgentSessionHistory | null> {
+    let profile = '';
+    try {
+      profile = seedCursorProfile({
+        baseDir: this.profileBaseDir(),
+        sessionStoreDir: this.sessionStoreDir(),
+        homeDir: this.cursorOptions.homeDir,
+      });
+      const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
+        cwd: input.cwd,
+        stdinWrites: acpSessionLoadFrames({
+          sessionId: input.sessionId,
+          cwd: input.cwd,
+          clientName: CURSOR_ACP_CLIENT_NAME,
+          clientVersion: this.clientVersion,
+          clientMeta: CURSOR_ACP_CLIENT_META,
+        }),
+        settleWhen: acpSessionLoadSettled,
+        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
+        timeoutMs: CURSOR_SESSION_LOAD_TIMEOUT_MS,
+      });
+      if (stdout === null) {
+        // The load failed or timed out. Null is "no readable record", which the
+        // caller turns into a thread that resumes correctly and simply opens
+        // empty — never into a failed import, because the SESSION is fine and
+        // only its transcript could not be fetched.
+        return null;
+      }
+      const events = readAcpSessionReplay(stdout);
+      const droppedBefore = Math.max(0, events.length - input.limit);
+      return { events: events.slice(droppedBefore), droppedBefore };
+    } catch {
+      return null;
+    } finally {
+      if (profile !== '') {
+        removeCursorProfile(profile);
+      }
+    }
+  }
+
+  /**
+   * Where the USER's own ACP conversations live — `<configDir>/acp-sessions`,
+   * or `~/.cursor/acp-sessions` when the run names no profile.
+   *
+   * Distinct from {@link sessionStoreDir}, which is geniro's, and the two must
+   * never be confused: one is read to offer an import, the other is written by
+   * every turn.
+   */
+  private userSessionStoreDir(configDir: string | null): string {
+    return join(
+      configDir ??
+        join(this.cursorOptions.homeDir ?? homedir(), CURSOR_HOME_DIR_NAME),
+      CURSOR_ACP_SESSIONS_DIR_NAME,
+    );
   }
 
   private profileBaseDir(): string {

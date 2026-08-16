@@ -1671,9 +1671,12 @@ export class AcpTurnDriver implements TurnDriver {
         return [];
       }
       default:
-        // user_message_chunk (our own prompt echoed back), plan/plan_update,
-        // current_mode_update, config_option_update, session_info_update — all
-        // real ACP updates this transcript does not model.
+        // user_message_chunk (our own prompt echoed back — an IMPORT reads
+        // those out of a `session/load` replay in `acp-sessions.ts` instead, at
+        // creation time, so they land BELOW the first message the user sends
+        // here), plan/plan_update, current_mode_update, config_option_update,
+        // session_info_update — all real ACP updates this transcript does not
+        // model.
         return [];
     }
   }

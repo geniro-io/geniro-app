@@ -3,6 +3,7 @@ import {
   Clock,
   FolderOpen,
   FolderPlus,
+  History,
   Plus,
   Square,
   Trash2,
@@ -25,6 +26,8 @@ import type {
 } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import type {
+  AgentSession,
+  AgentSessionListingDto,
   AgentSkillDto as AgentSkill,
   HandoffTargetDto,
   ItemDto as ChatItem,
@@ -109,6 +112,7 @@ import {
 } from './run-status';
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
+import { SessionPicker } from './session-picker';
 import {
   lastTerminalItemAt,
   settledRunStatus,
@@ -279,6 +283,20 @@ export function Chats({
   // `wf:<slug>` to run a library workflow as a team.
   const [target, setTarget] = useState<string>('claude');
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
+  // The "continue a session" picker. Its agent is its OWN — someone looking for
+  // an old cursor thread should not have to change what the composer is
+  // pointed at first, and picking one sets the composer from the session
+  // anyway.
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
+  const [sessionAgent, setSessionAgent] = useState<CliKind>('claude');
+  const [sessionFolderOnly, setSessionFolderOnly] = useState(true);
+  const [sessionListing, setSessionListing] =
+    useState<AgentSessionListingDto | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [resumingSessionId, setResumingSessionId] = useState<string | null>(
+    null,
+  );
   const workflowSlug = target.startsWith('wf:') ? target.slice(3) : null;
   const agentKind = (workflowSlug ? 'claude' : target) as CliKind;
   // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
@@ -1217,14 +1235,48 @@ export function Chats({
    * `useConfigDirCapability` selector is not reused here — it opens a SECOND read
    * of an endpoint this component already polls.)
    */
-  const composerConfigDirUnavailableReason = useMemo(
-    () =>
+  /**
+   * Why one CLI cannot be pointed at a config directory, from the capability
+   * bag — null when it can, `undefined` while the answer has not arrived, which
+   * a chip renders as nothing rather than as a guess.
+   *
+   * Asked about two DIFFERENT agents on this screen: the composer's, and the
+   * session picker's, which is its own. Answering the second with the first is
+   * how a claude profile came to be sent to cursor.
+   */
+  const configDirReasonFor = useCallback(
+    (agent: CliKind): string | null | undefined =>
       capabilities
-        ? capabilities.configDirs.find((row) => row.agent === agentKind)
+        ? capabilities.configDirs.find((row) => row.agent === agent)
             ?.unavailableReason
         : undefined,
-    [capabilities, agentKind],
+    [capabilities],
   );
+  const composerConfigDirUnavailableReason = useMemo(
+    () => configDirReasonFor(agentKind),
+    [configDirReasonFor, agentKind],
+  );
+
+  /**
+   * The same question for the SESSION PICKER's agent, which is its own.
+   *
+   * Read separately rather than reusing the composer's, and the bug that
+   * forces it: the config directory the composer holds belongs to whichever
+   * CLI the composer is pointed at — a claude profile while the picker is
+   * showing cursor. Sent along anyway, it asked cursor to list conversations
+   * under a directory that is not its store (an empty list, reading as "you
+   * have no history") and would have 400'd the import, since the daemon
+   * REFUSES a config directory for a CLI with no such mechanism.
+   */
+  const sessionConfigDirUnavailableReason = useMemo(
+    () => configDirReasonFor(sessionAgent),
+    [configDirReasonFor, sessionAgent],
+  );
+  /** The profile to ask the picker's CLI about, or null when it takes none. */
+  const sessionConfigDir =
+    configDir !== null && sessionConfigDirUnavailableReason === null
+      ? configDir
+      : null;
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
@@ -1805,6 +1857,105 @@ export function Chats({
       return `data:${image.mediaType};base64,${image.data}`;
     },
     [chatApi],
+  );
+
+  /**
+   * Ask the picked CLI what conversations it holds, whenever the question
+   * changes — which CLI, which folder, and which profile.
+   *
+   * Only while the dialog is OPEN. The listing spawns a cursor process, so a
+   * hook that ran on mount would launch one for a control nobody has pressed.
+   */
+  useEffect(() => {
+    if (!sessionPickerOpen) {
+      return;
+    }
+    let stale = false;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    void agentsApi
+      .listAgentSessions({
+        agent: sessionAgent,
+        ...(sessionFolderOnly && folder ? { cwd: folder } : {}),
+        // The profile THIS CLI takes, so the list and the resume agree about
+        // which account they are talking about — an id listed under one
+        // profile is not resumable under another.
+        ...(sessionConfigDir === null ? {} : { configDir: sessionConfigDir }),
+      })
+      .then((listing) => {
+        if (!stale) {
+          setSessionListing(listing);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!stale) {
+          setSessionListing(null);
+          setSessionsError(daemonErrorDetail(err));
+        }
+      })
+      .finally(() => {
+        if (!stale) {
+          setSessionsLoading(false);
+        }
+      });
+    return () => {
+      stale = true;
+    };
+  }, [
+    sessionPickerOpen,
+    sessionAgent,
+    sessionFolderOnly,
+    folder,
+    sessionConfigDir,
+    agentsApi,
+  ]);
+
+  /**
+   * Take over one of those conversations: create a chat bound to it and open
+   * it.
+   *
+   * The new run's cwd is the SESSION's, never the composer's — a resumed
+   * conversation is about the tree it was reasoning over, and continuing it
+   * somewhere else is how an agent starts confidently answering about the
+   * wrong project. Its title is the session's, so the sidebar row says what
+   * the thread is rather than repeating the folder.
+   *
+   * The daemon does the import inside this one call (it copies what has to be
+   * copied and writes the transcript), which is why the dialog stays up with
+   * the row spinning rather than closing optimistically: a thread that opens
+   * empty and fills in later is indistinguishable from one that failed.
+   */
+  const resumeSession = useCallback(
+    async (session: AgentSession): Promise<void> => {
+      if (session.cwd === null) {
+        return;
+      }
+      setResumingSessionId(session.id);
+      setSessionsError(null);
+      try {
+        const run = await chatApi.createChat({
+          createChatDto: {
+            agentKind: sessionAgent,
+            cwd: session.cwd,
+            resumeSessionId: session.id,
+            ...(session.title ? { title: session.title } : {}),
+            ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
+            ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
+            ...(sessionConfigDir === null
+              ? {}
+              : { configDir: sessionConfigDir }),
+          },
+        });
+        setRuns((prev) => [run, ...prev]);
+        setSessionPickerOpen(false);
+        await activateRun(run.id);
+      } catch (err) {
+        setSessionsError(daemonErrorDetail(err));
+      } finally {
+        setResumingSessionId(null);
+      }
+    },
+    [sessionAgent, models, efforts, sessionConfigDir, chatApi, activateRun],
   );
 
   const ensureRun = useCallback(async (): Promise<string | null> => {
@@ -3392,6 +3543,25 @@ export function Chats({
                         onClick={handleNewGroup}>
                         <FolderPlus className="shrink-0" />
                       </Button>
+                      {/*
+                        Beside the +, not inside it. The + is a one-click new
+                        thread and has to stay one; picking up an existing
+                        conversation is a different act with a question attached
+                        to it, so it gets its own control.
+                      */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        aria-label="Continue a session"
+                        title="Continue a session you already have"
+                        onClick={() => {
+                          setSessionAgent(agentKind);
+                          setSessionPickerOpen(true);
+                        }}>
+                        <History className="shrink-0" />
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -4421,6 +4591,21 @@ export function Chats({
                     </span>
                   </>
                 </ConfirmDialog>
+                <SessionPicker
+                  open={sessionPickerOpen}
+                  agent={sessionAgent}
+                  onAgentChange={setSessionAgent}
+                  folder={folder}
+                  folderOnly={sessionFolderOnly}
+                  onFolderOnlyChange={setSessionFolderOnly}
+                  configDir={sessionConfigDir}
+                  listing={sessionListing}
+                  loading={sessionsLoading}
+                  error={sessionsError}
+                  busyId={resumingSessionId}
+                  onClose={() => setSessionPickerOpen(false)}
+                  onResume={(session) => void resumeSession(session)}
+                />
               </div>
             </MarkdownImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>

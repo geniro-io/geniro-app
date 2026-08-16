@@ -169,13 +169,20 @@ function stubScript(handle) {
   const claude = JSON.stringify(findCli('claude') || '/usr/bin/claude');
   const cursorPath = findCli('cursor-agent');
   const cursor = JSON.stringify(cursorPath);
+  // The agent CONFIG directory every chat opens under, so a run can be driven
+  // against a profile other than the default — which is how a rate-limited
+  // default account is worked around without touching the user's own settings.
+  const configDir = JSON.stringify(process.env.GENIRO_RUN_CONFIG_DIR ?? null);
+  const recentConfigDirs = process.env.GENIRO_RUN_CONFIG_DIR
+    ? `[${configDir}]`
+    : '[]';
   return `window.geniro = {
     getStatus: async () => ({ onboardingComplete: true, daemon: { connected: true, handle: ${h} } }),
     getDaemonHandle: async () => (${h}),
     onDaemonRestarted: () => () => {},
     pickProjectFolder: async () => ${cwd}, pickAgentBinary: async () => null,
-    getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false }),
-    updateSettings: async (p) => { if (p.notificationsEnabled !== undefined) window.__geniroNotificationsEnabled = p.notificationsEnabled; return { onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...p }; },
+    getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], configDir: ${configDir}, recentConfigDirs: ${recentConfigDirs}, lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false }),
+    updateSettings: async (p) => { if (p.notificationsEnabled !== undefined) window.__geniroNotificationsEnabled = p.notificationsEnabled; return { onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], configDir: ${configDir}, recentConfigDirs: ${recentConfigDirs}, lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...p }; },
     detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected', loggedIn: null }, { kind: 'cursor-agent', found: ${cursorPath ? 'true' : 'false'}, path: ${cursor}, version: ${cursorPath ? "'detected'" : 'null'}, loggedIn: null }]),
     completeOnboarding: async () => {},
     // Settings' CLI sign-in resolves through the daemon and then hands the

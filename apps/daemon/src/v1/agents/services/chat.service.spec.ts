@@ -37,6 +37,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
+import type { CliSessionsService } from './cli-sessions.service';
 import { EffortsService } from './efforts.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
@@ -514,6 +515,13 @@ function setup(
     efforts,
     seqs,
     groups,
+    // A double: nothing in this spec creates a chat FROM an existing CLI
+    // session, and the real service would reach the adapters to do it.
+    // `cli-sessions.service.spec.ts` owns that path.
+    {
+      prepare: async () => undefined,
+      importHistory: async () => ({ events: [], notice: '' }),
+    } as unknown as CliSessionsService,
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.

@@ -329,6 +329,25 @@ type AgentEventBody =
   | { type: 'text'; text: string }
   | {
       /**
+       * A message the USER wrote, as the CLI reports it back.
+       *
+       * Produced ONLY while replaying a conversation geniro does not already
+       * hold — the import of an existing CLI session. In an ordinary turn the
+       * daemon wrote the prompt itself and persisted it before the CLI ever saw
+       * it, so a CLI echoing it back is a duplicate and every adapter drops it
+       * (ACP's `user_message_chunk`, which is exactly this line arriving during
+       * a normal `session/load`).
+       *
+       * It exists because a transcript with the user's half missing is not the
+       * conversation: an imported thread would open on a column of answers to
+       * questions nobody can see. That could not be expressed with `text`,
+       * whose row is `role: 'assistant'` by definition.
+       */
+      type: 'user_message';
+      text: string;
+    }
+  | {
+      /**
        * An INCREMENT of assistant text, as the CLI generates it — the live
        * plane behind a growing bubble.
        *
@@ -883,6 +902,118 @@ export interface AgentMcpServersInput {
 export interface AgentMcpServerHealthInput extends AgentMcpServersInput {
   /** The server's name, as the CLI's own listing spells it. */
   server: string;
+}
+
+/**
+ * One conversation this CLI already holds on this machine, offered so the user
+ * can carry it on inside geniro instead of only in their terminal.
+ *
+ * Deliberately four fields and no more: everything here has to be answerable by
+ * BOTH a disk scan and a protocol call, since that is how the two shipped CLIs
+ * differ (claude keeps a JSONL transcript per session; cursor answers ACP
+ * `session/list`). A field only one of them can fill would render as a blank
+ * column for the other rather than as a fact.
+ */
+export interface AgentSessionRecord {
+  /**
+   * The id this CLI resumes by — `claude --resume <id>`, ACP `session/load`.
+   * Opaque here on purpose: only the adapter that produced it may interpret it.
+   */
+  id: string;
+  /**
+   * The folder the conversation ran in, or null when the CLI records none.
+   *
+   * Load-bearing rather than decorative: a resumed turn runs SOMEWHERE, and
+   * running an agent's continuation in a different project than the one it was
+   * reasoning about is how a resume produces confident nonsense. The importer
+   * opens the new chat in this folder, so a session with none cannot be offered.
+   */
+  cwd: string | null;
+  /**
+   * One line naming the conversation, or null when nothing names it.
+   *
+   * The CLI's own title where it has one (cursor generates them), else the
+   * opening prompt — which is why this is a plain string and not a "title"
+   * with a separate "preview": a picker row can only show one line, and the
+   * adapter is what knows which line its CLI can produce.
+   */
+  title: string | null;
+  /** When it was last written, epoch ms; null when the CLI records none. */
+  updatedAt: number | null;
+}
+
+/**
+ * The answer to {@link AgentAdapter.listSessions} — the rows, and the reason
+ * there are none.
+ *
+ * Same shape and same rule as the MCP listing: "this CLI holds no sessions" and
+ * "this CLI cannot be asked" are both an empty array, and a reader that cannot
+ * tell them apart either invents an explanation or branches on which CLI it is
+ * holding. Only `sessions: []` with a NULL reason asserts that there is nothing
+ * to resume.
+ */
+export interface AgentSessionListing {
+  sessions: AgentSessionRecord[];
+  unavailableReason: string | null;
+}
+
+/** Everything an adapter needs to list the conversations it holds. */
+export interface AgentSessionsInput {
+  /**
+   * Only sessions from this folder, or null for every folder the CLI
+   * remembers. Canonicalized by the caller when present.
+   */
+  cwd: string | null;
+  /**
+   * The config directory to read, or null for the CLI's own default profile.
+   *
+   * Part of the question, exactly as it is for MCP servers: a CLI keeps its
+   * conversations inside its profile, so a second account holds a different set
+   * — and an id listed under one profile is not resumable under another.
+   */
+  configDir: string | null;
+  /** Most rows to return, newest first. */
+  limit: number;
+}
+
+/** Which conversation is being taken over, and from where. */
+export interface AgentSessionImportInput {
+  /** The id, as {@link AgentSessionRecord.id} spelled it. */
+  sessionId: string;
+  /** The profile it was listed under; null = the CLI's default. */
+  configDir: string | null;
+  /**
+   * The folder the conversation ran in, as the listing reported it.
+   *
+   * Here rather than derived, because an adapter that reaches the CLI to do
+   * this has to ROOT it somewhere: ACP's `session/load` takes a cwd, and
+   * reading a conversation about one project while rooted in another is how a
+   * resumed thread starts reasoning about the wrong tree.
+   */
+  cwd: string;
+}
+
+/**
+ * A conversation read back out of a CLI's own record — the answer to
+ * {@link AgentAdapter.readSessionHistory}.
+ */
+export interface AgentSessionHistory {
+  /**
+   * The events, OLDEST FIRST, in the same vocabulary a live turn produces — so
+   * an imported transcript goes through the one `mapEventToItem` every other
+   * row in the app already passes through, rather than a second row builder
+   * that could render the same message differently.
+   */
+  events: AgentEvent[];
+  /**
+   * How many earlier rows were left out to honour the caller's limit; 0 when
+   * the whole conversation is here.
+   *
+   * Stated rather than silent, on the rule the workflow executor's dropped
+   * settings follow: a transcript that begins mid-conversation with nothing
+   * saying so is a transcript that lies about what the agent was told.
+   */
+  droppedBefore: number;
 }
 
 /**
@@ -1938,6 +2069,46 @@ export interface AdapterConfig {
      * tried without it" look identical from the outside.
      */
     readonly inheritedEnvKeys: readonly string[];
+  };
+
+  // ── Taking over a conversation the CLI already holds ────────────────────
+  /**
+   * What this CLI can offer of the conversations already on the user's machine
+   * — the facts behind {@link AgentAdapter.listSessions},
+   * {@link AgentAdapter.prepareSessionImport} and
+   * {@link AgentAdapter.readSessionHistory}.
+   */
+  readonly sessions: {
+    /**
+     * Why the conversations this CLI holds cannot be listed, or null when they
+     * can be. Carried to the picker and shown there, so an empty list explains
+     * itself instead of reading as "you have no history".
+     */
+    readonly listingUnavailableReason: string | null;
+    /**
+     * What the listing DOES NOT reach, or null when it reaches everything.
+     *
+     * Separate from {@link listingUnavailableReason} because it is the shape
+     * that would otherwise be invisible: cursor lists its ACP sessions in full
+     * and holds a second store — its interactive `cursor-agent` chats — that
+     * the same server answers `Session not found` for (probed 2026-08-16 on
+     * 2026.08.11-e8db854, an id out of `~/.cursor/chats/` under its own
+     * recorded cwd). A user whose terminal history is all in that store sees a
+     * short, correct list and concludes the feature is broken; this is the
+     * sentence that tells them which half they are looking at.
+     */
+    readonly listingPartialReason: string | null;
+    /**
+     * Why a resumed thread starts with an empty transcript, or null when its
+     * history arrives one way or the other.
+     *
+     * Non-null is the honest answer for a CLI that can hand back the
+     * conversation but not the record of it — the thread continues correctly
+     * (the AGENT still has its context) while geniro can show nothing before
+     * the user's next message, which without a sentence reads as an import that
+     * silently did nothing.
+     */
+    readonly historyUnavailableReason: string | null;
   };
 
   // ── Config directory (which profile / account the CLI runs as) ──────────

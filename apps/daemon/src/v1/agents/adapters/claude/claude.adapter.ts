@@ -26,6 +26,10 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentSessionHistory,
+  AgentSessionImportInput,
+  AgentSessionListing,
+  AgentSessionsInput,
   AgentTurnInput,
   FollowUpMessage,
   InstalledApprovalSupport,
@@ -46,6 +50,7 @@ import {
   CLAUDE_CONFIG_LOCK_SUFFIX,
   CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
+  CLAUDE_DEFAULT_PROFILE_DIR,
   CLAUDE_DENY_MESSAGE,
   CLAUDE_EFFORT_FLAG,
   CLAUDE_EMPTY_MCP_CONFIG,
@@ -108,6 +113,10 @@ import {
   questionTextOf,
   withResponse,
 } from './utils/claude-question.utils';
+import {
+  listClaudeSessions,
+  readClaudeSessionHistory,
+} from './utils/claude-sessions.utils';
 
 /**
  * Drives `claude` headlessly. The prompt is sent as a stream-json user-message
@@ -334,6 +343,19 @@ export class ClaudeAdapter extends AgentAdapter {
          * was written to fix. Same list as the strip, so neither can drift.
          */
         inheritedEnvKeys: CLAUDE_CREDENTIAL_KEYS,
+      },
+      sessions: {
+        // Every conversation this CLI has ever held sits in the profile as one
+        // JSONL file per session, under a directory named after its cwd — so
+        // both halves of the picker (which folder, and what it was about) are
+        // readable without asking the binary anything.
+        listingUnavailableReason: null,
+        // The scan covers the whole profile, so there is no second store the
+        // way there is for cursor.
+        listingPartialReason: null,
+        // That same JSONL IS the transcript, in the very envelope this CLI's
+        // stream-json output uses — see `readSessionHistory`.
+        historyUnavailableReason: null,
       },
       configDir: {
         /**
@@ -563,6 +585,66 @@ export class ClaudeAdapter extends AgentAdapter {
   override listModels(): Promise<AgentModel[]> {
     return Promise.resolve(
       claudeModels(this.getConfig().builtinModels, this.claudeOptions.homeDir),
+    );
+  }
+
+  /**
+   * The conversations this profile holds, read straight off disk — no binary is
+   * spawned, so a signed-out or missing CLI still lists a user's history.
+   *
+   * Never throws: a profile that cannot be read is an empty list, which the
+   * base's `unavailableReason` contract already covers as "nothing to resume"
+   * only when this adapter says so. It cannot say so falsely here — the scan
+   * treats an unreadable directory as absent, which is the same answer the user
+   * would get from the CLI.
+   */
+  override async listSessions(
+    input: AgentSessionsInput,
+  ): Promise<AgentSessionListing> {
+    const sessions = await listClaudeSessions({
+      profileDir: this.profileDir(input.configDir),
+      cwd: input.cwd,
+      limit: input.limit,
+    });
+    return { sessions, unavailableReason: null };
+  }
+
+  /**
+   * Nothing to do, and the reason is worth stating: this CLI resumes by id out
+   * of the same profile the listing read, and the run carries that profile as
+   * its own `configDir`. So the session is already where the turn will look for
+   * it — unlike cursor, whose turns run under a profile of geniro's own making.
+   */
+  override prepareSessionImport(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /**
+   * The stored transcript, mapped by the same function that maps a live turn's
+   * stdout — the session JSONL is that stream, appended to a file.
+   */
+  override readSessionHistory(
+    input: AgentSessionImportInput & { limit: number },
+  ): Promise<AgentSessionHistory | null> {
+    return readClaudeSessionHistory({
+      profileDir: this.profileDir(input.configDir),
+      sessionId: input.sessionId,
+      limit: input.limit,
+    });
+  }
+
+  /**
+   * The profile a session lives in: the run's own config directory, or this
+   * CLI's default `~/.claude` when it names none.
+   *
+   * The default is spelled here rather than taken from `configDir.envVar`,
+   * which only says how a directory is HANDED to the CLI and not where the CLI
+   * keeps one when nobody does.
+   */
+  private profileDir(configDir: string | null): string {
+    return (
+      configDir ??
+      join(this.claudeOptions.homeDir ?? homedir(), CLAUDE_DEFAULT_PROFILE_DIR)
     );
   }
 

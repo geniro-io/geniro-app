@@ -757,3 +757,67 @@ export const RunWireSchema = z.object({
     .describe("Text of the run's latest message item — the list preview line"),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
+
+/**
+ * One conversation a CLI already holds on this machine, offered so the user can
+ * carry it on inside geniro.
+ *
+ * `cwd` is nullable on the wire and NOT optional in practice: a session whose
+ * folder the CLI never recorded cannot be resumed anywhere sensible, so the
+ * picker offers it read-only rather than pretending a resume would work. Every
+ * other field is a label.
+ */
+export const AgentSessionWireSchema = z
+  .object({
+    id: z.string().describe('The id the CLI resumes by'),
+    cwd: z
+      .string()
+      .nullable()
+      .describe(
+        'Folder the conversation ran in; null when the CLI recorded none',
+      ),
+    title: z
+      .string()
+      .nullable()
+      .describe("The CLI's own title, or the conversation's opening prompt"),
+    updatedAt: z
+      .number()
+      .nullable()
+      .describe('Epoch ms of the last write; null when the CLI records none'),
+  })
+  // NESTED, never a response root — so an id here names the row type in the
+  // generated client instead of leaving it `…DtoSessionsInner`. Compare
+  // `AgentMcpServer` above, and the note on the listing below for what the same
+  // id on a ROOT would cost.
+  .meta({ id: 'AgentSession' });
+export type AgentSessionWire = z.infer<typeof AgentSessionWireSchema>;
+
+/**
+ * The sessions listing, with the two things an empty list could mean.
+ *
+ * Both reasons are carried rather than folded into one, because they answer
+ * different questions and a picker shows them in different places:
+ * `unavailableReason` says the list could not be taken at all,
+ * `partialReason` says it was taken and does not cover everything this CLI
+ * holds — cursor's interactive chats live in a store its ACP server will not
+ * open, and a user with months of terminal history needs to be told that rather
+ * than left to conclude the feature is broken.
+ */
+export const AgentSessionListingWireSchema = z.object({
+  sessions: z.array(AgentSessionWireSchema),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe('Why this CLI could not be asked at all; null when it could'),
+  partialReason: z
+    .string()
+    .nullable()
+    .describe('What this listing does not reach; null when it reaches all'),
+});
+// No `.meta({ id })` on this one: it is a RESPONSE DTO ROOT, and nestjs-zod
+// would then register the component under the id while the route still points
+// at the DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
+// The nested row above carries an id precisely because it is not a root.
+export type AgentSessionListingWire = z.infer<
+  typeof AgentSessionListingWireSchema
+>;

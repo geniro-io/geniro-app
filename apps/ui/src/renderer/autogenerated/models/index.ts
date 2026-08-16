@@ -301,6 +301,62 @@ export interface AgentModelEffortCapability {
 /**
  * 
  * @export
+ * @interface AgentSession
+ */
+export interface AgentSession {
+    /**
+     * The id the CLI resumes by
+     * @type {string}
+     * @memberof AgentSession
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentSession
+     */
+    cwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentSession
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof AgentSession
+     */
+    updatedAt: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface AgentSessionListingDto
+ */
+export interface AgentSessionListingDto {
+    /**
+     * 
+     * @type {Array<AgentSession>}
+     * @memberof AgentSessionListingDto
+     */
+    sessions: Array<AgentSession>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentSessionListingDto
+     */
+    unavailableReason: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentSessionListingDto
+     */
+    partialReason: string | null;
+}
+/**
+ * 
+ * @export
  * @interface AgentSkillDto
  */
 export interface AgentSkillDto {
@@ -849,6 +905,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    resumeSessionId?: string;
 }
 
 

@@ -135,6 +135,30 @@ export const CURSOR_SESSION_STORE_DIR_NAME = 'cursor-sessions';
  */
 export const CURSOR_MODEL_PROBE_TIMEOUT_MS = 15_000;
 
+/**
+ * How long `session/list` gets. Shorter than the model probe's budget because
+ * it is a strictly smaller question — `initialize` then one lookup, with no
+ * `session/new` in between — and because it is asked interactively, when the
+ * user opens the picker, where a stall is felt rather than merely logged.
+ */
+export const CURSOR_SESSION_LIST_TIMEOUT_MS = 12_000;
+
+/**
+ * How long a `session/load` gets to replay a conversation. Longer than the
+ * listing's: the handshake is the same, but the agent then streams the entire
+ * prior transcript before it answers, and a long thread is a lot of frames.
+ */
+export const CURSOR_SESSION_LOAD_TIMEOUT_MS = 30_000;
+
+/**
+ * Refusal when the conversation being imported is not in the profile it was
+ * listed under — a session removed, or an id from another profile. Said as the
+ * user's own problem, not as a path, because the path is inside a store they
+ * did not choose the layout of.
+ */
+export const CURSOR_SESSION_MISSING_MESSAGE =
+  'that cursor-agent session is no longer in this profile — it may have been deleted since the list was taken';
+
 // ── `cursor-agent mcp list` ───────────────────────────────────────────────
 //
 // This adapter deliberately carried NO const file until now: every static fact

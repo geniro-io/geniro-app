@@ -19,6 +19,7 @@ import type {
   AgentKind,
   AgentMcpListingDto,
   AgentModelDto,
+  AgentSessionListingDto,
   AgentSkillDto,
   SetMcpServerEnabledDto,
 } from '../models/index';
@@ -36,6 +37,12 @@ export interface AgentsApiListAgentMcpServersRequest {
 
 export interface AgentsApiListAgentModelsRequest {
     agent: AgentKind;
+}
+
+export interface AgentsApiListAgentSessionsRequest {
+    agent: AgentKind;
+    cwd?: string;
+    configDir?: string;
 }
 
 export interface AgentsApiListAgentSkillsRequest {
@@ -205,6 +212,62 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentModels(requestParameters: AgentsApiListAgentModelsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentModelDto>> {
         const response = await this.listAgentModelsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listAgentSessionsRaw(requestParameters: AgentsApiListAgentSessionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentSessionListingDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentSessions().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['cwd'] != null) {
+            queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/sessions`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentSessions(requestParameters: AgentsApiListAgentSessionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentSessionListingDto> {
+        const response = await this.listAgentSessionsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

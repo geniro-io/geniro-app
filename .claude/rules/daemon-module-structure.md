@@ -1,6 +1,6 @@
 ---
 description: Directory layout every daemon (NestJS) feature module must follow
-globs:
+paths:
   - "apps/daemon/src/**"
 ---
 
@@ -93,34 +93,16 @@ Rules:
   answer is a **twin parser**: an independent implementation on each side
   carrying a reciprocal `TWIN PARSER:` doc block that cross-references its twin.
   A shape drift fixed on one side MUST be mirrored on the other, and the doc
-  block is what makes that obligation discoverable. Reference twins:
-  `apps/daemon/src/v1/agents/adapters/claude/utils/claude-question.utils.ts` ↔
-  `apps/ui/src/renderer/chats/approval-card.tsx` (the AskUserQuestion
-  `{questions:[{question,options:[{label}]}]}` shape, M4);
-  `apps/daemon/src/v1/agents/adapters/cursor-acp/utils/cursor-question.utils.ts` ↔
-  the SAME renderer file's `readCursorQuestions` (the `cursor/ask_question`
-  `{questions:[{id,prompt,options:[{id,label}]}]}` shape) — one file holding
-  two twins, one per CLI, because a question card is routed by the tool name
-  the daemon put on the request and each name owns its own parser; and
-  `apps/daemon/src/v1/agents/chat.types.ts` `AttachmentWireSchema` ↔
-  `apps/ui/src/renderer/chats/attachment-payload.ts` (the `{id, mediaType}`
-  image rows inside a message item's `z.unknown()` payload — the payload is
-  untyped on the wire BY DESIGN, since each item kind carries a different
-  shape, so no generated type reaches the renderer); the same payload's
-  `parentToolUseId` (which sub-agent produced a row) AND the `subagent_info`
-  row's own `{id,label,kind,prompt,model,durationMs,stepsUnavailableReason}`
-  (what a delegate IS, for a CLI that announces one apart from the launching
-  call — note the two keys are deliberately different, since one means "the
-  delegate produced this row" and the other "this row is about the delegate"):
-  `apps/daemon/src/v1/agents/utils/event-to-item.ts` ↔
-  `apps/ui/src/renderer/chats/subagent-payload.ts`; and the pidfile's `entry`
-  stamp: `apps/daemon/src/utils/handshake.ts` `stampEntry` ↔
+  block is what makes that obligation discoverable. Exemplar: the pidfile's
+  `entry` stamp, `apps/daemon/src/utils/handshake.ts` `stampEntry` ↔
   `apps/ui/src/main/daemon-pidfile.ts` `stampEntry` — the one twin that is NOT
   daemon↔renderer but daemon↔Electron-main, where the two apps share no code at
   all (importing daemon source would pull the Nest graph into the main bundle),
-  so the file on disk is the entire contract.
+  so the file on disk is the entire contract. Run `grep -rn "TWIN PARSER:" apps
+  packages` to find the rest — the doc block itself is the discovery mechanism,
+  so this rule does not enumerate them.
 - Unit tests (`*.spec.ts`) are co-located in the same directory as the file under test and move with it.
 - When adding a file to a module, place it in its kind-directory from the start; never park it at the module root "temporarily".
 - Only create the directories the module actually needs — no empty placeholder dirs.
-- The kind-directory layout mirrors the sibling Geniro repo's `apps/api` module convention (e.g. `v1/threads/`), so structure fixes can flow between the repos; the two-files-at-root constraint is a deliberate local tightening (the sibling also parks `*.listener.ts` / `*.utils.ts` at module ROOTS — don't copy that: a helper never sits at a module root. The `*.utils.ts` suffix itself is used deliberately inside `adapters/<name>/utils/` and `adapters/utils/`, and nowhere else.)
+- The kind-directory layout mirrors the sibling Geniro repo's `apps/api` module convention (e.g. `v1/threads/`), so structure fixes can flow between the repos; the two-files-at-root constraint is a deliberate local tightening (the sibling also parks `*.listener.ts` / `*.utils.ts` at module ROOTS — don't copy that: a helper never sits at a module root.)
 - Reference layout: `apps/daemon/src/v1/agents/`.

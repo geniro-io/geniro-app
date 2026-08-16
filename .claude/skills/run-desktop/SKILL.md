@@ -1,15 +1,25 @@
 ---
 name: run-desktop
-description: Build, run, and drive the Geniro desktop UI on headless Linux (Claude Code on the web). Use when asked to run/start/screenshot the app or interact with its UI in a remote container. Drives the real renderer bundle in Chromium wired to a real daemon — the packaged Electron shell can't launch here.
+description: Build, run, and drive the Geniro desktop UI on headless Linux (Claude Code on the web). Use when asked to run/start/screenshot the app or interact with its UI in a remote container. Drives the real renderer bundle in Chromium wired to a real daemon — the packaged Electron shell can't launch here. On macOS, prefer `pnpm dev` with the real Electron shell first; use this Chromium harness as the fallback for headless/remote environments and for scripted/automated UI driving via its REPL.
 ---
 
-Geniro is a macOS Electron app. In this remote Linux container the **packaged
-Electron shell cannot launch** — the Electron binary download is blocked by the
-egress policy (403 from github releases; report, don't route around it). So for
-agent/automated use we drive the **same renderer bundle** the Electron window
-loads, in the pre-installed **Chromium**, wired to a **real daemon** (spawned
-under host Node), with `window.geniro` stubbed to hand the renderer a live
-daemon handle + an onboarded state.
+Geniro is a macOS Electron app. **On macOS, the first choice is `pnpm dev`** —
+it launches the real Electron shell against a real daemon, and needs nothing
+in this skill. Reach for the harness below instead when there is no display to
+launch Electron on (a remote/headless container), or when the task wants
+**scripted, repeatable UI driving** through a REPL rather than a human at the
+window — either way, on a real Mac you can always fall back to `pnpm dev` and
+drive the window by hand.
+
+In a remote Linux container, specifically, the **packaged Electron shell
+cannot launch** at all — in that environment the Electron binary download hit
+a 403 from GitHub releases (egress policy; report, don't route around it). So
+for agent/automated use there we drive the **same renderer bundle** the
+Electron window loads, in the pre-installed **Chromium**, wired to a **real
+daemon** (spawned under host Node), with `window.geniro` stubbed to hand the
+renderer a live daemon handle + an onboarded state. This is also the harness to
+reach for on a Mac when scripted driving (not a human eyeballing the window) is
+what's wanted — it works there too, it's just not the first choice.
 
 Everything is a REPL driver at `.claude/skills/run-desktop/driver.mjs`. Launch
 is slow (~15s: daemon boot + the claude modes probe). Screenshots land in
@@ -67,7 +77,7 @@ Then actually open `/tmp/shots/chats.png`. Blank frame = launch failed.
 | `approve` / `deny` | answer a pending approval card |
 | `ss [name]` | screenshot → `/tmp/shots/<name>.png` |
 | `text [css-sel]` | print innerText |
-| `options <css-sel>` | print a `<select>`'s `<option>` list |
+| `options <css-sel>` | print an open menu's `[role="option"]` rows within the matched element (label, `aria-selected`, `disabled`) |
 | `js <expr>` | run an expression in the page (Playwright `page.evaluate`) |
 | `quit` | close browser, kill daemon, exit |
 
@@ -103,24 +113,24 @@ composer's profile chip shows it and every run created carries it.
   supported one here. On a real Mac, just `pnpm dev`.
 - **Never `npm install` in this repo.** It's a pnpm workspace; npm prunes the
   hoisted `node_modules` and the daemon then can't find `reflect-metadata`.
-  Repair with `pnpm install --force` (or `rm -rf node_modules && pnpm install`).
-  Keep playwright-core in the side dir.
+  Repair with `pnpm install --force`. Keep playwright-core in the side dir.
+  Symptom: `daemon exited code=1` / `Cannot find module` → node_modules is
+  damaged (npm-in-pnpm) or the daemon isn't built:
+  `pnpm install --force && pnpm build`.
 - **Daemon runs under host Node**, so better-sqlite3 must be host-ABI (see
   Prerequisites). `Cannot find module …better_sqlite3.node` / ABI mismatch =
   run `pnpm rebuild better-sqlite3`.
-- **Native `<select>` menus can't be screenshotted open** (drawn by the OS, not
-  the DOM). To show a dropdown's choices, set the value and screenshot each
-  state, or read them with `options <sel>`.
-- **Cross-origin to the daemon** works because the driver launches Chromium with
-  `--disable-web-security` and the context with `bypassCSP` (the renderer's REST
-  + Socket.IO hit the daemon on a different loopback port).
-
-## Troubleshooting
-
-- **`daemon exited code=1` / `Cannot find module`** → node_modules is damaged
-  (npm-in-pnpm) or the daemon isn't built: `pnpm install --force && pnpm build`.
-- **`playwright-core not found`** → `mkdir -p ~/.geniro-run-pw && npm i --prefix ~/.geniro-run-pw playwright-core`.
+- **This app has no native `<select>`** — every dropdown is `role="option"`
+  DOM buttons behind `[data-menu-trigger]` (`menu.tsx`), which is exactly what
+  makes one screenshottable and assertable open: click the trigger, then `ss`
+  it or read its rows with `options <sel>`.
+- **The browser flags are harness-only.** `--no-sandbox`,
+  `--disable-web-security` and `bypassCSP: true` are what let the renderer's
+  REST + Socket.IO cross loopback ports to the real daemon here; they must
+  never be copied into app code or CI, and this browser must only ever load
+  the locally-served renderer bundle — never a remote origin — since it can
+  reach the daemon and its bearer token.
+- **`playwright-core not found`** →
+  `mkdir -p ~/.geniro-run-pw && npm i --prefix ~/.geniro-run-pw playwright-core`.
 - **`WARN: app shell not detected`** → the renderer isn't built (`pnpm build`),
   or the daemon didn't come up (run `caps`, check the launch log).
-- **Stale Xvfb/Chromium** (not usually needed — Chromium runs headless): kill
-  leftover `chrome` procs; the driver's `quit` reaps the daemon it spawned.

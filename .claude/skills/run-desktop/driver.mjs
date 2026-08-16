@@ -288,7 +288,13 @@ const COMMANDS = {
   // Run an expression in the page (Playwright page.evaluate — page context, not Node).
   async js(expr) { try { log(JSON.stringify(await page.evaluate(expr))); } catch (e) { log('ERROR', e.message); } },
   async text(sel) { log(await page.evaluate((s) => (s ? document.querySelector(s) : document.body)?.innerText ?? '(null)', sel || null)); },
-  async options(sel) { log(JSON.stringify(await page.evaluate((s) => { const el = document.querySelector(s); return el ? [...el.querySelectorAll('option')].map((o) => ({ value: o.value, label: o.textContent })) : null; }, sel))); },
+  // This app has no native <select> — a picker's rows are `role="option"`
+  // buttons in the open Menu panel (menu.tsx), not <option> tags, and they
+  // carry no data-value: read `label` off textContent plus the two real
+  // attributes the markup has, `aria-selected` and `disabled`. `sel` scopes
+  // the search to one element (e.g. the `[data-slot="select"]` wrapper); the
+  // menu must already be open (`click [data-menu-trigger]`) or this returns [].
+  async options(sel) { log(JSON.stringify(await page.evaluate((s) => { const root = document.querySelector(s); if (!root) return null; return [...root.querySelectorAll('[role="option"]')].map((o) => ({ label: o.textContent.trim(), selected: o.getAttribute('aria-selected') === 'true', disabled: o.hasAttribute('disabled') })); }, sel))); },
   async quit() { try { await browser?.close(); } catch {} try { daemon?.kill('SIGTERM'); } catch {} staticSrv?.close(); },
   help() { log('commands:', Object.keys(COMMANDS).join(', ')); },
 };

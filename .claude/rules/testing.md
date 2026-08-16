@@ -1,6 +1,6 @@
 ---
 description: Tests — a claimed behavior must have an assertion that fails when it breaks
-globs:
+paths:
   - "**/*.spec.ts"
   - "**/*.spec.tsx"
 ---

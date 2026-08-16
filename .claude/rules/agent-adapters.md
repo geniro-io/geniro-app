@@ -1,6 +1,6 @@
 ---
 description: CLI agent adapters — abstract base class + one subdirectory per adapter
-globs:
+paths:
   - "apps/daemon/src/v1/agents/**"
 ---
 
@@ -10,16 +10,17 @@ globs:
 
 **Every fact about a specific CLI lives in that CLI's `adapters/<name>/`
 directory — as a field of its `AdapterConfig` or behind an abstract method on
-`AgentAdapter`. Nothing else in the daemon branches on which agent it is talking
-to.**
+`AgentAdapter` (`apps/daemon/src/v1/agents/adapters/agent-adapter.ts`, with the
+contract types beside it in `adapter.types.ts`). Nothing else in the daemon
+branches on which agent it is talking to.**
 
 All of it: argv, wire shapes, where it keeps skills on disk, what it reports
 about itself, which flags it understands, what it cannot do at all. An
 `if (agent === 'claude')` in a service, controller, gateway or util is a missing
 config field or a missing method — never a condition at the read site. A CLI
 with no answer declares that as a fact with the reason beside it
-(`cursor-acp`'s `terminal: null`, its `efforts: []`), which is how a reader
-learns the feature does not exist. Such a declaration is a MEASUREMENT, not a
+(`cursor-acp`'s `handoff: { kind: 'unavailable', reason: '…' }`), which is how a
+reader learns the feature does not exist. Such a declaration is a MEASUREMENT, not a
 permanent property: `cursor-acp`'s `questionToolName` said `null` on the
 strength of "baseline ACP has no question call", and the vendor had added one
 (`cursor/ask_question`) that geniro was refusing in-protocol. Write down what
@@ -51,20 +52,10 @@ to do with several answers, never HOW to ask. Reference pair: `ModelsService` /
 - Reach for a CLI's proprietary headless mode (`-p --output-format
   stream-json`) only when ACP is genuinely unavailable, and say so in the
   adapter's doc block so the choice is revisited when the CLI catches up.
-- Why ACP wins for this codebase, concretely — each of these was a hand-rolled
-  subsystem on the legacy cursor path, and all of them were deleted with it:
-  - **Permissions.** `session/request_permission` is an ACP baseline, so
-    `ask`/`acceptEdits` are real. A CLI without a permission protocol forces
-    every mode to degrade to auto-approve.
-  - **MCP delivery.** Client-supplied `mcpServers` in `session/new` carries a
-    caller node's call endpoint in-protocol, with the token on an HTTP header
-    inside a stdin frame. The alternative is planting the endpoint in a
-    well-known config file in the user's own worktree — which cost a per-cwd
-    mutex, a write journal, backup/surgical-restore, boot reconciliation, and
-    a one-shot trust probe gating the whole call runtime.
-  - **A typed event stream.** `session/update` has a published schema;
-    proprietary NDJSON is version-volatile and needs a deliberately liberal
-    mapper that guesses across CLI releases.
+- What ACP gives that a proprietary mode does not: real permissions
+  (`session/request_permission`), client-supplied MCP servers in-protocol
+  (`mcpServers` in `session/new`), and a published event schema
+  (`session/update`) instead of a version-volatile NDJSON mapper.
 - What ACP does NOT change: one turn is still one process, so `ProcessRegistry`,
   cancel, and the executor's fan-out are untouched either way. Nor does it
   exempt an adapter from the rule above — an ACP adapter still answers every
@@ -166,10 +157,8 @@ constants or types to name**, every pure helper in
 lifecycle services (`claude/claude-probe.service.ts`). **A file named after one
 CLI never lives outside that CLI's directory** — not in `services/`, not in
 `utils/`, not in another module. Specs move with their file. There is no
-exception: the one that used to stand here (`cursor-mcp-cleanup`, a one-release
-boot sweep of residue the deleted legacy transport left in users' worktrees)
-was written down as expiring and has since been deleted. Write the expiry down
-if you ever need another.
+exception today; if you ever need one, write down its expiry so it can be
+deleted on schedule.
 
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol
@@ -214,16 +203,12 @@ filename suffix, is what keeps it out of `dist/`.
   named credentials in `utils/child-env.ts`; an adapter re-injects only what its
   own CLI is entitled to (`CursorAcpAdapter.buildEnv` → `CURSOR_API_KEY`;
   `claudeCredentialEnv` → the Anthropic keys). No adapter leaks a credential into
-  another agent's child.
-  - **The value being the USER's rather than geniro's changes nothing here.**
-    geniro used to mint that Cursor key from the Keychain and pass it as
-    `GENIRO_CURSOR_API_KEY`; it stores no credential at all now, so the only key
-    that can appear is one the user exported in their own shell. It is still
-    stripped from every child and still re-injected for the cursor child alone —
-    because the rule protects against handing agent A's credential to agent B,
-    and an INHERITED credential is exactly as capable of that as a minted one.
-    Un-stripping a name because "we no longer set it" is the mistake this
-    sub-point exists to prevent.
+  another agent's child — this holds even for a credential geniro merely
+  INHERITS rather than mints (a `CURSOR_API_KEY` the user exported in their own
+  shell, no longer minted as `GENIRO_CURSOR_API_KEY`): the rule protects
+  against handing agent A's credential to agent B, and an inherited credential
+  is exactly as capable of that as a minted one, so don't un-strip a name
+  merely because geniro no longer sets it.
 - **Per-agent state is keyed by agent**, never by the thing it is about.
   `SkillHarvestStore` keys by (agent, cwd): one folder is routinely used by both
   CLIs, and keying it loosely leaked claude's built-ins into a cursor listing.

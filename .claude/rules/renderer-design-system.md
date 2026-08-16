@@ -1,6 +1,6 @@
 ---
 description: Renderer styling — design tokens only, never hardcoded colours
-globs:
+paths:
   - "apps/ui/src/renderer/**"
 ---
 

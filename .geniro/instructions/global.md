@@ -38,19 +38,15 @@ file at the start of each run and at every phase-boundary refresh via
 - Vendored `@packages/{common,http-server,metrics,mikroorm}` track the sibling
   Geniro repo — keep changes minimal and local-first so fixes can flow between
   the two repos.
-- **Renderer design system** — the UI (`apps/ui/src/renderer`) is Tailwind v4 +
-  a token layer in `styles/global.css` that tracks the sibling Geniro web app.
-  Two hard rules, enforced by an eslint override on `apps/ui/src/renderer/**`:
-  (1) **never hardcode a colour** — every colour/radius/shadow comes from a token
-  (`bg-primary`, `text-muted-foreground`, `var(--token)`); a raw hex/`rgb()`/`hsl()`,
-  including inside a Tailwind arbitrary value (`bg-[#…]`), fails lint. (2) **never
-  duplicate a component** — reuse a primitive in `components/ui/` or a shared
-  component in `components/`; promote any recurring pattern into one rather than
-  re-implementing it inline. New styling flows token → `components/ui/` primitive
-  → `components/` app component (compose with `cn()`/`cva`, no barrels). Full
+- **Renderer design system** (`apps/ui/src/renderer`) — two hard rules: (1)
+  never hardcode a colour, every colour/radius/shadow comes from a token in
+  `styles/global.css` — enforced where possible, by an eslint override on
+  `apps/ui/src/renderer/**`; (2) never duplicate a component, reuse a primitive
+  in `components/ui/` or a shared component in `components/` — review-only, no
+  mechanical enforcement exists for this one. Compose with `cn()`/`cva`. Full
   contract in CLAUDE.md → *Design system (renderer)*.
-- After moving native deps or switching ABIs, `pnpm rebuild:native` rebuilds
-  better-sqlite3 against Electron's ABI.
+- `pnpm rebuild:native` is a required step, not a conditional one — see
+  CLAUDE.md's Commands section (*Daily development*) for when and why.
 - **Guard added on one path — sweep sibling paths for bypasses.** When a change
   adds a guard or cleanup obligation on one call path (a claim/release pair,
   validation, dedup, an auth check), before finishing sweep every sibling path
@@ -59,37 +55,26 @@ file at the start of each run and at every phase-boundary refresh via
   the guard or releases the obligation. Both round-2 M3 self-review bugs were
   exactly this shape: the guard existed, a caller path bypassed it.
 
-- **A script that branches on "is X configured" must own every config value that
-  decision controls.** When a pipeline branches on an env signal (`CSC_NAME`, a
-  file's presence) and the tool it drives has its own config file that can also
-  carry a value governing the same behavior, inject every dependent value from
-  that one branch and never statically pin any of them in the config file — a
-  pinned value silently shadows the signal inside the tool's own resolution,
-  decoupling the branch from what actually ships. Prefer one ternary setting
-  all coupled values (make the invalid combination unrepresentable); when
-  reviewing such a branch, grep the tool's config for statically pinned values
-  it is supposed to control. (M4: `identity: '-'` pinned in electron-builder.yml
-  shadowed CSC_NAME/CSC_LINK — an "unsigned-safe" build would have shipped
-  ad-hoc-signed WITH the auto-update feed.)
-
 - **"Verified" means observed on the instance the USER runs.** The observation
   must come from their launched app, the daemon their app is actually talking
   to, the real renderer bundle — never a daemon you booted yourself, a temp
   userData dir, or a spec you wrote to check with. Name the instance and how
   you reached it. `pnpm dev` runs the daemon from `apps/daemon/dist/main.js`,
-  and `DaemonSupervisor.startNow()` ADOPTS an already-running healthy daemon
-  whose `package.json` version matches
-  (`apps/ui/src/main/daemon-supervisor.ts:243-250`). That version string does
-  not change between rebuilds, so a same-version rebuild keeps serving the OLD
-  `dist/`: rebuild, kill the pid in `<userData>/daemon.json`, relaunch,
-  re-check — and state which build you observed. A component spec is a proxy
-  too, so renderer edits are NOT exempt — drive the real bundle. When the
-  remaining step is the user's, say "waiting on <step>", never "fixed".
-  (Four sessions hit this: "Why its still not sorted?", "But it still wasnt
-  fixed", "Still", "But i still see samne error!" — each after a fix was
-  declared. The last was "verified" by booting a daemon and curling it, which
-  proved nothing about the one the app was talking to; the real cause was a
-  `dist/` five days stale.)
+  and `DaemonSupervisor.startNow()` replaces a rebuilt daemon on its own:
+  `mayAdopt` (`apps/ui/src/main/daemon-supervisor.ts`) compares the pidfile's
+  recorded entry-file mtime+size against the one you just built, not the
+  `package.json` version — its own doc block says "`version` cannot make this
+  call" — so a same-version rebuild moves the stamp and IS replaced
+  automatically. **Rebuild + relaunch is normally enough.** Fall back to
+  killing the pid in `<userData>/daemon.json` only for the three cases where a
+  stale daemon is still adopted: (a) the pidfile's `entry.path` is not the
+  `dist/main.js` you just built — e.g. a `pnpm daemon:dev` daemon running
+  TypeScript source holds the pidfile; (b) `isBusy` is true or errors (it
+  defaults to busy on failure) — typically another window's run, and killing
+  it costs that run; or (c) either mtime stamp is unreadable. After a kill,
+  relaunch, re-check, and state which build you observed. A component spec is
+  a proxy too, so renderer edits are NOT exempt — drive the real bundle. When
+  the remaining step is the user's, say "waiting on <step>", never "fixed".
 
 ## Additional Steps
 
@@ -107,15 +92,9 @@ file at the start of each run and at every phase-boundary refresh via
   index).
 
   **Creating the index is not enough — it then rots.** Only the checkout holding
-  `.codegraph/daemon.sock` is kept warm; a worktree has no daemon, so its index
-  freezes at creation. Measured 2026-08-13 (v1.1.1): five worktrees of this repo
-  carried indexes 2–7 days old, and on a sibling monorepo `codegraph status`
-  printed `✓ Index is up to date` on two worktrees where `sync` immediately found
-  1,087 and 629 unindexed files. **Do not trust that ✓** — a stale index answers a
-  real symbol with `No results found`, indistinguishable from "doesn't exist", and
-  `codegraph_explore` fills the hole with token-level matches on unrelated code
-  under a banner promising current on-disk source. `sync` is incremental
-  (12–23 s on 12k files) and is the only authoritative check, so run it
+  `.codegraph/daemon.sock` is kept warm, so a worktree's index freezes at
+  creation and drifts for days. `codegraph status` cannot be trusted to say
+  so — `sync` is the only authoritative staleness check, so run it
   unconditionally rather than guarding on the index's absence.
 
     ```bash
@@ -134,22 +113,11 @@ file at the start of each run and at every phase-boundary refresh via
   trusting a lookup. Never reach for `init`/`index` to refresh: both are full
   rebuilds costing ~580 MB per checkout.
 
-### Before ship
-<!-- e.g. confirm `pnpm full-check` is green and the daemon smoke
-     (boot apps/daemon/dist/main.js → GET /health/check → 200) passes -->
-
-### After implement
-<!-- -->
-
 ## Constraints
 
-Hard local-first / security rules (also stated in CLAUDE.md):
-
-- No cloud / remote / multi-machine code paths — everything runs locally.
-- No Python runtime anywhere in the stack (including the CLI-agent layer).
-- Secrets live in the macOS Keychain only — never in SQLite, never in a file
-  (the per-launch loopback session token in `daemon.json` is allowed).
-- The daemon binds loopback (`127.0.0.1`) only and gates every non-public route
-  with the per-launch bearer token.
-- Graph definitions are YAML (the source of truth); SQLite holds runtime/history
-  only (`runs` / `items` / `node_state`).
+Hard local-first / security rules are stated once, in full, in CLAUDE.md →
+*Constraints (local-first & security)* — read that section rather than this
+one. This block used to restate them and had drifted into a lossy subset,
+dropping four of CLAUDE.md's hard rules (ProcessRegistry registration, the
+detached-child journal, "no tmux / PTY-scraping for graph execution", and the
+`--no-verify` ban) — a pointer cannot drift the same way a second copy can.

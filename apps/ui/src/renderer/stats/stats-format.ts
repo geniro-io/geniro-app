@@ -63,6 +63,27 @@ export function formatTurns(turns: number): string {
   return `${turns} turn${turns === 1 ? '' : 's'}`;
 }
 
+/**
+ * Money at axis size: `$0`, `$500`, `$1.5k`, `$12k`.
+ *
+ * The full `formatUsd` is right for a figure someone is reading, and wrong for
+ * a tick: five ticks of `$1500.00` is a column of noise wider than the plot it
+ * labels. Tooltips keep the exact value, so nothing is lost by rounding here.
+ */
+export function formatUsdAxis(value: number): string {
+  const abs = Math.abs(value);
+  if (abs < 1_000) {
+    // No decimals: an axis step is a round number by construction, and `$12.50`
+    // beside `$25.00` invites the reader to look for a precision the tick does
+    // not have.
+    return `$${Math.round(value)}`;
+  }
+  const thousands = value / 1_000;
+  // One decimal below 10k (`$1.5k` is a useful distinction), none above, where
+  // it would be false precision on a tick.
+  return `$${abs < 10_000 ? Number(thousands.toFixed(1)) : Math.round(thousands)}k`;
+}
+
 /** Working time as a person would say it: `45s`, `12m`, `3h 12m`. */
 export function formatDuration(ms: number): string {
   // Tested against the RAW value, not the rounded minute count: 45s rounds to

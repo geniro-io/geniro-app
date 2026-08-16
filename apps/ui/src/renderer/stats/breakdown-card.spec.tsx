@@ -60,97 +60,113 @@ function card(groups: UsageGroup[]): HTMLDivElement {
   );
 }
 
+/** Each row's rendered bar width, in source order. */
+const barWidths = (el: HTMLElement): string[] =>
+  [...el.querySelectorAll('li')].map(
+    (row) => row.querySelector<HTMLElement>('div > div')?.style.width ?? '',
+  );
+
 describe('BreakdownCard', () => {
   it('names a slice whose CLI reported no cost beside one that did', () => {
     // The mixed-CLI period: claude prices its turns, cursor-agent reports no
-    // cost at all. Sizing the ring with `costUsd ?? 0` turns "not measured"
-    // into "worth nothing", and a slice worth nothing is dropped — so forty
-    // turns of work disappear from the breakdown they are the subject of.
+    // cost at all. Sizing on `costUsd ?? 0` turns "not measured" into "worth
+    // nothing", and a zero-width bar reads as nothing having happened — so
+    // forty turns of work disappear from the breakdown they are the subject of.
     const el = card([
       { key: 'claude', totals: totals({ turns: 3, costUsd: 5 }) },
       { key: 'cursor-agent', totals: totals({ turns: 40, costUsd: null }) },
     ]);
 
     expect(el.textContent).toContain('cursor-agent');
-    // …and not by relabelling its silence as free work, which is the other
-    // way `?? 0` reads on the page.
+    // …and not by relabelling its silence as free work, which is the other way
+    // `?? 0` reads on the page.
     expect(el.textContent).not.toContain('$0.00');
+    // The whole card fell back to turn sizing, so the 40-turn row is the long
+    // bar rather than an invisible one.
+    expect(barWidths(el)[1]).toBe('100%');
   });
 
-  it('still names the period’s slices when every reported cost is a measured zero', () => {
+  it('still names the period’s rows when every reported cost is a measured zero', () => {
     // A subscription-priced claude profile reports real token counts against a
     // cost of 0 (`turn_complete` rows carrying `costUsd: 0` are recorded in
-    // `agent-activity.ts`). Every slice then sizes to 0, the ring empties, and
-    // the card claims there was no activity in a period of twelve turns.
+    // `agent-activity.ts`). Sizing on cost empties every bar, and the card would
+    // claim there was no activity in a period of twelve turns.
     const el = card([
       { key: 'claude', totals: totals({ turns: 12, costUsd: 0 }) },
     ]);
 
     expect(el.textContent).toContain('claude');
     expect(el.textContent).not.toContain(EMPTY_LABEL);
+    expect(barWidths(el)[0]).toBe('100%');
   });
 
-  it('agrees with a one-turn slice in the legend', () => {
-    // Asserted on the RENDERED card, not on `formatTurns` alone: the helper
-    // being right does not make this call site use it, and the defect was
-    // visible only here — one cursor-agent turn beside 114 claude ones read
-    // "1 turns" against the real ledger.
+  it('agrees with a one-turn row', () => {
+    // Found by driving the real ledger: one cursor-agent turn beside 114 claude
+    // ones rendered "1 turns".
     const el = card([
-      { key: 'claude', totals: totals({ turns: 114, costUsd: 5 }) },
+      { key: 'claude', totals: totals({ turns: 114, costUsd: null }) },
       { key: 'cursor-agent', totals: totals({ turns: 1, costUsd: null }) },
     ]);
 
     expect(el.textContent).toContain('1 turn');
     expect(el.textContent).not.toContain('1 turns');
-    // The sibling slice still pluralizes — this is agreement, not a blanket
-    // switch to the singular.
     expect(el.textContent).toContain('114 turns');
   });
 
-  it('keeps every legend swatch on the wedge it names, past the palette', () => {
-    // Ten groups fold to eight wedges. The trailing "N more" slice outweighs
-    // the kept slices below it, so a SECOND fold inside DonutChart re-sorted
-    // the list and the swatch at index N stopped naming the wedge at index N.
-    // Folding once — here, where the legend is also built — is what this pins.
-    const groups = Array.from({ length: 10 }, (_, index) => ({
-      key: `p${index}`,
-      totals: {
-        turns: 10 - index,
-        costUsd: 10 - index,
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheCreationTokens: null,
-        thinkingTokens: null,
-        workedMs: null,
-      },
-    })) as unknown as UsageGroup[];
+  it('gives a tiny-but-real row a visible bar', () => {
+    // One turn against a thousand rounds to 0.1% of the track, which paints as
+    // nothing at all. A row that exists must be able to be seen to exist.
+    const el = card([
+      { key: 'big', totals: totals({ turns: 1_000 }) },
+      { key: 'tiny', totals: totals({ turns: 1 }) },
+    ]);
 
+    expect(barWidths(el)[1]).toBe('2%');
+  });
+
+  it('shows every group, with no fold', () => {
+    // The ring this replaced could only draw eight wedges and folded the rest
+    // into a "N more" slice — whose re-sorting is what once broke the legend's
+    // correspondence with its own colours. A list has no such budget.
+    const groups = Array.from({ length: 12 }, (_, index) => ({
+      key: `p${index}`,
+      totals: totals({ turns: 12 - index }),
+    })) as UsageGroup[];
+
+    const el = card(groups);
+
+    expect(el.querySelectorAll('li')).toHaveLength(12);
+    expect(el.textContent).toContain('p11');
+    expect(el.textContent).not.toContain('more');
+  });
+
+  it('keeps the full label available when the visible one is truncated', () => {
     const el = render(
       <BreakdownCard
-        title="By project"
-        groups={groups}
-        labelOf={(key) => key ?? 'Unknown'}
+        title="By model"
+        groups={[
+          {
+            key: 'claude-opus-5[thinking=true,context=300k,effort=high]',
+            totals: totals(),
+          },
+        ]}
+        labelOf={(key) => key ?? 'CLI default'}
         emptyLabel="none"
       />,
     );
 
-    // LABEL→COLOUR PAIRS, not two colour lists. Comparing the colours alone
-    // compared `wedgeToken(0..7)` with itself by DOM position, so it held
-    // whatever slice each wedge actually was — certifying the very property it
-    // was written to protect. Pairing is what observes the correspondence.
-    const wedges = [...el.querySelectorAll('circle')]
-      .slice(1)
-      .map((node) => [
-        node.querySelector('title')?.textContent,
-        node.getAttribute('stroke'),
-      ]);
-    const legend = [...el.querySelectorAll('li')].map((row) => [
-      row.querySelector('span:nth-child(2)')?.textContent,
-      row.querySelector<HTMLElement>('span:first-child')?.style.backgroundColor,
-    ]);
+    // The row truncates by CSS; the title attribute is what a hover recovers.
+    // This is the case the ring handled worst — the legend beside it had room
+    // for only a few characters of a name like this.
+    expect(el.querySelector('li span')?.getAttribute('title')).toBe(
+      'claude-opus-5[thinking=true,context=300k,effort=high]',
+    );
+  });
 
-    expect(wedges).toHaveLength(8);
-    expect(legend).toEqual(wedges);
+  it('says so when the period holds nothing', () => {
+    const el = card([]);
+
+    expect(el.textContent).toContain(EMPTY_LABEL);
+    expect(el.querySelectorAll('li')).toHaveLength(0);
   });
 });

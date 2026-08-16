@@ -6,6 +6,7 @@ import {
   formatDayTitle,
   formatDuration,
   formatTurns,
+  formatUsdAxis,
 } from './stats-format';
 import { periodRange, STATS_PERIODS } from './use-stats';
 
@@ -55,6 +56,28 @@ describe('formatDuration', () => {
 
   it('drops the minutes on a whole number of hours', () => {
     expect(formatDuration(2 * 60 * 60_000)).toBe('2h 0m');
+  });
+});
+
+describe('formatUsdAxis', () => {
+  it('drops the cents an axis tick cannot justify', () => {
+    // The full formatter rendered ticks as `$2000.00`, a column of noise wider
+    // than the plot it labels. The exact value still lives in the tooltip.
+    expect(formatUsdAxis(0)).toBe('$0');
+    expect(formatUsdAxis(500)).toBe('$500');
+    expect(formatUsdAxis(12.5)).toBe('$13');
+  });
+
+  it('compacts thousands, with one decimal only where it distinguishes', () => {
+    expect(formatUsdAxis(1_500)).toBe('$1.5k');
+    expect(formatUsdAxis(3_337.95)).toBe('$3.3k');
+    // Past 10k a tenth of a thousand is false precision on a tick.
+    expect(formatUsdAxis(12_000)).toBe('$12k');
+    expect(formatUsdAxis(12_400)).toBe('$12k');
+  });
+
+  it('drops a trailing .0 rather than printing $2.0k', () => {
+    expect(formatUsdAxis(2_000)).toBe('$2k');
   });
 });
 

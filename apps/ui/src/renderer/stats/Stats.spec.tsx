@@ -80,13 +80,22 @@ function stats(overrides: Partial<UsageStatsDto> = {}): UsageStatsDto {
   } as UsageStatsDto;
 }
 
-/** Every stat card, as `label → value`. */
+/**
+ * Every stat on the page, as `label → value` — the hero, its supporting
+ * figures, and the metric grid alike.
+ *
+ * Read off the `stat` / `stat-label` / `stat-value` slots rather than by
+ * counting spans, which is what the previous helper did: it silently matched
+ * only cards with exactly two spans, so adding an icon to a card would have
+ * dropped it out of the map and every assertion about it with it.
+ */
 function cards(el: HTMLElement): Record<string, string> {
   const entries: Record<string, string> = {};
-  for (const card of el.querySelectorAll('[data-slot="card-content"]')) {
-    const spans = card.querySelectorAll('span');
-    if (spans.length === 2) {
-      entries[spans[0]!.textContent ?? ''] = spans[1]!.textContent ?? '';
+  for (const stat of el.querySelectorAll('[data-slot="stat"]')) {
+    const label = stat.querySelector('[data-slot="stat-label"]')?.textContent;
+    const value = stat.querySelector('[data-slot="stat-value"]')?.textContent;
+    if (label !== null && label !== undefined) {
+      entries[label] = value ?? '';
     }
   }
   return entries;
@@ -183,66 +192,13 @@ describe('Stats', () => {
     // Same period, different projection of data already in hand — a refetch
     // here would cost a round trip for a value the client already holds.
     expect(mocks.readUsageStats).toHaveBeenCalledTimes(1);
-    expect(
-      el.querySelector('[data-slot="bar-chart"]')?.getAttribute('aria-label'),
-    ).toContain('Tokens');
-  });
-
-  it('draws no bar for a day nobody measured, and says so on hover', async () => {
-    // A quiet day and an unmeasured day are different claims. Neither may be
-    // drawn as a measured zero — `sumTokens`'s guard is what keeps
-    // `(a ?? 0) + (b ?? 0)` from turning the second into the first.
-    mocks.readUsageStats.mockResolvedValue(
-      stats({
-        days: [
-          {
-            date: '2026-08-10',
-            totals: totals({
-              turns: 0,
-              costUsd: null,
-              inputTokens: null,
-              outputTokens: null,
-            }),
-          },
-          {
-            date: '2026-08-11',
-            totals: totals({
-              turns: 3,
-              costUsd: null,
-              inputTokens: null,
-              outputTokens: null,
-            }),
-          },
-        ],
-      }),
-    );
-
-    const el = await render(<Stats handle={HANDLE} />);
-
-    const columns = [
-      ...el.querySelectorAll<HTMLElement>('[data-slot="bar-chart-column"]'),
-    ];
-    expect(columns[0]!.title).toContain('no turns');
-    expect(columns[1]!.title).toContain('not measured');
-    // Neither day drew a bar — a measured zero would have drawn a hairline.
-    expect(el.querySelectorAll('[data-slot="bar-chart-bar"]')).toHaveLength(0);
-
-    await act(async () => {
-      buttonNamed(el, 'Tokens').click();
-    });
-    // Same under the token metric: both figures were null, so the day stays
-    // unmeasured rather than becoming a zero-token day.
-    expect(el.querySelectorAll('[data-slot="bar-chart-bar"]')).toHaveLength(0);
-  });
-
-  it('names each day column with its turn count and figure', async () => {
-    const el = await render(<Stats handle={HANDLE} />);
-
-    const titles = [
-      ...el.querySelectorAll<HTMLElement>('[data-slot="bar-chart-column"]'),
-    ].map((node) => node.title);
-    expect(titles[0]).toContain('2 turns');
-    expect(titles[0]).toContain('$1.50');
+    // The toggle moved, which is what "re-plots" means from here. The plotted
+    // series itself is asserted in `chart-data.spec.ts`: Recharts measures its
+    // container to lay out, and jsdom reports every box as 0×0, so a chart
+    // never paints under this environment. Asserting on the SVG here would pin
+    // nothing — it is absent whether or not the metric switch works.
+    expect(buttonNamed(el, 'Tokens').getAttribute('aria-pressed')).toBe('true');
+    expect(buttonNamed(el, 'Spend').getAttribute('aria-pressed')).toBe('false');
   });
 
   it('shortens a project path in the breakdown', async () => {

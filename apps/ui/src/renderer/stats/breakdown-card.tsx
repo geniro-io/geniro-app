@@ -6,21 +6,23 @@ import {
   CardHeader,
   CardTitle,
 } from '../components/ui/card';
-import {
-  DonutChart,
-  type DonutSlice,
-  visibleSlices,
-  wedgeToken,
-} from '../components/ui/donut-chart';
+import { isCosted, toRankedRows } from './chart-data';
+import { categoryToken } from './charts/chart-theme';
 import { formatTurns } from './stats-format';
 
 /**
- * One dimension of the period's spend — which agents, models or projects it
- * went to — as a ring with the legend that names its wedges.
+ * A breakdown as a ranked list of bars — who spent what, dearest first.
  *
- * Ranked by cost where any slice reported one and by turn count otherwise, so a
- * period of cursor-agent work still ranks by something the reader can act on
- * instead of by whatever order the daemon happened to return.
+ * Bars rather than the ring this replaced. A ring compares angles, which the eye
+ * does badly past three slices and cannot do at all for the long tail; and its
+ * legend had to sit beside it, so a model name like
+ * `claude-opus-5[thinking=true,context=300k,…]` was truncated to a few
+ * characters. A bar row gives the label the full width of the card and ranks by
+ * length, which is the comparison actually being made.
+ *
+ * Every group is drawn — there is no "N more" fold, because the fold was what
+ * forced the ring's slice budget in the first place, and a list simply gets
+ * longer.
  */
 export function BreakdownCard({
   title,
@@ -34,64 +36,54 @@ export function BreakdownCard({
   labelOf: (key: string | null) => string;
   emptyLabel: string;
 }): React.JSX.Element {
-  // Cost sizes the ring only when EVERY group reported one and they sum to
-  // something. Sizing on cost whenever ANY group had one erased the others: a
-  // null became 0, and a zero-width wedge is dropped, so in a mixed claude +
-  // cursor period the cursor group vanished from both the ring and the legend
-  // with its turns nowhere on the page. The same collapse hid a period whose
-  // costs were all a genuine 0 behind the empty state, despite real turns.
-  // EVERY group must have contributed a positive cost. `some` was not enough:
-  // a subscription-priced group reporting a measured `costUsd: 0` beside a
-  // USD-billed one still sized on cost, got a zero-width wedge, and was dropped
-  // from both ring and legend — the same disappearance, reached by a different
-  // route. One such group now falls the whole card back to turn sizing, which
-  // renders and labels all of them.
-  const costed =
-    groups.length > 0 &&
-    groups.every((group) => (group.totals.costUsd ?? 0) > 0);
-  const slices: DonutSlice[] = groups.map((group) => ({
-    key: group.key ?? '__none__',
-    label: labelOf(group.key),
-    value: costed ? (group.totals.costUsd ?? 0) : group.totals.turns,
-  }));
-  // Folded ONCE, here, because this component also builds the legend and keys
-  // its swatches by index — `DonutChart` renders what it is given.
-  const drawn = visibleSlices(slices);
+  const costed = isCosted(groups);
+  const rows = toRankedRows(
+    groups,
+    labelOf,
+    (row) =>
+      // Spend where the whole card is sized by it; the turn count otherwise, so a
+      // group whose CLI reported no cost still states what it DID.
+      costed && row.costUsd !== null
+        ? formatUsd(row.costUsd)
+        : formatTurns(row.turns),
+    costed,
+  );
 
   return (
     <Card className="min-w-0 flex-1">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="text-sm font-medium">{title}</CardTitle>
       </CardHeader>
-      <CardContent className="flex items-center gap-5 pb-5">
-        {drawn.length === 0 ? (
+      <CardContent className="pb-5">
+        {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">{emptyLabel}</p>
         ) : (
-          <>
-            <DonutChart
-              slices={drawn}
-              ariaLabel={`${title} — ${costed ? 'spend' : 'turns'} per slice`}
-            />
-            <ul className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm">
-              {drawn.map((slice, index) => (
-                <li key={slice.key} className="flex min-w-0 items-center gap-2">
-                  <span
-                    aria-hidden="true"
-                    className="size-2.5 shrink-0 rounded-full"
-                    // The token the ring drew this wedge in, taken from the
-                    // chart itself so the swatch cannot drift from the arc.
-                    style={{ backgroundColor: wedgeToken(index) }}
-                  />
-                  <span className="min-w-0 flex-1 truncate" title={slice.label}>
-                    {slice.label}
+          <ul className="flex flex-col gap-3">
+            {rows.map((row, index) => (
+              <li key={row.id} className="flex flex-col gap-1.5">
+                <div className="flex min-w-0 items-baseline gap-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate" title={row.title}>
+                    {row.label}
                   </span>
                   <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {costed ? formatUsd(slice.value) : formatTurns(slice.value)}
+                    {row.display}
                   </span>
-                </li>
-              ))}
-            </ul>
-          </>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      // A floor, so a real but tiny share is still a visible
+                      // mark rather than rounding away to nothing — the same
+                      // reason the old ring kept a minimum wedge.
+                      width: `${Math.max(row.fraction * 100, 2)}%`,
+                      backgroundColor: categoryToken(index),
+                    }}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </CardContent>
     </Card>

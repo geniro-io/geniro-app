@@ -7,6 +7,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { usageFiguresFromRaw } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
+import { usageDimensions } from '../utils/usage-dimensions';
 
 /**
  * Seeds the usage ledger from transcript rows that were written before it
@@ -137,9 +138,7 @@ export class UsageBackfillService implements OnModuleInit {
         nodeId: row.nodeId,
         seq: row.seq,
         occurredAt: row.createdAt,
-        agentKind: node?.agentKind ?? run?.agentKind ?? null,
-        model: node?.model ?? run?.model ?? null,
-        cwd: run?.cwd ?? null,
+        ...usageDimensions(run, node),
         ...figures,
       };
       if (await this.usageDao.recordOnce(input, em)) {

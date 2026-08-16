@@ -16,6 +16,7 @@ export interface UsageEventInput {
   agentKind: AgentKind | null;
   model: string | null;
   cwd: string | null;
+  workflowName: string | null;
   costUsd: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -87,6 +88,9 @@ export const UsageStatsWireSchema = z.object({
   byAgent: z.array(UsageGroupWireSchema),
   byModel: z.array(UsageGroupWireSchema),
   byProject: z.array(UsageGroupWireSchema),
+  byWorkflow: z
+    .array(UsageGroupWireSchema)
+    .describe('per workflow; the null key is single-agent chats'),
 });
 // No `.meta({ id })`: this is a RESPONSE DTO ROOT, and nestjs-zod would then
 // register the component under the id while the route still points at the DTO

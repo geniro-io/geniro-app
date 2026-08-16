@@ -122,6 +122,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: 'claude-opus-5',
       cwd: '/work/project',
+      workflowName: null,
       costUsd: 0.4,
       inputTokens: 800,
     });
@@ -165,6 +166,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: null,
       cwd: null,
+      workflowName: null,
       costUsd: 0.4,
       inputTokens: 800,
       outputTokens: 150,
@@ -254,6 +256,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       agentKind: null,
       model: null,
       cwd: null,
+      workflowName: null,
       costUsd: 0.4,
     });
   });

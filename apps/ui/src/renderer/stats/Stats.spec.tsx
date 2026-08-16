@@ -76,6 +76,10 @@ function stats(overrides: Partial<UsageStatsDto> = {}): UsageStatsDto {
     byAgent: [{ key: 'claude', totals: totals() }],
     byModel: [{ key: 'claude-opus-5', totals: totals() }],
     byProject: [{ key: '/Users/me/work/geniro-app', totals: totals() }],
+    byWorkflow: [
+      { key: 'Nightly review', totals: totals() },
+      { key: null, totals: totals() },
+    ],
     ...overrides,
   } as UsageStatsDto;
 }
@@ -199,6 +203,15 @@ describe('Stats', () => {
     // nothing — it is absent whether or not the metric switch works.
     expect(buttonNamed(el, 'Tokens').getAttribute('aria-pressed')).toBe('true');
     expect(buttonNamed(el, 'Spend').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('names a single-agent chat in the workflow breakdown', async () => {
+    // A null workflow key is a real row, not an absence: what the graphs cost
+    // only means something beside what the plain chats cost.
+    const el = await render(<Stats handle={HANDLE} />);
+
+    expect(el.textContent).toContain('Nightly review');
+    expect(el.textContent).toContain('Chats');
   });
 
   it('shortens a project path in the breakdown', async () => {

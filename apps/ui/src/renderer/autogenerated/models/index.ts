@@ -2224,6 +2224,12 @@ export interface UsageStatsDto {
      * @memberof UsageStatsDto
      */
     byProject: Array<UsageGroup>;
+    /**
+     * per workflow; the null key is single-agent chats
+     * @type {Array<UsageGroup>}
+     * @memberof UsageStatsDto
+     */
+    byWorkflow: Array<UsageGroup>;
 }
 /**
  * 

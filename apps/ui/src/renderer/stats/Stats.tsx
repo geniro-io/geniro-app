@@ -31,7 +31,6 @@ import {
   cacheHitRate,
   formatDayTitle,
   formatDuration,
-  formatTurns,
   NOT_MEASURED,
 } from './stats-format';
 import { STATS_PERIODS, type StatsPeriodId, useStats } from './use-stats';
@@ -167,7 +166,7 @@ export function Stats({
               <DailySeriesChart points={points} metric={metric} />
             </ChartPanel>
 
-            <section className="grid gap-4 lg:grid-cols-3">
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <BreakdownCard
                 title="By agent"
                 groups={data.byAgent}
@@ -187,6 +186,18 @@ export function Stats({
                   key === null ? 'Unknown folder' : shortenPath(key, 2)
                 }
                 emptyLabel="No project activity in this period."
+              />
+              <BreakdownCard
+                title="By workflow"
+                groups={data.byWorkflow}
+                // A null key is a single-agent chat, and it is named rather
+                // than hidden: what the graphs cost is only meaningful beside
+                // what the plain chats cost. Turns recorded before the ledger
+                // stored a workflow name land here too — the name was never
+                // written and cannot be recovered, and inventing one would be
+                // worse than a row that says "not a workflow".
+                labelOf={(key) => key ?? 'Chats'}
+                emptyLabel="No workflow activity in this period."
               />
             </section>
 

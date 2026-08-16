@@ -72,6 +72,7 @@ describe('StatsService (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: 'claude-opus-5',
       cwd: '/work/project',
+      workflowName: null,
       costUsd: 1,
       inputTokens: 100,
       outputTokens: 10,
@@ -190,12 +191,14 @@ describe('StatsService (in-memory sqlite)', () => {
         agentKind: 'claude',
         model: 'claude-opus-5',
         cwd: '/work/a',
+        workflowName: null,
         costUsd: 1,
       });
       await record(new Date(2026, 7, 10, 10), {
         agentKind: 'cursor-agent',
         model: 'composer-1',
         cwd: '/work/b',
+        workflowName: null,
         costUsd: 5,
       });
 
@@ -223,10 +226,12 @@ describe('StatsService (in-memory sqlite)', () => {
       await record(new Date(2026, 7, 10, 9), { cwd: '/work/a', costUsd: null });
       await record(new Date(2026, 7, 10, 10), {
         cwd: '/work/b',
+        workflowName: null,
         costUsd: null,
       });
       await record(new Date(2026, 7, 10, 11), {
         cwd: '/work/b',
+        workflowName: null,
         costUsd: null,
       });
 
@@ -260,6 +265,38 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.byAgent[0]!.key).toBeNull();
       expect(stats.byModel[0]!.key).toBeNull();
       expect(stats.byProject[0]!.key).toBeNull();
+    });
+
+    it('splits spend by workflow, keeping chats as their own row', async () => {
+      // The comparison this breakdown exists for: what the graphs cost
+      // against what plain chats cost. A chat's null key is a REAL row
+      // here, not an absence — dropping it would leave the workflow shares
+      // reading as shares of everything, when they are shares of the graph
+      // runs alone.
+      await record(new Date(2026, 7, 10, 9), {
+        workflowName: 'Nightly review',
+        costUsd: 5,
+      });
+      await record(new Date(2026, 7, 10, 10), {
+        workflowName: null,
+        costUsd: 3,
+      });
+      await record(new Date(2026, 7, 10, 11), {
+        workflowName: 'Nightly review',
+        costUsd: 1,
+      });
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(
+        stats.byWorkflow.map((group) => [group.key, group.totals.costUsd]),
+      ).toEqual([
+        ['Nightly review', 6],
+        [null, 3],
+      ]);
     });
   });
 

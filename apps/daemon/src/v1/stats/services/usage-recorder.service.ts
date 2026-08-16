@@ -8,6 +8,10 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { usageFiguresFrom } from '../../agents/utils/usage-figures';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
+import {
+  type UsageDimensions,
+  usageDimensions,
+} from '../utils/usage-dimensions';
 
 /**
  * Copies every finished turn's usage into the ledger as it happens.
@@ -82,30 +86,17 @@ export class UsageRecorderService implements OnModuleInit {
     await this.usageDao.recordOnce(row, em);
   }
 
-  /**
-   * What this turn ran as, copied at write time because the rows that hold it
-   * are destroyed with the run.
-   *
-   * A graph node's own `node_state` wins over the run's fields where it has
-   * them: a workflow run names no single agent (its `agentKind` is null) and
-   * each node names its own, so reading the run alone would attribute every
-   * node's spend to nothing. `cwd` only ever lives on the run — `node_state`
-   * stamps none — so it comes from there for both shapes.
-   */
+  /** See {@link usageDimensions} — one reading, shared with the boot sweep. */
   private async dimensions(
     runId: string,
     nodeId: string | null,
     em: EntityManager,
-  ): Promise<Pick<UsageEventInput, 'agentKind' | 'model' | 'cwd'>> {
+  ): Promise<UsageDimensions> {
     const run = await this.runDao.getById(runId, em);
     const node =
       nodeId === null
         ? null
         : await this.nodeStateDao.getByRunNode(runId, nodeId, em);
-    return {
-      agentKind: node?.agentKind ?? run?.agentKind ?? null,
-      model: node?.model ?? run?.model ?? null,
-      cwd: run?.cwd ?? null,
-    };
+    return usageDimensions(run, node);
   }
 }

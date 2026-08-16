@@ -51,6 +51,7 @@ export class StatsService {
     const byAgent = new Map<string | null, ChatTotalsWire>();
     const byModel = new Map<string | null, ChatTotalsWire>();
     const byProject = new Map<string | null, ChatTotalsWire>();
+    const byWorkflow = new Map<string | null, ChatTotalsWire>();
 
     for (const event of events) {
       addUsage(totals, event);
@@ -58,6 +59,10 @@ export class StatsService {
       addUsage(bucket(byAgent, event.agentKind), event);
       addUsage(bucket(byModel, event.model), event);
       addUsage(bucket(byProject, event.cwd), event);
+      // The null key is every single-agent chat, which is a real and useful
+      // row here rather than an absence: it is what the workflows are being
+      // compared against.
+      addUsage(bucket(byWorkflow, event.workflowName), event);
     }
 
     return {
@@ -74,6 +79,7 @@ export class StatsService {
       byAgent: rank(byAgent),
       byModel: rank(byModel),
       byProject: rank(byProject),
+      byWorkflow: rank(byWorkflow),
     };
   }
 

@@ -52,6 +52,17 @@ export function formatDayTitle(date: string): string {
   return formatDay(date, DAY_TITLE_OPTIONS);
 }
 
+/**
+ * A turn count with its noun agreeing: `1 turn`, `2 turns`, `0 turns`.
+ *
+ * Shared rather than restated at each site because the page renders the same
+ * count in two places — the per-day hover sentence and a breakdown legend — and
+ * only the first of them agreed, so a one-turn slice read "1 turns".
+ */
+export function formatTurns(turns: number): string {
+  return `${turns} turn${turns === 1 ? '' : 's'}`;
+}
+
 /** Working time as a person would say it: `45s`, `12m`, `3h 12m`. */
 export function formatDuration(ms: number): string {
   // Tested against the RAW value, not the rounded minute count: 45s rounds to

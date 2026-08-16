@@ -17,6 +17,7 @@ import {
   formatDayLabel,
   formatDayTitle,
   formatDuration,
+  formatTurns,
   NOT_MEASURED,
   NOT_MEASURED_TITLE,
 } from './stats-format';
@@ -232,7 +233,7 @@ function dailyPoint(
   const title = `${formatDayTitle(day.date)} — ${
     day.totals.turns === 0
       ? 'no turns'
-      : `${day.totals.turns} turn${day.totals.turns === 1 ? '' : 's'}, ${
+      : `${formatTurns(day.totals.turns)}, ${
           value === null
             ? 'not measured'
             : metric === 'cost'

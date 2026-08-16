@@ -5,6 +5,7 @@ import {
   formatDayLabel,
   formatDayTitle,
   formatDuration,
+  formatTurns,
 } from './stats-format';
 import { periodRange, STATS_PERIODS } from './use-stats';
 
@@ -54,6 +55,21 @@ describe('formatDuration', () => {
 
   it('drops the minutes on a whole number of hours', () => {
     expect(formatDuration(2 * 60 * 60_000)).toBe('2h 0m');
+  });
+});
+
+describe('formatTurns', () => {
+  it('agrees with a count of one', () => {
+    // Live against the real ledger, a period holding a single cursor-agent turn
+    // rendered its legend row as "1 turns". The count of one is the whole point
+    // of this helper — every other count was already right.
+    expect(formatTurns(1)).toBe('1 turn');
+  });
+
+  it('pluralizes every other count, zero included', () => {
+    expect(formatTurns(0)).toBe('0 turns');
+    expect(formatTurns(2)).toBe('2 turns');
+    expect(formatTurns(114)).toBe('114 turns');
   });
 });
 

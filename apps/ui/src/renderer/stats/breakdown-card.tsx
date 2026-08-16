@@ -12,6 +12,7 @@ import {
   visibleSlices,
   wedgeToken,
 } from '../components/ui/donut-chart';
+import { formatTurns } from './stats-format';
 
 /**
  * One dimension of the period's spend — which agents, models or projects it
@@ -85,7 +86,7 @@ export function BreakdownCard({
                     {slice.label}
                   </span>
                   <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {costed ? formatUsd(slice.value) : `${slice.value} turns`}
+                    {costed ? formatUsd(slice.value) : formatTurns(slice.value)}
                   </span>
                 </li>
               ))}

@@ -90,6 +90,23 @@ describe('BreakdownCard', () => {
     expect(el.textContent).not.toContain(EMPTY_LABEL);
   });
 
+  it('agrees with a one-turn slice in the legend', () => {
+    // Asserted on the RENDERED card, not on `formatTurns` alone: the helper
+    // being right does not make this call site use it, and the defect was
+    // visible only here — one cursor-agent turn beside 114 claude ones read
+    // "1 turns" against the real ledger.
+    const el = card([
+      { key: 'claude', totals: totals({ turns: 114, costUsd: 5 }) },
+      { key: 'cursor-agent', totals: totals({ turns: 1, costUsd: null }) },
+    ]);
+
+    expect(el.textContent).toContain('1 turn');
+    expect(el.textContent).not.toContain('1 turns');
+    // The sibling slice still pluralizes — this is agreement, not a blanket
+    // switch to the singular.
+    expect(el.textContent).toContain('114 turns');
+  });
+
   it('keeps every legend swatch on the wedge it names, past the palette', () => {
     // Ten groups fold to eight wedges. The trailing "N more" slice outweighs
     // the kept slices below it, so a SECOND fold inside DonutChart re-sorted

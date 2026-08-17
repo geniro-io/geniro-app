@@ -94,7 +94,10 @@ export type BetweenTurnApproval = (request: {
 }) => boolean | null;
 
 /** An `approval_request`, narrowed — the only event kind that is ever held. */
-type ApprovalRequestEvent = Extract<AgentEvent, { type: 'approval_request' }>;
+export type ApprovalRequestEvent = Extract<
+  AgentEvent,
+  { type: 'approval_request' }
+>;
 
 /**
  * How many between-turn approval requests one session will hold at once.
@@ -229,6 +232,34 @@ export interface CliSessionOptions {
    * Undefined = the previous behaviour, a logged drop.
    */
   onBetweenTurnEvent?: (event: AgentEvent) => void;
+  /**
+   * Put a request the policy will not decide in front of the USER now, rather
+   * than holding it until some later turn happens to adopt it.
+   *
+   * The holding path it takes precedence over is what a real incident was made
+   * of: claude asked an `AskUserQuestion` 8 minutes after its turn had settled
+   * (the CLI carries on by itself — see `handleOrphanEvent`), the question was
+   * held, and NOTHING said so. The transcript grew the tool-call row and the
+   * badge said the agent was working, so for 22 minutes the app showed a run
+   * making progress while the CLI stood blocked on a person who had no control
+   * to answer with. The session's idle window then closed the process, which
+   * the CLI read as a refusal — and the user got a bare "claude run failed"
+   * for a question they were never shown.
+   *
+   * `respond` is the whole reason this can exist off-turn: a verdict is one
+   * encoded line on a stdin that is already open, and neither the encoder nor
+   * the stdin belongs to a turn. Its `input` argument echoes the request's own
+   * arguments back exactly as the in-turn seam does, so an ALLOW cannot hand
+   * the CLI a blanked argument list.
+   *
+   * Returns whether the owner TOOK the request. False (or no handler at all)
+   * falls back to holding it — a caller with nowhere to draw a card must not
+   * lose the request, only wait longer for it.
+   */
+  onHeldApproval?: (
+    event: ApprovalRequestEvent,
+    respond: (allow: boolean, input?: unknown) => boolean,
+  ) => boolean;
 }
 
 /**
@@ -313,6 +344,21 @@ export interface CliSession {
    * reusable one.
    */
   readonly retired: boolean;
+  /**
+   * Alive with no turn in flight, and yet NOT free: the CLI is blocked on a
+   * verdict only the user can give — a card raised between turns, or a request
+   * held for the next turn to adopt.
+   *
+   * Separate from `idle` on purpose, the way `retired` is and for the mirror
+   * reason. Folding it in would make every reader treat this session as busy,
+   * including {@link CliSession.startTurn}'s own callers; what actually needs to
+   * change is narrower — whoever REAPS an unused process must not reap this one,
+   * because the thing it is waiting for is a person, and a person taking twenty
+   * minutes to answer is not a session going unused. The whole incident this
+   * exists to prevent is that reap: the close reached the CLI as a refusal of
+   * the question, and the run was marked failed for it.
+   */
+  readonly parked: boolean;
   /** Terminate the process group (the CLI plus every grandchild). */
   close(): void;
   /** Resolves once the process is gone. Never rejects. */
@@ -582,6 +628,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * say, a `tool_result` would file one turn's output under another's.
    */
   const pendingApprovals: ApprovalRequestEvent[] = [];
+  /**
+   * Request ids the OWNER took off-turn ({@link CliSessionOptions.onHeldApproval})
+   * and has not answered yet — a card on someone's screen right now.
+   *
+   * Deliberately NOT in `pendingApprovals`: that buffer's contract is "replay
+   * this into the next turn", and replaying a request the user is already
+   * looking at would draw a second card for it. What the two share is the only
+   * thing this set is read for — while either is non-empty, the CLI is blocked
+   * on a person and the session is {@link CliSession.parked}.
+   */
+  const ownedApprovals = new Set<string>();
   /**
    * When each outstanding approval request was seen, for the round-trip line.
    *
@@ -864,6 +921,33 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     if (verdict === null) {
       approvalSeenAt.delete(event.id);
+      // Offered to the owner FIRST, because holding is the weaker answer: it
+      // leaves the CLI blocked with nothing on screen until a turn that may
+      // never come. A verdict needs no turn — only this stdin and the encoder
+      // the last turn installed, both of which outlive it.
+      if (opts.onHeldApproval && approvalEncoder) {
+        const respond = (allow: boolean, input?: unknown): boolean => {
+          ownedApprovals.delete(event.id);
+          const answer = approvalEncoder?.(event.id, allow, input);
+          const written = answer !== undefined && sessionWrite(answer);
+          opts.logger?.warn(
+            `${opts.command}: between-turn ${isQuestion ? 'question' : 'approval_request'} for '${event.toolName}' ` +
+              `(id ${event.id}) ${written ? `${allow ? 'allowed' : 'refused'} by the user` : 'could NOT be answered — stdin is gone'}`,
+          );
+          return written;
+        };
+        ownedApprovals.add(event.id);
+        if (opts.onHeldApproval(event, respond)) {
+          opts.logger?.warn(
+            `${opts.command}: ${isQuestion ? 'question' : 'approval_request'} for '${event.toolName}' ` +
+              `(id ${event.id}) arrived between turns — raised for the user to answer now`,
+          );
+          return;
+        }
+        // The owner declined it, so nothing is on screen after all — fall
+        // through to the hold rather than leaving the set claiming a card.
+        ownedApprovals.delete(event.id);
+      }
       pendingApprovals.push(event);
       opts.logger?.warn(
         `${opts.command}: ${isQuestion ? 'question' : 'approval_request'} for '${event.toolName}' ` +
@@ -1704,6 +1788,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get retired() {
       return cancelledTurnMayStillEmit;
     },
+    /**
+     * Both buffers, because both mean the same thing about the PROCESS: it is
+     * standing still on a verdict a person owes it. Which of the two holds the
+     * request only decides whether a card is up yet.
+     */
+    get parked() {
+      return ownedApprovals.size > 0 || pendingApprovals.length > 0;
+    },
     close: () => {
       if (processGone) {
         return;
@@ -1749,6 +1841,8 @@ function deadSession(message: string): CliSession {
     // retired session is a live process to close, while this one has no process
     // at all. `alive: false` is what gets this entry dropped.
     retired: false,
+    // No process, so nothing is blocked on anyone.
+    parked: false,
     close: () => {},
     closed: Promise.resolve(),
   };

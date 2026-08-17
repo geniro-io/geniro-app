@@ -607,6 +607,20 @@ export const CLAUDE_MCP_GET_TIMEOUT_MS = 20_000;
 export const CLAUDE_MCP_LOGIN_ARGS: readonly string[] = ['mcp', 'login'];
 
 /**
+ * What this CLI says when a server sign-in did not complete — see
+ * `AdapterConfig.mcp.loginFailureMarkers` for why the verdict has to be read
+ * out of the words rather than off an exit status.
+ *
+ * Observed verbatim on 2.1.232: `Couldn't complete authentication for
+ * "probe": stdin isn't a terminal…`. The apostrophe is left out of the marker
+ * on purpose — this CLI writes typographic punctuation elsewhere, and a marker
+ * carrying one would stop matching the day the line is re-quoted.
+ */
+export const CLAUDE_MCP_LOGIN_FAILURE_MARKERS: readonly string[] = [
+  'complete authentication for',
+];
+
+/**
  * Argv that signs the CLI ITSELF in — the account, not one of its MCP servers.
  *
  * `claude auth login` ("Sign in to your Anthropic account"), read from the

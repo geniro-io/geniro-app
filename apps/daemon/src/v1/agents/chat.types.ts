@@ -460,10 +460,19 @@ export type AgentMcpServerWire = z.infer<typeof AgentMcpServerWireSchema>;
  * dials every server the folder defines, which is measured in seconds and
  * bounded only by the slowest one. Blocking the response on that made the panel
  * hold an HTTP request open for up to the CLI's whole listing timeout. So a
- * cold read now answers immediately with `pending: true` and empty rows, and
- * the dial continues behind it — meaning `servers: []` asserts "this folder has
- * none" only when `pending` is false. A consumer that ignores the flag would
- * read a read-in-progress as an empty folder.
+ * cold read now answers immediately with `pending: true`, and the dial
+ * continues behind it — meaning `servers: []` asserts "this folder has none"
+ * only when `pending` is false. A consumer that ignores the flag would read a
+ * read-in-progress as an empty folder.
+ *
+ * A pending answer MAY carry rows, and they are the folder's PREVIOUS reading
+ * (`AgentMcpService.firstPaint`). It could not, until a user reported the panel
+ * "loading for a minute" — the rows were being withheld for the whole of a
+ * re-dial that already knew what the folder held, so the one moment the list
+ * was most wanted was the one moment it showed nothing. `pending` still means
+ * exactly what it meant: these rows are not the answer YET. What changed is
+ * that a stale row beats an empty panel, which the flag is what makes safe to
+ * say.
  */
 // No `.meta({ id })` on this ROOT: it is the response DTO's own schema (see
 // AgentModelWireSchema above for the dangling-$ref an id here would cause).
@@ -487,20 +496,24 @@ export const AgentMcpListingWireSchema = z
       ),
   })
   // Three fields, but only three LEGAL states — reading, refused, answered. The
-  // combinations below are representable and mean nothing, and every consumer
-  // was guarding against them by hand (each construction site spells
+  // combination below is representable and means nothing, and every consumer
+  // was guarding against it by hand (each construction site spells
   // `pending: false`). One missed guard renders a read-in-progress as "No
   // servers", a claim about the user's configuration that nobody made.
+  //
+  // ROWS are no longer part of this rule (see the doc block): a pending answer
+  // carries the folder's previous reading, so the panel keeps its list through
+  // a re-dial. A REASON still is — "we cannot ask this CLI at all" and "we are
+  // still asking" are opposite claims, and an envelope asserting both leaves
+  // the renderer to pick.
   //
   // Enforced on the RESPONSE, which is where it bites: `@ZodResponse`
   // serializes through this schema, so a daemon that ever composed an illegal
   // envelope fails here rather than shipping it to a renderer that has to
   // re-derive which field wins.
   .refine(
-    (listing) =>
-      !listing.pending ||
-      (listing.unavailableReason === null && listing.servers.length === 0),
-    'a pending listing carries no rows and no reason — it is the answer not being ready yet',
+    (listing) => !listing.pending || listing.unavailableReason === null,
+    'a pending listing states no reason — it is the answer not being ready yet',
   );
 export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
 

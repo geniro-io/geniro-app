@@ -11,6 +11,7 @@ import { createGroupTerminator } from '../utils/kill-tree';
 import {
   type BetweenTurnApproval,
   type CliSession,
+  type CliSessionOptions,
   runCliSession,
   type SessionLogger,
   type SpawnFn,
@@ -63,6 +64,24 @@ const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
  * daemon-wide memory fault, not a failed read.
  */
 const UTILITY_COMMAND_MAX_BUFFER_CHARS = 1024 * 1024;
+
+/**
+ * How {@link AgentCommandOptions.pty} gets a terminal — the macOS/BSD
+ * `script(1)`, which allocates a pty, runs the command under it and forwards
+ * both directions.
+ *
+ * Not a native pty module by choice: `node-pty` was deleted with the PTY mirror
+ * in M4, and re-adding a native dependency — with the Electron-ABI rebuild that
+ * follows it everywhere — to allocate one terminal for one sign-in is a bad
+ * trade. This ships with the OS. `-q` suppresses the wrapper's own start/stop
+ * banner, and `/dev/null` is the transcript file it insists on being given (the
+ * BSD form takes the file positionally, before the command).
+ *
+ * Agent-agnostic and stays here: it is a property of the PLATFORM, not of any
+ * CLI, so no adapter declares it.
+ */
+const PTY_WRAPPER = 'script';
+const PTY_WRAPPER_ARGS = ['-q', '/dev/null'] as const;
 
 /**
  * Constructor options every adapter accepts — test seams, not user config. The
@@ -489,6 +508,47 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * RUN this CLI's sign-in to ONE MCP server, as a managed child — the sibling
+   * of {@link runLogin} one level down, and of {@link mcpLoginTarget}, which
+   * only says what the invocation would be.
+   *
+   * The resolve-only path stays as the fallback and the escape hatch, exactly
+   * as it does for the account login. What changed is that this is possible at
+   * all: `mcp login` refuses a piped stdin outright, so for two milestones the
+   * only way to run it was to open the user's terminal — which is what got
+   * reported ("it opens a shell; it should take us straight to the browser").
+   * The refusal is about a TERMINAL, not about being watched, so
+   * {@link AgentCommandOptions.pty} is the whole fix; that option's doc block
+   * carries the probe.
+   *
+   * Resolves with the child's output whatever the exit status
+   * (`captureDiagnosis`), because under a pty the status belongs to the wrapper
+   * and the CLI's own verdict is only ever in what it printed.
+   */
+  runMcpLogin(options: {
+    server: string;
+    cwd: string;
+    configDir?: string | null;
+    timeoutMs: number;
+    onSpawn: (child: ChildProcess, spawnInfo: AgentSpawnInfo) => void;
+  }): Promise<string | null> {
+    const { loginArgs } = this.getConfig().mcp;
+    if (loginArgs === null) {
+      return Promise.resolve(null);
+    }
+    return this.runCommand([...loginArgs, options.server], {
+      pty: true,
+      captureDiagnosis: true,
+      // The CLI resolves a server NAME against the folder it runs in, so a
+      // sign-in started anywhere else authenticates a different server or none.
+      cwd: options.cwd,
+      timeoutMs: options.timeoutMs,
+      env: this.configDirEnv(options.configDir),
+      onSpawn: options.onSpawn,
+    });
+  }
+
+  /**
    * RUN this CLI's sign-out, headlessly.
    *
    * Unlike its sign-in sibling this needs no browser and no input at all —
@@ -517,6 +577,21 @@ export abstract class AgentAdapter {
       ...(options.onSpawn === undefined ? {} : { onSpawn: options.onSpawn }),
     });
     return out !== null;
+  }
+
+  /**
+   * Whether this CLI's own words say a server sign-in did NOT complete.
+   *
+   * Concrete over `mcp.loginFailureMarkers`, so the service driving one never
+   * learns which CLI phrases it how. A blank marker is ignored rather than
+   * matching everything — an empty substring is contained in every string, so
+   * one that reached the list would report every sign-in as failed.
+   */
+  mcpLoginFailed(output: string): boolean {
+    const haystack = output.toLowerCase();
+    return this.getConfig().mcp.loginFailureMarkers.some(
+      (marker) => marker !== '' && haystack.includes(marker.toLowerCase()),
+    );
   }
 
   /**
@@ -983,7 +1058,13 @@ export abstract class AgentAdapter {
   ): Promise<string | null> {
     const conversational =
       options.stdinWrites !== undefined || options.settleWhen !== undefined;
-    return options.processGroup === true || conversational
+    // A pty implies the group path for the same reason a conversational
+    // command does, and one step harder: the wrapper is a process with the CLI
+    // under it and a browser opener under that, so a single-pid reap addresses
+    // the wrapper alone. See {@link AgentCommandOptions.pty}.
+    return options.processGroup === true ||
+      conversational ||
+      options.pty === true
       ? this.runAsProcessGroup(args, options)
       : this.runViaExecFile(args, options);
   }
@@ -1119,11 +1200,30 @@ export abstract class AgentAdapter {
         settle(null);
       }, timeoutMs);
       timer.unref?.();
+      // Under a pty the CLI is not the child — `script` is, with the CLI under
+      // it. Everything downstream (the reap, the journal, the streams) then
+      // addresses the wrapper's group, which is exactly the unit that has to
+      // die: see {@link AgentCommandOptions.pty}.
+      const spawned =
+        options.pty === true
+          ? {
+              command: PTY_WRAPPER,
+              args: [...PTY_WRAPPER_ARGS, this.command, ...args],
+            }
+          : { command: this.command, args };
       try {
-        child = spawnFn(this.command, args, {
+        child = spawnFn(spawned.command, spawned.args, {
           ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
           detached: true,
-          stdio: ['pipe', 'pipe', 'pipe'],
+          // The pty wrapper gets /dev/null on stdin, not a pipe, and that is
+          // load-bearing rather than tidiness: `script` copies its OWN stdin's
+          // terminal settings onto the pty it allocates, so with a pipe there
+          // it dies at once with `script: tcgetattr/ioctl: Operation not
+          // supported on socket` and exit 1 — measured, and silent from the
+          // caller's side, since an empty output past `captureDiagnosis` reads
+          // as a command that ran and said nothing. Nothing is lost by it: the
+          // CLI's stdin is the pty, and a pty command writes no frames.
+          stdio: [options.pty === true ? 'ignore' : 'pipe', 'pipe', 'pipe'],
           env: buildChildEnv({ ...this.inheritedEnv(), ...options.env }),
         });
       } catch {
@@ -1135,7 +1235,7 @@ export abstract class AgentAdapter {
       // taken by `mcp list`, which HEALTH-CHECKS by launching the user's own
       // MCP servers (see the doc block above). A SIGKILL between the spawn and
       // the reap strands that whole group with nothing left to name it.
-      trackDetachedChild(child, this.command);
+      trackDetachedChild(child, spawned.command);
       if (options.stdinWrites !== undefined) {
         // Attached BEFORE the first write. An `'error'` on a stream with no
         // listener is an uncaught exception in node, and `child.on('error')`
@@ -1520,6 +1620,7 @@ export abstract class AgentAdapter {
       runScoped?: boolean;
       betweenTurnApproval?: BetweenTurnApproval | undefined;
       onBetweenTurnEvent?: (event: AgentEvent) => void;
+      onHeldApproval?: CliSessionOptions['onHeldApproval'];
     } = {},
   ): AgentSession {
     const runScoped = opts.runScoped === true && this.canHostSession(input);
@@ -1566,6 +1667,10 @@ export abstract class AgentAdapter {
         // live in the chat service and the graph executor.
         betweenTurnApproval: opts.betweenTurnApproval,
         onBetweenTurnEvent: opts.onBetweenTurnEvent,
+        // Same passthrough and the same reason: whether a request the posture
+        // will not decide can be put in front of the user depends on the owner
+        // having somewhere to draw a card, which no adapter can know.
+        onHeldApproval: opts.onHeldApproval,
       });
     } catch (err) {
       // A synchronous throw between prepareTurn and a live session (a bad
@@ -1722,6 +1827,12 @@ export abstract class AgentAdapter {
         // scan is the reader. A wrapper that dropped it would leave that scan
         // treating an unusable process as the freshest reusable one.
         return session.retired;
+      },
+      get parked() {
+        // Forwarded for the same reason `retired` is: the buffers holding the
+        // unanswered requests live in the process wrapper, and the reader is
+        // the registry's reaper.
+        return session.parked;
       },
       close: () => session.close(),
       closed: session.closed,

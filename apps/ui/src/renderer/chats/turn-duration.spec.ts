@@ -5,6 +5,8 @@ import {
   cliTurnApiMs,
   cliTurnDurationMs,
   formatDuration,
+  openTurnWorkedMs,
+  scanTurns,
   threadWorkedMs,
   turnDurations,
 } from './turn-duration';
@@ -202,6 +204,81 @@ describe('threadWorkedMs', () => {
 
   it('reports zero for a thread with no settled turn', () => {
     expect(threadWorkedMs(turnDurations([]))).toEqual({ ms: 0, turns: 0 });
+  });
+});
+
+describe('scanTurns + openTurnWorkedMs', () => {
+  const at = (iso: string): number => Date.parse(iso);
+
+  it('reports no open turn once the last one settled', () => {
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      untimedDone('2026-08-14T10:00:10.000Z'),
+    ];
+    expect(scanTurns(items).open).toBeNull();
+    expect(openTurnWorkedMs(null, at('2026-08-14T11:00:00.000Z'))).toBe(0);
+  });
+
+  it('measures the turn in flight from its own start, not from now', () => {
+    // The defect this exists for: the header's total stood still for the whole
+    // of a turn. A figure measured from the reader's mount would restart at
+    // zero on every reload instead.
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      untimedDone('2026-08-14T10:00:10.000Z'),
+      userAt('2026-08-14T10:05:00.000Z'),
+    ];
+    const { durations, open } = scanTurns(items);
+    expect(threadWorkedMs(durations).ms).toBe(10_000);
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:06:30.000Z'))).toBe(90_000);
+  });
+
+  it('stops counting while the turn sits on an unanswered card', () => {
+    // Ticking here would report the user's own thinking time as the agent's
+    // work — the very thing the wall-clock fallback subtracts for a settled
+    // turn, so the live reading has to do it too or the two mean different
+    // things.
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      item('approval_request', '2026-08-14T10:00:20.000Z', {
+        payload: { id: 'req-1' },
+      }),
+    ];
+    const { open } = scanTurns(items);
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:00:30.000Z'))).toBe(20_000);
+    // Ten minutes later, still unanswered: the same 20s of work.
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:10:30.000Z'))).toBe(20_000);
+  });
+
+  it('resumes counting once the card is answered', () => {
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      item('approval_request', '2026-08-14T10:00:20.000Z', {
+        payload: { id: 'req-1' },
+      }),
+      item('approval_verdict', '2026-08-14T10:10:20.000Z', {
+        payload: { id: 'req-1', verdict: 'allow' },
+      }),
+    ];
+    const { open } = scanTurns(items);
+    // 10m25s elapsed, 10m of it parked → 25s worked.
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:10:25.000Z'))).toBe(25_000);
+  });
+
+  it('never reports a negative figure from a clock that moved backwards', () => {
+    const { open } = scanTurns([userAt('2026-08-14T10:00:00.000Z')]);
+    expect(openTurnWorkedMs(open, at('2026-08-14T09:59:00.000Z'))).toBe(0);
+  });
+
+  it('still answers the settled durations exactly as turnDurations does', () => {
+    // The two share one scan; a divergence would mean the transcript rows and
+    // the header disagreed about the same turn.
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      cliDone('2026-08-14T10:00:10.000Z', 7618),
+      userAt('2026-08-14T10:05:00.000Z'),
+    ];
+    expect(scanTurns(items).durations).toEqual(turnDurations(items));
   });
 });
 

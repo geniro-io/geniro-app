@@ -38,6 +38,8 @@ const geniro = {
   onUpdateState: vi.fn().mockReturnValue(() => {}),
   openInTerminal: vi.fn(),
   notify: vi.fn(),
+  testNotification: vi.fn(),
+  openNotificationSettings: vi.fn(),
   onNotificationActivated: vi.fn().mockReturnValue(() => {}),
 };
 
@@ -127,6 +129,10 @@ beforeEach(() => {
     .mockResolvedValue(updateState({ phase: 'up-to-date' }));
   geniro.installUpdate.mockReset();
   geniro.onUpdateState.mockReset().mockReturnValue(() => {});
+  geniro.testNotification
+    .mockReset()
+    .mockResolvedValue({ posted: true, shown: true, reason: null });
+  geniro.openNotificationSettings.mockReset().mockResolvedValue(undefined);
   handoffApi.resolveCliLogin.mockReset();
   cliAuthApi.cliLogout.mockReset().mockResolvedValue({
     agent: 'cursor-agent',
@@ -146,6 +152,67 @@ afterEach(async () => {
     await act(async () => root?.unmount());
   }
   container.remove();
+});
+
+describe('Settings notifications section', () => {
+  /** The section holding the notifications switch. */
+  function notificationsSection(): HTMLElement {
+    return container
+      .querySelector('#settings-notifications')!
+      .closest('section')!;
+  }
+
+  function buttonNamed(text: string): HTMLButtonElement | undefined {
+    return [...notificationsSection().querySelectorAll('button')].find(
+      (button) => button.textContent?.includes(text),
+    );
+  }
+
+  it('opens macOS’s own Notifications pane on one press', async () => {
+    // The report: the app already KNEW where to send the user ("System Settings
+    // › Notifications › Geniro") and printed it as directions to follow by
+    // hand. A destination the app can reach is a button, not a sentence.
+    await mount();
+
+    await act(async () => {
+      buttonNamed('macOS settings')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(geniro.openNotificationSettings).toHaveBeenCalledTimes(1);
+    // No argument: the destination is a constant in main, so the renderer
+    // cannot aim `shell.openExternal` at a pane of its choosing.
+    expect(geniro.openNotificationSettings).toHaveBeenCalledWith();
+  });
+
+  it('offers the way out WITHOUT having to run the test first', async () => {
+    // The button that only appears once a test has failed is no use to the
+    // user who already knows the banners are missing — which is how the report
+    // arrived, after the test had been run and read.
+    await mount();
+
+    expect(buttonNamed('macOS settings')).toBeDefined();
+    expect(notificationsSection().textContent).not.toContain('Sent —');
+  });
+
+  it('points a shown-but-unseen test at that button rather than at a path to walk', async () => {
+    await mount();
+
+    await act(async () => {
+      buttonNamed('Send a test')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    const result = container.querySelector(
+      '[data-slot="notification-test-result"]',
+    );
+    expect(result?.textContent).toContain('open macOS settings above');
+    expect(result?.textContent).not.toContain(
+      'System Settings › Notifications',
+    );
+  });
 });
 
 describe('Settings updates section', () => {

@@ -78,6 +78,24 @@ function typeAndCommit(field: HTMLTextAreaElement, text: string): void {
 
 const noop = (): void => {};
 
+/** Type into the open editor WITHOUT committing, so a control can do it. */
+function type(field: HTMLTextAreaElement, text: string): void {
+  act(() => {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )!.set!;
+    setValue.call(field, text);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+/** One of the editor's own controls, by its visible label. */
+const control = (text: string): HTMLButtonElement | null =>
+  [...(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+    (button) => button.textContent?.trim() === text,
+  ) ?? null;
+
 describe('QueuedStrip', () => {
   it('renders nothing at all when the queue is empty', () => {
     const el = render(
@@ -404,5 +422,68 @@ describe('QueuedStrip', () => {
     );
     const group = el.querySelector('[aria-label="Queued messages"]')!;
     expect(group.getAttribute('role')).toBe('group');
+  });
+});
+
+describe('QueuedStrip — the editor is a block, with its own controls', () => {
+  const open = (onEdit: (id: string, text: string) => void): void => {
+    render(
+      <QueuedStrip
+        messages={[message('q1', 'first')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={onEdit}
+        onRemove={noop}
+        onSteer={noop}
+      />,
+    );
+    click(byLabel('Edit queued message 1'));
+  };
+
+  it('opens a multi-line field rather than a one-line slot', () => {
+    // The reported defect: what a composer prompt was edited in was a strip
+    // barely taller than its own border. `rows` is the property that decides
+    // that, so it is what this asserts.
+    open(noop);
+
+    expect(editor(1)!.rows).toBeGreaterThanOrEqual(3);
+  });
+
+  it('Save commits the rewrite', () => {
+    const onEdit = vi.fn();
+    open(onEdit);
+
+    type(editor(1)!, 'rewritten');
+    click(control('Save'));
+
+    expect(onEdit).toHaveBeenCalledWith('q1', 'rewritten');
+    expect(editor(1)).toBeNull();
+  });
+
+  it('Cancel discards it', () => {
+    const onEdit = vi.fn();
+    open(onEdit);
+
+    type(editor(1)!, 'rewritten');
+    click(control('Cancel'));
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(editor(1)).toBeNull();
+  });
+
+  it('does NOT commit on blur, which is what makes Cancel possible', () => {
+    // Blur-to-commit and a visible Cancel cannot coexist: clicking Cancel
+    // blurs the field first, so the draft being discarded would be saved on
+    // the way out. This fails the moment the blur handler comes back.
+    const onEdit = vi.fn();
+    open(onEdit);
+
+    type(editor(1)!, 'rewritten');
+    act(() => {
+      editor(1)!.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    });
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(editor(1)).not.toBeNull();
   });
 });

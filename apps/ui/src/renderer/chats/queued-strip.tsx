@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
+import { cn } from '../components/ui/utils';
 
 /**
  * One message waiting to go out — text plus however many images rode with it.
@@ -128,47 +129,93 @@ export function QueuedStrip({
         return (
           <div
             key={message.id}
-            className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-            <Clock aria-hidden="true" className="size-3 shrink-0" />
+            className={cn(
+              'rounded-md bg-muted/50 text-xs text-muted-foreground',
+              // Two shapes, deliberately. A queued row is a one-line summary
+              // and stays one; the EDITOR is a block, because what it holds is
+              // a composer prompt — the same kind of text as the box below it,
+              // and it was being asked for through a one-line slot barely
+              // taller than its own border. That is the reported "some thin
+              // line still left; it should be a proper text block".
+              editingId === message.id
+                ? 'flex flex-col gap-2 px-2 py-2'
+                : 'flex items-center gap-1.5 px-2 py-1',
+            )}>
             {editingId === message.id ? (
               // A Textarea, not an Input: this value is a composer prompt, and
               // `<input type=text>` applies HTML value sanitization, which
               // strips the newlines out of a multi-line one. Not
               // `ExpandableTextarea` either — its ⤢ opens a modal editor, which
               // fights this strip's own close-when-the-row-drains behaviour,
-              // and it exposes no key/blur handling to commit through.
-              <Textarea
-                ref={inputRef}
-                value={draft}
-                rows={1}
-                aria-label={`Edit queued message ${position}`}
-                className="min-h-0 flex-1 resize-none px-1.5 py-0.5 text-xs"
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  // One keystroke commits, so an Enter confirming an IME
-                  // composition must not fire on a half-composed word.
-                  if (event.nativeEvent.isComposing) {
-                    return;
-                  }
-                  // Enter inserts a newline here — the whole point of the
-                  // field — so committing moves to the modifier the composer
-                  // itself uses.
-                  if (
-                    event.key === 'Enter' &&
-                    (event.metaKey || event.ctrlKey)
-                  ) {
-                    event.preventDefault();
-                    commit(message.id);
-                  } else if (event.key === 'Escape') {
-                    // Unmounting a focused field fires no blur, so the
-                    // abandoned draft cannot leak through the commit below.
-                    setEditingId(null);
-                  }
-                }}
-                onBlur={() => commit(message.id)}
-              />
+              // and it exposes no key handling to commit through.
+              <>
+                <span className="flex items-center gap-1.5">
+                  <Clock aria-hidden="true" className="size-3 shrink-0" />
+                  Editing message {position} — it goes out when this turn ends
+                </span>
+                <Textarea
+                  ref={inputRef}
+                  value={draft}
+                  rows={3}
+                  aria-label={`Edit queued message ${position}`}
+                  // Sized like the composer it is a draft for, not like the row
+                  // it replaced: real leading, real padding, three lines to
+                  // start and a ceiling past which it scrolls rather than
+                  // pushing the transcript off the screen. `resize-y` because
+                  // the one thing a fixed block cannot know is how long THIS
+                  // message is.
+                  className="max-h-48 min-h-24 resize-y text-sm leading-relaxed"
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    // One keystroke commits, so an Enter confirming an IME
+                    // composition must not fire on a half-composed word.
+                    if (event.nativeEvent.isComposing) {
+                      return;
+                    }
+                    // Enter inserts a newline here — the whole point of the
+                    // field — so committing moves to the modifier the composer
+                    // itself uses.
+                    if (
+                      event.key === 'Enter' &&
+                      (event.metaKey || event.ctrlKey)
+                    ) {
+                      event.preventDefault();
+                      commit(message.id);
+                    } else if (event.key === 'Escape') {
+                      setEditingId(null);
+                    }
+                  }}
+                />
+                {/* Committing on BLUR is gone with the one-line field, and the
+                    two changes belong together: a block this size is something
+                    a user clicks out of to read the transcript behind it, and
+                    silently saving on the way out is only tolerable while the
+                    edit is one line nobody can lose track of. With the buttons
+                    visible, blur has to mean nothing at all — Cancel would
+                    otherwise fire it and save the very draft it is discarding. */}
+                <span className="flex items-center gap-1.5">
+                  <span className="mr-auto">⌘↵ to save · Esc to cancel</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-muted-foreground"
+                    onClick={() => setEditingId(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7"
+                    onClick={() => commit(message.id)}>
+                    Save
+                  </Button>
+                </span>
+              </>
             ) : (
               <>
+                <Clock aria-hidden="true" className="size-3 shrink-0" />
                 <span className="min-w-0 flex-1 truncate" title={message.text}>
                   {label}
                 </span>

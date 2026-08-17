@@ -101,8 +101,23 @@ export function InlineClampText({
         'rounded-lg px-3 py-2.5 text-[11px] leading-relaxed',
         accentClass,
       )}>
+      {/*
+        `overflow-clip`, and the difference from `overflow-hidden` is the whole
+        of a reported bug. `hidden` truncates AND makes the box a scroll
+        container — one with no scrollbar, which nothing on screen says exists
+        and no gesture can scroll back. Anything that brings a descendant into
+        view therefore shifts this content up for good, and the clamp starts
+        cutting through the middle of its FIRST line instead of its last.
+        Measured: opening a sub-agent's detail dialog does exactly that, every
+        time. `Dialog` moves focus to the first focusable child on open; when
+        the request panel leads with a fenced block, that child is the fence's
+        own Copy button sitting inside this box, so `focus()` scrolls the clamp
+        to reveal it. `clip` truncates without a scroll container — probe-
+        confirmed in this stack, where a box set to `scrollTop = 40` keeps 40
+        under `hidden` and refuses it under `clip`.
+      */}
       <div
-        className={cn(!expanded && isLong && 'overflow-hidden')}
+        className={cn(!expanded && isLong && 'overflow-clip')}
         style={
           !expanded && isLong
             ? {

@@ -1,4 +1,58 @@
 /**
+ * A pty child's output as plain text: escape sequences gone, CR line endings
+ * normalized.
+ *
+ * A sign-in the daemon runs under a terminal (`AgentCommandOptions.pty`) writes
+ * TERMINAL output, and the readers below are written for prose. The one that
+ * breaks without this is {@link firstUrlIn}: claude emits its authorization URL
+ * as an OSC-8 hyperlink — `ESC ] 8 ; ; <url> BEL <url> ESC ] 8 ; ; BEL` — and
+ * BEL is neither whitespace nor one of the characters that regex stops at, so
+ * the match would run straight through it and hand the browser one URL glued to
+ * a copy of itself. Measured on 2.1.232.
+ *
+ * Applied unconditionally: output that carries no escapes is returned
+ * unchanged, so there is no second path to keep in step.
+ */
+export function plainTerminalText(raw: string): string {
+  // The one place in this codebase where matching control characters IS the
+  // job: the rule exists to catch a control byte that reached a pattern by
+  // accident, and every one below is named on purpose, in escaped form, with
+  // the sequence it strips written out beside it.
+  /* eslint-disable no-control-regex */
+  return (
+    raw
+      // OSC — `ESC ] … BEL` or `ESC ] … ESC \`, PAYLOAD INCLUDED.
+      //
+      // Dropping the payload is what makes an OSC-8 hyperlink read correctly,
+      // and keeping it was measured to be wrong: the sequence is
+      // `ESC ] 8 ; ; <url> BEL <url> ESC ] 8 ; ; BEL` — the target inside the
+      // escape and the visible text after it are the SAME url — so preserving
+      // the escape's copy handed the caller one url glued to a second copy of
+      // itself. Observed end-to-end before this was narrowed: a live
+      // `mcp-login` answered with exactly that doubled string.
+      .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+      // CSI — cursor moves, colours, erases. Nothing here carries meaning
+      // to a reader of prose.
+      .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+      // Whatever single-character escapes and bells are left over — and then
+      // every remaining C0 control byte, newline and tab excepted.
+      //
+      // The second rule is not belt-and-braces over the first. A pty echoes the
+      // wrapper's own housekeeping as literal control BYTES — the measured
+      // output opens `EOT BS BS` before the CLI's first word — and those are
+      // not escape sequences, so nothing above touches them. They reach the
+      // wire through `message`, and a raw control character inside a JSON
+      // string is invalid JSON: the route answered 200 with a body the client
+      // could not parse, which is a harder failure to read than any of the ones
+      // this function exists for.
+      .replace(/[\u001b\u0007]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+  );
+  /* eslint-enable no-control-regex */
+}
+
+/**
  * The sign-in link a CLI printed, out of whatever else it wrote.
  *
  * CLI-AGNOSTIC on purpose, and this is not a per-CLI fact dodging the adapter

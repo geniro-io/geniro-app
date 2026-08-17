@@ -113,13 +113,17 @@ export function DirectorySelect({
       aria-label={ariaLabel}
       title={title}
       disabled={disabled}
-      // Capped, never shrunk. The row decides what FITS by measuring these
-      // chips at their natural width and moving the rest into its overflow
-      // menu; a chip that quietly gave up width instead would report a false
-      // fit and squeeze itself down to a few letters (it reached 80px, then
-      // 0px before that) rather than move. The cap still bounds a deep path —
-      // its full text is one tooltip, or one menu row, away.
+      // Capped AND shrinkable, which the old note here forbade — on the
+      // strength of a row that measured its chips and moved whatever did not
+      // fit into an overflow menu, so a chip giving up width silently reported
+      // a false fit. That row is gone (`composer-rows.tsx` measures nothing
+      // now), and with it the reason: this is one of the three chips whose
+      // label is USER DATA, so when the row runs short it is the right one to
+      // give up width rather than push a neighbour onto a second line. The cap
+      // still bounds a deep path, and the full text is one tooltip — or one
+      // menu row — away.
       className={cn('max-w-52', className)}
+      flexible
       leadingIcon={icon}
       groups={[
         ...(rows.length > 0

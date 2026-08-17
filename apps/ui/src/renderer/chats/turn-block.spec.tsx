@@ -160,6 +160,40 @@ describe('standalone transcript rows', () => {
     expect(container.textContent).toContain('it broke');
   });
 
+  it('gives a LOOSE row inside a delegate enclosure no sender frame either', () => {
+    // `TurnBlock` folds `nested` into `soloAgent`, and this is the same rule on
+    // the path that renders a row which did NOT fold into one. The frame would
+    // not merely repeat the enclosure's identity, it would assert the wrong
+    // one: a delegate's rows carry the DELEGATING agent's `nodeId`, so the
+    // avatar and the name under the bubble read `Writer` — the agent that
+    // launched the delegate — one line beneath a header naming the delegate.
+    //
+    // Reached here by rendering a bare item entry, which is what the two lists
+    // this guards between can disagree about: `SENDER_KINDS` decides who gets a
+    // frame, `ownerOf` decides who folds into a block, and today every kind in
+    // the first except `call_question` is owned by the second. A kind added to
+    // one and not the other lands exactly here.
+    const entry = groupTranscript([
+      item('message', { text: 'Working on it.' }, 'writer', 'assistant'),
+    ])[0]!;
+    act(() => {
+      root.render(
+        <NestedThreadContext.Provider value={true}>
+          <TranscriptEntryView
+            entry={entry}
+            nodes={NODES}
+            chatAgentName="claude"
+          />
+        </NestedThreadContext.Provider>,
+      );
+    });
+
+    expect(container.querySelector('[data-slot="sender-row"]')).toBeNull();
+    expect(container.querySelector('[data-slot="avatar"]')).toBeNull();
+    expect(container.textContent).not.toContain('Writer');
+    expect(container.textContent).toContain('Working on it.');
+  });
+
   it('keeps the user’s own bubble in a solo chat — the chat still has two sides', () => {
     const entry = groupTranscript([
       item('message', { text: 'do the thing' }, null, 'user'),

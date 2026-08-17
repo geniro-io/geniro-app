@@ -7,7 +7,10 @@ import type {
   AgentTurnInput,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import type { BetweenTurnApproval } from '../utils/spawn-cli';
+import type {
+  BetweenTurnApproval,
+  CliSessionOptions,
+} from '../utils/spawn-cli';
 
 /**
  * How long a run's CLI process is kept after its last turn.
@@ -113,6 +116,13 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
      * under the RUN, which is the same run for every turn on this session.
      */
     onBetweenTurnEvent?: (event: AgentEvent) => void,
+    /**
+     * How a request the posture will not decide reaches the USER with no turn
+     * in flight — see `CliSessionOptions.onHeldApproval`. Bound at spawn like
+     * the event sink above and for the same reason: it files the card under the
+     * RUN, which does not change from turn to turn.
+     */
+    onHeldApproval?: CliSessionOptions['onHeldApproval'],
   ): AgentTurnHandle {
     const existing = this.entries.get(runId);
     if (existing) {
@@ -154,6 +164,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
             // cannot grant something unasked is the one to fail toward.
             (request) => policy.current?.(request) ?? null,
       onBetweenTurnEvent,
+      onHeldApproval,
     });
     const handle = session.startTurn(input, onEvent);
     if (!handle) {
@@ -278,6 +289,22 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       if (this.entries.get(runId) !== entry || !entry.session.idle) {
         return;
       }
+      if (entry.session.parked) {
+        // The window measures a chat going UNUSED, and this one is not: the CLI
+        // is standing still on a question the user has been shown and has not
+        // answered. Closing it here is how a real run was lost — the CLI read
+        // the close as a refusal of the question, wrote "the user doesn't want
+        // to proceed", and the run was marked failed 22 minutes after anyone
+        // had touched it.
+        //
+        // Re-armed rather than abandoned: the wait ends when they answer, and
+        // nothing else would restart the clock before the next turn. So an
+        // answered card leaves the session with at most one more full window,
+        // and one never answered costs a process the user still has open — the
+        // same bound an in-turn card already has, where Stop is the only end.
+        this.arm(runId, entry);
+        return;
+      }
       this.closeEntry(runId, entry, 'it went unused');
     }, SESSION_IDLE_MS);
     entry.timer.unref?.();
@@ -317,7 +344,12 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     while (this.entries.size >= MAX_LIVE_SESSIONS) {
       let oldest: [string, SessionEntry] | null = null;
       for (const candidate of this.entries) {
-        if (!candidate[1].session.idle) {
+        // `parked` alongside `idle`, not folded into it: a session holding a
+        // card the user is looking at is idle in the only sense `idle` claims
+        // (no turn in flight) and busy in the sense that matters here. Evicting
+        // it kills the question rather than the process — the CLI takes the
+        // close as a refusal, and the user's answer arrives at nothing.
+        if (!candidate[1].session.idle || candidate[1].session.parked) {
           continue;
         }
         if (oldest === null || candidate[1].lastUsedAt < oldest[1].lastUsedAt) {

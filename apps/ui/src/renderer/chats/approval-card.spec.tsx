@@ -1238,3 +1238,211 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
     expect(onRespond).toHaveBeenCalledWith(true, 'no picture here');
   });
 });
+
+describe('ApprovalCard — a screenshot belongs to the TAB it was pasted into', () => {
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+  const threeQuestions = {
+    questions: [
+      { question: 'How was it launched?', header: 'Launch' },
+      { question: 'What did you click?', header: 'Click' },
+      { question: 'Does it repeat?', header: 'Repeat' },
+    ],
+  };
+
+  /** Paste an image onto whichever answer field is on screen. */
+  async function pasteImage(el: HTMLElement): Promise<void> {
+    const field = el.querySelector('input')!;
+    const event = new Event('paste', { bubbles: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [new File([PNG_BYTES], 'shot.png', { type: 'image/png' })],
+      },
+    });
+    await act(async () => {
+      field.dispatchEvent(event);
+    });
+    for (let attempt = 0; ; attempt++) {
+      if (el.querySelector('[data-slot="staged-attachment"]')) {
+        return;
+      }
+      if (attempt >= 100) {
+        throw new Error('the pasted image never staged');
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  const thumbnails = (el: HTMLElement): number =>
+    el.querySelectorAll('[data-slot="staged-attachment"]').length;
+
+  it('shows the thumbnail on that tab ALONE', async () => {
+    // The report: "when i attach photo to question - it should be attached to
+    // tab where i inserted it, not to all". One `useAttachments` stages the
+    // whole card, so before the owner tag the strip drew every image under
+    // every question.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={threeQuestions}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    click(tabsOf(el)[1]!);
+    await pasteImage(el);
+    expect(thumbnails(el)).toBe(1);
+
+    click(tabsOf(el)[0]!);
+    expect(thumbnails(el)).toBe(0);
+    click(tabsOf(el)[2]!);
+    expect(thumbnails(el)).toBe(0);
+    click(tabsOf(el)[1]!);
+    expect(thumbnails(el)).toBe(1);
+  });
+
+  it('announces it on the LINE of the question it answers', async () => {
+    // The submission is one labelled line per question, and this is what makes
+    // the picture legible to the model: an image note appended once at the end
+    // of the whole card says a screenshot is coming and nothing about which of
+    // three questions it is about.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={threeQuestions}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    typeInto(el.querySelector('input')!, 'from the Dock');
+    click(tabsOf(el)[1]!);
+    await pasteImage(el);
+    click(tabsOf(el)[2]!);
+    typeInto(el.querySelector('input')!, 'once');
+
+    click(buttonNamed(el, 'Submit answers'));
+
+    const [, answer] = onRespond.mock.calls[0]!;
+    const lines = String(answer).split('\n');
+    expect(lines[0]).toBe('How was it launched?: from the Dock');
+    expect(lines[1]).toBe('What did you click?: ');
+    expect(lines[2]).toContain('1 image attached');
+    expect(lines[3]).toBe('Does it repeat?: once');
+  });
+
+  it('counts an image-only tab as ANSWERED', async () => {
+    // It could not before: the empty-tab gate had a carve-out for a LONE
+    // question only, on the stated grounds that one image cannot say which tab
+    // it belongs to. With an owner it can, so a tab answered with a picture is
+    // an answered tab on every card.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={threeQuestions}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    typeInto(el.querySelector('input')!, 'from the Dock');
+    click(tabsOf(el)[2]!);
+    typeInto(el.querySelector('input')!, 'once');
+    click(tabsOf(el)[1]!);
+    expect(buttonNamed(el, 'Submit answers').disabled).toBe(true);
+    expect(el.textContent).toContain('still empty: Click');
+
+    await pasteImage(el);
+
+    expect(buttonNamed(el, 'Submit answers').disabled).toBe(false);
+    expect(el.textContent).not.toContain('still empty');
+  });
+});
+
+describe('ApprovalCard — Enter moves to the next question', () => {
+  const twoQuestions = {
+    questions: [
+      { question: 'Which folder?', header: 'Folder' },
+      { question: 'Which branch?', header: 'Branch' },
+    ],
+  };
+
+  const pressEnter = (input: HTMLInputElement): void => {
+    act(() => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+  };
+
+  it('advances instead of doing nothing', () => {
+    // The report: "when i press enter - it should go to next tab
+    // automatically". Picking an OPTION has advanced since the tabs were
+    // introduced; typing did not, so a card of free-text questions was answered
+    // by typing, reaching for the mouse, typing, reaching for the mouse again —
+    // and Enter, the key the field itself invites, did nothing at all.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={twoQuestions}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    typeInto(el.querySelector('input')!, '/tmp/a');
+    pressEnter(el.querySelector('input')!);
+
+    expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
+    // …and it has not spent the one-shot verdict on a half-filled card.
+    expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it('submits from the LAST tab still empty, under the button’s own gate', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={twoQuestions}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    typeInto(el.querySelector('input')!, '/tmp/a');
+    pressEnter(el.querySelector('input')!);
+    typeInto(el.querySelector('input')!, 'main');
+    pressEnter(el.querySelector('input')!);
+
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(String(onRespond.mock.calls[0]![1])).toBe(
+      'Which folder?: /tmp/a\nWhich branch?: main',
+    );
+  });
+
+  it('moves ON from an empty tab rather than submitting it blank', () => {
+    // The verdict is one-shot, so the dangerous reading of "Enter submits" is
+    // an Enter pressed on a tab the user has not filled in. `nextTab` is the
+    // next EMPTY tab and never the current one, so there is always somewhere to
+    // go while anything is unanswered — Submit stays the only way to finish.
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={twoQuestions}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+
+    pressEnter(el.querySelector('input')!);
+
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
+  });
+});

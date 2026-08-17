@@ -70,6 +70,7 @@ function McpDisclosure({
   onRefresh,
   onSetEnabled,
   onSignIn,
+  loginPanel,
 }: {
   /** Names the dialog, so several open one at a time stay tellable apart. */
   agentName: string;
@@ -80,6 +81,11 @@ function McpDisclosure({
   onRefresh?: () => void;
   onSetEnabled?: (server: string, enabled: boolean) => void;
   onSignIn?: (server: string) => void;
+  /**
+   * A sign-in in flight, rendered under the rows — the owner composes it, so
+   * this file learns nothing about login sessions.
+   */
+  loginPanel?: React.ReactNode;
 }): React.JSX.Element {
   const count = listing?.servers?.length ?? 0;
   return (
@@ -119,6 +125,11 @@ function McpDisclosure({
           // across a panel that is already bounded.
           className="border-t-0"
         />
+        {/* A sign-in in progress, INSIDE the dialog that started it. The CLI's
+            own browser tab opens behind the app, so without this the Sign in
+            control reads as a button that did nothing — which is the whole
+            reason the account sign-in has a progress panel of its own. */}
+        {loginPanel}
       </Dialog>
     </>
   );
@@ -358,6 +369,7 @@ export function AgentsPanel({
   onRefreshMcp,
   onSetMcpEnabled,
   onSignInMcp,
+  mcpLoginPanel,
   mcpToggleError = null,
   onDismissMcpToggleError,
   onMcpOpenChange,
@@ -403,12 +415,18 @@ export function AgentsPanel({
    * Sign one CLI in to one MCP server. Absent hides the action, on the same
    * rule as {@link onSetMcpEnabled}.
    *
-   * It ends in the user's own terminal rather than in the daemon, and that is
-   * forced: `mcp login` refuses a non-TTY stdin outright (probe-verified), so
-   * there is no headless path being passed over. Nothing in this panel knows
-   * that — it hands over a CLI kind and a server name.
+   * Where it ends up is the owner's business — this panel hands over a CLI
+   * kind and a server name and learns nothing else. It used to open a terminal
+   * window because `mcp login` refuses a piped stdin; it now runs in the
+   * daemon under a pty, and the only trace of the change here is
+   * {@link mcpLoginPanel}, which is what the flow needs somewhere to be shown.
    */
   onSignInMcp?: (kind: CliKind, server: string) => void;
+  /**
+   * A sign-in in flight, rendered inside the MCP dialog. Composed by the owner
+   * (`Chats`), so nothing here has to know what a login session is.
+   */
+  mcpLoginPanel?: React.ReactNode;
   /**
    * Why the last toggle did not land. Shown as a strip rather than swallowed:
    * the daemon refuses a toggle it cannot honour, and its sentence explains
@@ -650,6 +668,12 @@ export function AgentsPanel({
             ];
             const hasList =
               listedThreads.length > 0 || settledSubagents.length > 0;
+            // The caption's two figures, counted off the ROWS it captions —
+            // see the caption itself for why they are no longer the agent's.
+            const listedTotal = listedThreads.length + settledSubagents.length;
+            const listedActive = listedThreads.filter(
+              (thread) => thread.status === 'running',
+            ).length;
             const tasks = tasksByAgent?.get(agent.id) ?? [];
             const taskState = taskProgress(tasks);
             // Whether the list is still being WORKED, which is what decides
@@ -759,6 +783,7 @@ export function AgentsPanel({
                             ? (server) => onSignInMcp(mcpKind, server)
                             : undefined
                         }
+                        loginPanel={mcpLoginPanel}
                       />
                     ) : null}
                     {hasList ? (
@@ -843,15 +868,26 @@ export function AgentsPanel({
                 {isExpanded && hasList ? (
                   <div className="flex flex-col border-t border-border px-2 py-1.5">
                     {/* The counts, in the one place they describe something: a
-                        caption over the rows below. Both are the AGENT's own
-                        figures rather than the list's — turns live anywhere on
-                        it, and every thread it holds including the conversation
-                        whose control sits in the header — so the number can
-                        exceed the rows, and saying "threads" rather than naming
-                        the rows is what keeps that honest. */}
+                        caption over the rows below — and counting THOSE ROWS,
+                        which is the whole of the fix here.
+                        They used to be the agent's own figures: `activeTurns`
+                        (live turns of the NODE) and every thread it holds
+                        INCLUDING the main conversation, whose control sits in
+                        the card's header and which is therefore not a row. The
+                        defence was that "threads" names no rows so the numbers
+                        may exceed them. It does not survive contact with a
+                        reader: measured on a real delegation, a card showing
+                        three spinning sub-agents over "4 finished sub-agents"
+                        was captioned `1 active · 8 threads` — every figure
+                        contradicted by what sat directly beneath it (1 vs 3
+                        spinners, 8 vs 7 rows), because in-process delegates
+                        emit no node status and so count for nothing in
+                        `activeTurns`, while the main conversation counts in
+                        `threads`. A caption that disagrees with its own list is
+                        read as a bug in the counting, which is what it is. */}
                     <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                      {agent.activeTurns} active · {agent.threads.length}{' '}
-                      {agent.threads.length === 1 ? 'thread' : 'threads'}
+                      {listedActive} active · {listedTotal}{' '}
+                      {listedTotal === 1 ? 'thread' : 'threads'}
                     </p>
                     <ul className="m-0 flex list-none flex-col gap-0.5">
                       {listedThreads.map((thread) => (

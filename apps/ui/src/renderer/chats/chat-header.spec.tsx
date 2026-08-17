@@ -204,3 +204,131 @@ describe('ChatHeader — how long this thread WORKED', () => {
     expect(el.textContent).not.toContain('turns');
   });
 });
+
+describe('ChatHeader — the worked total while a turn is in flight', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps counting, second by second, instead of standing still', () => {
+    // The reported defect: a header reading `running · 18s · worked 64m 34s`
+    // where the 64m had not moved for the whole turn.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-04T00:01:00Z'));
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        workedMs={600_000}
+        turnCount={5}
+        turnStartedAt="2026-08-04T00:00:00.000Z"
+        openTurn={{
+          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+          parkedMs: 0,
+          openSince: [],
+        }}
+      />,
+    );
+
+    // 10m settled + 1m of the turn in flight.
+    expect(el.textContent).toContain('worked 11m 0s');
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(el.textContent).toContain('worked 11m 30s');
+  });
+
+  it('counts the turn in flight in the tally its time is part of', () => {
+    // A sum over six turns labelled "5 turns" is the kind of small lie a reader
+    // has no way to catch.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-04T00:01:00Z'));
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        workedMs={600_000}
+        turnCount={5}
+        openTurn={{
+          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+          parkedMs: 0,
+          openSince: [],
+        }}
+      />,
+    );
+
+    expect(el.textContent).toContain('/ 6 turns');
+  });
+
+  it('freezes while the turn waits on the user, and never resumes late', () => {
+    // The elapsed clock beside it keeps running — that one IS the wall clock.
+    // This one claims WORK, and nothing is working while a card sits open.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-04T00:01:00Z'));
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="needs-input"
+        workedMs={600_000}
+        turnCount={5}
+        openTurn={{
+          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+          parkedMs: 0,
+          openSince: [Date.parse('2026-08-04T00:00:20.000Z')],
+        }}
+      />,
+    );
+
+    // 10m settled + the 20s worked before the card opened.
+    expect(el.textContent).toContain('worked 10m 20s');
+
+    act(() => {
+      vi.advanceTimersByTime(120_000);
+    });
+    expect(el.textContent).toContain('worked 10m 20s');
+  });
+
+  it('stands still once the run has no turn in flight', () => {
+    // The settled reading is the sum and nothing else — this pins that the
+    // ticking is driven by the open turn, not by the component being mounted.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-04T00:01:00Z'));
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={600_000}
+        turnCount={5}
+        openTurn={null}
+      />,
+    );
+
+    expect(el.textContent).toContain('worked 10m 0s');
+    act(() => {
+      vi.advanceTimersByTime(120_000);
+    });
+    expect(el.textContent).toContain('worked 10m 0s');
+  });
+
+  it('shows a live figure for a first turn that has settled nothing yet', () => {
+    // `workedMs` is 0 for the whole of a thread's first turn, and the old
+    // `workedMs > 0` gate rendered nothing at all through it.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-04T00:00:45Z'));
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        workedMs={0}
+        turnCount={0}
+        openTurn={{
+          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+          parkedMs: 0,
+          openSince: [],
+        }}
+      />,
+    );
+
+    expect(el.textContent).toContain('worked 45s');
+    // One turn, so no tally — the figure IS that turn.
+    expect(el.textContent).not.toContain('turns');
+  });
+});

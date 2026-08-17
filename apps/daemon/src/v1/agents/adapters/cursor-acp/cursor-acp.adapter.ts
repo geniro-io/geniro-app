@@ -359,6 +359,17 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         loginArgs: ['mcp', 'login'],
         loginUnavailableReason: null,
+        /**
+         * EMPTY, and that is a measurement gap rather than a claim: this CLI's
+         * server sign-in has never been observed failing, so there is no
+         * wording to match. Inventing one would be a marker that silently never
+         * fires — the failure this adapter's own `needs_auth` note records
+         * having already made once. The consequence is bounded and stated at
+         * the field: with no marker, an attempt that failed is reported as
+         * having completed, and the LISTING — which is the authority either way
+         * — still shows the server unauthenticated on the re-read that follows.
+         */
+        loginFailureMarkers: [],
       },
       auth: {
         /**

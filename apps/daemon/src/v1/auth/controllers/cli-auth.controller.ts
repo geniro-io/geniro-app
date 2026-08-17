@@ -8,6 +8,7 @@ import {
   LoginCodeBodyDto,
   LoginSessionDto,
   LogoutResultDto,
+  McpLoginQueryDto,
 } from '../dto/cli-auth.dto';
 import { CliAuthService } from '../services/cli-auth.service';
 
@@ -40,6 +41,20 @@ export class CliAuthController {
   @ZodResponse({ status: 200, type: LoginSessionDto })
   startLogin(@Query() query: CliAuthQueryDto): Promise<LoginSession> {
     return this.auth.startLogin(query);
+  }
+
+  /**
+   * Sign in to one MCP server, here, without a terminal window.
+   *
+   * Its state is read and cancelled through the SAME `login/:id` routes below:
+   * one session shape, one map, one lifecycle — a parallel set would be two
+   * places for a cancel to be got wrong.
+   */
+  @Post('mcp-login')
+  @ApiOperation({ operationId: 'startMcpLogin' })
+  @ZodResponse({ status: 200, type: LoginSessionDto })
+  startMcpLogin(@Query() query: McpLoginQueryDto): Promise<LoginSession> {
+    return this.auth.startMcpLogin(query);
   }
 
   @Get('login/:id')

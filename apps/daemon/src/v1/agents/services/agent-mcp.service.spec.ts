@@ -531,6 +531,90 @@ describe('AgentMcpService.list', () => {
     expect(second.servers.map((s) => s.name)).toEqual(['sentry']);
   });
 
+  it('keeps showing the folder’s last servers while a lapsed reading is re-dialled', async () => {
+    // The reported wait: the panel opened on a bare spinner for as long as the
+    // dial took — 8s against nine servers, up to the CLI's whole 45s deadline
+    // when one hangs. The previous reading is not fresher information, but the
+    // alternative is NO information for the duration, so it is painted with
+    // `pending` saying what it is.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    let calls = 0;
+    let releaseRedial!: (servers: AgentMcpServer[]) => void;
+    const { service, setNow } = harness(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve([server('codegraph'), server('ticktick')])
+        : new Promise<AgentMcpServer[]>((resolve) => {
+            releaseRedial = resolve;
+          });
+    });
+
+    const warm = await service.list(AgentKind.Claude, cwd);
+    expect(warm.servers.map((s) => s.name)).toEqual(['codegraph', 'ticktick']);
+
+    // The reading lapses, so the next ask is a cold dial — and this one hangs.
+    setNow(1_000 + 6 * 60_000);
+    const asked = service.list(AgentKind.Claude, cwd);
+    await vi.advanceTimersByTimeAsync(400);
+    const stale = await asked;
+
+    expect(stale.pending).toBe(true);
+    // The rows the user was looking at a moment ago, rather than an empty
+    // panel — this is the whole fix.
+    expect(stale.servers.map((s) => s.name)).toEqual(['codegraph', 'ticktick']);
+
+    releaseRedial([server('codegraph')]);
+    await vi.advanceTimersByTimeAsync(0);
+    const settled = await service.list(AgentKind.Claude, cwd);
+
+    expect(settled.pending).toBe(false);
+    expect(settled.servers.map((s) => s.name)).toEqual(['codegraph']);
+  });
+
+  it('keeps the rows through a REFRESH too, which is where blanking them stings most', async () => {
+    // Reconnect is the press that definitely re-dials. Emptying the list there
+    // makes the button that repairs a broken server look like the one that
+    // loses the list — and it is pressed precisely when the user is staring at
+    // the row they want fixed.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    let calls = 0;
+    const { service } = harness(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve([server('codegraph')])
+        : new Promise<AgentMcpServer[]>(() => undefined);
+    });
+
+    await service.list(AgentKind.Claude, cwd);
+    const asked = service.list(AgentKind.Claude, cwd, { refresh: true });
+    await vi.advanceTimersByTimeAsync(400);
+    const during = await asked;
+
+    expect(during.pending).toBe(true);
+    expect(during.servers.map((s) => s.name)).toEqual(['codegraph']);
+  });
+
+  it('still shows an empty panel for a folder nothing has ever read', async () => {
+    // The stale paint must not invent rows: with no previous reading there is
+    // genuinely nothing to show, and `pending` is what keeps that apart from
+    // "this folder has no servers".
+    vi.useFakeTimers();
+    const cwd = realDir();
+    const { service } = harness(
+      () => new Promise<AgentMcpServer[]>(() => undefined),
+    );
+
+    const asked = service.list(AgentKind.Claude, cwd);
+    await vi.advanceTimersByTimeAsync(400);
+    const first = await asked;
+
+    expect(first.pending).toBe(true);
+    expect(first.servers).toEqual([]);
+    expect(first.unavailableReason).toBeNull();
+  });
+
   it('hands the next ask the failure the deferred dial produced', async () => {
     // A dial that misses the budget finishes with nobody awaiting it, and a
     // FAILED one is deliberately never cached — so its verdict has to survive

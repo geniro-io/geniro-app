@@ -182,10 +182,12 @@ describe('AgentsPanel', () => {
     // The counts are the thread LIST's header now, so a closed card shows
     // none of them: on this line they were a tally every card carried whether
     // or not the reader had opened the rows they describe.
-    expect(worker.textContent).not.toContain('3 active');
+    expect(worker.textContent).not.toContain('active');
     expect(worker.textContent).not.toContain('2 threads');
     click(worker.querySelector('button[aria-label="Worker threads"]'));
-    expect(worker.textContent).toContain('3 active · 2 threads');
+    // ONE of its two calls is running — `activeTurns` (3 here) is the node's
+    // own live turns and is deliberately not what this caption counts.
+    expect(worker.textContent).toContain('1 active · 2 threads');
     click(worker.querySelector('button[aria-label="Worker threads"]'));
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
     // The figures are hover-only now, so the meter's accessible name is where
@@ -1383,7 +1385,9 @@ describe('AgentsPanel — sub-agent threads', () => {
   it('lists a sub-agent as a thread of the agent that launched it', () => {
     const el = renderWithSubagent();
     expect(el.textContent).toContain('Review the diff');
-    expect(el.textContent).toContain('2 threads');
+    // ONE row is listed — the delegate. The agent's own conversation is the
+    // card, not a row, so it is not in the count either.
+    expect(el.textContent).toContain('1 active · 1 thread');
   });
 
   it('offers NO terminal handoff on a sub-agent row', () => {
@@ -1543,6 +1547,51 @@ describe('AgentsPanel — sub-agent threads', () => {
       // Still not swept into the finished pile, which is what the split is for.
       expect(el.textContent).not.toContain('Main conversation');
       expect(el.textContent).toContain('3 finished sub-agents');
+    });
+
+    it('counts the ROWS below it, not the agent’s turns and threads', () => {
+      // The reported card, rebuilt: three delegates spinning over "4 finished
+      // sub-agents", captioned `1 active · 8 threads`. Both figures were the
+      // AGENT's — `activeTurns` counts node status transitions and an
+      // in-process delegate emits none, while `threads` includes the main
+      // conversation, which the card names and never lists as a row.
+      const el = render(
+        <AgentsPanel
+          agents={[
+            {
+              ...busy,
+              activeTurns: 1,
+              threads: [
+                { ...mainThread, status: 'running' },
+                { ...subagent, id: 'live-1', label: 'Probe group 1' },
+                { ...subagent, id: 'live-2', label: 'Probe group 2' },
+                { ...subagent, id: 'live-3', label: 'Probe group 3' },
+                ...(['a', 'b', 'c', 'd'] as const).map(
+                  (suffix): AgentThread => ({
+                    ...subagent,
+                    id: `done-${suffix}`,
+                    label: `Finished ${suffix}`,
+                    status: 'completed',
+                  }),
+                ),
+              ],
+            },
+          ]}
+          terminalReasons={TERMINALS}
+          onOpenThread={() => undefined}
+          onOpenSubagent={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
+
+      expect(el.textContent).toContain('3 active · 7 threads');
+      // The two readings the caption used to give, neither of which any row
+      // below it supported.
+      expect(el.textContent).not.toContain('1 active');
+      expect(el.textContent).not.toContain('8 threads');
+      // …and the rows it now agrees with: three live, four counted as finished.
+      expect(el.textContent).toContain('4 finished sub-agents');
     });
 
     it('shows no disclosure at all when every delegate is still working', () => {

@@ -79,7 +79,26 @@ export function CliLoginProgress({
         </span>
         <div className="ml-auto flex items-center gap-1">
           {session.url !== null && !over ? (
-            <CopyButton text={session.url} label="Copy sign-in link" />
+            <>
+              {/* Opening it is the USER's press, never automatic. The CLI has
+                  already opened a tab on this same challenge, and a second one
+                  raised on their behalf is a reliable way to invalidate the
+                  first — but a browser that did not open, or opened in the
+                  wrong profile, leaves them with a copy control and no way to
+                  act on it, which is the gap this closes. `window.open` is
+                  routed to the OS browser by main's own scheme-checked
+                  `setWindowOpenHandler`, so this needs no channel of its own. */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                title="Open the sign-in page in your browser"
+                onClick={() => window.open(session.url ?? '', '_blank')}>
+                Open
+              </Button>
+              <CopyButton text={session.url} label="Copy sign-in link" />
+            </>
           ) : null}
           <Button
             type="button"

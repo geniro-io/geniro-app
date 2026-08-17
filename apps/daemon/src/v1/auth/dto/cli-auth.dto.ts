@@ -19,6 +19,24 @@ const AgentQuerySchema = z.object({
 
 export class CliAuthQueryDto extends createZodDto(AgentQuerySchema) {}
 
+/**
+ * Which MCP server to sign in to, and where from.
+ *
+ * `cwd` is REQUIRED, unlike the account query's absent one, for the reason the
+ * handoff route's is: the CLI resolves a server NAME against the folder it runs
+ * in, so a sign-in started anywhere else authenticates a different server or
+ * none at all.
+ *
+ * `.trim()` before `.min(1)`: whitespace is not a server name, and one that got
+ * through would compose an invocation whose last argument is a space.
+ */
+export class McpLoginQueryDto extends createZodDto(
+  AgentQuerySchema.extend({
+    cwd: z.string().trim().min(1),
+    server: z.string().trim().min(1),
+  }),
+) {}
+
 export class LoginSessionDto extends createZodDto(LoginSessionSchema) {}
 export class LogoutResultDto extends createZodDto(LogoutResultSchema) {}
 

@@ -67,6 +67,7 @@ import {
   CLAUDE_MCP_LIST_TIMEOUT_MS,
   CLAUDE_MCP_LIST_UNREADABLE_MESSAGE,
   CLAUDE_MCP_LOGIN_ARGS,
+  CLAUDE_MCP_LOGIN_FAILURE_MARKERS,
   CLAUDE_MCP_TOOL_TIMEOUT_ENV,
   CLAUDE_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_MODEL_CACHE_FILE,
@@ -301,6 +302,16 @@ export class ClaudeAdapter extends AgentAdapter {
         /** `claude mcp login <name>` — probe-verified on 2.1.223. */
         loginArgs: CLAUDE_MCP_LOGIN_ARGS,
         loginUnavailableReason: null,
+        /**
+         * The CLI's own failure line, observed verbatim on 2.1.232:
+         * `Couldn't complete authentication for "probe": stdin isn't a
+         * terminal…`. The marker deliberately starts AFTER the apostrophe —
+         * the CLI spells other messages with typographic punctuation, and a
+         * marker containing one would silently stop matching the day this line
+         * is re-cased or re-quoted. The opener it must not collide with is
+         * "Starting authentication for", which shares no substring with this.
+         */
+        loginFailureMarkers: CLAUDE_MCP_LOGIN_FAILURE_MARKERS,
       },
       auth: {
         /** `claude auth login` — read from `claude auth --help` on 2.1.227. */

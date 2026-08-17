@@ -1637,6 +1637,101 @@ describe('an event arriving between turns', () => {
     );
   });
 
+  it('raises a between-turn question for the user NOW rather than holding it for a turn that may never come', async () => {
+    // The incident: claude asked eight minutes after its turn had settled, the
+    // request was held, and nothing said so — the transcript grew the tool row
+    // and the badge went on reading "working" while the CLI stood blocked on a
+    // person with no control to answer with. An owner that HAS a card surface
+    // is offered the request instead, and the verdict it sends needs no turn:
+    // the stdin and the encoder both outlive one.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const raised: string[] = [];
+    let answer: ((allow: boolean, input?: unknown) => boolean) | null = null;
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: questionOrDone,
+      spawn,
+      logger,
+      questionToolName: 'AskUserQuestion',
+      betweenTurnApproval: () => null,
+      onHeldApproval: (event, respond) => {
+        raised.push(event.id);
+        answer = respond;
+        return true;
+      },
+    });
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+    const writtenBefore = child.stdin.written;
+
+    line(child, { ask: 'q-1' });
+
+    expect(raised).toEqual(['q-1']);
+    // Still nothing answered on the user's behalf — the card is up, not filled.
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe('');
+    // And the process is not "unused": it is standing still on a person.
+    expect(session.parked).toBe(true);
+
+    // Their verdict reaches the live stdin with no turn in flight at all.
+    expect(answer!(true)).toBe(true);
+    expect(child.stdin.written.slice(writtenBefore.length)).toBe(
+      'VERDICT q-1 true\n',
+    );
+    expect(session.parked).toBe(false);
+
+    // …and it is NOT also replayed into the next turn, which would draw the
+    // user a second card for a question they have already answered.
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => events.push(event) });
+    expect(
+      events.filter((event) => event.type === 'approval_request'),
+    ).toHaveLength(0);
+  });
+
+  it('falls back to holding when the owner will not take the request', async () => {
+    // A caller with nowhere to draw a card must lose nothing — only wait
+    // longer. The claim is the owner's to decline, so declining puts the
+    // request back on the path it was always on.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { spawn, child } = fakeSpawn();
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: questionOrDone,
+      spawn,
+      logger,
+      questionToolName: 'AskUserQuestion',
+      onHeldApproval: () => false,
+    });
+
+    const turn = session.startTurn({
+      onEvent: () => {},
+      buildApprovalResponse: (id, allow) => `VERDICT ${id} ${allow}\n`,
+    });
+    line(child, { done: true });
+    await turn?.done;
+
+    line(child, { ask: 'q-9' });
+
+    expect(session.parked).toBe(true);
+    const events: AgentEvent[] = [];
+    session.startTurn({ onEvent: (event) => events.push(event) });
+    expect(events[0]).toEqual(
+      expect.objectContaining({ type: 'approval_request', id: 'q-9' }),
+    );
+  });
+
   it('names the tool and the request id, so the line can be joined to a transcript row', () => {
     // The message this replaces said only `dropped a 'approval_request' event
     // arriving between turns` — no tool, no id, no way to correlate it with

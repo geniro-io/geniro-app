@@ -28,6 +28,22 @@ export interface StagedAttachment {
   /** `data:` URL for the thumbnail. */
   preview: string;
   name: string;
+  /**
+   * Which part of a MULTI-PART field this image was pasted into, or null for a
+   * field that has only one.
+   *
+   * The composer passes nothing and is unchanged. It exists for the question
+   * card, whose tabs are several answers being written at once into one card:
+   * an image pasted on the third tab belongs to the third question, and without
+   * an owner every tab showed every image and the answer text could only say
+   * that a picture was coming, never which question it was about.
+   *
+   * Deliberately just a tag, not a partition: the bytes still leave as ONE
+   * follow-up message, because that is what the delivery path does. What the
+   * owner decides is which thumbnails a part shows and which answer line
+   * announces them.
+   */
+  owner: number | null;
 }
 
 const readAsBase64 = (file: File): Promise<string> =>
@@ -53,8 +69,11 @@ const readAsBase64 = (file: File): Promise<string> =>
 export function useAttachments(): {
   attachments: StagedAttachment[];
   error: string | null;
-  /** Returns true when the event carried images (so the caller can preventDefault). */
-  addFromClipboard: (data: DataTransfer | null) => boolean;
+  /**
+   * Returns true when the event carried images (so the caller can
+   * preventDefault). `owner` tags them — see {@link StagedAttachment.owner}.
+   */
+  addFromClipboard: (data: DataTransfer | null, owner?: number) => boolean;
   remove: (key: string) => void;
   clear: () => void;
   clearError: () => void;
@@ -64,53 +83,63 @@ export function useAttachments(): {
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const addFromClipboard = useCallback((data: DataTransfer | null): boolean => {
-    const files = [...(data?.files ?? [])].filter((file) =>
-      file.type.startsWith('image/'),
-    );
-    if (files.length === 0) {
-      return false;
-    }
-    setError(null);
-    for (const file of files) {
-      if (!ACCEPTED.includes(file.type)) {
-        setError(`${file.type} images are not supported`);
-        continue;
+  const addFromClipboard = useCallback(
+    (data: DataTransfer | null, owner?: number): boolean => {
+      const files = [...(data?.files ?? [])].filter((file) =>
+        file.type.startsWith('image/'),
+      );
+      if (files.length === 0) {
+        return false;
       }
-      if (file.size > MAX_ATTACHMENT_BYTES) {
-        setError(
-          `${file.name || 'image'} is larger than ${Math.floor(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB`,
-        );
-        continue;
-      }
-      void readAsBase64(file)
-        .then((base64) => {
-          setAttachments((current) => {
-            if (current.length >= MAX_ATTACHMENTS) {
-              setError(`at most ${MAX_ATTACHMENTS} images per message`);
-              return current;
-            }
-            return [
-              ...current,
-              {
-                // A pasted screenshot has no name and two pastes of the same
-                // image are indistinguishable by content, so the key is
-                // positional + random rather than derived from the file.
-                key: `${Date.now()}-${current.length}-${Math.random().toString(36).slice(2, 8)}`,
-                mediaType: file.type as AttachmentMediaType,
-                data: base64,
-                preview: `data:${file.type};base64,${base64}`,
-                name: file.name || 'pasted image',
-              },
-            ];
+      setError(null);
+      for (const file of files) {
+        if (!ACCEPTED.includes(file.type)) {
+          setError(`${file.type} images are not supported`);
+          continue;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          setError(
+            `${file.name || 'image'} is larger than ${Math.floor(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB`,
+          );
+          continue;
+        }
+        void readAsBase64(file)
+          .then((base64) => {
+            setAttachments((current) => {
+              if (current.length >= MAX_ATTACHMENTS) {
+                setError(`at most ${MAX_ATTACHMENTS} images per message`);
+                return current;
+              }
+              return [
+                ...current,
+                {
+                  // A pasted screenshot has no name and two pastes of the same
+                  // image are indistinguishable by content, so the key is
+                  // positional + random rather than derived from the file.
+                  key: `${Date.now()}-${current.length}-${Math.random().toString(36).slice(2, 8)}`,
+                  mediaType: file.type as AttachmentMediaType,
+                  data: base64,
+                  preview: `data:${file.type};base64,${base64}`,
+                  name: file.name || 'pasted image',
+                  // Captured at PASTE time, not read at render time: the read
+                  // above is async, and the user is free to change tabs while
+                  // it runs — an owner resolved later would land the image on
+                  // whichever tab they had moved to.
+                  owner: owner ?? null,
+                },
+              ];
+            });
+          })
+          .catch((err: unknown) => {
+            setError(
+              err instanceof Error ? err.message : 'could not read image',
+            );
           });
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : 'could not read image');
-        });
-    }
-    return true;
-  }, []);
+      }
+      return true;
+    },
+    [],
+  );
 
   const remove = useCallback((key: string): void => {
     setAttachments((current) => current.filter((item) => item.key !== key));

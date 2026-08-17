@@ -242,6 +242,15 @@ function fakeAdapter(kind: AgentKind): {
      * a turn that has already settled.
      */
     onBetweenTurnEvent?: (event: AgentEvent) => void;
+    /**
+     * Where the session offers a request the posture will not decide — the only
+     * path a spec can drive to play a question arriving with no turn to raise a
+     * card through, which is the incident this seam exists for.
+     */
+    onHeldApproval?: (
+      event: Extract<AgentEvent, { type: 'approval_request' }>,
+      respond: (allow: boolean, input?: unknown) => boolean,
+    ) => boolean;
   }[];
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
@@ -298,6 +307,15 @@ function fakeAdapter(kind: AgentKind): {
      * do: emit AFTER its turn settled. Nothing else can reach that path.
      */
     onBetweenTurnEvent?: (event: AgentEvent) => void;
+    /**
+     * Captured for the same reason: a request the posture will not decide is
+     * offered to the OWNER here, and this is the only way a spec can play one
+     * arriving with no turn to raise it.
+     */
+    onHeldApproval?: (
+      event: Extract<AgentEvent, { type: 'approval_request' }>,
+      respond: (allow: boolean, input?: unknown) => boolean,
+    ) => boolean;
   }[] = [];
   const startSession = vi.fn(
     (
@@ -308,12 +326,17 @@ function fakeAdapter(kind: AgentKind): {
           requiresUserInteraction?: boolean;
         }) => boolean | null;
         onBetweenTurnEvent?: (event: AgentEvent) => void;
+        onHeldApproval?: (
+          event: Extract<AgentEvent, { type: 'approval_request' }>,
+          respond: (allow: boolean, input?: unknown) => boolean,
+        ) => boolean;
       } = {},
     ) => {
       const record = {
         closed: false,
         betweenTurnApproval: opts.betweenTurnApproval,
         onBetweenTurnEvent: opts.onBetweenTurnEvent,
+        onHeldApproval: opts.onHeldApproval,
       };
       sessions.push(record);
       let inFlight = 0;
@@ -2190,6 +2213,58 @@ describe('ChatService — approval modes (parity M1)', () => {
     claude.finish();
     await drain();
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('draws the card for a question that arrives with NO turn in flight, and routes the verdict to the live process', async () => {
+    // The incident this was written from, reconstructed off the user's own
+    // database and daemon log: claude's process outlived its turn, asked an
+    // `AskUserQuestion` eight minutes later, and the request was HELD for a
+    // turn that never came. The transcript grew the tool-call row and the badge
+    // read "working", so for twenty-two minutes the app showed progress while
+    // the CLI stood blocked on a person with no control to answer with — and
+    // then the idle window closed the process, which the CLI read as a refusal.
+    // The user was left with a bare "claude run failed".
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.finish();
+    await drain();
+
+    // Only a run-scoped process can reach this seam: the turn is over, so
+    // there is no handle and no `onEvent` left to raise a card through.
+    const respond = vi.fn(() => true);
+    const raised = claude.sessions[0]!.onHeldApproval!(
+      {
+        type: 'approval_request',
+        id: 'q-off',
+        toolName: 'AskUserQuestion',
+        input: QUESTION_INPUT,
+        requiresUserInteraction: true,
+      },
+      respond,
+    );
+    expect(raised).toBe(true);
+    await drain();
+
+    // A real card: a replayable row AND a live entry a verdict can reach.
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(true);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+    expect(approvals.resolve(run.id, 'q-off', true, 'Blue')).toBe(true);
+    // Answered through the SESSION, not a turn — there is none to answer
+    // through — with the question's own input folded, so the agent receives a
+    // pick rather than a blanked argument list.
+    expect(respond).toHaveBeenCalledWith(true, {
+      ...QUESTION_INPUT,
+      answers: { 'Which color?': 'Blue' },
+    });
+    await drain();
+    const verdict = itemDao.items.find((i) => i.kind === 'approval_verdict');
+    expect(JSON.parse(verdict!.payload)).toMatchObject({
+      id: 'q-off',
+      allow: true,
+      answer: 'Blue',
+    });
   });
 
   it('announces the run as parked on the user while a question is open, and unparked once it is answered', async () => {

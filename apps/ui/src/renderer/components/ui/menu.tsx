@@ -53,6 +53,17 @@ export interface MenuGroup {
 const flatten = (groups: MenuGroup[]): MenuItem[] =>
   groups.flatMap((group) => group.items);
 
+/** Breathing room kept between a shortened panel and the window edge. */
+const VIEWPORT_MARGIN = 8;
+
+/**
+ * The shortest a panel is shortened to, however little room there is.
+ *
+ * Roughly three rows: below that the menu stops being usable as a list, and an
+ * overhanging panel whose rows scroll is the better failure of the two.
+ */
+const MIN_MENU_HEIGHT = 120;
+
 /**
  * The app's dropdown: a token-styled popover list, built from scratch because
  * the native `<select>` menu is drawn by the OS and can render none of what
@@ -113,17 +124,53 @@ export function Menu({
    * panel's width depends on its longest row.
    */
   const [flipped, setFlipped] = React.useState(false);
+  /**
+   * The panel's own height cap, when its full height does not fit in the window.
+   *
+   * The horizontal axis has been measured since the chip row gained an overflow
+   * popover; the vertical one never was, and `max-h-80` on the row list is a cap
+   * on the LIST rather than a promise that the panel fits anywhere. So a long
+   * list — the branch picker, which has as many rows as the repo has branches —
+   * simply extended past the top of the window with nothing to stop it.
+   * Reproduced at 900×420 with fourteen branches: a 341px panel sat at
+   * `top: -326`, leaving 14 of its pixels on screen ("sometimes popover with
+   * branch is cut").
+   *
+   * Null means "fits, cap nothing" — which is every menu the report is not
+   * about, so the common case keeps its natural size.
+   */
+  const [maxHeight, setMaxHeight] = React.useState<number | null>(null);
 
   React.useLayoutEffect(() => {
     if (!open) {
       setFlipped(false);
+      setMaxHeight(null);
       return;
     }
     const panel = panelRef.current;
-    if (panel && panel.getBoundingClientRect().right > window.innerWidth) {
+    if (!panel) {
+      return;
+    }
+    const rect = panel.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
       setFlipped(true);
     }
-  }, [open]);
+    // The panel grows AWAY from the trigger — upward from a fixed bottom edge
+    // for `side='top'`, downward for `bottom` — so the edge it can run past is
+    // decided by `side`, and shortening it always pulls the offending end back.
+    const overflow =
+      side === 'top' ? -rect.top : rect.bottom - window.innerHeight;
+    if (overflow > 0) {
+      // Floored rather than allowed to collapse: a menu shortened to the two
+      // rows that happen to fit is a worse answer than one that overhangs
+      // slightly and scrolls, and the list inside already scrolls. Measured
+      // against the app's own minimum window (640px tall), the floor is only
+      // ever reached by a trigger sitting near the top of the window.
+      setMaxHeight(
+        Math.max(MIN_MENU_HEIGHT, rect.height - overflow - VIEWPORT_MARGIN),
+      );
+    }
+  }, [open, side]);
 
   // A fresh open is a fresh search — a stale filter would hide the very rows
   // the user just reopened the menu to see. Focus moves into the menu either
@@ -238,19 +285,26 @@ export function Menu({
       aria-labelledby={labelledBy}
       tabIndex={-1}
       onKeyDown={onKeyDown}
+      // The measured cap, when there was not room for the panel's full height.
+      // Inline because it is a MEASUREMENT — see `maxHeight`.
+      style={maxHeight === null ? undefined : { maxHeight }}
       className={cn(
         // The shared floating surface, plus this panel's own sizing. No
         // vertical padding: a row's highlight runs to the panel edge, where
         // `overflow-hidden` lets the corner radius clip it. Padding would leave
         // a bare strip above the first row and below the last.
         popoverSurface,
-        'min-w-56 max-w-96 overflow-hidden',
+        // `flex flex-col` is what makes the cap above reach the row list: the
+        // search field keeps its height and the list takes what is left. As a
+        // plain block the capped panel would simply clip its own rows, hiding
+        // them with no way to scroll to them.
+        'flex min-w-56 max-w-96 flex-col overflow-hidden',
         side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
         align === 'start' && !flipped ? 'left-0' : 'right-0',
         className,
       )}>
       {searchPlaceholder !== undefined ? (
-        <div className="border-b border-border px-3 py-1.5">
+        <div className="shrink-0 border-b border-border px-3 py-1.5">
           <input
             ref={searchRef}
             value={query}
@@ -264,7 +318,11 @@ export function Menu({
           />
         </div>
       ) : null}
-      <div className="max-h-80 overflow-y-auto p-1">
+      {/* `min-h-0` is what lets a flex CHILD shrink below its content height —
+          without it the list keeps its full size and the capped panel clips
+          instead of scrolling. `max-h-80` stays as the cap for a panel that
+          fits: a menu is a picker, not a page. */}
+      <div className="max-h-80 min-h-0 flex-1 overflow-y-auto p-1">
         {selectable.length === 0 ? (
           <p className="px-2.5 py-2 text-sm text-muted-foreground">
             {emptyLabel}

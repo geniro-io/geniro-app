@@ -91,7 +91,7 @@ describe('McpSection — what the CLI loads only for itself', () => {
     expect(el.textContent).toContain(NOTE);
     // The settled-empty half of the loading/empty pair: `servers: []` with
     // `loading: false` is the only state that may claim the folder has none.
-    expect(el.textContent).not.toContain('Loading…');
+    expect(el.textContent).not.toContain('Starting each server');
   });
 
   it('renders nothing extra for a CLI that declares no such gap', () => {
@@ -444,8 +444,25 @@ describe('McpSection — an empty listing that is still being dialled', () => {
   it('says the read is in flight rather than claiming the folder has none', () => {
     const el = render({ listing: listing(), loading: true });
 
-    expect(el.textContent).toContain('Loading…');
+    // And says what is being waited ON: this read STARTS every server the
+    // folder defines, which is why it is measured in seconds — a bare
+    // "Loading…" over an empty panel is what got the wait reported as broken.
+    expect(el.textContent).toContain('Starting each server');
     expect(el.textContent).not.toContain('No servers');
+  });
+
+  it('keeps the rows it already has while the next read runs', () => {
+    // The contract the daemon's stale-paint depends on: it now answers a cold
+    // dial with the PREVIOUS reading plus `pending: true`, and that is only
+    // worth anything if rows outrank the loading state here. A component that
+    // put a spinner over a non-empty listing would throw the fix away.
+    const el = render({
+      listing: listing({ name: 'codegraph' }),
+      loading: true,
+    });
+
+    expect(el.textContent).toContain('codegraph');
+    expect(el.textContent).not.toContain('Starting each server');
   });
 });
 

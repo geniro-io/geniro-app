@@ -100,6 +100,84 @@ export function runGroupSections<TRun extends { groupId: string | null }>(
   ];
 }
 
+/**
+ * How many rows a section draws before the rest go behind "Show all".
+ *
+ * A sidebar is a list of PLACES TO GO, not an archive: a group holding a
+ * hundred finished threads pushed every group below it off the screen, so
+ * reaching the next one meant scrolling past conversations nobody was going
+ * back to. Eight is roughly one screenful of rows in a 260px rail beside a
+ * header, which is the point — a section stays scannable without its neighbours
+ * leaving the viewport.
+ */
+export const SECTION_PREVIEW_LIMIT = 8;
+
+/**
+ * Below this many hidden rows the fold is not worth drawing.
+ *
+ * The toggle is itself a row: hiding one costs a row to show a row, and hiding
+ * two saves exactly one. Anything under this reads as the sidebar being coy
+ * about nothing.
+ */
+const MIN_HIDDEN = 3;
+
+/** A section's rows as drawn, and how many the fold is holding back. */
+export interface RunGroupPreview<TRun> {
+  visible: TRun[];
+  /** Rows the fold is hiding; 0 when the section is drawn in full. */
+  hidden: number;
+}
+
+/**
+ * Which of a section's runs are drawn while it is FOLDED — the caller decides
+ * whether it is (a `hidden` of 0 is also how it learns there is nothing to
+ * unfold, so this answers both questions at once).
+ *
+ * Two rules, in this order:
+ *
+ * 1. **Anything `keep` claims is always drawn**, however far down the list it
+ *    sits — that is the whole feature. A working thread the user is waiting on
+ *    must never be the thing behind "Show all", so a group with thirty live
+ *    chats draws thirty rows and hides nothing.
+ * 2. The remaining slots up to `limit` go to the runs the caller ordered first
+ *    (the list is newest-activity-first), so a folded group still opens on the
+ *    threads someone was last in.
+ *
+ * The caller's ORDER is preserved either way — kept rows are not floated to the
+ * top. Reordering on status would make rows jump under the cursor exactly when
+ * a turn starts or ends, which is when the user is most likely to be aiming at
+ * one.
+ */
+export function previewSectionRuns<TRun>(
+  runs: readonly TRun[],
+  {
+    keep,
+    limit = SECTION_PREVIEW_LIMIT,
+  }: {
+    /** This run is drawn whatever the limit says. */
+    keep: (run: TRun) => boolean;
+    limit?: number;
+  },
+): RunGroupPreview<TRun> {
+  if (runs.length <= limit) {
+    return { visible: [...runs], hidden: 0 };
+  }
+  const shown = new Set<number>();
+  runs.forEach((run, index) => {
+    if (keep(run)) {
+      shown.add(index);
+    }
+  });
+  for (let index = 0; index < runs.length && shown.size < limit; index++) {
+    shown.add(index);
+  }
+  const hidden = runs.length - shown.size;
+  if (hidden < MIN_HIDDEN) {
+    return { visible: [...runs], hidden: 0 };
+  }
+  return { visible: runs.filter((_, index) => shown.has(index)), hidden };
+}
+
 /** What a group header reports about the threads inside it. */
 export interface RunGroupSummary {
   count: number;

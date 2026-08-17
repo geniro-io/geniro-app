@@ -174,6 +174,45 @@ describe('BlockRequest / BlockResult tints', () => {
   });
 });
 
+describe('the clamped panel', () => {
+  /** A prompt long enough that the panel clamps it. */
+  const LONG = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n');
+
+  /** The clamped box itself — the one carrying the max-height. */
+  function clamp(): HTMLElement | null {
+    return container.querySelector('div[style*="max-height"]');
+  }
+
+  it('truncates WITHOUT becoming a scroll container', () => {
+    // The reported bug, and the reason this is asserted on the class rather
+    // than on behaviour: `overflow: hidden` truncates AND makes the box
+    // scrollable — invisibly, with no scrollbar and no gesture that scrolls it
+    // back. Anything bringing a descendant into view then shifts the content up
+    // for good, so the clamp cuts through the middle of its FIRST line. It is
+    // reproducible: `Dialog` focuses the first focusable child on open, and for
+    // a request panel leading with a fenced block that child is the fence's
+    // Copy button INSIDE this box. jsdom implements neither scrolling nor
+    // overflow, so the browser half was probe-confirmed instead (`scrollTop =
+    // 40` sticks under `hidden`, is refused under `clip`) and what is pinned
+    // here is the one thing this component decides: which of the two it asks
+    // for.
+    act(() => root.render(<BlockRequest label="Task" text={LONG} />));
+    const box = clamp();
+    expect(box).not.toBeNull();
+    expect(box?.className).toContain('overflow-clip');
+    expect(box?.className).not.toContain('overflow-hidden');
+  });
+
+  it('drops the clamp entirely once expanded, rather than clipping a taller box', () => {
+    act(() => root.render(<BlockRequest label="Task" text={LONG} />));
+    const more = [...container.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Show more'),
+    );
+    act(() => more?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(clamp()).toBeNull();
+  });
+});
+
 describe('BlockShell header hover surface', () => {
   /** The header row and the disclosure inside it. */
   function header(): { row: Element; button: Element | null } {

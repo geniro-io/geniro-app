@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { firstUrlIn, lastProgressLine } from './login-output';
+import {
+  firstUrlIn,
+  lastProgressLine,
+  plainTerminalText,
+} from './login-output';
 
 describe('firstUrlIn', () => {
   it('finds the link claude prints, sentence and all', () => {
@@ -70,5 +74,56 @@ describe('lastProgressLine', () => {
   it('is null when there is nothing but blank lines or a URL', () => {
     expect(lastProgressLine('\n  \n')).toBeNull();
     expect(lastProgressLine('https://x.test/only')).toBeNull();
+  });
+});
+
+describe('plainTerminalText', () => {
+  /**
+   * What `claude mcp login` actually writes under a pty, transcribed from a
+   * live run on 2.1.232: an EOT and two backspaces the wrapper echoes, CR line
+   * endings, and the URL as an OSC-8 hyperlink whose target is repeated as the
+   * visible text.
+   */
+  const PTY_OUTPUT =
+    '\u0004\b\bStarting authentication for "probe"\u2026\r\n' +
+    "If the browser didn't open, visit:\r\n" +
+    '  \u001b]8;;https://tt.test/oauth?code_challenge=abc\u0007' +
+    'https://tt.test/oauth?code_challenge=abc\u001b]8;;\u0007\r\n' +
+    'Waiting for authorization\u2026 (^C to cancel)\r\n';
+
+  it('leaves the URL exactly once, not glued to a copy of itself', () => {
+    // The defect this function exists for, and it was observed END TO END: the
+    // route answered with the authorization url immediately followed by a
+    // second copy of the same url, because an OSC-8 hyperlink carries its
+    // target inside the escape AND as the text after it.
+    const url = firstUrlIn(plainTerminalText(PTY_OUTPUT));
+
+    expect(url).toBe('https://tt.test/oauth?code_challenge=abc');
+  });
+
+  it('leaves no control character behind, so the answer is valid JSON', () => {
+    // A raw control byte inside a JSON string is invalid JSON: the route
+    // answered 200 with a body no client could parse, which is how this was
+    // found. Newlines survive because the line readers need them.
+    const text = plainTerminalText(PTY_OUTPUT);
+
+    // Asserting on control characters is the whole point of this test.
+    // eslint-disable-next-line no-control-regex
+    expect(/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)).toBe(false);
+    expect(() => JSON.parse(JSON.stringify({ text }))).not.toThrow();
+  });
+
+  it('reads the CLI’s last line as prose', () => {
+    expect(lastProgressLine(plainTerminalText(PTY_OUTPUT))).toBe(
+      'Waiting for authorization\u2026 (^C to cancel)',
+    );
+  });
+
+  it('leaves prose from a piped child untouched', () => {
+    // Applied unconditionally, so there is no second path to keep in step —
+    // which is only safe if output that carries no escapes survives it.
+    const plain = 'Opening browser to sign in\u2026\nPaste code here >';
+
+    expect(plainTerminalText(plain)).toBe(plain);
   });
 });

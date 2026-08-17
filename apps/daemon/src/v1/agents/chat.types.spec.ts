@@ -68,12 +68,15 @@ describe('AgentMcpListingWireSchema — three fields, three legal states', () =>
     ).toBe(false);
   });
 
-  it('refuses a pending listing that also carries rows', () => {
-    // The shape that would do real damage in the other direction: rows under
-    // `pending` invite a consumer to render them as the answer.
+  it('ACCEPTS a pending listing carrying rows — the folder’s previous reading', () => {
+    // Deliberately legal, and it was not: withholding the rows for the whole
+    // of a re-dial is what got the panel reported as "loading for a minute",
+    // since the one moment the list is most wanted is the moment it showed
+    // nothing. `pending` is what keeps them honest — they are the LAST answer,
+    // not this one.
     expect(
       AgentMcpListingWireSchema.safeParse({ ...answered, pending: true })
         .success,
-    ).toBe(false);
+    ).toBe(true);
   });
 });

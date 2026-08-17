@@ -97,6 +97,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.testNotification) as ReturnType<
       GeniroApi['testNotification']
     >,
+  openNotificationSettings: () =>
+    ipcRenderer.invoke(IPC.openNotificationSettings) as ReturnType<
+      GeniroApi['openNotificationSettings']
+    >,
   onNotificationActivated: (listener) => {
     const handler = (_event: IpcRendererEvent, runId: unknown): void => {
       listener(runId as string);

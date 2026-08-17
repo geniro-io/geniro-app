@@ -46,6 +46,19 @@ const groupApi = vi.hoisted(() => ({
   reorderRunGroups: vi.fn(),
   deleteRunGroup: vi.fn(),
 }));
+/**
+ * The daemon-run sign-in flow (`/v1/auth`). An MCP server sign-in goes through
+ * it now: the CLI wants a terminal, and the daemon allocates one, so no window
+ * opens and nothing is resolved for the user to run themselves.
+ */
+const cliAuthApi = vi.hoisted(() => ({
+  startMcpLogin: vi.fn(),
+  startCliLogin: vi.fn(),
+  getCliLogin: vi.fn(),
+  submitCliLoginCode: vi.fn(),
+  cancelCliLogin: vi.fn(),
+  cliLogout: vi.fn(),
+}));
 const agentsApi = vi.hoisted(() => ({
   listAgentSkills: vi.fn(),
   // The one route that is not passive: the daemon health-checks each server,
@@ -88,6 +101,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     groups: groupApi,
     capabilities: capabilitiesApi,
     handoff: handoffApi,
+    cliAuth: cliAuthApi,
   })),
 }));
 // Counts how many times each turn block actually re-rendered, so a test can
@@ -3541,11 +3555,24 @@ describe('Chats queued messages', () => {
       inCard.indexOf(bottomRow),
     );
 
-    // Above the text, wrapping is CORRECT — nothing shares that line, so the
-    // card grows upward with its own content instead of hiding a control.
-    expect(topRow.className).toContain('flex-wrap');
+    // NEITHER row wraps. The top one used to, and the four-then-one arrangement
+    // that produced — `auto-approve` alone under the other four — is what got
+    // reported. It holds one line by SHRINKING the chips whose labels are user
+    // data (see `Select`'s `flexible`), so nothing is hidden and nothing moves
+    // to a second line; the geometry of that was measured in a real browser,
+    // which jsdom cannot do, so what is pinned here is the rule that produces
+    // it.
+    expect(topRow.className).not.toContain('flex-wrap');
     // Below it, the pinned actions make wrapping wrong, and they never shrink.
     expect(bottomRow.className).not.toContain('flex-wrap');
+    // And the chips that may give up width are the run's folder and branch —
+    // never the short fixed-vocabulary ones beside them, which is the whole
+    // difference between this and letting flex take width off everything.
+    const shrinkable = [...topRow.children].filter((el) =>
+      classesOf(el).includes('shrink'),
+    );
+    expect(shrinkable.length).toBeGreaterThan(0);
+    expect(shrinkable.length).toBeLessThan(topRow.children.length);
     expect(classesOf(send.parentElement!)).toContain('shrink-0');
 
     // And no overflow control survives anywhere: every option is on screen.
@@ -5565,6 +5592,15 @@ describe('Chats — signing a server in', () => {
     )!;
   }
 
+  /** A sign-in the daemon has started and is still driving. */
+  const waitingSession = {
+    id: 'login-1',
+    agent: 'claude' as const,
+    status: 'waiting' as const,
+    url: 'https://linear.app/oauth/authorize?client_id=x',
+    message: 'Waiting for authorization…',
+  };
+
   it('signs in against the RUN’s folder, not the composer’s', async () => {
     // The load-bearing rule, and the one nothing pinned. A server name resolves
     // against the directory the CLI runs in, so signing in from the composer's
@@ -5572,13 +5608,7 @@ describe('Chats — signing a server in', () => {
     // server or none at all. This test fails if the handler is switched to it.
     api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
     agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
-    handoffApi.resolveMcpLogin.mockResolvedValue({
-      kind: 'command',
-      command: 'claude',
-      args: ['mcp', 'login', 'linear'],
-      cwd: '/proj-a',
-      unavailableReason: null,
-    });
+    cliAuthApi.startMcpLogin.mockResolvedValue(waitingSession);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'First chat');
@@ -5588,30 +5618,20 @@ describe('Chats — signing a server in', () => {
       signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(handoffApi.resolveMcpLogin).toHaveBeenCalledWith({
+    expect(cliAuthApi.startMcpLogin).toHaveBeenCalledWith({
       agent: 'claude',
       cwd: '/proj-a',
       server: 'linear',
     });
-    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
-      command: 'claude',
-      args: ['mcp', 'login', 'linear'],
-      cwd: '/proj-a',
-    });
   });
 
-  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
-    // A refusal is the ANSWER, not a failure — this CLI has no sign-in command
-    // — so the user reads the daemon's own sentence and no window opens.
+  it('opens NO terminal window — the daemon runs it and reports back', async () => {
+    // The reported defect: pressing Sign in opened a shell. The CLI wanted a
+    // TTY, not a human, so the window bought nothing and cost the user a
+    // context switch into a terminal they then had to read.
     api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
     agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
-    handoffApi.resolveMcpLogin.mockResolvedValue({
-      kind: 'unavailable',
-      command: null,
-      args: [],
-      cwd: null,
-      unavailableReason: 'cursor-agent cannot sign in to an MCP server',
-    });
+    cliAuthApi.startMcpLogin.mockResolvedValue(waitingSession);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'First chat');
@@ -5622,16 +5642,19 @@ describe('Chats — signing a server in', () => {
     });
 
     expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(
-      'cursor-agent cannot sign in to an MCP server',
-    );
+    // And the flow is VISIBLE, which is what the window used to be doing: the
+    // browser tab opens behind the app, so a button with no panel behind it
+    // reads as one that did nothing.
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"]'),
+    ).not.toBeNull();
   });
 
-  it('surfaces a failed resolve rather than pressing on', async () => {
+  it('surfaces a refused sign-in rather than pressing on', async () => {
     api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
     agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
-    handoffApi.resolveMcpLogin.mockRejectedValue(
-      new Error('daemon GET /v1/handoff/mcp-login failed (500): boom'),
+    cliAuthApi.startMcpLogin.mockRejectedValue(
+      new Error('daemon POST /v1/auth/mcp-login failed (400): boom'),
     );
     const { client } = makeClient();
     const container = await mount(client);
@@ -6529,7 +6552,6 @@ describe('Chats — background sub-agents', () => {
     const dialog = container.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.textContent).toContain('Sub-agent · Review the diff');
-    expect(dialog?.textContent).toContain('Timeline');
     expect(dialog?.textContent).toContain('reading the diff now');
 
     // A later row from the same delegate must appear in the OPEN dialog —

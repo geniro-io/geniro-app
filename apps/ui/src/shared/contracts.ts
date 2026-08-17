@@ -488,6 +488,17 @@ export interface GeniroApi {
     reason: string | null;
   }>;
   /**
+   * Open macOS's own Notifications pane, where an app the system is holding
+   * gets un-held.
+   *
+   * The other half of {@link testNotification}: that one establishes that the
+   * silence is the OS's doing, and this one goes to the only place the user can
+   * do anything about it. It takes NO argument on purpose — the destination is
+   * a constant in main, so a renderer cannot aim `shell.openExternal` at a pane
+   * of its choosing.
+   */
+  openNotificationSettings(): Promise<void>;
+  /**
    * A notification the user CLICKED, carrying the run it was about.
    *
    * The other half of `notify`: a banner you cannot act on only tells you to go
@@ -521,5 +532,6 @@ export const IPC = {
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',
   testNotification: 'geniro:testNotification',
+  openNotificationSettings: 'geniro:openNotificationSettings',
   onNotificationActivated: 'geniro:onNotificationActivated',
 } as const satisfies Record<keyof GeniroApi, string>;

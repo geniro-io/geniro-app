@@ -6552,7 +6552,6 @@ describe('Chats — background sub-agents', () => {
     const dialog = container.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.textContent).toContain('Sub-agent · Review the diff');
-    expect(dialog?.textContent).toContain('Timeline');
     expect(dialog?.textContent).toContain('reading the diff now');
 
     // A later row from the same delegate must appear in the OPEN dialog —

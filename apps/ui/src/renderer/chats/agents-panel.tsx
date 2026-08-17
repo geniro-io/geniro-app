@@ -668,6 +668,12 @@ export function AgentsPanel({
             ];
             const hasList =
               listedThreads.length > 0 || settledSubagents.length > 0;
+            // The caption's two figures, counted off the ROWS it captions —
+            // see the caption itself for why they are no longer the agent's.
+            const listedTotal = listedThreads.length + settledSubagents.length;
+            const listedActive = listedThreads.filter(
+              (thread) => thread.status === 'running',
+            ).length;
             const tasks = tasksByAgent?.get(agent.id) ?? [];
             const taskState = taskProgress(tasks);
             // Whether the list is still being WORKED, which is what decides
@@ -862,15 +868,26 @@ export function AgentsPanel({
                 {isExpanded && hasList ? (
                   <div className="flex flex-col border-t border-border px-2 py-1.5">
                     {/* The counts, in the one place they describe something: a
-                        caption over the rows below. Both are the AGENT's own
-                        figures rather than the list's — turns live anywhere on
-                        it, and every thread it holds including the conversation
-                        whose control sits in the header — so the number can
-                        exceed the rows, and saying "threads" rather than naming
-                        the rows is what keeps that honest. */}
+                        caption over the rows below — and counting THOSE ROWS,
+                        which is the whole of the fix here.
+                        They used to be the agent's own figures: `activeTurns`
+                        (live turns of the NODE) and every thread it holds
+                        INCLUDING the main conversation, whose control sits in
+                        the card's header and which is therefore not a row. The
+                        defence was that "threads" names no rows so the numbers
+                        may exceed them. It does not survive contact with a
+                        reader: measured on a real delegation, a card showing
+                        three spinning sub-agents over "4 finished sub-agents"
+                        was captioned `1 active · 8 threads` — every figure
+                        contradicted by what sat directly beneath it (1 vs 3
+                        spinners, 8 vs 7 rows), because in-process delegates
+                        emit no node status and so count for nothing in
+                        `activeTurns`, while the main conversation counts in
+                        `threads`. A caption that disagrees with its own list is
+                        read as a bug in the counting, which is what it is. */}
                     <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                      {agent.activeTurns} active · {agent.threads.length}{' '}
-                      {agent.threads.length === 1 ? 'thread' : 'threads'}
+                      {listedActive} active · {listedTotal}{' '}
+                      {listedTotal === 1 ? 'thread' : 'threads'}
                     </p>
                     <ul className="m-0 flex list-none flex-col gap-0.5">
                       {listedThreads.map((thread) => (

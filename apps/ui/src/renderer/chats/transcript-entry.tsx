@@ -1,9 +1,10 @@
-import { memo } from 'react';
+import { memo, useContext } from 'react';
 
 import { CallBlock } from './call-block';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
 import { SubagentBlock } from './subagent-block';
+import { NestedThreadContext } from './subagent-context';
 import { TaskListCard } from './task-list';
 import { ToolGroup } from './tool-group';
 import type { TranscriptEntry } from './transcript-groups';
@@ -52,6 +53,24 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
    */
   soloAgent?: boolean;
 }): React.JSX.Element | null {
+  /**
+   * Inside a sub-agent enclosure, which is `soloAgent` by a stronger argument
+   * than "the identity is already on the header": a delegate's rows carry the
+   * DELEGATING agent's `nodeId`, so a sender frame here would not repeat the
+   * enclosure's identity but assert the wrong one — the chat's own agent named
+   * one line beneath a header naming the delegate that actually spoke.
+   * {@link TurnBlock} folds `nested` into `soloAgent` on exactly that reasoning
+   * and records the symptom it was fixing.
+   *
+   * This path is the sibling `TurnBlock`'s fix did not cover: the row that did
+   * NOT fold into a block. Today every kind in {@link SENDER_KINDS} except
+   * `call_question` is owned by `ownerOf` and therefore always folds, so this
+   * is a guard on the seam between two lists rather than a live symptom — the
+   * two are free to disagree, and the row that falls through the gap is
+   * captioned wrongly rather than merely plainly.
+   */
+  const nested = useContext(NestedThreadContext);
+  const solo = soloAgent || nested;
   const nameOf = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
   const agentName = (id: string | null): string =>
@@ -63,7 +82,7 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
         block={entry}
         nodes={nodes}
         chatAgentName={chatAgentName}
-        soloAgent={soloAgent}
+        soloAgent={solo}
       />
     );
   }
@@ -122,7 +141,7 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
       </SenderRow>
     );
   }
-  if (soloAgent) {
+  if (solo) {
     // The one agent needs no identity — its rows sit bare in the flow.
     return content;
   }

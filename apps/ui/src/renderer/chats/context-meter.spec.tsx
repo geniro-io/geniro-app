@@ -524,8 +524,11 @@ describe('the expanded readout the meter opens onto', () => {
     // The meter is NOT unmounted across a chat switch — the composer keeps one
     // and `activateRun` only swaps the run beneath it — so a reading survives
     // into a conversation it does not describe unless it is discarded on
-    // purpose. Both halves of the defect are here: the stale breakdown itself,
-    // and the summary it suppresses, which belongs to the chat now on screen.
+    // purpose.
+    //
+    // What replaces it is the LOADING line, not the last-request summary: the
+    // new chat's reading is on its way, and printing a different measurement
+    // of the same window in the meantime is the jump this panel now avoids.
     const load = vi
       .fn()
       .mockResolvedValueOnce(METRICS)
@@ -543,7 +546,7 @@ describe('the expanded readout the meter opens onto', () => {
 
     expect(container.textContent).not.toContain('System prompt');
     expect(container.textContent).not.toContain('claude-opus-5[1m]');
-    expect(container.textContent).toContain('62.4k / 1M');
+    expect(container.textContent).toContain('Reading the agent');
   });
 
   it('does not paint the old chat’s breakdown for even ONE frame', async () => {
@@ -706,6 +709,70 @@ describe('the expanded readout the meter opens onto', () => {
     openMeter();
 
     expect(container.textContent).toContain('Reading the agent');
+  });
+
+  /**
+   * A meter whose SUMMARY figure differs from the breakdown's.
+   *
+   * The shared `tree` uses 62,444 for both, which is exactly the collision
+   * these two tests have to avoid: the whole question is which of the two
+   * measurements is on screen, and one number cannot answer it. 340.3k against
+   * a 62.4k breakdown is the reported pair's shape.
+   */
+  function renderDivergent(load: ChatMetricsLoader): void {
+    render(
+      <ChatMetricsLoaderContext.Provider value={load}>
+        <ContextMeter
+          contextTokens={340_300}
+          contextWindowTokens={1_000_000}
+          runId="run-1"
+        />
+      </ChatMetricsLoaderContext.Provider>,
+    );
+  }
+
+  it('never shows the last-request figure and then swaps it for the /context one', async () => {
+    // The reported jump: the summary is the prompt side of the LAST REQUEST,
+    // the panel header is the agent's own `/context` reply, and putting the
+    // first in the spot the second is about to take reads as one figure
+    // correcting itself a beat later. One reading is shown, or none.
+    //
+    // Asserted across BOTH frames of one open — while the reading is in
+    // flight, and once it has landed — because the defect is only visible as
+    // the transition between them.
+    let settle: (metrics: typeof METRICS) => void = () => undefined;
+    renderDivergent(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    openMeter();
+
+    // Frame one: reading in flight. The summary's own figure is absent.
+    expect(container.textContent).toContain('Reading the agent');
+    expect(container.textContent).not.toContain('340.3k');
+
+    await act(async () => {
+      settle(METRICS);
+    });
+
+    // Frame two: the breakdown's figure, and still not the summary's.
+    expect(container.textContent).toContain('62.4k');
+    expect(container.textContent).not.toContain('340.3k');
+  });
+
+  it('keeps the summary when no breakdown is coming — a failed fetch', async () => {
+    // The counterweight to the suppression above: with the reading settled and
+    // no breakdown to show, the summary is not a placeholder for a different
+    // figure, it is the only figure there is. Withholding it there would leave
+    // the panel with an error and nothing else.
+    renderDivergent(() => Promise.reject(new Error('daemon GET failed (500)')));
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('340.3k / 1M');
+    expect(container.textContent).toContain('daemon GET failed (500)');
   });
 
   it('offers no readout at all for a meter with no run', async () => {

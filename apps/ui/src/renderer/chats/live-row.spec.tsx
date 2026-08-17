@@ -58,6 +58,24 @@ describe('formatElapsed', () => {
     expect(formatElapsed(65_000)).toBe('1m 5s');
   });
 
+  it('rolls into HOURS rather than counting minutes forever', () => {
+    // The reported header, verbatim: `worked 128m 57s / 14 turns`. Minutes were
+    // unbounded, so a long thread reported a figure nobody reads as a duration
+    // without dividing by 60 themselves.
+    expect(formatElapsed(7_737_000)).toBe('2h 8m 57s');
+    // The boundary in both directions — 59m is still minutes, 60m is an hour.
+    expect(formatElapsed(59 * 60_000 + 59_000)).toBe('59m 59s');
+    expect(formatElapsed(60 * 60_000)).toBe('1h 0m 0s');
+  });
+
+  it('keeps hours unbounded rather than inventing a day tier', () => {
+    // Stated because it is a CHOICE, not an oversight: one more unit is one
+    // more case, and nothing in the app has produced a day of working time.
+    expect(formatElapsed(25 * 60 * 60_000 + 3 * 60_000 + 40_000)).toBe(
+      '25h 3m 40s',
+    );
+  });
+
   it('never reports a negative age', () => {
     // A clock skew between the daemon's `thinkingSince` and this machine can
     // put the anchor in the future; "-3s" would be the one reading that is

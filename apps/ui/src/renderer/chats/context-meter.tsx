@@ -237,13 +237,30 @@ function MeterReadout({
             ? 'w-max max-w-[20rem]'
             : 'max-h-[26rem] w-[22rem] overflow-y-auto',
         )}>
-        {/* The summary steps aside once the full breakdown has landed: the
-            panel's own header states the same used/window pair, and two
-            renderings of one figure inches apart is what the readout was
-            already criticised for. It STAYS for every other state — while the
-            reading is in flight, and for a CLI that has no breakdown to give —
-            because there is nothing to replace it with. */}
-        {metrics?.data?.context ? null : children}
+        {/* The summary steps aside as soon as a breakdown is COMING, not once
+            it has landed — and the difference is a reported bug.
+
+            These are two different measurements of one window: the summary is
+            the prompt side of the LAST REQUEST, the panel's header is the
+            agent's own `/context` reply. Showing the first for the 1–3s the
+            second takes, and then swapping it out in the same spot, reads as
+            one figure correcting itself — measured on a real chat as `340.3k
+            of 1M · 34%` becoming `487.5k of 1M · 49%` a beat later, with
+            nothing in between to say the question had changed. "Agent context
+            is jumping — first I see one number, and then when it loads full
+            stats, another number."
+
+            So the popover states ONE reading or none. While the first one is
+            in flight it carries the loading line alone; a re-read keeps the
+            previous BREAKDOWN on screen (`ContextPanel`), which is the same
+            measurement and therefore moves rather than jumps. The summary is
+            still the whole content where no breakdown is coming — no loader,
+            no run, a CLI that has none to give, or a fetch that failed — since
+            there it is not a placeholder for a different figure, it is the
+            only figure there is. */}
+        {metrics === null || (!metrics.loading && !metrics.data?.context)
+          ? children
+          : null}
         {metrics ? (
           <ContextPanel
             metrics={metrics.data}
@@ -373,9 +390,8 @@ function useChatMetrics(
   // meantime leaves the previous chat's reading in state until the next open —
   // and an effect runs after that open has painted, so without this the first
   // frame of the new chat's panel is the old chat's window, totals and spend,
-  // with `{metrics?.data?.context ? null : children}` suppressing the summary
-  // that would have been right. One frame rather than forever, and the same
-  // wrong figures under the same wrong name.
+  // with the summary suppressed alongside it. One frame rather than forever,
+  // and the same wrong figures under the same wrong name.
   return state.runId === runId ? state : { runId, ...NO_READING };
 }
 

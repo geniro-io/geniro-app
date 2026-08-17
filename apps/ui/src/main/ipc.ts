@@ -4,6 +4,7 @@ import {
   dialog,
   ipcMain,
   type IpcMainInvokeEvent,
+  shell,
 } from 'electron';
 
 import { IPC } from '../shared/contracts';
@@ -19,6 +20,7 @@ import {
   revealPathSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
+import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
 import { openInTerminal } from './open-terminal';
 import { revealPath } from './reveal-path';
@@ -180,6 +182,12 @@ export function registerIpc(
         }
       },
     }),
+  );
+
+  // No input at all, and that is the point — see the module's own doc block.
+  // The renderer asks for THE notifications pane, not for a URL of its choosing.
+  ipcMain.handle(IPC.openNotificationSettings, () =>
+    openNotificationSettings((url) => shell.openExternal(url)),
   );
 
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {

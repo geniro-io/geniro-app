@@ -92,12 +92,37 @@ function useSecondsTick(): void {
   }, []);
 }
 
-/** `12s`, `1m 5s` — the elapsed form both rows read. */
+/**
+ * `12s`, `1m 5s`, `2h 8m 57s` — the elapsed form both rows read.
+ *
+ * The hours tier is the whole of a report, and the header is where it showed:
+ * `worked 128m 57s / 14 turns`. Minutes were unbounded, so a thread's summed
+ * working time — and a long thinking stretch, and a delegate's `took` — kept
+ * counting past the point where anyone reads a minute count as a duration.
+ * Nobody divides 128 by 60 to find out they have spent two hours.
+ *
+ * `stats/stats-format.ts` has had an hours-aware `formatDuration` since the
+ * Stats page shipped, which is what made this one's absence a genuine
+ * inconsistency rather than a missing feature: the same span read `2h 8m` on
+ * one screen and `128m 57s` on another. The two do NOT merge, and the reason is
+ * their precision: that one rounds to whole minutes, for totals nobody reads to
+ * the second, while this one drives a clock that reticks every second and would
+ * visibly freeze without them.
+ *
+ * There is deliberately no DAY tier. Hours stay unbounded, so a thread that
+ * worked a full day reads `25h 3m 40s` — long, legible, and one unit rather
+ * than a fourth case nothing in the app has yet produced.
+ */
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
-  return seconds < 60
-    ? `${seconds}s`
-    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
 }
 
 /**

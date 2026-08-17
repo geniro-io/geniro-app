@@ -307,3 +307,119 @@ describe('Menu', () => {
     expect(el.textContent).toContain('No matches');
   });
 });
+
+describe('Menu — fitting the window', () => {
+  /**
+   * Open with the panel reporting a given rect.
+   *
+   * jsdom lays nothing out, so every `getBoundingClientRect` is zeroes and the
+   * measurement under test can never fire on its own. The stub is scoped to the
+   * PANEL and removed once the layout effect has run.
+   */
+  function openWithPanelRect(
+    rect: { top: number; bottom: number; height: number },
+    props: Partial<React.ComponentProps<typeof Menu>> = {},
+  ): HTMLDivElement {
+    const zero = {
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this.getAttribute('role') !== 'listbox') {
+          return zero;
+        }
+        return {
+          ...zero,
+          top: rect.top,
+          bottom: rect.bottom,
+          height: rect.height,
+          // Comfortably inside the window, so the horizontal flip this shares
+          // an effect with stays out of the way.
+          left: 0,
+          right: 200,
+          width: 200,
+        } as DOMRect;
+      });
+    try {
+      return open(BRANCHES, props);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  const panel = (el: HTMLElement): HTMLElement =>
+    el.querySelector<HTMLElement>('[role="listbox"]')!;
+
+  it('shortens a panel that runs off the TOP of the window', () => {
+    // The reported branch picker, as measured at 900×420 before the fix: a
+    // 341px panel at `top: -326`, so 326 of its pixels were above the window
+    // and fifteen of fourteen branches were unreachable. `max-h-80` caps the
+    // ROW LIST; nothing measured whether the panel fitted anywhere.
+    const el = openWithPanelRect({ top: -326, bottom: 15, height: 341 });
+
+    // Floored at 120: 341 - 326 - 8 would be 7px, which is not a menu.
+    expect(panel(el).style.maxHeight).toBe('120px');
+  });
+
+  it('shortens a panel that runs off the BOTTOM, by exactly the overflow', () => {
+    // The same measurement on the other edge — a menu opened downward from a
+    // trigger near the foot of the window.
+    const el = openWithPanelRect(
+      { top: 668, bottom: window.innerHeight + 100, height: 341 },
+      { side: 'bottom' },
+    );
+
+    // 341 - 100 overflow - 8 margin.
+    expect(panel(el).style.maxHeight).toBe('233px');
+  });
+
+  it('leaves a panel that FITS at its natural height', () => {
+    // The common case, and the one a blanket cap would quietly shrink: no
+    // inline height at all, so the panel keeps `max-h-80` and its own sizing.
+    const el = openWithPanelRect({ top: 24, bottom: 365, height: 341 });
+
+    expect(panel(el).style.maxHeight).toBe('');
+  });
+
+  it('drops the cap when the menu closes, so the next open re-measures', () => {
+    // The cap belongs to one open at one size. Carried across, a menu once
+    // shortened in a small window would stay short in a large one.
+    const el = openWithPanelRect({ top: -326, bottom: 15, height: 341 });
+    expect(panel(el).style.maxHeight).toBe('120px');
+
+    act(() => {
+      root!.render(
+        <Menu
+          open={false}
+          groups={BRANCHES}
+          value="main"
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+    });
+    act(() => {
+      root!.render(
+        <Menu
+          open
+          groups={BRANCHES}
+          value="main"
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+    });
+
+    // Re-opened with jsdom's zeroed rects — nothing overflows, so no cap.
+    expect(panel(el).style.maxHeight).toBe('');
+  });
+});

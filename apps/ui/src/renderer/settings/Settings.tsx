@@ -383,7 +383,7 @@ export function Settings({
         setNotificationTest(result.shown === true ? 'shown' : 'unknown');
         setNotificationTestResult(
           result.shown === true
-            ? 'Sent — you should have seen a banner. If you did not, macOS is holding it: System Settings › Notifications › Geniro.'
+            ? 'Sent — you should have seen a banner. If you did not, macOS is holding it: open macOS settings above and switch Geniro on under Notifications.'
             : (result.reason ??
                 'Sent, but the system said nothing about it — check Notification Centre.'),
         );
@@ -500,15 +500,31 @@ export function Settings({
               get — and every later silence (permission refused, Do Not Disturb,
               the app silenced in System Settings) is indistinguishable from a
               bug in here. */}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="ml-auto shrink-0"
-            disabled={notificationTest === 'testing'}
-            onClick={onTestNotification}>
-            {notificationTest === 'testing' ? 'Sending…' : 'Send a test'}
-          </Button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Beside the test rather than behind its result, and always
+                present: the test says whether the OS is holding the app, and
+                this is the only place the user can do anything about it. It
+                used to be a SENTENCE naming that place — "System Settings ›
+                Notifications › Geniro" — which is the report ("we should have
+                some button that will automatically open settings for us"): a
+                destination the app knows how to reach, printed as directions
+                for the user to follow by hand. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void window.geniro.openNotificationSettings()}>
+              macOS settings
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={notificationTest === 'testing'}
+              onClick={onTestNotification}>
+              {notificationTest === 'testing' ? 'Sending…' : 'Send a test'}
+            </Button>
+          </div>
         </div>
         {notificationTestResult ? (
           <p

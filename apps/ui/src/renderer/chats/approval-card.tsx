@@ -11,7 +11,7 @@ import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { DiffView, editDiffOf } from './diff-view';
 import { disclosesInput } from './tool-render';
-import { useAttachments } from './use-attachments';
+import { type StagedAttachment, useAttachments } from './use-attachments';
 
 /** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -328,9 +328,26 @@ function QuestionCard({
   // caller as a separate message — see `onRespond`'s note for why they cannot
   // ride the answer string itself.
   const attachments = useAttachments();
-  const imageCount = attachments.attachments.length;
   /**
-   * The line appended to the answer when screenshots ride along.
+   * The images pasted into ONE tab.
+   *
+   * Per tab, and that is the fix: one hook stages every screenshot on the card,
+   * so before the owner tag every tab drew every thumbnail and the answer could
+   * only say that a picture was coming — never which question it answered. A
+   * user pasting a screenshot under the second question saw it appear under the
+   * first and the third as well ("it should be attached to tab where i inserted
+   * it, not to all").
+   *
+   * The BYTES are still one delivery: they leave as a single follow-up message,
+   * because that is what the send path does. What is per-tab is which
+   * thumbnails a tab shows and which answer line announces them.
+   */
+  const imagesAt = (index: number): StagedAttachment[] =>
+    attachments.attachments.filter(
+      (image) => (image.owner ?? 0) === (questions.length > 1 ? index : 0),
+    );
+  /**
+   * The line appended to a tab's answer when screenshots ride along with it.
    *
    * A factual description of the DELIVERY, not words put in the user's mouth:
    * the bytes go out as their own message, and without this the model reads the
@@ -340,11 +357,10 @@ function QuestionCard({
    * Shared by BOTH submit paths, so neither can describe the delivery
    * differently from the other.
    */
-  const imageNote =
-    imageCount === 0
+  const imageNoteFor = (count: number): string =>
+    count === 0
       ? ''
-      : `\n(${imageCount === 1 ? '1 image' : `${imageCount} images`} attached — sent as the next message)`;
-  const withImageNote = (answer: string): string => `${answer}${imageNote}`;
+      : `\n(${count === 1 ? '1 image' : `${count} images`} attached — sent as the next message)`;
   const { responded, sending, respond } = useOneShotVerdict(
     verdict,
     expired,
@@ -362,8 +378,19 @@ function QuestionCard({
   const staged = questions.length > 1 || questions[0]!.multiSelect;
   // Each tab's answer: the labels it picked, plus whatever was typed there.
   // Both, so "Red, but a lighter shade" survives as one answer.
-  const answerAt = (index: number): string =>
+  const typedAt = (index: number): string =>
     joinParts([...(picked[index] ?? []), (texts[index] ?? '').trim()]);
+  // …and the tab's OWN image note, so a card of three questions announces the
+  // screenshot on the line of the question it belongs to rather than once at
+  // the end for the whole card.
+  //
+  // This is also what makes an image-only tab count as ANSWERED below: the note
+  // is non-empty, so `unanswered` no longer lists a tab the user answered with
+  // a picture. The old code had to special-case a lone question for that, on
+  // the stated grounds that "one image cannot say which tab it belongs to" —
+  // which stopped being true the moment images carried an owner.
+  const answerAt = (index: number): string =>
+    `${typedAt(index)}${imageNoteFor(imagesAt(index).length)}`;
   const submission =
     questions.length > 1 ? combinedAnswer(questions, answerAt) : answerAt(0);
   // The per-tab budget: the daemon drops an oversized verdict on the floor
@@ -411,28 +438,25 @@ function QuestionCard({
   // leave NO room to type.
   const typedBudget = Math.max(
     0,
-    perTabBudget - pendingPickCost - imageNote.length,
+    perTabBudget -
+      pendingPickCost -
+      imageNoteFor(imagesAt(activeIndex).length).length,
   );
   const unanswered = questions
     .map((q, index) =>
       answerAt(index).length === 0 ? tabLabel(q, index) : null,
     )
     .filter((label): label is string => label !== null);
-  /** The answer as sent, plus the line stating that an image follows. */
-  const submissionWithImages = withImageNote(submission);
-  const tooLong = submissionWithImages.length > MAX_ANSWER_LENGTH;
+  const tooLong = submission.length > MAX_ANSWER_LENGTH;
   // ONE gate, shared by the Submit button and the Enter key — two conditions
   // would drift, and an Enter that outran the button's guard would send an
   // answer the daemon drops on the floor with no on-card explanation.
   //
-  // A pasted screenshot ANSWERS a lone question on its own ("which of these
-  // looks right?" is answered by the picture), so it clears the empty-tab gate
-  // there. It deliberately does not on a multi-question card: one image cannot
-  // say which tab it belongs to.
-  const canSubmit =
-    (unanswered.length === 0 ||
-      (questions.length === 1 && imageCount > 0 && !tooLong)) &&
-    !tooLong;
+  // A pasted screenshot ANSWERS the tab it was pasted into ("which of these
+  // looks right?" is answered by the picture), on every card rather than only a
+  // lone question — `answerAt` carries the note, so such a tab is not in
+  // `unanswered` in the first place.
+  const canSubmit = unanswered.length === 0 && !tooLong;
   // Submit is disabled for exactly two reasons, and both are SAID: a
   // disabled button with no explanation is the defect this card had.
   const blockedReason = tooLong
@@ -474,7 +498,7 @@ function QuestionCard({
       // settled and no way to resend.
       respond(
         true,
-        withImageNote(joinParts([label, (texts[index] ?? '').trim()])),
+        `${joinParts([label, (texts[index] ?? '').trim()])}${imageNoteFor(imagesAt(index).length)}`,
         attachments.toWire(),
       );
       return;
@@ -631,7 +655,7 @@ function QuestionCard({
               come to look different in the two places a screenshot is
               attached. */}
           <AttachmentStrip
-            attachments={attachments.attachments}
+            attachments={imagesAt(activeIndex)}
             onRemove={attachments.remove}
           />
           {attachments.error ? (
@@ -647,7 +671,13 @@ function QuestionCard({
             onPaste={(event) => {
               // Only a paste carrying IMAGES is intercepted; plain text keeps
               // the field's own behaviour, which is what typing an answer is.
-              if (attachments.addFromClipboard(event.clipboardData)) {
+              //
+              // Tagged with the tab it landed in — see `imagesAt`. Read HERE
+              // rather than inside the hook's async read, which the user is
+              // free to change tabs during.
+              if (
+                attachments.addFromClipboard(event.clipboardData, activeIndex)
+              ) {
                 event.preventDefault();
               }
             }}
@@ -673,10 +703,36 @@ function QuestionCard({
               if (e.nativeEvent.isComposing) {
                 return;
               }
-              // Only when this tab IS the whole answer; with more to fill in,
-              // Enter would submit the others empty.
-              if (e.key === 'Enter' && !staged && canSubmit) {
-                respond(true, submissionWithImages, attachments.toWire());
+              if (e.key !== 'Enter') {
+                return;
+              }
+              /*
+                Enter ADVANCES before it submits, which is the second half of
+                the report ("when i press enter - it should go to next tab
+                automatically").
+
+                Picking an option has moved to the next unfilled tab since the
+                tabs were introduced; typing an answer did not, so a card of
+                three free-text questions was answered by typing, reaching for
+                the mouse, typing, reaching for the mouse again — and Enter,
+                the key every one of those fields invites, did nothing at all.
+
+                The order is what keeps it safe. `nextTab` is the next tab still
+                EMPTY, so it is null exactly when nothing is left to fill in —
+                which is when Enter submits, under the same `canSubmit` gate the
+                button uses. From an empty tab, `nextTab` skips over nothing:
+                the current tab is never its own candidate, so Enter on an
+                unanswered tab moves on rather than submitting it blank, and the
+                Submit button (which lists what is still empty) stays the way to
+                finish.
+              */
+              if (nextTab !== null) {
+                e.preventDefault();
+                focusTab(nextTab);
+                return;
+              }
+              if (canSubmit) {
+                respond(true, submission, attachments.toWire());
               }
             }}
           />
@@ -705,15 +761,12 @@ function QuestionCard({
             <Button
               type="button"
               disabled={!canSubmit}
-              onClick={() =>
-                respond(true, submissionWithImages, attachments.toWire())
-              }>
+              onClick={() => respond(true, submission, attachments.toWire())}>
               {staged ? 'Submit answers' : 'Answer'}
             </Button>
-            {/* The typed-answer counterpart to the pick's auto-advance.
-                Typing cannot advance on its own — there is no keystroke that
-                means "done with this one" while Enter is reserved — so without
-                this the only way on is to notice the tab strip and click it. */}
+            {/* The mouse counterpart to Enter's auto-advance — kept once Enter
+                gained it, because the strip is small and this button is what
+                names the move for anyone who never presses Enter in a field. */}
             {showTabs && nextTab !== null ? (
               <Button
                 type="button"

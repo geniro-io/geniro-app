@@ -3,19 +3,14 @@ import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
 import { Button } from '../components/ui/button';
-import { cn } from '../components/ui/utils';
 import {
-  BlockPendingLine,
   BlockRequest,
   BlockResult,
   BlockShell,
   type BlockStatus,
   BlockTitle,
-  BlockToolFooter,
-  SectionLabel,
 } from './block-shell';
 import { formatElapsed, RunSettledContext } from './live-row';
-import { formatClockTime } from './relative-time';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { TaskCount } from './task-list';
 import { taskProgress } from './task-payload';
@@ -27,9 +22,8 @@ import {
   subagentBlockStatus,
   subagentTitle,
   type TaskListEntry,
-  toolCallSummary,
 } from './transcript-groups';
-import { payloadString, type TranscriptNodeMeta } from './transcript-item';
+import type { TranscriptNodeMeta } from './transcript-item';
 
 function shellStatusOf(
   block: SubagentBlockEntry,
@@ -45,91 +39,6 @@ function shellStatusOf(
     default:
       return 'running';
   }
-}
-
-/** One step a delegate took, as the timeline lists it. */
-interface SubagentStep {
-  id: string;
-  time: string;
-  what: string;
-  detail: string | null;
-}
-
-/**
- * What the delegate DID, in order — the timeline half of its detail panel.
- *
- * Deliberately a different reading of the same entries the conversation shows,
- * not a second source: the conversation is what it said, this is the sequence
- * of steps it took, which is what a reader scanning a long delegation actually
- * wants. Built by walking the block's own folded entries, so a step can never
- * describe work the thread below does not contain.
- */
-export function subagentSteps(block: SubagentBlockEntry): SubagentStep[] {
-  const steps: SubagentStep[] = [];
-  const walk = (entries: SubagentBlockEntry['entries']): void => {
-    for (const entry of entries) {
-      if (entry.type === 'tools') {
-        for (const pair of entry.pairs) {
-          steps.push({
-            id: pair.call.id,
-            time: formatClockTime(pair.call.createdAt) ?? '',
-            what: payloadString(pair.call.payload, 'name') ?? 'tool',
-            detail: toolCallSummary(pair.call) || null,
-          });
-        }
-        continue;
-      }
-      if (entry.type === 'turn-block' || entry.type === 'call-block') {
-        walk(entry.entries);
-        continue;
-      }
-      if (entry.type === 'task-list') {
-        // The delegate keeping its OWN list, which is the ticket's second half:
-        // a background sub-agent plans exactly like the main agent does, and its
-        // list is its own (both CLIs number tasks from 1, so the fold keeps the
-        // threads apart).
-        const { done, total, current } = taskProgress(entry.tasks);
-        steps.push({
-          id: entry.id,
-          time: formatClockTime(entry.createdAt) ?? '',
-          what: `tasks ${done}/${total}`,
-          detail:
-            current === null
-              ? null
-              : (current.activeForm ?? current.title ?? `Task ${current.id}`),
-        });
-        continue;
-      }
-      if (entry.type !== 'item') {
-        // A sub-agent block never nests inside another — a claude delegate is
-        // a leaf and cannot itself delegate.
-        continue;
-      }
-      const item = entry.item;
-      if (item.kind === 'message' || item.kind === 'reasoning') {
-        const text = payloadString(item.payload, 'text');
-        if (text) {
-          steps.push({
-            id: item.id,
-            time: formatClockTime(item.createdAt) ?? '',
-            what: item.kind === 'reasoning' ? 'thought' : 'said',
-            detail: text.replace(/\s+/g, ' ').slice(0, 120),
-          });
-        }
-        continue;
-      }
-      if (item.kind === 'error') {
-        steps.push({
-          id: item.id,
-          time: formatClockTime(item.createdAt) ?? '',
-          what: 'error',
-          detail: payloadString(item.payload, 'message'),
-        });
-      }
-    }
-  };
-  walk(block.entries);
-  return steps;
 }
 
 /**
@@ -211,61 +120,54 @@ function SubagentStepsMissing({
 }: {
   block: SubagentBlockEntry;
 }): React.JSX.Element | null {
-  if (block.stepsUnavailableReason === null || block.entries.length > 0) {
+  if (block.entries.length > 0) {
+    return null;
+  }
+  // The daemon's own sentence when there is one, and it outranks the generic
+  // line: "has not done anything yet" is a claim about the DELEGATE, and saying
+  // it about one whose steps this CLI never streams reports geniro's blind spot
+  // as the sub-agent sitting idle — which is how it read for a cursor delegate
+  // that had just spent thirteen seconds working.
+  //
+  // The generic line is only for a delegate that has genuinely not spoken YET,
+  // so it is withheld from one that has RETURNED: a block carrying a result has
+  // demonstrably done something, and beside that result the sentence is simply
+  // false. It used to sit under a `Timeline` heading, where it read as "no
+  // steps recorded"; the heading is gone (see {@link SubagentDetail}) and a
+  // bare sentence has to be true on its own.
+  const line =
+    block.stepsUnavailableReason ??
+    (block.returned || block.result !== null
+      ? null
+      : 'This sub-agent has not done anything yet.');
+  if (line === null) {
     return null;
   }
   return (
     <p
       data-role="subagent-steps-missing"
       className="m-0 text-[11px] text-muted-foreground">
-      {block.stepsUnavailableReason}
+      {line}
     </p>
   );
 }
 
-function SubagentTimeline({
-  block,
-}: {
-  block: SubagentBlockEntry;
-}): React.JSX.Element {
-  const steps = subagentSteps(block);
-  if (steps.length === 0) {
-    // The daemon's own sentence outranks the generic line: "has not done
-    // anything yet" is a claim about the DELEGATE, and saying it about one whose
-    // steps this CLI never streams reports geniro's blind spot as the sub-agent
-    // sitting idle — which is exactly how it read for a cursor delegate that had
-    // just spent thirteen seconds working.
-    return (
-      <p className="m-0 text-[11px] text-muted-foreground">
-        {block.stepsUnavailableReason ??
-          'This sub-agent has not done anything yet.'}
-      </p>
-    );
-  }
-  return (
-    <ol
-      data-role="subagent-timeline"
-      className="m-0 flex list-none flex-col gap-1 p-0">
-      {steps.map((step) => (
-        <li key={step.id} className="flex items-baseline gap-2 text-[11px]">
-          <span className="w-10 shrink-0 tabular-nums text-muted-foreground">
-            {step.time}
-          </span>
-          <span className="shrink-0 font-medium">{step.what}</span>
-          {step.detail ? (
-            <span className="min-w-0 flex-1 truncate text-muted-foreground">
-              {step.detail}
-            </span>
-          ) : null}
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 /**
- * One sub-agent's timeline AND its conversation, for the detail dialog the
- * panel row and the block's own control open.
+ * One sub-agent's conversation, for the detail dialog the panel row and the
+ * block's own control open.
+ *
+ * **There is no timeline half any more.** It was a second reading of the very
+ * entries below it — one line per tool call, message and task move — sitting
+ * above the thread it was derived from, and it is the first thing a reader had
+ * to scroll past to reach the conversation they opened the dialog for. The
+ * report was blunt about which of the two answers the question: "we dont need
+ * timeline - we can check messages instead". With it went `subagentSteps` and
+ * its step type: nothing else built one, and a folder left behind for a surface
+ * that no longer exists is how a codebase grows a second, drifting truth.
+ *
+ * What remains is one section, so it carries no heading: `Conversation` over
+ * the only thing in the dialog is a heading repeated as its own content, and
+ * the dialog's title already names what this is.
  */
 export function SubagentDetail({
   block,
@@ -276,32 +178,13 @@ export function SubagentDetail({
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   chatAgentName?: string | null;
 }): React.JSX.Element {
-  // With nothing to build a timeline FROM and a stated reason there never will
-  // be, the split is two headings over one sentence — and the sentence would be
-  // printed under both. The thread section keeps it, because "where is the
-  // conversation" is the question a reader opened this panel with.
-  const nothingToSequence =
-    block.stepsUnavailableReason !== null && block.entries.length === 0;
   return (
-    <div className="flex flex-col gap-4">
-      {nothingToSequence ? null : (
-        <div>
-          <SectionLabel>Timeline</SectionLabel>
-          <SubagentTimeline block={block} />
-        </div>
-      )}
-      <div
-        className={cn(
-          'flex flex-col gap-2.5',
-          nothingToSequence ? null : 'border-t border-border pt-3',
-        )}>
-        <SectionLabel>Conversation</SectionLabel>
-        <SubagentThread
-          block={block}
-          nodes={nodes}
-          chatAgentName={chatAgentName}
-        />
-      </div>
+    <div className="flex flex-col gap-2.5">
+      <SubagentThread
+        block={block}
+        nodes={nodes}
+        chatAgentName={chatAgentName}
+      />
     </div>
   );
 }
@@ -322,10 +205,7 @@ export function SubagentThread({
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   chatAgentName?: string | null;
 }): React.JSX.Element {
-  const runSettledAt = useContext(RunSettledContext);
   const title = subagentTitle(block);
-  const toolCount = countTools(block.entries);
-  const status = subagentBlockStatus(block, runSettledAt);
   return (
     <NestedThreadContext.Provider value={true}>
       {block.prompt ? (
@@ -347,18 +227,15 @@ export function SubagentThread({
       {block.result ? (
         <BlockResult label={`Result from ${title}`} text={block.result} />
       ) : null}
-      {status === 'running' ? (
-        <BlockPendingLine>{title} is working...</BlockPendingLine>
-      ) : null}
-      {status === 'stopped' ? (
-        <BlockPendingLine pulse={false}>
-          stopped before {title} reported back
-        </BlockPendingLine>
-      ) : null}
-      <BlockToolFooter
-        count={toolCount}
-        note={status === 'failed' ? <span>returned an error</span> : undefined}
-      />
+      {/*
+        No footer. It used to close every delegate's thread with `<title> is
+        working...` and `N tools` — both of which the header directly above
+        already says, and says better: the status is a spinner and a chip, the
+        tool count is a chip, and both are legible with the block still closed.
+        Repeating them under the thread put the delegate's NAME back on screen a
+        third time, in the place a reader is looking for what it produced. The
+        call block keeps its own footer, which heads no such header.
+      */}
     </NestedThreadContext.Provider>
   );
 }

@@ -18,6 +18,15 @@ import {
 
 const roots: string[] = [];
 
+/**
+ * A fixed epoch-seconds mark the ordered fixtures are stamped around.
+ *
+ * The listing sorts newest-first, so any test whose claim depends on the ORDER
+ * files are decided in has to state that order rather than inherit it from how
+ * fast the machine wrote them.
+ */
+const TS_BASE = 1_700_000_000;
+
 afterEach(() => {
   while (roots.length > 0) {
     rmSync(roots.pop() as string, { recursive: true, force: true });
@@ -199,19 +208,30 @@ describe('listClaudeSessions', () => {
     const theirs = join(root, 'projects', 'theirs');
     mkdirSync(theirs, { recursive: true });
     for (let i = 0; i < 9; i += 1) {
+      const path = join(theirs, `t${i}.jsonl`);
       writeFileSync(
-        join(theirs, `t${i}.jsonl`),
+        path,
         JSON.stringify(
           userLine(i === 8 ? '/tmp/mine' : '/tmp/theirs', 'elsewhere'),
         ),
       );
+      // Stamped rather than left to the clock. The listing decides newest-first,
+      // so what this test pins — a folder rejected by an EARLIER file, with the
+      // wanted `t8` behind the rejection — only holds if `t8` sorts last. Nine
+      // writes normally land inside one millisecond and the stable sort then
+      // preserves this loop's order, but on a loaded machine they straddle a
+      // tick, `t8` becomes the newest of the nine and is decided BEFORE anything
+      // has rejected the directory: measured as an intermittent
+      // `['m1','t8']` under the full suite, passing alone every time.
+      utimesSync(path, TS_BASE - i, TS_BASE - i);
     }
     const mine = join(root, 'projects', 'mine');
     mkdirSync(mine, { recursive: true });
-    writeFileSync(
-      join(mine, 'm1.jsonl'),
-      JSON.stringify(userLine('/tmp/mine', 'here')),
-    );
+    const minePath = join(mine, 'm1.jsonl');
+    writeFileSync(minePath, JSON.stringify(userLine('/tmp/mine', 'here')));
+    // Newest of all, so the one row that must survive is decided first and the
+    // assertion cannot pass by the rejection merely reaching it in time.
+    utimesSync(minePath, TS_BASE + 1, TS_BASE + 1);
 
     const rows = await listClaudeSessions({
       profileDir: root,

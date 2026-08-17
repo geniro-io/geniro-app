@@ -94,4 +94,5 @@ xattr -dr com.apple.quarantine "$DEST/$APP_NAME" 2>/dev/null || true
 echo
 echo "Installed: $DEST/$APP_NAME"
 echo "Launch it from Applications, or run: open \"$DEST/$APP_NAME\""
-echo "Update later by re-running this script (or: brew upgrade --cask geniro)."
+echo "It updates itself from GitHub Releases — you should not need this script again."
+echo "(If it ever cannot: re-run this script, or brew upgrade --cask geniro.)"

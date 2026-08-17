@@ -1,210 +1,182 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  app: { isPackaged: false, getVersion: vi.fn(() => '1.0.0') },
-}));
+import { fetchLatestRelease, isNewerVersion, parseVersion } from './updater';
 
-vi.mock('electron', () => ({ app: mocks.app }));
-
-import { checkForUpdates, checkOnLaunch, UPDATE_COMMAND } from './updater';
-
-function mockFetch(impl: (url: string) => Promise<Response> | Response): void {
-  vi.stubGlobal('fetch', vi.fn(impl as typeof fetch));
-}
-
-function releaseResponse(tag: string, ok = true, status = 200): Response {
+function feedResponse(
+  body: unknown,
+  { ok = true, status = 200 }: { ok?: boolean; status?: number } = {},
+): Response {
   return {
     ok,
     status,
-    json: async () => ({ tag_name: tag }),
+    json: async () => body,
   } as unknown as Response;
 }
 
-/** The tap's cask file, as raw.githubusercontent serves it. */
-function caskResponse(version: string, ok = true, status = 200): Response {
+function asset(name: string): Record<string, string> {
   return {
-    ok,
-    status,
-    text: async () =>
-      `cask "geniro" do\n  version "${version}"\n  sha256 "x"\nend\n`,
-  } as unknown as Response;
+    name,
+    browser_download_url: `https://example.test/download/${name}`,
+  };
 }
 
-/**
- * Answer BOTH endpoints the check reads, by URL.
- *
- * `cask: null` is a tap that will not answer — the fallback path — rather than
- * a tap serving nothing, which is a different fact and a different verdict.
- */
-function mockChannels(release: string, cask: string | null): void {
-  mockFetch((url) =>
-    String(url).includes('homebrew-tap')
-      ? cask === null
-        ? Promise.reject(new Error('tap unreachable'))
-        : Promise.resolve(caskResponse(cask))
-      : Promise.resolve(releaseResponse(release)),
-  );
+function mockFetch(impl: () => Promise<Response> | Response): void {
+  vi.stubGlobal('fetch', vi.fn(impl) as unknown as typeof fetch);
 }
-
-beforeEach(() => {
-  mocks.app.isPackaged = false;
-  mocks.app.getVersion.mockReturnValue('1.0.0');
-});
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('checkForUpdates', () => {
-  it('short-circuits in dev without touching the network', async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const result = await checkForUpdates();
-
-    expect(result.status).toBe('dev');
-    expect(fetchSpy).not.toHaveBeenCalled();
+describe('isNewerVersion', () => {
+  it('compares numerically, not lexically (1.10.0 > 1.9.0)', () => {
+    expect(isNewerVersion('1.10.0', '1.9.0')).toBe(true);
+    expect(isNewerVersion('1.9.0', '1.10.0')).toBe(false);
   });
 
-  it('reports an available update and names the update command', async () => {
-    mocks.app.isPackaged = true;
-    mockChannels('v1.1.0', '1.1.0');
-
-    const result = await checkForUpdates();
-
-    expect(result.status).toBe('available');
-    expect(result.version).toBe('1.1.0');
-    expect(result.message).toContain(UPDATE_COMMAND);
+  it('never offers a downgrade or a re-install of the running version', () => {
+    expect(isNewerVersion('0.9.0', '1.0.0')).toBe(false);
+    expect(isNewerVersion('1.0.0', '1.0.0')).toBe(false);
   });
 
-  it('stays quiet while a published release is not yet installable', async () => {
-    mocks.app.isPackaged = true;
-    // The real window between `create-release` and `bump-cask`: the feed names
-    // 1.1.0, the cask still serves 1.0.0, and `brew upgrade --cask geniro`
-    // therefore does nothing — which is what the banner used to send the user
-    // off to run.
-    mockChannels('v1.1.0', '1.0.0');
-
-    const result = await checkForUpdates();
-
-    expect(result.status).toBe('up-to-date');
+  it('refuses to update when either version is unparseable', () => {
+    // "We cannot tell" must read as "do not replace the app", not as an
+    // update: this is the only guard between a malformed tag and a swap.
+    expect(isNewerVersion('not-a-version', '1.0.0')).toBe(false);
+    expect(isNewerVersion('2.0.0', 'nightly')).toBe(false);
   });
 
-  it('announces the CASK version once the tap catches up, not the feed', async () => {
-    mocks.app.isPackaged = true;
-    // A tap that is AHEAD of `/releases/latest` (a re-cut release, a feed
-    // cache): the version named must still be the one brew would install.
-    mockChannels('v1.1.0', '1.2.0');
-
-    const result = await checkForUpdates();
-
-    expect(result).toMatchObject({ status: 'available', version: '1.2.0' });
+  it('tolerates the tag feed’s leading v', () => {
+    expect(parseVersion('v1.2.3')).toEqual([1, 2, 3]);
+    expect(isNewerVersion('v1.2.3', '1.2.2')).toBe(true);
   });
+});
 
-  it('falls back to the release feed when the tap cannot be read', async () => {
-    mocks.app.isPackaged = true;
-    mockChannels('v1.1.0', null);
+describe('fetchLatestRelease', () => {
+  it('resolves the version, the macOS zip and the checksum file', async () => {
+    mockFetch(() =>
+      feedResponse({
+        tag_name: 'v1.4.0',
+        assets: [
+          asset('Geniro-1.4.0-arm64.dmg'),
+          asset('Geniro-1.4.0-arm64-mac.zip'),
+          asset('SHA256SUMS.txt'),
+        ],
+      }),
+    );
 
-    const result = await checkForUpdates();
+    const lookup = await fetchLatestRelease();
 
-    // A machine that cannot reach the tap must not be told it is up to date —
-    // that is a silenced update, not a verified one.
-    expect(result).toMatchObject({ status: 'available', version: '1.1.0' });
-  });
-
-  it('reports up-to-date when the latest release matches the running version', async () => {
-    mocks.app.isPackaged = true;
-    mockFetch(() => releaseResponse('v1.0.0'));
-
-    const result = await checkForUpdates();
-
-    expect(result).toEqual({
-      status: 'up-to-date',
-      version: '1.0.0',
-      message: null,
+    expect(lookup).toEqual({
+      ok: true,
+      release: {
+        version: '1.4.0',
+        zip: {
+          name: 'Geniro-1.4.0-arm64-mac.zip',
+          url: 'https://example.test/download/Geniro-1.4.0-arm64-mac.zip',
+        },
+        checksums: {
+          name: 'SHA256SUMS.txt',
+          url: 'https://example.test/download/SHA256SUMS.txt',
+        },
+      },
     });
   });
 
-  it('does NOT offer a downgrade when the feed is older than the running app', async () => {
-    mocks.app.isPackaged = true;
-    mockFetch(() => releaseResponse('v0.9.0'));
+  it('picks the zip over the dmg — the dmg is not what gets swapped in', async () => {
+    mockFetch(() =>
+      feedResponse({
+        tag_name: 'v2.0.0',
+        assets: [
+          asset('Geniro-2.0.0-arm64.dmg'),
+          asset('Geniro-2.0.0-arm64-mac.zip'),
+        ],
+      }),
+    );
 
-    const result = await checkForUpdates();
+    const lookup = await fetchLatestRelease();
 
-    // An ad-hoc install never auto-downgrades; an older release is just
-    // "up to date" from the app's perspective (nothing to pull).
-    expect(result.status).toBe('up-to-date');
+    expect(lookup.ok && lookup.release.zip.name).toBe(
+      'Geniro-2.0.0-arm64-mac.zip',
+    );
   });
 
-  it('compares versions numerically, not lexically (v1.10.0 > v1.9.0)', async () => {
-    mocks.app.isPackaged = true;
-    mocks.app.getVersion.mockReturnValue('1.9.0');
-    mockFetch(() => releaseResponse('v1.10.0'));
+  it('reports a release with no checksum file as one, rather than hiding it', async () => {
+    mockFetch(() =>
+      feedResponse({
+        tag_name: 'v1.4.0',
+        assets: [asset('Geniro-1.4.0-arm64-mac.zip')],
+      }),
+    );
 
-    const result = await checkForUpdates();
+    const lookup = await fetchLatestRelease();
 
-    expect(result.status).toBe('available');
-    expect(result.version).toBe('1.10.0');
+    // The lookup still succeeds — the REFUSAL belongs to the installer, which
+    // is the only place that knows the digest is load-bearing. Surfacing it as
+    // a failed check here would hide a real release from the user.
+    expect(lookup.ok && lookup.release.checksums).toBeNull();
+  });
+
+  it('fails a release that publishes no macOS archive', async () => {
+    mockFetch(() =>
+      feedResponse({ tag_name: 'v1.4.0', assets: [asset('notes.txt')] }),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup).toEqual({
+      ok: false,
+      error: 'release v1.4.0 publishes no macOS archive',
+    });
   });
 
   it('sends a User-Agent (GitHub rejects the API without one)', async () => {
-    mocks.app.isPackaged = true;
     let sentHeaders: Record<string, string> | undefined;
-    mockFetch((_url) => releaseResponse('v1.0.0'));
     vi.stubGlobal(
       'fetch',
       vi.fn((_url: string, init?: RequestInit) => {
         sentHeaders = init?.headers as Record<string, string>;
-        return Promise.resolve(releaseResponse('v1.0.0'));
-      }) as typeof fetch,
+        return Promise.resolve(
+          feedResponse({ tag_name: 'v1.0.0', assets: [] }),
+        );
+      }) as unknown as typeof fetch,
     );
 
-    await checkForUpdates();
+    await fetchLatestRelease();
 
     expect(sentHeaders?.['User-Agent']).toBeTruthy();
   });
 
   it('maps a non-OK feed response to a structured error, never a throw', async () => {
-    mocks.app.isPackaged = true;
-    mockFetch(() => releaseResponse('v1.1.0', false, 503));
+    mockFetch(() => feedResponse({}, { ok: false, status: 503 }));
 
-    const result = await checkForUpdates();
+    const lookup = await fetchLatestRelease();
 
-    expect(result.status).toBe('error');
-    expect(result.message).toContain('503');
+    expect(lookup).toEqual({
+      ok: false,
+      error: 'release feed returned HTTP 503',
+    });
   });
 
   it('maps a network failure to a structured error, never a throw', async () => {
-    mocks.app.isPackaged = true;
     mockFetch(() => {
       throw new Error('network down');
     });
 
-    const result = await checkForUpdates();
+    const lookup = await fetchLatestRelease();
 
-    expect(result.status).toBe('error');
-    expect(result.message).toContain('network down');
-  });
-});
-
-describe('checkOnLaunch', () => {
-  it('does nothing when the settings toggle is off', () => {
-    mocks.app.isPackaged = true;
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-
-    checkOnLaunch(false);
-
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookup.ok).toBe(false);
+    expect(!lookup.ok && lookup.error).toContain('network down');
   });
 
-  it('fires the check when enabled on a packaged app', async () => {
-    mocks.app.isPackaged = true;
-    const fetchSpy = vi.fn(() => Promise.resolve(releaseResponse('v1.0.0')));
-    vi.stubGlobal('fetch', fetchSpy as typeof fetch);
+  it('maps an unreadable tag to a structured error', async () => {
+    mockFetch(() => feedResponse({ tag_name: 42, assets: [] }));
 
-    checkOnLaunch(true);
+    const lookup = await fetchLatestRelease();
 
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(lookup).toEqual({
+      ok: false,
+      error: 'could not read the latest release version',
+    });
   });
 });

@@ -15,10 +15,13 @@ import { ErrorText } from '../components/error-text';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
+import { ProgressBar } from '../components/ui/progress-bar';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { createDaemonApis } from '../daemon-api';
 import { useConfigDirCapability } from '../graphs/use-config-dir-capability';
+import { updateStatusLine } from '../updates/update-status';
+import { useUpdateState } from '../updates/use-update-state';
 import { useCliLogin } from './use-cli-login';
 
 function normalizedCliPaths(
@@ -66,8 +69,16 @@ export function Settings({
   const [notificationTestResult, setNotificationTestResult] = useState<
     string | null
   >(null);
-  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  // The live update state, pushed by main — the same one the app-wide strip
+  // reads, so this screen cannot show a stale reading of a running download.
+  const update = useUpdateState();
+  const updateLine = update.state ? updateStatusLine(update.state) : '';
+  const updateWorking =
+    update.state?.phase === 'downloading' ||
+    update.state?.phase === 'installing';
+  // A check pressed mid-download would be answered with the download's own
+  // state and read as having done nothing.
+  const updateBusy = updateWorking || update.state?.phase === 'checking';
   // The STORED tri-state, not the effective one: `null` means "not chosen",
   // and the switch below renders what that resolves to for this build.
   const [storedInspect, setStoredInspect] = useState<boolean | null>(null);
@@ -400,25 +411,6 @@ export function Settings({
     [persist],
   );
 
-  const checkNow = useCallback(async (): Promise<void> => {
-    setCheckingUpdates(true);
-    setUpdateStatus(null);
-    try {
-      const result = await window.geniro.checkForUpdates();
-      setUpdateStatus(
-        result.status === 'up-to-date'
-          ? `Up to date (v${result.version ?? '?'})`
-          : // 'available' / 'dev' / 'error' all carry a ready-to-show message
-            // (for 'available' it names the brew/script update command).
-            (result.message ?? result.status),
-      );
-    } catch (err) {
-      setUpdateStatus(String(err));
-    } finally {
-      setCheckingUpdates(false);
-    }
-  }, []);
-
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col gap-6 overflow-y-auto px-6 py-8">
       <header className="flex flex-col gap-1">
@@ -550,28 +542,56 @@ export function Settings({
             onCheckedChange={onToggleUpdates}
           />
           <Label htmlFor="settings-check-updates" className="cursor-pointer">
-            Check for app updates on launch
+            Check for updates automatically
           </Label>
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="ml-auto"
-            disabled={checkingUpdates}
-            onClick={() => void checkNow()}>
-            {checkingUpdates ? 'Checking…' : 'Check now'}
+            disabled={updateBusy}
+            onClick={() => void update.check()}>
+            {update.state?.phase === 'checking' ? 'Checking…' : 'Check now'}
           </Button>
+          {/* The same action as the strip's, on the screen a user opens when
+              they went LOOKING for it — not a second mechanism: both call the
+              one service, and both are gated on the same `canInstall`. */}
+          {update.state?.phase === 'available' && update.state.canInstall ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={() => void update.install()}>
+              Update now
+            </Button>
+          ) : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          Geniro notifies you of a new release but does not self-update —
-          install updates with{' '}
-          <code className="rounded bg-muted px-1 py-0.5">
-            brew upgrade --cask geniro
-          </code>{' '}
-          or by re-running the install script.
+          Geniro checks GitHub Releases on launch and every few hours. An update
+          downloads, is verified against its published checksum and replaces the
+          app in place — nothing is installed until you press Update now.
         </p>
-        {updateStatus ? (
-          <p className="text-xs text-muted-foreground">{updateStatus}</p>
+        {update.state && updateLine ? (
+          <p
+            className={cn(
+              'text-xs',
+              update.state.phase === 'error'
+                ? 'text-destructive'
+                : 'text-muted-foreground',
+            )}>
+            {updateLine}
+            {update.state.message ? ` ${update.state.message}` : null}
+          </p>
+        ) : null}
+        {/* Only while something is moving: a bar sitting at 0% next to an
+            offer would suggest a download nobody started. */}
+        {updateWorking && update.state ? (
+          <ProgressBar
+            fraction={
+              update.state.phase === 'installing' ? null : update.state.progress
+            }
+            label={`Update ${update.state.version} progress`}
+          />
         ) : null}
       </section>
 

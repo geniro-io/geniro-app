@@ -52,9 +52,9 @@ vi.mock('./settings', () => ({
   readSettings: mocks.readSettings,
   updateSettings: mocks.updateSettings,
 }));
-vi.mock('./updater', () => ({ checkForUpdates: vi.fn() }));
 
 import { registerIpc } from './ipc';
+import type { UpdateService } from './update-service';
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel);
@@ -79,11 +79,36 @@ describe('registerIpc daemon configuration refresh', () => {
     isConnected: vi.fn(() => false),
     restart,
   } as unknown as DaemonSupervisor;
+  const updateStart = vi.fn();
+  const updates = {
+    start: updateStart,
+    getState: vi.fn(),
+    check: vi.fn(),
+    install: vi.fn(),
+  } as unknown as UpdateService;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
-    registerIpc(supervisor);
+    registerIpc(supervisor, updates);
+  });
+
+  it('re-arms automatic update checks the moment the toggle is flipped', async () => {
+    await handler(IPC.updateSettings)(event, { checkForUpdates: true });
+
+    // Without this the switch only takes effect at the NEXT launch, so a user
+    // who turns checking on is told nothing until they quit and reopen.
+    expect(updateStart).toHaveBeenCalledWith(true);
+
+    updateStart.mockClear();
+    await handler(IPC.updateSettings)(event, { checkForUpdates: false });
+    expect(updateStart).toHaveBeenCalledWith(false);
+
+    // An unrelated setting must not restart the schedule — that would reset
+    // the interval on every keystroke-debounced binary-path save.
+    updateStart.mockClear();
+    await handler(IPC.updateSettings)(event, { notificationsEnabled: false });
+    expect(updateStart).not.toHaveBeenCalled();
   });
 
   it('restarts after CLI path settings change, but not unrelated settings', async () => {

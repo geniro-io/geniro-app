@@ -9,7 +9,7 @@ import { registerIpc } from './ipc';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
-import { checkOnLaunch } from './updater';
+import { createUpdateService } from './update-service';
 
 /**
  * Product display name. Set before anything reads it: it drives
@@ -33,6 +33,7 @@ const ICON_PATH = join(app.getAppPath(), 'resources', 'icon.png');
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
 
 const supervisor = new DaemonSupervisor();
+const updates = createUpdateService();
 let mainWindow: BrowserWindow | null = null;
 let teardownDone = false;
 
@@ -201,8 +202,11 @@ function main(): void {
       app.dock.setIcon(nativeImage.createFromPath(ICON_PATH));
     }
 
-    registerIpc(supervisor);
-    checkOnLaunch(readSettings().checkForUpdates);
+    registerIpc(supervisor, updates);
+    // Armed here, but the first check is deliberately delayed inside the
+    // service — launch is busy enough, and an update banner is worth nothing
+    // before the window has painted.
+    updates.start(readSettings().checkForUpdates);
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
@@ -241,6 +245,10 @@ function main(): void {
     if (teardownDone) {
       return;
     }
+    // Nothing should fire a check into a process that is on its way out —
+    // including the relaunch an installed update triggers, which quits through
+    // exactly this path.
+    updates.stop();
     event.preventDefault();
     void supervisor.stop().finally(() => {
       teardownDone = true;

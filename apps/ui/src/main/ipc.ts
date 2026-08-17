@@ -23,14 +23,17 @@ import { NotificationService } from './notifications/notifications.service';
 import { openInTerminal } from './open-terminal';
 import { revealPath } from './reveal-path';
 import { readSettings, updateSettings } from './settings';
-import { checkForUpdates } from './updater';
+import type { UpdateService } from './update-service';
 
 /**
  * Register every privileged channel the renderer can invoke. The renderer has
  * no Node/Electron access; each handler here is one entry in the GeniroApi
  * contract exposed via the preload.
  */
-export function registerIpc(supervisor: DaemonSupervisor): void {
+export function registerIpc(
+  supervisor: DaemonSupervisor,
+  updates: UpdateService,
+): void {
   // One instance for the app's lifetime, reading settings through the same
   // function every other handler here does — so the toggle it consults is
   // always the file's current state, never a value captured at registration.
@@ -81,6 +84,12 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
     if (parsed.cliPaths !== undefined || parsed.daemonInspect !== undefined) {
       await restartAndNotify(event);
     }
+    // Re-armed on the spot rather than at the next launch: switching automatic
+    // checks ON and being told nothing until tomorrow is a switch that appears
+    // not to work.
+    if (parsed.checkForUpdates !== undefined) {
+      updates.start(parsed.checkForUpdates);
+    }
     return settings;
   });
 
@@ -108,7 +117,12 @@ export function registerIpc(supervisor: DaemonSupervisor): void {
     },
   );
 
-  ipcMain.handle(IPC.checkForUpdates, () => checkForUpdates());
+  // No input on any of the three: what to check and what to install are main's
+  // own facts (the release feed, this bundle's path), and a renderer that could
+  // name either would be a renderer that could point the installer somewhere.
+  ipcMain.handle(IPC.getUpdateState, () => updates.getState());
+  ipcMain.handle(IPC.checkForUpdates, () => updates.check());
+  ipcMain.handle(IPC.installUpdate, () => updates.install());
 
   ipcMain.handle(IPC.getGitInfo, (_event, dir: unknown) =>
     readGitInfo(gitDirSchema.parse(dir)),

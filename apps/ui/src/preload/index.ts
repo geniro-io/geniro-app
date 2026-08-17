@@ -50,10 +50,25 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.pickWorkflowExport, defaultName) as ReturnType<
       GeniroApi['pickWorkflowExport']
     >,
+  getUpdateState: () =>
+    ipcRenderer.invoke(IPC.getUpdateState) as ReturnType<
+      GeniroApi['getUpdateState']
+    >,
   checkForUpdates: () =>
     ipcRenderer.invoke(IPC.checkForUpdates) as ReturnType<
       GeniroApi['checkForUpdates']
     >,
+  installUpdate: () =>
+    ipcRenderer.invoke(IPC.installUpdate) as ReturnType<
+      GeniroApi['installUpdate']
+    >,
+  onUpdateState: (listener) => {
+    const handler = (_event: IpcRendererEvent, state: unknown): void => {
+      listener(state as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IPC.onUpdateState, handler);
+    return () => ipcRenderer.removeListener(IPC.onUpdateState, handler);
+  },
   getGitInfo: (dir) =>
     ipcRenderer.invoke(IPC.getGitInfo, dir) as ReturnType<
       GeniroApi['getGitInfo']

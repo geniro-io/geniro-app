@@ -19,6 +19,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { cn } from '../components/ui/utils';
 import { createDaemonApis } from '../daemon-api';
+import type { DaemonClient } from '../daemon-client';
 import { BreakdownCard } from './breakdown-card';
 import { toDayPoints } from './chart-data';
 import {
@@ -59,8 +60,14 @@ type DailyMetricId = (typeof DAILY_METRICS)[number]['id'];
  */
 export function Stats({
   handle,
+  client = null,
 }: {
   handle: DaemonHandle | null;
+  /**
+   * The live channel, so the figures follow the turns as they finish. The page
+   * renders without it — it simply stops being live.
+   */
+  client?: DaemonClient | null;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -68,7 +75,11 @@ export function Stats({
   );
   const [period, setPeriod] = useState<StatsPeriodId>('30d');
   const [metric, setMetric] = useState<DailyMetricId>('cost');
-  const { data, loading, error, reload, dismiss } = useStats(apis, period);
+  const { data, loading, error, reload, dismiss } = useStats(
+    apis,
+    period,
+    client,
+  );
 
   const points = useMemo(() => (data ? toDayPoints(data.days) : []), [data]);
 

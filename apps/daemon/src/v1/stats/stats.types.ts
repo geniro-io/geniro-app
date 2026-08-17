@@ -28,6 +28,30 @@ export interface UsageEventInput {
 }
 
 /**
+ * A turn that has just been written to the ledger, announced on the WS channel
+ * so an open Stats page can refresh itself instead of showing whatever was true
+ * when it was opened.
+ *
+ * Deliberately NOT the figures themselves. The page's numbers are sums the
+ * daemon computes over a range (see `StatsService` on why the client holds no
+ * ledger), so a client adding a pushed row to its own totals would be keeping a
+ * second, divergent set of books — and the first one it dropped while
+ * disconnected would be invisible and permanent. It carries only enough to
+ * decide whether the reading on screen is now stale, and the refetch is what
+ * answers with figures.
+ *
+ * Outside the generated HTTP contract (it rides `/ws`, which has no OpenAPI
+ * document), so its renderer-side TWIN in `daemon-client.ts` must be changed
+ * with it.
+ */
+export interface UsageRecordedEvent {
+  runId: string;
+  nodeId: string | null;
+  /** When the turn happened — ISO-8601, the same instant the row carries. */
+  occurredAt: string;
+}
+
+/**
  * One day's spend.
  *
  * The totals REUSE `ChatTotalsWireSchema` rather than restating its eight

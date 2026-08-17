@@ -6,6 +6,7 @@ import type { ItemWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 import { NotificationsGateway } from './notifications.gateway';
 
@@ -62,6 +63,7 @@ describe('NotificationsGateway', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -78,6 +80,7 @@ describe('NotificationsGateway', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -96,6 +99,7 @@ describe('NotificationsGateway', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -130,6 +134,7 @@ describe('NotificationsGateway', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -161,6 +166,7 @@ describe('NotificationsGateway', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -179,6 +185,7 @@ describe('NotificationsGateway', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -202,6 +209,38 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(2);
 
     gw.onModuleDestroy();
+  });
+
+  it('broadcasts a recorded turn to EVERY client, and stops on destroy', () => {
+    const usage = new UsageEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      usage,
+    );
+    const emit = vi.fn();
+    // `to` is the ROOM path; a usage event must never take it — the Stats page
+    // joins no room, so a roomed emit would reach nobody at all.
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    const server = { emit, to } as unknown as Server;
+    gw.afterInit(server);
+
+    const event = {
+      runId: 'r1',
+      nodeId: null,
+      occurredAt: '2026-08-17T00:00:00.000Z',
+    };
+    usage.publish(event);
+
+    expect(emit).toHaveBeenCalledWith('usage_recorded', event);
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    usage.publish({ ...event, runId: 'r2' });
+    expect(emit).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -229,6 +268,7 @@ describe('verdict round-trip', () => {
       approvals,
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -246,6 +286,7 @@ describe('verdict round-trip', () => {
       new ApprovalRegistry(),
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -276,6 +317,7 @@ describe('verdict round-trip', () => {
       approvals,
       new WsPresenceService(),
       debugLog(),
+      new UsageEventBus(),
     );
 
     track('req-a');

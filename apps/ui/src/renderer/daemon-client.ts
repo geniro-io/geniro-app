@@ -72,6 +72,11 @@ export interface RunStatusEvent {
    * waiting.
    */
   awaiting?: RunAwaiting | null;
+  /**
+   * What the run said as it reached this status — the agent's closing words, or
+   * a failure's message. Absent on every announce that is not a settle.
+   */
+  summary?: string;
 }
 
 /**
@@ -83,7 +88,10 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, status, activity, awaiting } = data as Record<string, unknown>;
+  const { runId, status, activity, awaiting, summary } = data as Record<
+    string,
+    unknown
+  >;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
   }
@@ -113,6 +121,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     status: known ? null : (status as RunStatus),
     activity: typeof activity === 'string' && activity ? activity : null,
     ...(parked === undefined ? {} : { awaiting: parked }),
+    ...(typeof summary === 'string' && summary !== '' ? { summary } : {}),
   };
 }
 
@@ -182,6 +191,44 @@ export function parseDebugEntry(data: unknown): DebugLogEntry | null {
   };
 }
 
+/**
+ * A turn the daemon has just written to its usage ledger.
+ *
+ * TWIN PARSER: mirrors the daemon's `UsageRecordedEvent`
+ * (apps/daemon/src/v1/stats/stats.types.ts), broadcast on `usage_recorded`.
+ * It rides `/ws`, which has no OpenAPI document, so no generated type reaches
+ * it — a shape change on either side must be mirrored on the other.
+ *
+ * Broadcast to every client, not to a run's room: the page that reads it is
+ * Stats, which is about every run at once and joins no room at all.
+ */
+export interface UsageRecordedEvent {
+  runId: string;
+  nodeId: string | null;
+  occurredAt: string;
+}
+
+/**
+ * Read a `usage_recorded` payload, or null when it is not one.
+ *
+ * Defensive like its neighbours: the worst a skew may cost is a Stats page that
+ * refreshes on the next turn instead of this one.
+ */
+export function parseUsageRecorded(data: unknown): UsageRecordedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { runId, nodeId, occurredAt } = data as Record<string, unknown>;
+  if (typeof runId !== 'string' || typeof occurredAt !== 'string') {
+    return null;
+  }
+  return {
+    runId,
+    nodeId: typeof nodeId === 'string' ? nodeId : null,
+    occurredAt,
+  };
+}
+
 const JOIN_TIMEOUT_MS = 5_000;
 
 interface JoinWaiter {
@@ -215,6 +262,9 @@ export class DaemonClient {
   private readonly verdictAckListeners = new Set<(ack: VerdictAck) => void>();
   private readonly runStatusListeners = new Set<
     (event: RunStatusEvent) => void
+  >();
+  private readonly usageListeners = new Set<
+    (event: UsageRecordedEvent) => void
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
@@ -321,6 +371,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'usage_recorded') {
+        const usage = parseUsageRecorded(data);
+        if (usage) {
+          for (const listener of this.usageListeners) {
+            listener(usage);
+          }
+        }
+      }
       if (event === 'debug') {
         const entry = parseDebugEntry(data);
         if (entry) {
@@ -387,6 +445,17 @@ export class DaemonClient {
     this.runStatusListeners.add(listener);
     return () => {
       this.runStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to ledger writes — one event per finished turn whose usage was
+   * recorded, for whatever is showing what the app has spent.
+   */
+  onUsageRecorded(listener: (event: UsageRecordedEvent) => void): () => void {
+    this.usageListeners.add(listener);
+    return () => {
+      this.usageListeners.delete(listener);
     };
   }
 

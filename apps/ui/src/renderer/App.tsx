@@ -272,7 +272,7 @@ export function App(): React.JSX.Element {
               rather than however stale the last visit left them. */}
           {view === 'stats' ? (
             <div className="min-h-0 flex-1">
-              <Stats handle={handle} />
+              <Stats handle={handle} client={clientRef.current} />
             </div>
           ) : null}
           {view === 'settings' ? (

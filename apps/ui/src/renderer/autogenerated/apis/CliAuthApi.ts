@@ -39,6 +39,13 @@ export interface CliAuthApiStartCliLoginRequest {
     configDir?: string;
 }
 
+export interface CliAuthApiStartMcpLoginRequest {
+    agent: AgentKind;
+    cwd: string;
+    server: string;
+    configDir?: string;
+}
+
 export interface CliAuthApiSubmitCliLoginCodeRequest {
     id: string;
     loginCodeBodyDto: LoginCodeBodyDto;
@@ -240,6 +247,80 @@ export class CliAuthApi extends runtime.BaseAPI {
      */
     async startCliLogin(requestParameters: CliAuthApiStartCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
         const response = await this.startCliLoginRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async startMcpLoginRaw(requestParameters: CliAuthApiStartMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSession>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling startMcpLogin().'
+            );
+        }
+
+        if (requestParameters['cwd'] == null) {
+            throw new runtime.RequiredError(
+                'cwd',
+                'Required parameter "cwd" was null or undefined when calling startMcpLogin().'
+            );
+        }
+
+        if (requestParameters['server'] == null) {
+            throw new runtime.RequiredError(
+                'server',
+                'Required parameter "server" was null or undefined when calling startMcpLogin().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        if (requestParameters['cwd'] != null) {
+            queryParameters['cwd'] = requestParameters['cwd'];
+        }
+
+        if (requestParameters['server'] != null) {
+            queryParameters['server'] = requestParameters['server'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/auth/mcp-login`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async startMcpLogin(requestParameters: CliAuthApiStartMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
+        const response = await this.startMcpLoginRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

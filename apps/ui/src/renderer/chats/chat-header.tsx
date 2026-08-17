@@ -18,7 +18,29 @@ import {
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
-import { formatDuration } from './turn-duration';
+import {
+  formatDuration,
+  type OpenTurn,
+  openTurnWorkedMs,
+} from './turn-duration';
+
+/**
+ * One re-render a second, for as long as `active`.
+ *
+ * The two live readouts in this header own their own ticking rather than the
+ * header being repainted from above once a second — the same reason the
+ * transcript's live rows own theirs.
+ */
+function useSecondTick(active: boolean): void {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const id = window.setInterval(() => tick((n) => n + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, [active]);
+}
 
 /**
  * How long the turn on screen has been running, ticking every second.
@@ -33,14 +55,7 @@ function ElapsedTime({
 }: {
   since: string | null;
 }): React.JSX.Element | null {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (since === null) {
-      return;
-    }
-    const id = window.setInterval(() => tick((n) => n + 1), 1_000);
-    return () => window.clearInterval(id);
-  }, [since]);
+  useSecondTick(since !== null);
   const startedAt = since === null ? NaN : Date.parse(since);
   if (!Number.isFinite(startedAt)) {
     return null;
@@ -50,6 +65,52 @@ function ElapsedTime({
       className="shrink-0 text-xs tabular-nums text-muted-foreground"
       title="How long this turn has been running">
       · {formatElapsed(Date.now() - startedAt)}
+    </span>
+  );
+}
+
+/**
+ * What this thread has WORKED — the settled turns plus the one in flight,
+ * ticking while it runs.
+ *
+ * The whole figure moves, rather than the running turn being stated separately
+ * beside it: "how much work is in here" is one number, and a thread mid-turn
+ * had it standing still for the entire turn — a header reading `running · 18s ·
+ * worked 64m 34s` where the 64m had not moved in an hour of watching. The
+ * elapsed clock beside it is NOT the same answer: that one is this turn alone,
+ * and it is the raw wall clock — it keeps running while the agent sits parked
+ * on a question, which is exactly when this one must not.
+ */
+function WorkedTime({
+  settledMs,
+  turnCount,
+  openTurn,
+}: {
+  settledMs: number;
+  turnCount: number;
+  openTurn: OpenTurn | null;
+}): React.JSX.Element | null {
+  useSecondTick(openTurn !== null);
+  const liveMs = openTurnWorkedMs(openTurn, Date.now());
+  const totalMs = settledMs + liveMs;
+  if (totalMs <= 0) {
+    return null;
+  }
+  // The running turn counts toward the tally because its time counts toward
+  // the total — a sum over fifteen turns labelled "14 turns" is the kind of
+  // small lie a reader has no way to catch.
+  const turns = turnCount + (openTurn === null ? 0 : 1);
+  return (
+    <span
+      data-slot="thread-worked"
+      className="shrink-0 text-xs tabular-nums text-muted-foreground"
+      title={
+        openTurn === null
+          ? `Total time the agent worked in this thread, across ${turns} ${turns === 1 ? 'turn' : 'turns'} — not the span since it started`
+          : `Total time the agent worked in this thread, across ${turns} ${turns === 1 ? 'turn' : 'turns'} — the turn in flight included, measured by the wall clock and paused while it waits on you`
+      }>
+      · worked {formatDuration(totalMs)}
+      {turns > 1 ? ` / ${turns} turns` : ''}
     </span>
   );
 }
@@ -76,6 +137,7 @@ export function ChatHeader({
   turnStartedAt = null,
   workedMs = 0,
   turnCount = 0,
+  openTurn = null,
   sidePanelOpen,
   onToggleSidePanel,
   runningSubagents = 0,
@@ -132,6 +194,17 @@ export function ChatHeader({
   workedMs?: number;
   /** How many settled turns {@link workedMs} is the sum of. */
   turnCount?: number;
+  /**
+   * The turn still in flight, so the total keeps MOVING while one is — null
+   * when nothing is running.
+   *
+   * {@link workedMs} alone is the settled sum, which is a figure that stands
+   * still for the whole of a turn: the reported defect was a header sitting on
+   * `worked 64m 34s` while the agent visibly worked. Handed over as the turn's
+   * pieces rather than as a number, because a number would freeze the instant
+   * it was computed — the same reason {@link turnStartedAt} is a timestamp.
+   */
+  openTurn?: OpenTurn | null;
   sidePanelOpen: boolean;
   onToggleSidePanel: () => void;
   /** Delegates working right now — see {@link SidePanelLiveCounts}. */
@@ -181,19 +254,15 @@ export function ChatHeader({
             · {formatRelativeTime(lastActivityAt)}
           </span>
         )}
-        {workedMs > 0 ? (
-          // Beside the relative time, and deliberately NOT instead of it: the
-          // two answer different questions ("when did this last speak" vs "how
-          // much work is in here"), and it was the second that had no answer
-          // anywhere in the app once a turn had settled.
-          <span
-            data-slot="thread-worked"
-            className="shrink-0 text-xs tabular-nums text-muted-foreground"
-            title={`Total time the agent worked in this thread, across ${turnCount} ${turnCount === 1 ? 'turn' : 'turns'} — not the span since it started`}>
-            · worked {formatDuration(workedMs)}
-            {turnCount > 1 ? ` / ${turnCount} turns` : ''}
-          </span>
-        ) : null}
+        {/* Beside the relative time, and deliberately NOT instead of it: the
+            two answer different questions ("when did this last speak" vs "how
+            much work is in here"), and it was the second that had no answer
+            anywhere in the app once a turn had settled. */}
+        <WorkedTime
+          settledMs={workedMs}
+          turnCount={turnCount}
+          openTurn={openTurn}
+        />
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
         {/* What the panel is holding, stated BEFORE its toggle — the toggle

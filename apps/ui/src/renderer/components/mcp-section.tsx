@@ -285,6 +285,18 @@ function McpGroup({
 }
 
 /**
+ * What the panel says while a read is running and it has NOTHING to show.
+ *
+ * A bare "Loading…" is what got the wait reported: reading this list is not a
+ * fetch, it is the CLI STARTING every server the folder defines to see which
+ * answer, so it is measured in seconds and one hanging server takes it to
+ * tens of them. That is worth saying once, in the one state where the user is
+ * looking at an empty panel with no idea what is being waited on. A folder
+ * already read keeps its rows through the re-read and never reaches this.
+ */
+const FIRST_READ_LABEL = 'Starting each server to see which answer…';
+
+/**
  * One MCP server listing, rendered as rows.
  *
  * Shared by the chat Agents panel (per CLI, per folder, with the toggle) and
@@ -415,7 +427,7 @@ export function McpSection({
         // having no servers. A run can carry no folder at all (`Run.cwd` is
         // nullable), and there is nothing to ask about then.
         <span className="text-xs text-muted-foreground">
-          {loading ? 'Loading…' : 'Not checked'}
+          {loading ? FIRST_READ_LABEL : 'Not checked'}
         </span>
       ) : servers.length === 0 ? (
         // Empty rows are the daemon's placeholder for a cold read still
@@ -423,7 +435,7 @@ export function McpSection({
         // the same distinction the `servers === undefined` branch above
         // already draws, just reached from the other side of it.
         <span className="text-xs text-muted-foreground">
-          {loading ? 'Loading…' : 'No servers'}
+          {loading ? FIRST_READ_LABEL : 'No servers'}
         </span>
       ) : (
         <>

@@ -48,7 +48,7 @@ export function BranchSelect(
     return (
       <Chip
         title={`On branch ${info.branch ?? 'detached HEAD'} — a run stays on the branch it started on`}
-        className={cn('max-w-40', className)}>
+        className={cn('max-w-40 min-w-0 shrink', className)}>
         <GitBranch />
         <span className="truncate">{info.branch ?? 'detached HEAD'}</span>
       </Chip>
@@ -68,10 +68,12 @@ export function BranchSelect(
           : 'Git branch'
       }
       disabled={switching}
-      // Capped, not shrinkable: the row measures chips at their natural width
-      // to decide what fits, so the cap bounds a long branch name (the label
-      // truncates inside it) without making this chip lie about its size.
+      // Capped AND shrinkable — see the same pairing on `DirectorySelect`, and
+      // the reason it changed there. A branch name is user data, so this is one
+      // of the chips that should narrow when the composer row runs short rather
+      // than let a neighbour wrap.
       className={cn('max-w-40', className)}
+      flexible
       leadingIcon={<GitBranch />}
       groups={[{ items: info.branches.map((b) => ({ value: b, label: b })) }]}
       onValueChange={onSwitch}

@@ -340,20 +340,41 @@ export class AgentMcpService {
         ),
     });
     const key = keyOf(agent, projectDir, profile, version);
-    if (refresh) {
-      this.cache.delete(key);
-    }
-    // Single-flight is checked AFTER the refresh eviction on purpose: a
-    // double-clicked Refresh should join the re-read already running, not
-    // start a second one. Evicting the cache is idempotent; spawning is not.
+    const cached = this.cache.get(key);
+    /**
+     * The folder's servers as the last reading left them — what to PAINT while
+     * a dial runs, never an answer in its own right (see {@link firstPaint}).
+     *
+     * Before this, a lapsed entry was worth nothing to the caller and the panel
+     * opened on a bare spinner for as long as the dial took — 6s here against
+     * nine servers, and up to the CLI's whole 45s deadline when one of them
+     * hangs, which is the reported "MCP list has been loading for a minute".
+     * The folder's servers now stay on screen the whole time. They carry the
+     * previous reading's health rather than this moment's, which is exactly
+     * what `pending` says — and the alternative was never fresher information,
+     * only none.
+     */
+    const previous = cached?.servers ?? null;
+    // Single-flight is checked BEFORE the cache on purpose: a double-clicked
+    // Refresh should join the re-read already running, not start a second one.
     const running = this.inFlight.get(key);
     if (running) {
       return blocking
         ? { projectDir, adapter, result: await running, pending: false }
-        : { projectDir, adapter, ...(await this.firstPaint(key, running)) };
+        : {
+            projectDir,
+            adapter,
+            ...(await this.firstPaint(key, running, previous)),
+          };
     }
-    const cached = this.cache.get(key);
-    if (cached && this.now() - cached.fetchedAt < this.ttlMs) {
+    // A refresh SKIPS the cache rather than evicting it, and that distinction
+    // is the whole of Reconnect's behaviour: the entry is what the panel keeps
+    // showing while the re-dial runs, and every poll behind the refresh reads
+    // it too. Evicting here blanked the list at the exact press that repairs a
+    // broken server — measured against a real folder, where the refresh and
+    // the six polls after it all came back with zero rows. The fresh reading
+    // overwrites it below.
+    if (!refresh && cached && this.now() - cached.fetchedAt < this.ttlMs) {
       return {
         projectDir,
         adapter,
@@ -444,7 +465,11 @@ export class AgentMcpService {
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, ask);
     if (!blocking) {
-      return { projectDir, adapter, ...(await this.firstPaint(key, ask)) };
+      return {
+        projectDir,
+        adapter,
+        ...(await this.firstPaint(key, ask, previous)),
+      };
     }
     return { projectDir, adapter, result: await ask, pending: false };
   }
@@ -471,6 +496,12 @@ export class AgentMcpService {
   private async firstPaint(
     key: string,
     ask: Promise<AgentMcpListingResult>,
+    /**
+     * The folder's servers as the last reading left them, or null if this
+     * folder has never been read. Painted while the dial runs — see the
+     * `previous` capture in {@link readServers}.
+     */
+    stale: readonly AgentMcpServer[] | null,
   ): Promise<{
     result: AgentMcpListingResult;
     pending: boolean;
@@ -498,7 +529,13 @@ export class AgentMcpService {
         this.deferredFailure.set(key, result);
       }
     });
-    return { result: { ok: true, servers: [] }, pending: true };
+    // The previous reading, or nothing on a folder never read. Either way
+    // `pending` is true, so the panel keeps its spinner and the caller keeps
+    // polling — the rows are what it draws MEANWHILE, never a settled answer.
+    return {
+      result: { ok: true, servers: stale === null ? [] : [...stale] },
+      pending: true,
+    };
   }
 
   /**

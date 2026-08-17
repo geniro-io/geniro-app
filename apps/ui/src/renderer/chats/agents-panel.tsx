@@ -70,6 +70,7 @@ function McpDisclosure({
   onRefresh,
   onSetEnabled,
   onSignIn,
+  loginPanel,
 }: {
   /** Names the dialog, so several open one at a time stay tellable apart. */
   agentName: string;
@@ -80,6 +81,11 @@ function McpDisclosure({
   onRefresh?: () => void;
   onSetEnabled?: (server: string, enabled: boolean) => void;
   onSignIn?: (server: string) => void;
+  /**
+   * A sign-in in flight, rendered under the rows — the owner composes it, so
+   * this file learns nothing about login sessions.
+   */
+  loginPanel?: React.ReactNode;
 }): React.JSX.Element {
   const count = listing?.servers?.length ?? 0;
   return (
@@ -119,6 +125,11 @@ function McpDisclosure({
           // across a panel that is already bounded.
           className="border-t-0"
         />
+        {/* A sign-in in progress, INSIDE the dialog that started it. The CLI's
+            own browser tab opens behind the app, so without this the Sign in
+            control reads as a button that did nothing — which is the whole
+            reason the account sign-in has a progress panel of its own. */}
+        {loginPanel}
       </Dialog>
     </>
   );
@@ -358,6 +369,7 @@ export function AgentsPanel({
   onRefreshMcp,
   onSetMcpEnabled,
   onSignInMcp,
+  mcpLoginPanel,
   mcpToggleError = null,
   onDismissMcpToggleError,
   onMcpOpenChange,
@@ -403,12 +415,18 @@ export function AgentsPanel({
    * Sign one CLI in to one MCP server. Absent hides the action, on the same
    * rule as {@link onSetMcpEnabled}.
    *
-   * It ends in the user's own terminal rather than in the daemon, and that is
-   * forced: `mcp login` refuses a non-TTY stdin outright (probe-verified), so
-   * there is no headless path being passed over. Nothing in this panel knows
-   * that — it hands over a CLI kind and a server name.
+   * Where it ends up is the owner's business — this panel hands over a CLI
+   * kind and a server name and learns nothing else. It used to open a terminal
+   * window because `mcp login` refuses a piped stdin; it now runs in the
+   * daemon under a pty, and the only trace of the change here is
+   * {@link mcpLoginPanel}, which is what the flow needs somewhere to be shown.
    */
   onSignInMcp?: (kind: CliKind, server: string) => void;
+  /**
+   * A sign-in in flight, rendered inside the MCP dialog. Composed by the owner
+   * (`Chats`), so nothing here has to know what a login session is.
+   */
+  mcpLoginPanel?: React.ReactNode;
   /**
    * Why the last toggle did not land. Shown as a strip rather than swallowed:
    * the daemon refuses a toggle it cannot honour, and its sentence explains
@@ -759,6 +777,7 @@ export function AgentsPanel({
                             ? (server) => onSignInMcp(mcpKind, server)
                             : undefined
                         }
+                        loginPanel={mcpLoginPanel}
                       />
                     ) : null}
                     {hasList ? (

@@ -33,6 +33,12 @@ class FakeSession implements AgentSession {
    * stronger state it must close on sight instead of counting as reusable.
    */
   retired = false;
+  /**
+   * Blocked on a verdict only the user can give. Idle in every other respect,
+   * which is the whole point of the flag — the registry must reap an unused
+   * session and must not reap this one.
+   */
+  parked = false;
   private settle: (() => void) | null = null;
 
   ask(): Promise<null> {
@@ -328,6 +334,33 @@ describe('AgentSessionRegistry — ending a process', () => {
     expect(registry.liveCount).toBe(0);
   });
 
+  it('does not close a session parked on a card the user has not answered', async () => {
+    // The run this was written for: claude asked a question eight minutes after
+    // its turn had settled, the idle window closed the process under it, the
+    // CLI read the close as a refusal, and the chat was marked failed with a
+    // bare "claude run failed" for a question nobody had answered. The window
+    // measures a chat going UNUSED, and one waiting on a person is not that.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).parked = true;
+
+    vi.advanceTimersByTime(SESSION_IDLE_MS * 3);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(1);
+
+    // And the clock resumes once they answer — the re-arm is what stops a
+    // once-parked session living forever.
+    at(sessions, 0).parked = false;
+    vi.advanceTimersByTime(SESSION_IDLE_MS);
+
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
   it('does not close a session whose turn is still running', async () => {
     // The window is armed when a turn ENDS, so a long turn can outlive it.
     // Closing then would SIGKILL work the user is watching.
@@ -481,6 +514,30 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // run-0 was the oldest, and it is the one that went.
     expect(at(sessions, 0).closes).toBe(1);
     expect(at(sessions, 1).closes).toBe(0);
+    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+  });
+
+  it('evicts a newer idle session rather than the oldest one holding a card', async () => {
+    // `parked` is idle in the only sense `idle` claims — no turn in flight — so
+    // the age scan would pick it first, being the oldest. Evicting it kills the
+    // question rather than the process: the CLI takes the close as a refusal
+    // and the verdict the user is about to give arrives at nothing.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    at(sessions, 0).parked = true;
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    // The next-oldest went instead, so the ceiling is still enforced.
+    expect(at(sessions, 1).closes).toBe(1);
     expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
   });
 

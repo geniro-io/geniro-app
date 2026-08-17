@@ -58,6 +58,7 @@ export function Select({
   searchPlaceholder,
   leadingIcon,
   disabled = false,
+  flexible = false,
   className,
   id,
   title,
@@ -81,6 +82,21 @@ export function Select({
   /** Glyph on the TRIGGER itself (the folder chip's folder icon). */
   leadingIcon?: React.ReactNode;
   disabled?: boolean;
+  /**
+   * This chip may give up width when its row runs short, truncating its label
+   * instead of pushing a neighbour onto a second line.
+   *
+   * A PROP rather than something the caller can pass through `className`,
+   * because the two classes it needs go on the WRAPPER and `className` reaches
+   * the trigger — a caller writing `shrink` there sets it on an element whose
+   * parent still has `min-width: auto`, which is inert and looks like the rule
+   * simply not working. It was, until this existed.
+   *
+   * Off by default: a chip whose label is a fixed word (`auto-approve`, a model
+   * alias) has nothing to gain from an ellipsis, and the row reads best when
+   * the width comes off whichever chip holds USER DATA.
+   */
+  flexible?: boolean;
   className?: string;
   id?: string;
   title?: string;
@@ -95,7 +111,11 @@ export function Select({
   return (
     <span
       data-slot={ghost ? 'select-chip' : 'select'}
-      className={cn('relative inline-flex', ghost ? 'w-auto' : 'w-full')}>
+      className={cn(
+        'relative inline-flex',
+        ghost ? 'w-auto' : 'w-full',
+        flexible && 'min-w-0 shrink',
+      )}>
       <button
         type="button"
         id={id}
@@ -117,6 +137,12 @@ export function Select({
                 'focus-visible:ring-[3px] focus-visible:ring-ring/50',
               )
             : triggerVariants({ variant }),
+          // Both halves are needed and neither works alone. The wrapper shrinks
+          // (above); this makes the button FOLLOW it instead of keeping its
+          // content width and spilling out — measured without it, a 460px row
+          // shrank the wrappers on schedule while the buttons overlapped each
+          // other's text, which looks worse than the wrapping it replaced.
+          flexible && 'w-full min-w-0',
           className,
         )}
         onClick={() => setOpen((current) => !current)}>

@@ -579,13 +579,24 @@ function mapClaudeLine(
 
     case 'result': {
       if (asBoolean(root.is_error)) {
+        // The fallback carries the CLI's own `subtype` when the line has no
+        // sentence of its own, because without it the user is handed three
+        // words that answer nothing — reported verbatim as "i have error, i
+        // dont know why". `error_during_execution` at least names the shape of
+        // the failure and is searchable in the CLI's own vocabulary. A line
+        // that DID carry text keeps only that text: `result` is claude's own
+        // sentence about what went wrong, and a subtype appended to it would be
+        // machine noise on the end of an explanation.
+        const subtype = asString(root.subtype);
         return [
           {
             type: 'error',
             message:
               asString(root.result) ??
               asString(root.error) ??
-              CLAUDE_RUN_FAILED_MESSAGE,
+              (subtype === null
+                ? CLAUDE_RUN_FAILED_MESSAGE
+                : `${CLAUDE_RUN_FAILED_MESSAGE} (${subtype})`),
           },
         ];
       }

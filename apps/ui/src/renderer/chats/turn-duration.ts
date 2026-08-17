@@ -144,6 +144,61 @@ function parsedAt(iso: string): number | null {
 export function turnDurations(
   items: readonly ChatItem[],
 ): ReadonlyMap<string, TurnDuration> {
+  return scanTurns(items).durations;
+}
+
+/**
+ * The turn still IN FLIGHT at the end of the transcript, if there is one —
+ * everything needed to keep measuring it as the clock moves.
+ *
+ * A settled turn's figure is a number; a running one cannot be, for the reason
+ * `turnStartedAt` is a timestamp rather than an elapsed count: a duration
+ * computed by the owner freezes the moment it is handed over. So the pieces
+ * travel and the consumer does the subtraction, once a second, against its own
+ * `Date.now()`.
+ */
+export interface OpenTurn {
+  /** When this turn began. */
+  startedAt: number;
+  /** Parked stretches inside it that have already CLOSED. */
+  parkedMs: number;
+  /**
+   * Approval cards still open, by when each opened.
+   *
+   * Their wait is parked right up to `now` — which is what makes the live total
+   * STOP while the run sits on a question. That is not a nicety: a turn parked
+   * overnight would otherwise report eight hours of work nobody did, and this
+   * figure exists precisely to not be the wall clock.
+   */
+  openSince: readonly number[];
+}
+
+/**
+ * What the in-flight turn has worked as of `now` — 0 when nothing is running.
+ *
+ * Measured the same way the wall-clock fallback measures a settled turn, so the
+ * live figure and the one that replaces it at the settle mean the same thing.
+ * A CLI that times its own turn (claude) reports a slightly SMALLER number than
+ * the wall clock, so the total can tick back a second or two as a turn lands;
+ * that is the price of the primary clock being the honest one, and it is
+ * smaller than the error of showing a frozen total for the whole turn.
+ */
+export function openTurnWorkedMs(open: OpenTurn | null, now: number): number {
+  if (open === null) {
+    return 0;
+  }
+  let parked = open.parkedMs;
+  for (const since of open.openSince) {
+    parked += Math.max(0, now - since);
+  }
+  return Math.max(0, now - open.startedAt - parked);
+}
+
+/** Both readings off ONE pass: the settled turns, and the one still running. */
+export function scanTurns(items: readonly ChatItem[]): {
+  durations: ReadonlyMap<string, TurnDuration>;
+  open: OpenTurn | null;
+} {
   const durations = new Map<string, TurnDuration>();
   let startedAt: number | null = null;
   /** Open approval cards, by request id — a turn can have several at once. */
@@ -205,7 +260,19 @@ export function turnDurations(
     startedAt = null;
     parkedMs = 0;
   }
-  return durations;
+  return {
+    durations,
+    // A turn with a start and no terminal row yet is the one in flight. The
+    // scan already carries its parked stretches, so nothing is re-derived.
+    open:
+      startedAt === null
+        ? null
+        : {
+            startedAt,
+            parkedMs,
+            openSince: [...parkedSince.values()],
+          },
+  };
 }
 
 /** The `id` an approval row pairs on — both halves carry it. */

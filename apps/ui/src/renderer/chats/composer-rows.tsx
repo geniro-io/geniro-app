@@ -26,15 +26,28 @@ import * as React from 'react';
  *
  * Splitting by KIND removes the pressure instead of rationing it. The chips
  * describing what the run is (target, folder, branch, trigger, approval) sit
- * above the text and are free to wrap, because nothing shares that line with
- * them — wrapping there grows the card upward, which is what a card growing
- * with its own content should do. The two chips describing how this turn
- * thinks (model, effort) sit below beside the actions, where the pinned Send
- * button makes wrapping wrong; they are short, fixed-vocabulary labels, and
- * they truncate rather than push.
+ * above the text; the two describing how this turn thinks (model, effort) sit
+ * below beside the actions, where the pinned Send button makes wrapping wrong.
  *
  * So there is no measurement here at all, and no `…`: every control is on
  * screen, which is what the row could never promise before.
+ *
+ * **The top row does not wrap.** It used to, on the argument that a card
+ * growing upward is a card growing with its own content — and in a 672px card
+ * five chips whose labels are user data (a folder name, a branch, a profile)
+ * routinely need more than one line, so `auto-approve` sat alone under the
+ * other four. Reported, and fairly: the four-then-one arrangement reads as a
+ * layout accident rather than a second row of anything, and it moves under the
+ * user as the folder name changes.
+ *
+ * What replaced it is neither of the two options this block already weighed. It
+ * is not the overflow `…` (that HID controls — the failure the wrap was chosen
+ * over), and it is not a clip. The chips SHRINK: each label is already a
+ * `truncate` span with the icon and chevron as `shrink-0` siblings, so squeezing
+ * one shortens its text and leaves it reading as a picker. Nothing is hidden,
+ * nothing moves to a second line, and the chip that gives up width is whichever
+ * one is longest — which is the user's own folder or branch name, the one place
+ * an ellipsis costs least because the full value is on hover.
  */
 export function ComposerTopRow({
   children,
@@ -56,7 +69,14 @@ export function ComposerTopRow({
     // card's left edge without indenting it.
     // `pb-1.5` is the only gap to the card — the row is a caption for it, and
     // spacing it like a sibling block would break that reading.
-    <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1 px-1 pb-1.5 empty:hidden">
+    // No blanket shrink rule here, deliberately. Applied to every child, flex
+    // takes width off ALL of them — `claude` became `cla…` beside a folder chip
+    // still showing twenty characters, which is the wrong chip losing its
+    // label. Which chips may give up width is a property of what they hold, so
+    // each says so itself (`shrink` on the folder, branch and profile chips —
+    // the three whose text is user data and whose full value is on hover). The
+    // short fixed-vocabulary ones keep their `shrink-0` and stay whole.
+    <div className="flex items-center gap-x-0.5 px-1 pb-1.5 empty:hidden">
       {children}
     </div>
   );

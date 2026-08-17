@@ -869,6 +869,124 @@ export class ChatService {
    * is logged and swallowed: this is called from the session's event path,
    * where a throw has no caller to reach.
    */
+  /**
+   * Put a request that arrived with NO turn in flight in front of the user, as
+   * the same card an in-turn one gets.
+   *
+   * The path this replaces is what a whole run was lost to. claude's process
+   * outlives its turn and goes on working (`handleBetweenTurnEvent`), and eight
+   * minutes after a turn had settled it asked an `AskUserQuestion`. With no turn
+   * to raise a card, the session HELD it for a later turn to adopt — so the
+   * transcript grew the tool-call row, the badge went on saying the agent was
+   * working, and nothing anywhere offered a way to answer. Twenty-two minutes
+   * later the idle window closed the process, the CLI read the close as a
+   * refusal, and the user was shown a bare `claude run failed` for a question
+   * they had never seen. Both halves are fixed: this raises the card, and the
+   * session reports itself `parked` so the reaper leaves it alone.
+   *
+   * SYNCHRONOUS by contract — the session needs an immediate yes/no about who
+   * owns the request — so the writes ride a floating promise. The claim is
+   * therefore optimistic, and the one way it can be wrong is handled the way
+   * the in-turn branch handles it: if the card cannot be persisted the user will
+   * never see it, so the CLI is refused rather than left blocked forever.
+   */
+  private raiseHeldApproval(
+    runId: string,
+    adapter: AgentAdapter,
+    event: Extract<AgentEvent, { type: 'approval_request' }>,
+    respond: (allow: boolean, input?: unknown) => boolean,
+  ): boolean {
+    const mapped = mapEventToItem(event);
+    if (!mapped) {
+      return false;
+    }
+    const isQuestion = isUserQuestion(
+      adapter.getConfig().questionToolName,
+      event.toolName,
+    );
+    void (async () => {
+      const em = this.em.fork();
+      try {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          mapped.kind,
+          mapped.role,
+          mapped.payload,
+        );
+      } catch (err) {
+        respond(false);
+        this.logger.error(
+          `run ${runId} could not persist a between-turn card for '${event.toolName}' — refused it instead: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return;
+      }
+      this.approvals.track({
+        runId,
+        nodeId: SINGLE_AGENT_NODE,
+        requestId: event.id,
+        toolName: event.toolName,
+        input: event.input,
+        question: isQuestion,
+        respond: (allow, answer) => {
+          const delivered = respond(
+            allow,
+            foldApprovalAnswer(
+              adapter,
+              event.toolName,
+              event.input,
+              allow,
+              answer,
+            ),
+          );
+          this.announceAwaiting(runId);
+          if (delivered) {
+            void (async () => {
+              await this.persist(
+                em,
+                runId,
+                await this.seqs.reserve(runId),
+                'approval_verdict',
+                null,
+                {
+                  id: event.id,
+                  allow,
+                  // Recorded only when it was actually folded, on the same rule
+                  // the in-turn branch states: the transcript must never claim
+                  // an answer the agent did not receive.
+                  ...(answerFoldsInto(
+                    adapter.getConfig().questionToolName,
+                    event.toolName,
+                    allow,
+                    answer,
+                  )
+                    ? { answer }
+                    : {}),
+                },
+              );
+            })().catch((err: unknown) => {
+              this.logger.error(
+                `run ${runId} between-turn verdict item write failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            });
+          }
+          return delivered;
+        },
+      });
+      // After the track, so the registry this reads already holds the card —
+      // exactly as the in-turn branch orders it. Without this the badge keeps
+      // announcing whatever the CLI was last doing, which is the half of the
+      // report that read as "it says it is working while it waits for me".
+      this.announceAwaiting(runId);
+    })();
+    return true;
+  }
+
   private async handleBetweenTurnEvent(
     runId: string,
     agent: AgentKind,
@@ -1675,6 +1793,11 @@ export class ChatService {
             event,
           );
         },
+        // A chat HAS a card surface, so a request the posture above will not
+        // decide is shown rather than held — see {@link raiseHeldApproval} for
+        // the run that was lost to holding one.
+        (event, respond) =>
+          this.raiseHeldApproval(runId, adapter, event, respond),
       );
       this.registry.register(runId, handle);
       // How a mid-turn approval change reaches THIS turn's own seam. The

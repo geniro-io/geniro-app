@@ -8,10 +8,15 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { childProcessHandle } from '../../agents/utils/child-handle';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
+import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import type { AgentKind } from '../../runs/runs.types';
 import type { LoginSession, LoginStatus, LogoutResult } from '../auth.types';
 import { LOGIN_TIMEOUT_MS } from '../auth.types';
-import { firstUrlIn, lastProgressLine } from '../utils/login-output';
+import {
+  firstUrlIn,
+  lastProgressLine,
+  plainTerminalText,
+} from '../utils/login-output';
 
 /** How long `start` waits for the CLI to print its URL before answering anyway. */
 const URL_WAIT_MS = 4_000;
@@ -25,6 +30,15 @@ interface LoginRun {
   session: LoginSession;
   child: ChildProcess | null;
   output: string;
+  /**
+   * The MCP server this sign-in is for, or null for the CLI's own account.
+   *
+   * The only thing the two flows do differently after the spawn: a server
+   * sign-in's verdict is read out of the CLI's WORDS (`mcpLoginFailed`), since
+   * under a pty the exit status belongs to the `script` wrapper and says
+   * nothing about the CLI beneath it.
+   */
+  server: string | null;
 }
 
 /**
@@ -132,6 +146,7 @@ export class CliAuthService {
       },
       child: null,
       output: '',
+      server: null,
     };
     this.runs.set(id, run);
 
@@ -159,6 +174,83 @@ export class CliAuthService {
           );
         },
       })
+      .then((out) => this.settle(run, out !== null))
+      .catch(() => this.settle(run, false));
+
+    await this.waitForUrl(run);
+    return run.session;
+  }
+
+  /**
+   * Start a sign-in to ONE MCP server, without opening a terminal window.
+   *
+   * The same session shape, the same map and the same `status`/`cancel` routes
+   * as the account sign-in above — this is a second flow through one machine
+   * rather than a second machine, which is what stops the two drifting on
+   * lifecycle. What is genuinely different is only how it is spawned (under a
+   * pty; `AgentCommandOptions.pty` carries the probe) and how its verdict is
+   * read (out of the CLI's words, since the exit status belongs to the pty
+   * wrapper).
+   *
+   * The CLI opens the browser itself and serves its own localhost callback, so
+   * geniro neither opens a tab nor holds the flow: `url` is here for the run
+   * where the browser did not open, exactly as it is for the account login.
+   */
+  async startMcpLogin(input: {
+    agent: AgentKind;
+    server: string;
+    cwd: string;
+    configDir?: string;
+  }): Promise<LoginSession> {
+    const adapter = this.adapters.for(input.agent);
+    const { loginArgs, loginUnavailableReason } = adapter.getConfig().mcp;
+    if (loginArgs === null) {
+      throw new BadRequestException(
+        'MCP_LOGIN_UNSUPPORTED',
+        loginUnavailableReason ??
+          `${input.agent} cannot sign in to an MCP server`,
+      );
+    }
+    const id = randomUUID();
+    const run: LoginRun = {
+      session: {
+        id,
+        agent: input.agent,
+        status: 'waiting',
+        url: null,
+        message: null,
+      },
+      child: null,
+      output: '',
+      server: input.server,
+    };
+    this.runs.set(id, run);
+
+    void adapter
+      .runMcpLogin({
+        server: input.server,
+        // Validated here rather than trusted: this becomes a child's cwd, and
+        // the CLI resolves the server name against it.
+        cwd: resolveValidCwd(input.cwd),
+        configDir: this.resolveConfigDir(input.configDir),
+        timeoutMs: LOGIN_TIMEOUT_MS,
+        onSpawn: (child, spawnInfo) => {
+          run.child = child;
+          this.processes.register(
+            `auth:login:${id}`,
+            childProcessHandle(child, spawnInfo),
+          );
+          child.stdout?.on('data', (chunk: Buffer | string) =>
+            this.absorb(run, String(chunk)),
+          );
+          child.stderr?.on('data', (chunk: Buffer | string) =>
+            this.absorb(run, String(chunk)),
+          );
+        },
+      })
+      // `runMcpLogin` captures the output whatever the exit status, so a null
+      // is the spawn itself having failed — the CLI never ran, which is not
+      // the same as a sign-in that did not take.
       .then((out) => this.settle(run, out !== null))
       .catch(() => this.settle(run, false));
 
@@ -230,10 +322,14 @@ export class CliAuthService {
     if (isOver(run.session.status)) {
       return;
     }
-    const url = run.session.url ?? firstUrlIn(run.output);
-    const wantsCode = this.adapters
-      .for(run.session.agent)
-      .loginWantsCode(run.output);
+    // Stripped from the WHOLE buffer rather than per chunk, which is the only
+    // form that is correct: a terminal escape can straddle a read boundary, and
+    // a hyperlink cut in half would leave its own bytes in the text that the
+    // URL match then runs through. Prose survives this unchanged, so both kinds
+    // of child are read the same way.
+    const text = plainTerminalText(run.output);
+    const url = run.session.url ?? firstUrlIn(text);
+    const wantsCode = this.adapters.for(run.session.agent).loginWantsCode(text);
     run.session = {
       ...run.session,
       url,
@@ -244,7 +340,7 @@ export class CliAuthService {
         wantsCode || run.session.status === 'needs_code'
           ? 'needs_code'
           : 'waiting',
-      message: lastProgressLine(run.output) ?? run.session.message,
+      message: lastProgressLine(text) ?? run.session.message,
     };
   }
 
@@ -253,12 +349,24 @@ export class CliAuthService {
     if (run.session.status === 'cancelled') {
       return;
     }
+    const text = plainTerminalText(run.output);
+    // A SERVER sign-in cannot be judged by an exit status: it runs under a pty
+    // wrapper whose status is its own. The CLI's own words are the only verdict
+    // there is, and a CLI that declares no failure wording leaves this false —
+    // stated at `mcp.loginFailureMarkers`, along with why an invented marker
+    // would be worse than none.
+    const completed =
+      ok &&
+      !(
+        run.server !== null &&
+        this.adapters.for(run.session.agent).mcpLoginFailed(text)
+      );
     run.session = {
       ...run.session,
-      status: ok ? 'succeeded' : 'failed',
-      message: ok ? null : (lastProgressLine(run.output) ?? null),
+      status: completed ? 'succeeded' : 'failed',
+      message: completed ? null : (lastProgressLine(text) ?? null),
     };
-    if (!ok) {
+    if (!completed) {
       // Logged without the output, for the reason `lastProgressLine` exists: a
       // sign-in's stdout is the one stream here that can hold a one-time code.
       this.logger.warn(

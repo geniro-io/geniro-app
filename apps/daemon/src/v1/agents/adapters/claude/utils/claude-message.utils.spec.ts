@@ -473,6 +473,34 @@ describe('mapClaudeMessage', () => {
     ).toEqual([{ type: 'error', message: 'context limit exceeded' }]);
   });
 
+  it('names the CLI’s own subtype when an error result carries no sentence', () => {
+    // The exact line a user was handed: `{type:'result', is_error:true}` with
+    // no `result` and no `error`, rendered as three words that answer nothing
+    // — reported back as "i have error, i dont know why". The subtype is the
+    // only thing the line does say, and it is searchable.
+    expect(
+      mapClaudeMessage({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+      }),
+    ).toEqual([
+      { type: 'error', message: 'claude run failed (error_during_execution)' },
+    ]);
+  });
+
+  it('keeps the CLI’s own sentence alone when it has one', () => {
+    // A subtype appended to an explanation is machine noise on the end of it.
+    expect(
+      mapClaudeMessage({
+        type: 'result',
+        subtype: 'error_max_turns',
+        is_error: true,
+        result: 'reached the turn limit',
+      }),
+    ).toEqual([{ type: 'error', message: 'reached the turn limit' }]);
+  });
+
   it('ignores unknown event types and non-objects', () => {
     expect(mapClaudeMessage({ type: 'rate_limit_event', tier: 'x' })).toEqual(
       [],

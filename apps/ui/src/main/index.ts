@@ -10,6 +10,12 @@ import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
 import { createUpdateService } from './update-service';
+import {
+  describeLoadFailure,
+  flushMainLogs,
+  isRealLoadFailure,
+  reportMainLog,
+} from './window-diagnostics';
 
 /**
  * Product display name. Set before anything reads it: it drives
@@ -144,11 +150,84 @@ function createWindow(): void {
 
   // electron-vite sets ELECTRON_RENDERER_URL in dev; otherwise load the build.
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
-  if (rendererUrl) {
-    void win.loadURL(rendererUrl);
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'));
-  }
+  const load = (): void => {
+    if (rendererUrl) {
+      void win.loadURL(rendererUrl);
+    } else {
+      void win.loadFile(join(__dirname, '../renderer/index.html'));
+    }
+  };
+
+  /**
+   * Say what this window actually loaded, and retry ONCE if it loaded nothing.
+   *
+   * A user reopened the app through the Dock and got a window rendering raw
+   * bytes in the browser's default serif — no app, no stylesheet, nothing to
+   * click. It could not be diagnosed afterwards, and the reason is structural:
+   * the `ui` log channel is fed only by the RENDERER's own error handlers, so a
+   * window where the renderer never ran reports nothing by construction, and
+   * the main process — the one party that can see a load commit — had no path
+   * into the log at all. Across every log file on that machine the channel held
+   * zero entries.
+   *
+   * `did-finish-load` records the URL the window COMMITTED rather than the one
+   * it was asked for, which is the question a reader actually has. It is
+   * deliberately not a health check on the document: from here that would need
+   * `executeJavaScript` against the page's own CSP, and a wrong answer would
+   * reload a working app under the user.
+   *
+   * The retry is only for a REAL failure — `ERR_ABORTED` is what an ordinary
+   * redirect or an HMR reload looks like — and only once, because a second
+   * identical failure is a broken install rather than a transient, and a window
+   * that reloads forever is worse than one that stops with a line in the log.
+   */
+  let failures = 0;
+  win.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, url, isMainFrame) => {
+      const failure = { errorCode, errorDescription, url, isMainFrame };
+      if (!isRealLoadFailure(failure)) {
+        return;
+      }
+      const retrying = failures === 0;
+      failures += 1;
+      void reportMainLog(
+        supervisor.getHandle(),
+        'error',
+        describeLoadFailure(failure),
+        { kind: 'renderer-load-failed', retrying: String(retrying) },
+      );
+      if (retrying) {
+        load();
+      }
+    },
+  );
+  win.webContents.on('render-process-gone', (_event, details) => {
+    void reportMainLog(
+      supervisor.getHandle(),
+      'error',
+      `the renderer process is gone: ${details.reason}`,
+      { kind: 'render-process-gone', exitCode: String(details.exitCode) },
+    );
+  });
+  win.webContents.on('did-finish-load', () => {
+    // Worded off the failure count rather than reported as a plain success,
+    // because this fires for Chromium's ERROR PAGE too — and it keeps the
+    // failed URL, so the two are indistinguishable from here. Measured against
+    // a dead renderer URL, the naive line read "the window loaded
+    // http://127.0.0.1:59999/" directly beneath "ERR_CONNECTION_REFUSED",
+    // which is the log contradicting itself about the same load.
+    void reportMainLog(
+      supervisor.getHandle(),
+      'info',
+      failures === 0
+        ? `the window loaded ${win.webContents.getURL()}`
+        : `the window finished loading ${win.webContents.getURL()} after ${failures} failed attempt(s) — this may be the browser's error page`,
+      { kind: 'renderer-loaded', failures: String(failures) },
+    );
+  });
+
+  load();
 }
 
 /**
@@ -162,7 +241,12 @@ function createWindow(): void {
 function ensureDaemon(): void {
   void supervisor
     .start()
-    .then((handle) => notifyDaemonReady(mainWindow, handle))
+    .then((handle) => {
+      notifyDaemonReady(mainWindow, handle);
+      // The window is opened BEFORE this, so whatever it already reported about
+      // its own load has been waiting for an address to send it to.
+      void flushMainLogs(handle);
+    })
     .catch((err: unknown) => {
       console.error('[ui] daemon failed to start:', err);
     });

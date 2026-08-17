@@ -1242,6 +1242,36 @@ export interface AgentCommandOptions {
    * {@link AgentCommandOptions.stdinWrites} does and for the same reason.
    */
   settleWhen?: (stdout: string) => boolean;
+  /**
+   * Give the child a real TERMINAL on stdin, so a CLI that refuses a pipe will
+   * run at all.
+   *
+   * For exactly one shape of command: an interactive flow the daemon can
+   * otherwise only hand to the user's terminal. `claude mcp login <server>`
+   * is the case — probe-verified on 2.1.232 that with stdin a pipe it answers
+   * `stdin isn't a terminal, so authentication can't be completed here` and
+   * exits BEFORE printing anything, while under a pty it prints the
+   * authorization URL, opens the browser and serves its own
+   * `http://localhost:<port>/callback`. So the terminal window geniro used to
+   * open for it was never the mechanism, only the way to get a TTY.
+   *
+   * Implemented with `script(1)` (macOS/BSD: `script -q /dev/null <cmd> …`),
+   * NOT a native pty module: `node-pty` was deliberately deleted with the PTY
+   * mirror in M4, and re-adding a native dependency — with its Electron-ABI
+   * rebuild — to allocate one terminal for one sign-in is a poor trade.
+   * `script` ships with macOS and was measured to give the child
+   * `process.stdin.isTTY === true`.
+   *
+   * Implies {@link AgentCommandOptions.processGroup}: the wrapper is a process
+   * of its own with the CLI under it, and a browser opener under THAT, so the
+   * only reapable unit is the group.
+   *
+   * Two consequences the caller owns. The child's stdout is TERMINAL output —
+   * it carries ANSI escapes and CR line endings, so anything parsing it must
+   * tolerate them. And an exit status is the WRAPPER's, so a caller that needs
+   * the CLI's own verdict must read it out of the output.
+   */
+  pty?: boolean;
 }
 
 /**
@@ -1504,6 +1534,17 @@ export interface AgentSession {
    * retired session on sight, the way it closes a dead one.
    */
   readonly retired: boolean;
+  /**
+   * Alive and idle, and yet not free: the CLI is standing still on a verdict
+   * only the user can give, raised (or held) between turns.
+   *
+   * The one reader is whoever REAPS an unused session. A person taking twenty
+   * minutes over a question is not a chat going unused, and closing the process
+   * under them reaches the CLI as a refusal of that question — which is how a
+   * run came to be marked failed, with a bare "claude run failed" for a question
+   * that had never been put on screen.
+   */
+  readonly parked: boolean;
   /**
    * Terminate the process group — the CLI plus every tool/MCP grandchild.
    *
@@ -1983,17 +2024,41 @@ export interface AdapterConfig {
      * A VALUE, not a method: what differs per CLI is the words, not the
      * mechanism, so `AgentAdapter.mcpLoginTarget` is concrete over this.
      *
-     * The daemon RESOLVES this and never runs it. Probe-verified on claude
-     * 2.1.223: `claude mcp login <name>` refuses outright — in browser mode AND
-     * under `--no-browser` — when stdin is not a terminal ("stdin isn't a
-     * terminal, so authentication can't be completed here"), exiting non-zero
-     * ~1.6s in, before any OAuth callback could arrive. That is an upfront
-     * refusal rather than a timeout, so no amount of waiting or piping makes a
-     * headless spawn work. The invocation therefore goes where a TTY exists:
-     * the user's own terminal, through the handoff module. Giving the daemon a
-     * PTY instead would reintroduce the native module M4 deliberately deleted.
+     * The daemon RUNS this, and the terminal handoff (`mcpLoginTarget`) is the
+     * fallback — which is a REVERSAL of what this block said for two
+     * milestones, on a measurement that was right about the fact and wrong
+     * about the conclusion.
+     *
+     * What was measured (claude 2.1.223, re-confirmed on 2.1.232): with stdin a
+     * pipe, `claude mcp login <name>` answers "stdin isn't a terminal, so
+     * authentication can't be completed here" and exits BEFORE printing
+     * anything — an upfront refusal, so no amount of waiting or piping helps.
+     * True, and the conclusion drawn from it ("so it must go to the user's own
+     * terminal") skipped the middle option: the CLI wants a TERMINAL, not a
+     * human. Under a pty the same command prints its authorization URL, opens
+     * the browser itself and serves its own `http://localhost:<port>/callback`
+     * — measured 2026-08-17. The window a user was made to look at was never
+     * the mechanism.
+     *
+     * The pty costs no native module ({@link AgentCommandOptions.pty} carries
+     * the how and why), which is what the old note assumed it would.
      */
     readonly loginArgs: readonly string[] | null;
+    /**
+     * Substrings of this CLI's own output that mean a server sign-in did NOT
+     * complete — matched case-insensitively.
+     *
+     * A daemon-run sign-in under a pty cannot read an exit STATUS: the status
+     * belongs to the `script` wrapper, not to the CLI beneath it. What the CLI
+     * says is the only verdict there is. Empty for a CLI whose sign-in the
+     * daemon does not run.
+     *
+     * Note what this is NOT used for: whether the server is now authenticated.
+     * That is re-read from the listing, exactly as the account login's status
+     * is re-probed rather than inferred from an exit — this only decides which
+     * sentence the panel shows about the attempt.
+     */
+    readonly loginFailureMarkers: readonly string[];
     /**
      * Why no server of this CLI can be signed in to, or null when they can.
      *

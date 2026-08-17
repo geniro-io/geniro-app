@@ -22,7 +22,7 @@ import { createDaemonApis } from '../daemon-api';
 import { useConfigDirCapability } from '../graphs/use-config-dir-capability';
 import { updateStatusLine } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
-import { useCliLogin } from './use-cli-login';
+import { useCliLogin } from '../use-cli-login';
 
 function normalizedCliPaths(
   paths: Partial<Record<CliKind, string>>,

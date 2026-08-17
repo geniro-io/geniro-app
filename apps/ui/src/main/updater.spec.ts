@@ -20,6 +20,32 @@ function releaseResponse(tag: string, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
+/** The tap's cask file, as raw.githubusercontent serves it. */
+function caskResponse(version: string, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    text: async () =>
+      `cask "geniro" do\n  version "${version}"\n  sha256 "x"\nend\n`,
+  } as unknown as Response;
+}
+
+/**
+ * Answer BOTH endpoints the check reads, by URL.
+ *
+ * `cask: null` is a tap that will not answer — the fallback path — rather than
+ * a tap serving nothing, which is a different fact and a different verdict.
+ */
+function mockChannels(release: string, cask: string | null): void {
+  mockFetch((url) =>
+    String(url).includes('homebrew-tap')
+      ? cask === null
+        ? Promise.reject(new Error('tap unreachable'))
+        : Promise.resolve(caskResponse(cask))
+      : Promise.resolve(releaseResponse(release)),
+  );
+}
+
 beforeEach(() => {
   mocks.app.isPackaged = false;
   mocks.app.getVersion.mockReturnValue('1.0.0');
@@ -42,13 +68,48 @@ describe('checkForUpdates', () => {
 
   it('reports an available update and names the update command', async () => {
     mocks.app.isPackaged = true;
-    mockFetch(() => releaseResponse('v1.1.0'));
+    mockChannels('v1.1.0', '1.1.0');
 
     const result = await checkForUpdates();
 
     expect(result.status).toBe('available');
     expect(result.version).toBe('1.1.0');
     expect(result.message).toContain(UPDATE_COMMAND);
+  });
+
+  it('stays quiet while a published release is not yet installable', async () => {
+    mocks.app.isPackaged = true;
+    // The real window between `create-release` and `bump-cask`: the feed names
+    // 1.1.0, the cask still serves 1.0.0, and `brew upgrade --cask geniro`
+    // therefore does nothing — which is what the banner used to send the user
+    // off to run.
+    mockChannels('v1.1.0', '1.0.0');
+
+    const result = await checkForUpdates();
+
+    expect(result.status).toBe('up-to-date');
+  });
+
+  it('announces the CASK version once the tap catches up, not the feed', async () => {
+    mocks.app.isPackaged = true;
+    // A tap that is AHEAD of `/releases/latest` (a re-cut release, a feed
+    // cache): the version named must still be the one brew would install.
+    mockChannels('v1.1.0', '1.2.0');
+
+    const result = await checkForUpdates();
+
+    expect(result).toMatchObject({ status: 'available', version: '1.2.0' });
+  });
+
+  it('falls back to the release feed when the tap cannot be read', async () => {
+    mocks.app.isPackaged = true;
+    mockChannels('v1.1.0', null);
+
+    const result = await checkForUpdates();
+
+    // A machine that cannot reach the tap must not be told it is up to date —
+    // that is a silenced update, not a verified one.
+    expect(result).toMatchObject({ status: 'available', version: '1.1.0' });
   });
 
   it('reports up-to-date when the latest release matches the running version', async () => {

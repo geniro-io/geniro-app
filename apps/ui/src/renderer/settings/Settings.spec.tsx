@@ -8,6 +8,7 @@ import type {
   CliKind,
   GeniroApi,
   Settings as SettingsShape,
+  UpdateState,
 } from '../../shared/contracts';
 import { DAEMON_INSPECT_PORT, DEFAULT_SETTINGS } from '../../shared/contracts';
 import { Settings } from './Settings';
@@ -31,7 +32,10 @@ const geniro = {
   updateSettings: vi.fn(),
   detectClis: vi.fn(),
   pickAgentBinary: vi.fn(),
+  getUpdateState: vi.fn(),
   checkForUpdates: vi.fn(),
+  installUpdate: vi.fn(),
+  onUpdateState: vi.fn().mockReturnValue(() => {}),
   openInTerminal: vi.fn(),
   notify: vi.fn(),
   onNotificationActivated: vi.fn().mockReturnValue(() => {}),
@@ -64,6 +68,19 @@ vi.mock('../daemon-api', async (importOriginal) => ({
 }));
 
 const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
+
+/** An update state as main would push it; `idle` unless a phase is named. */
+function updateState(overrides: Partial<UpdateState> = {}): UpdateState {
+  return {
+    phase: 'idle',
+    version: null,
+    progress: null,
+    message: null,
+    currentVersion: '0.1.0',
+    canInstall: true,
+    ...overrides,
+  };
+}
 
 function det(
   kind: CliKind,
@@ -104,11 +121,12 @@ beforeEach(() => {
   geniro.updateSettings.mockReset().mockResolvedValue(settings);
   geniro.detectClis.mockReset().mockResolvedValue([]);
   geniro.openInTerminal.mockReset().mockResolvedValue(undefined);
-  geniro.checkForUpdates.mockReset().mockResolvedValue({
-    status: 'up-to-date',
-    version: '0.1.0',
-    message: null,
-  });
+  geniro.getUpdateState.mockReset().mockResolvedValue(updateState());
+  geniro.checkForUpdates
+    .mockReset()
+    .mockResolvedValue(updateState({ phase: 'up-to-date' }));
+  geniro.installUpdate.mockReset();
+  geniro.onUpdateState.mockReset().mockReturnValue(() => {});
   handoffApi.resolveCliLogin.mockReset();
   cliAuthApi.cliLogout.mockReset().mockResolvedValue({
     agent: 'cursor-agent',
@@ -146,7 +164,7 @@ describe('Settings updates section', () => {
       `label[for="${toggle.id}"]`,
     );
     expect(toggle.getAttribute('role')).toBe('switch');
-    expect(label?.textContent).toBe('Check for app updates on launch');
+    expect(label?.textContent).toBe('Check for updates automatically');
     // Exactly one switch IN THIS SECTION: the old raw-button label doubled the
     // toggle surface with no state semantics for assistive tech. Scoped to the
     // section rather than the page, because unrelated settings legitimately
@@ -264,12 +282,13 @@ describe('Settings updates section', () => {
     expect(container.textContent).toContain('Up to date (v0.1.0)');
   });
 
-  it('renders the available-update message (with the update command) and a failed check', async () => {
-    geniro.checkForUpdates.mockResolvedValueOnce({
-      status: 'available',
-      version: '0.2.0',
-      message: 'v0.2.0 is available — update with: brew upgrade --cask geniro',
-    });
+  it('offers an Update now button once a newer release is found, and installs on press', async () => {
+    geniro.checkForUpdates.mockResolvedValueOnce(
+      updateState({ phase: 'available', version: '0.2.0' }),
+    );
+    geniro.installUpdate.mockResolvedValue(
+      updateState({ phase: 'downloading', version: '0.2.0', progress: 0 }),
+    );
     await mount();
     const check = [...container.querySelectorAll('button')].find((b) =>
       b.textContent?.includes('Check now'),
@@ -278,14 +297,60 @@ describe('Settings updates section', () => {
     await act(async () => {
       check.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    // Assert on text unique to the check RESULT, not the always-present static
-    // hint (which also mentions brew) — else this passes with the result unshown.
-    expect(container.textContent).toContain('v0.2.0 is available');
+    expect(container.textContent).toContain('Geniro 0.2.0 is available');
 
-    geniro.checkForUpdates.mockRejectedValueOnce(new Error('ipc broke'));
+    const install = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Update now'),
+    )!;
+    expect(install).toBeTruthy();
+    await act(async () => {
+      install.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(geniro.installUpdate).toHaveBeenCalled();
+    // The screen follows the install rather than sitting on the offer it just
+    // acted on — the state it renders is main's, not a local flag.
+    expect(container.textContent).toContain('Downloading Geniro 0.2.0');
+    expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
+  });
+
+  it('names an available update this copy cannot install, instead of a dead button', async () => {
+    geniro.checkForUpdates.mockResolvedValueOnce(
+      updateState({
+        phase: 'available',
+        version: '0.2.0',
+        canInstall: false,
+        message: 'Update with: brew upgrade --cask geniro',
+      }),
+    );
+    await mount();
+    const check = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Check now'),
+    )!;
+
     await act(async () => {
       check.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
+
+    expect(container.textContent).toContain('brew upgrade --cask geniro');
+    expect(
+      [...container.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Update now'),
+      ),
+    ).toBe(false);
+  });
+
+  it('surfaces a broken channel rather than a button that visibly does nothing', async () => {
+    geniro.checkForUpdates.mockRejectedValueOnce(new Error('ipc broke'));
+    await mount();
+    const check = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Check now'),
+    )!;
+
+    await act(async () => {
+      check.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
     expect(container.textContent).toContain('ipc broke');
   });
 

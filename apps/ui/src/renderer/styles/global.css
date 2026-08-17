@@ -380,3 +380,20 @@
     background: var(--muted-foreground);
   }
 }
+
+/*
+ * The indeterminate sweep of `components/ui/progress-bar.tsx`.
+ *
+ * Declared here rather than as a Tailwind arbitrary value because keyframes
+ * cannot be expressed inline — `animate-[…]` can only NAME an animation. The
+ * sliver runs off both edges, so a step of unknown length reads as working
+ * rather than as a bar stuck at a third full.
+ */
+@keyframes progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}

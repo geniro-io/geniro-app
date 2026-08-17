@@ -84,6 +84,15 @@ export interface Settings {
   /** Whether to check for app updates on launch (wired in M4). */
   checkForUpdates: boolean;
   /**
+   * Whether the left nav rail is collapsed to its icon-only width.
+   *
+   * Persisted rather than session state because the rail is the one piece of
+   * chrome a user sets ONCE to suit how they work — a wide window with the
+   * labels on, a narrow one without — and re-collapsing it on every launch
+   * made the choice look like it had not been taken.
+   */
+  sidebarCollapsed: boolean;
+  /**
    * Post system notifications — a banner outside the app when an agent stops to
    * ask something, and when a thread's turn ends.
    *
@@ -131,6 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastEfforts: {},
   cliPaths: {},
   checkForUpdates: true,
+  sidebarCollapsed: false,
   notificationsEnabled: true,
   daemonInspect: null,
 };
@@ -408,6 +418,24 @@ export interface GeniroApi {
    */
   notify(notification: RunNotification): Promise<void>;
   /**
+   * Post a banner the user explicitly asked for, and report what became of it.
+   *
+   * The one notification path with an ANSWER, and it needs one: every other is
+   * fire-and-forget, so a user seeing no banners has no way to tell a setting
+   * from a permission from a bug. It also spends the macOS authorisation prompt
+   * deliberately — the system asks the first time an app posts and swallows
+   * that notification to do it, so without this the first banner anyone should
+   * have seen is always the one they never get.
+   */
+  testNotification(): Promise<{
+    /** Whether the app posted at all (settings/platform can refuse first). */
+    posted: boolean;
+    /** What the platform reported: true shown, false refused, null silent. */
+    shown: boolean | null;
+    /** Why it did not arrive, in words for the user; null when it did. */
+    reason: string | null;
+  }>;
+  /**
    * A notification the user CLICKED, carrying the run it was about.
    *
    * The other half of `notify`: a banner you cannot act on only tells you to go
@@ -437,5 +465,6 @@ export const IPC = {
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',
+  testNotification: 'geniro:testNotification',
   onNotificationActivated: 'geniro:onNotificationActivated',
 } as const satisfies Record<keyof GeniroApi, string>;

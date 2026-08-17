@@ -15,7 +15,14 @@ const notification: RunNotification = {
 };
 
 /** A notifier double that records what it was asked to post and replays a click. */
-function fakeNotifier(supported = true): Notifier & {
+function fakeNotifier(
+  supported = true,
+  /** What the platform reports back, as macOS does asynchronously. */
+  outcome: { shown: boolean; error: string | null } | null = {
+    shown: true,
+    error: null,
+  },
+): Notifier & {
   posted: { title: string; body: string }[];
   click(): void;
 } {
@@ -24,9 +31,12 @@ function fakeNotifier(supported = true): Notifier & {
   return {
     posted,
     isSupported: () => supported,
-    post: (options, listener) => {
+    post: (options, listener, onOutcome) => {
       posted.push(options);
       onClick = listener;
+      if (outcome !== null) {
+        onOutcome?.(outcome);
+      }
     },
     click: () => {
       if (onClick === null) {
@@ -214,5 +224,68 @@ describe('NotificationService', () => {
     ).not.toThrow();
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+});
+
+describe('the on-demand test banner', () => {
+  const target = (): Parameters<NotificationService['testPost']>[0] => ({
+    window: fakeWindow(),
+    onActivate: vi.fn(),
+  });
+
+  it('reports a banner the platform SHOWED', async () => {
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      fakeNotifier(),
+    );
+
+    await expect(service.testPost(target())).resolves.toEqual({
+      posted: true,
+      shown: true,
+      reason: null,
+    });
+  });
+
+  it('hands back the system’s REFUSAL instead of claiming success', async () => {
+    // The whole point of the control: an app macOS has not been authorised for
+    // fails here, silently, and every other path in this file would report
+    // "posted" and move on.
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      fakeNotifier(true, { shown: false, error: 'not authorized' }),
+    );
+
+    const result = await service.testPost(target());
+
+    expect(result).toMatchObject({ posted: true, shown: false });
+    expect(result.reason).toContain('not authorized');
+  });
+
+  it('does not call a silent platform a failure', async () => {
+    // Neither event fired. The banner may well be in Notification Centre, and
+    // telling the user it failed would be the wrong half of the truth.
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      fakeNotifier(true, null),
+    );
+
+    const result = await service.testPost(target());
+
+    expect(result).toMatchObject({ posted: true, shown: null });
+    expect(result.reason).toContain('did not report back');
+  }, 10_000);
+
+  it('says it is the SETTING when the switch is off, and posts nothing', async () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: false }),
+      notifier,
+    );
+
+    const result = await service.testPost(target());
+
+    expect(result).toMatchObject({ posted: false, shown: null });
+    expect(result.reason).toContain('switched off');
+    expect(notifier.posted).toHaveLength(0);
   });
 });

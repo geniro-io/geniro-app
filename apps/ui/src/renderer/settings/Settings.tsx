@@ -16,6 +16,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
+import { cn } from '../components/ui/utils';
 import { createDaemonApis } from '../daemon-api';
 import { useConfigDirCapability } from '../graphs/use-config-dir-capability';
 import { useCliLogin } from './use-cli-login';
@@ -58,6 +59,13 @@ export function Settings({
   >({});
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  /** Where the on-demand banner got to: idle → testing → what happened. */
+  const [notificationTest, setNotificationTest] = useState<
+    'idle' | 'testing' | 'shown' | 'unknown'
+  >('idle');
+  const [notificationTestResult, setNotificationTestResult] = useState<
+    string | null
+  >(null);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   // The STORED tri-state, not the effective one: `null` means "not chosen",
@@ -347,6 +355,36 @@ export function Settings({
     [persist],
   );
 
+  /**
+   * Post one banner on demand and say what the platform did with it.
+   *
+   * Four outcomes, kept apart because they need four different things from the
+   * user: it showed; the app itself refused (the switch above is off); the
+   * system refused (permission, or the app silenced in System Settings); or
+   * nothing was reported at all, which is not a failure and must not be
+   * announced as one — the banner may be sitting in Notification Centre.
+   */
+  const onTestNotification = useCallback((): void => {
+    setNotificationTest('testing');
+    void window.geniro
+      .testNotification()
+      .then((result) => {
+        setNotificationTest(result.shown === true ? 'shown' : 'unknown');
+        setNotificationTestResult(
+          result.shown === true
+            ? 'Sent — you should have seen a banner. If you did not, macOS is holding it: System Settings › Notifications › Geniro.'
+            : (result.reason ??
+                'Sent, but the system said nothing about it — check Notification Centre.'),
+        );
+      })
+      .catch((err: unknown) => {
+        setNotificationTest('unknown');
+        setNotificationTestResult(
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+  }, []);
+
   const onToggleInspect = useCallback(
     (next: boolean): void => {
       daemonInspectDirtyRef.current = true;
@@ -463,7 +501,35 @@ export function Settings({
           <Label htmlFor="settings-notifications" className="cursor-pointer">
             Show system notifications
           </Label>
+          {/* The one control here that PROVES something rather than sets it.
+              macOS asks for permission the first time an app posts and consumes
+              that banner to do it, so without a deliberate test the first
+              notification anyone should have seen is always the one they never
+              get — and every later silence (permission refused, Do Not Disturb,
+              the app silenced in System Settings) is indistinguishable from a
+              bug in here. */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto shrink-0"
+            disabled={notificationTest === 'testing'}
+            onClick={onTestNotification}>
+            {notificationTest === 'testing' ? 'Sending…' : 'Send a test'}
+          </Button>
         </div>
+        {notificationTestResult ? (
+          <p
+            data-slot="notification-test-result"
+            className={cn(
+              'text-xs',
+              notificationTest === 'shown'
+                ? 'text-success'
+                : 'text-muted-foreground',
+            )}>
+            {notificationTestResult}
+          </p>
+        ) : null}
         <p className="text-xs text-muted-foreground">
           A macOS banner when an agent stops to ask you something and when a
           thread’s turn ends — so a run parked on a question does not sit

@@ -12,6 +12,7 @@ import {
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';
+import { UsageEventBus } from './usage-events.bus';
 
 /**
  * Copies every finished turn's usage into the ledger as it happens.
@@ -40,6 +41,7 @@ export class UsageRecorderService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly usageDao: UsageEventDao,
+    private readonly usageBus: UsageEventBus,
   ) {}
 
   onModuleInit(): void {
@@ -83,7 +85,17 @@ export class UsageRecorderService implements OnModuleInit {
       ...(await this.dimensions(runId, item.nodeId, em)),
       ...figures,
     };
-    await this.usageDao.recordOnce(row, em);
+    const written = await this.usageDao.recordOnce(row, em);
+    // Announced only for a row that is NEW, and only after the write returned:
+    // a re-seen turn changes no total, so telling every open page to re-read
+    // the ledger for it would be a refetch that cannot move a single figure.
+    if (written) {
+      this.usageBus.publish({
+        runId,
+        nodeId: item.nodeId,
+        occurredAt: row.occurredAt.toISOString(),
+      });
+    }
   }
 
   /** See {@link usageDimensions} — one reading, shared with the boot sweep. */

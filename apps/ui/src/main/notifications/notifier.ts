@@ -41,14 +41,34 @@ export interface Notifier {
    * Show a banner. `onClick` fires if the user activates it — which may be long
    * after this returns, or never.
    */
-  post(options: { title: string; body: string }, onClick: () => void): void;
+  post(
+    options: { title: string; body: string },
+    onClick: () => void,
+    /**
+     * The platform's own verdict on this banner, once it has one.
+     *
+     * Asynchronous by nature and therefore reported this way rather than
+     * returned: `show()` resolves nothing, and macOS decides whether a banner
+     * is actually presented AFTER the call — an app the user has not authorised
+     * (or has since silenced) fails there, silently, which is exactly the
+     * "sometimes nothing arrives" this exists to make visible.
+     */
+    onOutcome?: (outcome: { shown: boolean; error: string | null }) => void,
+  ): void;
 }
 
 export const electronNotifier: Notifier = {
   isSupported: () => Notification.isSupported(),
-  post: (options, onClick) => {
+  post: (options, onClick, onOutcome) => {
     const banner = new Notification(options);
     banner.on('click', onClick);
+    // `show` and `failed` are the only two things macOS says back, and until
+    // now neither was listened for — so a banner the OS refused looked exactly
+    // like one it presented, from inside this app.
+    banner.on('show', () => onOutcome?.({ shown: true, error: null }));
+    banner.on('failed', (_event, error) =>
+      onOutcome?.({ shown: false, error: String(error) }),
+    );
     banner.show();
   },
 };

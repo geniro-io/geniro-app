@@ -265,6 +265,7 @@ export class ChatService {
     runId: string,
     status: RunStatus,
     activity: string | null = null,
+    summary: string | null = null,
   ): Promise<void> {
     await writeRunStatus(
       { runDao: this.runDao, bus: this.bus },
@@ -272,6 +273,7 @@ export class ChatService {
       runId,
       status,
       activity,
+      summary,
     );
   }
 
@@ -1171,6 +1173,17 @@ export class ChatService {
 
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
+      /**
+       * The last thing the agent SAID this turn — what a settle announcement
+       * carries so a client can tell the user what happened rather than merely
+       * that something did.
+       *
+       * Held here rather than read back from the database at the settle: the
+       * text is passing through this very handler, and a run's newest `message`
+       * row is not reliably the agent's (a queued follow-up drains into the
+       * transcript as a user message the moment the turn ends).
+       */
+      let lastAgentText: string | null = null;
       let eventHandlingFailed = false;
       /**
        * The token figures the CLI reported for a compaction that just finished,
@@ -1610,10 +1623,30 @@ export class ChatService {
               // before the finalizer flushes it — the text the user watched
               // would vanish from the replayed transcript.
               this.partials.retire(runId, SINGLE_AGENT_NODE, null);
+              if (mapped.role === 'assistant') {
+                // Straight off the mapped payload, which is the shape the row
+                // is written from — no re-read, no second reading of what a
+                // message IS.
+                const text = (mapped.payload as { text?: unknown }).text;
+                lastAgentText =
+                  typeof text === 'string' && text.trim() !== ''
+                    ? text
+                    : lastAgentText;
+              }
             }
             const status = terminalStatus(event);
             if (status) {
-              await this.setRunStatus(em, runId, status);
+              // What the settle SAYS, for whoever is not looking at this chat.
+              // A failure speaks for itself; a completion is summarised by the
+              // agent's own closing words, which is the only text that answers
+              // "what happened" without opening the thread.
+              await this.setRunStatus(
+                em,
+                runId,
+                status,
+                null,
+                event.type === 'error' ? event.message : lastAgentText,
+              );
               // Set only after the write succeeds: if it throws, the finalizer
               // still writes a synthetic completion rather than leaving 'running'.
               sawTerminal = true;

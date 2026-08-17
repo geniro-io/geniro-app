@@ -1,4 +1,10 @@
-import { IdCard, PanelRight, Workflow as WorkflowIcon } from 'lucide-react';
+import {
+  Bot,
+  IdCard,
+  ListTodo,
+  PanelRight,
+  Workflow as WorkflowIcon,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '../components/ui/button';
@@ -72,6 +78,8 @@ export function ChatHeader({
   turnCount = 0,
   sidePanelOpen,
   onToggleSidePanel,
+  runningSubagents = 0,
+  openTasks = 0,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -126,6 +134,10 @@ export function ChatHeader({
   turnCount?: number;
   sidePanelOpen: boolean;
   onToggleSidePanel: () => void;
+  /** Delegates working right now — see {@link SidePanelLiveCounts}. */
+  runningSubagents?: number;
+  /** Tasks on the agents' own lists that are not finished. */
+  openTasks?: number;
 }): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
@@ -184,6 +196,35 @@ export function ChatHeader({
         ) : null}
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
+        {/* What the panel is holding, stated BEFORE its toggle — the toggle
+            alone could not say whether opening it was worth the click. Each
+            counter renders only while it has something to count ("if there
+            is"), so a plain turn keeps the header exactly as it was, and both
+            are part of the SAME control: pressing one opens the list they
+            describe rather than making the user find it. */}
+        {runningSubagents > 0 || openTasks > 0 ? (
+          <button
+            type="button"
+            onClick={onToggleSidePanel}
+            aria-label={`Side panel — ${runningSubagents} running sub-agents, ${openTasks} open tasks`}
+            title={`${runningSubagents} sub-${runningSubagents === 1 ? 'agent' : 'agents'} working · ${openTasks} ${openTasks === 1 ? 'task' : 'tasks'} to go`}
+            className="flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs tabular-nums text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+            {runningSubagents > 0 ? (
+              <span
+                data-slot="running-subagents"
+                className="flex items-center gap-1">
+                <Bot aria-hidden="true" className="size-3.5 shrink-0" />
+                {runningSubagents}
+              </span>
+            ) : null}
+            {openTasks > 0 ? (
+              <span data-slot="open-tasks" className="flex items-center gap-1">
+                <ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
+                {openTasks}
+              </span>
+            ) : null}
+          </button>
+        ) : null}
         <Button
           type="button"
           variant={sidePanelOpen ? 'secondary' : 'ghost'}

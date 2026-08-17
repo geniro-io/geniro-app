@@ -317,23 +317,6 @@ export const GroupHeader = memo(function GroupHeader({
             </span>
           </span>
         )}
-        {/* A parked thread outranks a working one, and both survive a fold —
-            which is the whole point of putting them here. A collapsed group
-            that hid an unanswered question would be a worse sidebar than no
-            groups at all. */}
-        {summary.needsInput ? (
-          <MessageCircleQuestion
-            data-slot="group-needs-input"
-            aria-label={`${group.name} has a thread waiting for you`}
-            className="size-3 shrink-0 text-warning"
-          />
-        ) : summary.busy ? (
-          <Loader2
-            data-slot="group-busy"
-            aria-label={`${group.name} has a thread running`}
-            className="size-3 shrink-0 animate-spin text-primary"
-          />
-        ) : null}
         {/* `relative` so the menu panel hangs off this wrapper — see menu.tsx,
             which positions against the trigger's parent rather than a portal. */}
         <span
@@ -450,6 +433,29 @@ export const GroupHeader = memo(function GroupHeader({
             </button>
           </Popover>
         </span>
+        {/* LAST in the row, after the options button, so the glyph sits flush
+            with the right edge — level with the spinners on the chat rows
+            below it. Before this it came BEFORE that button, which is
+            `opacity-0` until the row is hovered but still occupies its 20px
+            box, so the header's spinner floated ~23px short of every card's
+            and read as a stray mark in the middle of the row.
+            A parked thread outranks a working one, and both survive a fold —
+            which is the whole point of putting them here. A collapsed group
+            that hid an unanswered question would be a worse sidebar than no
+            groups at all. */}
+        {summary.needsInput ? (
+          <MessageCircleQuestion
+            data-slot="group-needs-input"
+            aria-label={`${group.name} has a thread waiting for you`}
+            className="size-3 shrink-0 text-warning"
+          />
+        ) : summary.busy ? (
+          <Loader2
+            data-slot="group-busy"
+            aria-label={`${group.name} has a thread running`}
+            className="size-3 shrink-0 animate-spin text-primary"
+          />
+        ) : null}
       </div>
       {error ? (
         <p className="truncate px-2 text-xs text-destructive">{error}</p>

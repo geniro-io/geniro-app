@@ -5,6 +5,7 @@ import { StatsController } from './controllers/stats.controller';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { StatsService } from './services/stats.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
+import { UsageEventBus } from './services/usage-events.bus';
 import { UsageRecorderService } from './services/usage-recorder.service';
 
 /**
@@ -26,9 +27,14 @@ import { UsageRecorderService } from './services/usage-recorder.service';
   controllers: [StatsController],
   providers: [
     UsageEventDao,
+    UsageEventBus,
     StatsService,
     UsageRecorderService,
     UsageBackfillService,
   ],
+  // The bus alone. The WS gateway announces each recorded turn so an open Stats
+  // page can refresh — the same direction as everything else here: the channel
+  // observes this module, this module observes nothing above it.
+  exports: [UsageEventBus],
 })
 export class StatsModule {}

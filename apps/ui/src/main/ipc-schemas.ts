@@ -56,6 +56,7 @@ export const settingsPatchSchema = z.strictObject({
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),
   checkForUpdates: z.boolean().optional(),
+  sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
   // Nullable, not just optional: `null` is the "unchosen, resolve per build"
   // state, and it must be writable so a user can hand the choice back.

@@ -18,6 +18,7 @@ export function useRunNotifications<TRun extends { id: string }>({
   statusOf,
   labelOf,
   awaitingOf,
+  summaryOf,
   activeRunId,
 }: {
   runs: readonly TRun[];
@@ -27,6 +28,12 @@ export function useRunNotifications<TRun extends { id: string }>({
   labelOf: (run: TRun) => string;
   /** What a parked run is waiting for, for the wording. */
   awaitingOf: (run: TRun) => RunAwaiting | null;
+  /**
+   * What the run said as it settled — the agent's closing words or the
+   * failure's message. Optional: without it the banner falls back to the plain
+   * "the turn finished" sentence, which is what it always said.
+   */
+  summaryOf?: (run: TRun) => string | null;
   /** The chat on screen — suppressed while the window has focus. */
   activeRunId: string | null;
 }): void {
@@ -62,12 +69,20 @@ export function useRunNotifications<TRun extends { id: string }>({
           kind: trigger.kind,
           runId: trigger.runId,
           title: labelOf(run),
-          body: notificationBody(trigger, awaitingOf(run)),
+          body: notificationBody(
+            trigger,
+            awaitingOf(run),
+            summaryOf?.(run) ?? null,
+          ),
         })
         .catch((err: unknown) => {
           // A banner is never worth a broken chat list.
           console.error('failed to post a notification', err);
         });
     }
-  }, [runs, statusOf, labelOf, awaitingOf]);
+    // `summaryOf` rides the deps with the rest: the settle that changes a run's
+    // status and the sentence explaining it arrive in ONE event, so the two
+    // land in the same render and the banner is worded from the settle it is
+    // about rather than from the previous one.
+  }, [runs, statusOf, labelOf, awaitingOf, summaryOf]);
 }

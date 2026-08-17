@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_SETTINGS, type Settings } from '../../shared/contracts';
 import { type AppView, NavRail } from './nav-rail';
 
 (
@@ -11,6 +12,27 @@ import { type AppView, NavRail } from './nav-rail';
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+
+/**
+ * The rail reads its remembered width from settings and writes it back, so the
+ * IPC surface has to exist for it to mount at all. Stubbed per test with the
+ * real default shape, and `updateSettings` is a spy because "was the choice
+ * persisted" is exactly what one of these tests is about.
+ */
+const getSettings = vi.fn(async (): Promise<Settings> => DEFAULT_SETTINGS);
+const updateSettings = vi.fn(async (patch: Partial<Settings>) => ({
+  ...DEFAULT_SETTINGS,
+  ...patch,
+}));
+
+beforeEach(() => {
+  getSettings.mockReset().mockResolvedValue(DEFAULT_SETTINGS);
+  updateSettings.mockReset().mockResolvedValue(DEFAULT_SETTINGS);
+  (globalThis as { window?: { geniro?: unknown } }).window!.geniro = {
+    getSettings,
+    updateSettings,
+  } as unknown as Window['geniro'];
+});
 
 function render(element: React.ReactElement): HTMLDivElement {
   container = document.createElement('div');
@@ -90,5 +112,52 @@ describe('NavRail', () => {
     // Stats is a primary destination, so it belongs with Chats and Graphs
     // rather than in the utility group Settings sits in.
     expect(labels).toEqual(['Chats', 'Graphs', 'Stats', 'Settings']);
+  });
+
+  it('opens on the width it was left at, and writes every change back', async () => {
+    getSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      sidebarCollapsed: true,
+    });
+    const el = rail('chats');
+
+    // Collapsed from the stored value: the labels are gone and the control
+    // offers to EXPAND, which is only true of a rail that opened collapsed.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(el.querySelector('[aria-label="Expand menu"]')).toBeTruthy();
+    expect(buttonNamed(el, 'Chats')).toBeUndefined();
+
+    await act(async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[aria-label="Expand menu"]',
+      )!.click();
+    });
+
+    expect(updateSettings).toHaveBeenCalledWith({ sidebarCollapsed: false });
+  });
+
+  it('drops the connection dot while collapsed, and keeps it while open', async () => {
+    getSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      sidebarCollapsed: true,
+    });
+    const el = rail('chats');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The dot is the only `rounded-full` span in the rail — collapsed, the row
+    // is the debug trigger alone.
+    expect(el.querySelectorAll('span.rounded-full')).toHaveLength(0);
+
+    await act(async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[aria-label="Expand menu"]',
+      )!.click();
+    });
+
+    expect(el.querySelectorAll('span.rounded-full')).toHaveLength(1);
   });
 });

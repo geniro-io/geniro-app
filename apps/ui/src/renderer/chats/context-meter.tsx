@@ -48,6 +48,25 @@ const HOVER_OPEN_DELAY_MS = 250;
 const HOVER_CLOSE_GRACE_MS = 120;
 
 /**
+ * How often an OPEN readout re-reads while the agent is working.
+ *
+ * The readout used to be taken once per open and never again, and its own copy
+ * said so — "send a message in this chat to take a fresh reading" — while every
+ * figure in it moved underneath: measured across one turn, the thread went from
+ * 0 turns to 1, its cost from nothing to $0.03, and the window from 32,560 to
+ * 32,105 tokens. Somebody watching an agent work was reading the moment they
+ * opened the panel.
+ *
+ * Ten seconds and not one, because this is not a cheap read: for claude it is a
+ * control request onto the live agent's stdin, measured at 1.1s on a 411k-token
+ * session, and the CLI serialises them. It runs only while the panel is OPEN
+ * and only while the agent is actually working — a settled chat's figures
+ * cannot change on their own, so polling one would be a question with a known
+ * answer.
+ */
+const LIVE_REREAD_MS = 10_000;
+
+/**
  * A ring with a readout behind it: the shell BOTH ring branches are drawn on —
  * the one showing how full the window is, and the one saying the CLI never
  * reports it.
@@ -64,6 +83,7 @@ function MeterReadout({
   side,
   className,
   runId,
+  live = false,
   children,
 }: {
   ring: React.ReactNode;
@@ -73,6 +93,8 @@ function MeterReadout({
   className?: string;
   /** Which chat to fetch the full readout for, or null for none. */
   runId?: string | null;
+  /** Whether this chat's agent is working right now — see {@link LIVE_REREAD_MS}. */
+  live?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   const [pinned, setPinned] = useState(false);
@@ -81,7 +103,7 @@ function MeterReadout({
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const open = pinned || hovered;
-  const metrics = useChatMetrics(runId ?? null, open);
+  const metrics = useChatMetrics(runId ?? null, open, live);
   // Every path OUT of the open state cancels the pending hover, including the
   // two that close an already-open panel: a timer left running fires after the
   // close and reopens the panel the user just dismissed.
@@ -227,6 +249,7 @@ function MeterReadout({
             metrics={metrics.data}
             loading={metrics.loading}
             error={metrics.error}
+            live={live}
           />
         ) : null}
       </Popover>
@@ -278,12 +301,30 @@ const NO_READING: Omit<MetricsState, 'runId'> = {
 function useChatMetrics(
   runId: string | null,
   open: boolean,
+  live: boolean,
 ): MetricsState | null {
   const load = useContext(ChatMetricsLoaderContext);
   const [state, setState] = useState<MetricsState>({
     runId: null,
     ...NO_READING,
   });
+  // Bumped by the live re-read timer below. A nonce rather than calling the
+  // fetch from two places: one effect owns the request, so a re-read cannot
+  // race the open-fetch or duplicate its cancellation.
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    // `live` is in the deps, so this ALSO fires the moment the turn settles —
+    // which is exactly when the last turn's cost and token counts land, and it
+    // costs no timer of its own.
+    if (!open || !live || load === null || runId === null) {
+      return;
+    }
+    const timer = setInterval(
+      () => setNonce((value) => value + 1),
+      LIVE_REREAD_MS,
+    );
+    return () => clearInterval(timer);
+  }, [open, live, load, runId]);
   useEffect(() => {
     if (!open || load === null || runId === null) {
       return;
@@ -291,8 +332,9 @@ function useChatMetrics(
     // The reply of a fetch whose panel has closed — or whose run has changed
     // under it — must not land in the new state. Without this, closing the
     // readout mid-request and reopening it on another chat showed the first
-    // chat's window under the second chat's name.
-    let live = true;
+    // chat's window under the second chat's name. Named `current` rather than
+    // `live`, which is now the working-agent PROP this effect also depends on.
+    let current = true;
     setState((previous) =>
       // Re-reading the SAME chat keeps what is already on screen, so a refetch
       // costs no blank panel. A DIFFERENT chat keeps nothing: those figures
@@ -303,12 +345,12 @@ function useChatMetrics(
     );
     void load(runId)
       .then((data) => {
-        if (live) {
+        if (current) {
           setState({ runId, data, loading: false, error: null });
         }
       })
       .catch((err: unknown) => {
-        if (live) {
+        if (current) {
           setState((previous) => ({
             ...previous,
             runId,
@@ -318,9 +360,11 @@ function useChatMetrics(
         }
       });
     return () => {
-      live = false;
+      current = false;
     };
-  }, [load, runId, open]);
+    // `live` rides the deps so a settle takes one final reading; `nonce` is the
+    // live re-read.
+  }, [load, runId, open, live, nonce]);
   if (load === null || runId === null) {
     return null;
   }
@@ -359,6 +403,7 @@ export function ContextMeter({
   unavailableReason = null,
   runId = null,
   side = 'bottom',
+  live = false,
   className,
 }: {
   /** Prompt-side tokens of the latest request, or null when unknown. */
@@ -401,6 +446,16 @@ export function ContextMeter({
    * is unchanged.
    */
   side?: 'top' | 'bottom';
+  /**
+   * Whether this chat's agent is working RIGHT NOW.
+   *
+   * What it buys is the readout following the turn instead of freezing on the
+   * moment it was opened — see {@link LIVE_REREAD_MS} — and the thread line
+   * saying that a turn is in flight rather than counting it as nothing.
+   * Defaults false, so a caller that cannot know (the agents panel's per-node
+   * meters) gets exactly the readout it had.
+   */
+  live?: boolean;
   className?: string;
 }): React.JSX.Element | null {
   // The model's OWN window, or NOTHING. A window of 0 is rejected here, not
@@ -431,6 +486,7 @@ export function ContextMeter({
         side={side}
         className={className}
         runId={runId}
+        live={live}
         label={unavailableReason}
         ring={
           // An EMPTY ring at the same 14px, in the muted tone: it holds the spot
@@ -487,6 +543,7 @@ export function ContextMeter({
       side={side}
       className={className}
       runId={runId}
+      live={live}
       // Deliberately still the bare reading, with no "which measurement"
       // qualifier: this is the control's accessible NAME, and a name that
       // explains itself stops being one — it is announced on every focus, and

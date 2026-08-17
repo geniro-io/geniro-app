@@ -3143,6 +3143,36 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
   });
 
+  it('carries the agent’s closing words into the settle announcement', async () => {
+    // What a background thread's notification is worded from. The run ROW
+    // cannot serve: `lastMessage` is enriched by list endpoints only, so for a
+    // chat nobody has open it still holds the user's own message from before
+    // the turn — a banner reading your own prompt back at you.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'text', text: 'Fixed the parser — 3 tests green.' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(statuses.at(-1)).toMatchObject({
+      runId: run.id,
+      status: 'completed',
+      summary: 'Fixed the parser — 3 tests green.',
+    });
+  });
+
   it('announces a FAILED and a CANCELLED settle too, not just the happy one', async () => {
     // "every status change" is only true if the terminal ones are covered, and
     // a failed or cancelled run is precisely the badge that lies longest. The
@@ -3163,6 +3193,10 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'failed',
       activity: null,
       awaiting: null,
+      // The failure's OWN message rides the announcement: the client that has
+      // to act on it is the one not looking at this chat, and a notification
+      // saying only "the turn failed" sends the user to find out what did.
+      summary: 'the CLI died',
     });
 
     const cancelled = setup();

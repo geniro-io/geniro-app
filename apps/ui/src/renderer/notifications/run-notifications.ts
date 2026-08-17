@@ -86,6 +86,12 @@ export function diffRunNotifications(
 export function notificationBody(
   trigger: RunNotificationTrigger,
   awaiting: RunAwaiting | null,
+  /**
+   * What the run SAID as it settled — the agent's closing words, or the
+   * failure's own message, as the daemon announced them. Null when nothing was
+   * said, or on a client that predates the field.
+   */
+  summary: string | null = null,
 ): string {
   if (trigger.kind === 'question') {
     const phrase =
@@ -94,7 +100,55 @@ export function notificationBody(
     // status word in a 260px sidebar row.
     return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
   }
+  // What actually happened, in the agent's own words, whenever there are any.
+  // "The turn finished." is true of every turn that ever finished and so tells
+  // the reader nothing they did not know from the banner existing — the whole
+  // complaint being a notification with no content in it. A failure's message
+  // matters even more: it is the one case where the user has to decide whether
+  // to go and look.
+  const said = oneLine(summary);
+  if (said !== null) {
+    return trigger.status === 'failed' ? `Failed: ${said}` : said;
+  }
   return trigger.status === 'failed'
     ? 'The turn failed.'
     : 'The turn finished.';
+}
+
+/**
+ * How much of a message a banner may carry.
+ *
+ * macOS shows two or three lines and elides the rest itself, so this is not
+ * about fitting — it is about not handing the notification centre a
+ * multi-kilobyte answer to store. Cut on a word where one is near the end, so
+ * the ellipsis lands after a word rather than mid-syllable.
+ */
+const BODY_LIMIT = 220;
+
+/**
+ * One line of an agent's answer: markdown headings, code fences and blank
+ * lines collapsed away, trimmed, truncated.
+ *
+ * The first NON-EMPTY line rather than the first: an answer routinely opens
+ * with a heading or a fenced block, and a banner reading "```ts" says less than
+ * no banner at all. Returns null for text with nothing readable in it, which
+ * falls back to the plain sentence.
+ */
+function oneLine(text: string | null): string | null {
+  if (text === null) {
+    return null;
+  }
+  const line = text
+    .split('\n')
+    .map((row) => row.replace(/^\s*[#>*-]+\s*/, '').trim())
+    .find((row) => row !== '' && !row.startsWith('```'));
+  if (line === undefined || line === '') {
+    return null;
+  }
+  if (line.length <= BODY_LIMIT) {
+    return line;
+  }
+  const cut = line.slice(0, BODY_LIMIT);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > BODY_LIMIT - 40 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }

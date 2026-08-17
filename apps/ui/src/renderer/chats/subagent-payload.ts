@@ -50,6 +50,17 @@ export interface SubagentDeclaration {
   model: string | null;
   durationMs: number | null;
   stepsUnavailableReason: string | null;
+  /**
+   * Whether the CLI says this delegate is still working in the BACKGROUND —
+   * `null` when it has said nothing, which is every announcement but claude's
+   * task lifecycle.
+   *
+   * It exists because the transcript's own end-of-delegate signal is the
+   * launching tool call returning, and a delegate the agent does not wait for
+   * returns at once while it runs on. Null therefore has to mean "no claim":
+   * treating it as "not running" would be the old reading with extra steps.
+   */
+  backgroundOpen: boolean | null;
 }
 
 /**
@@ -85,6 +96,8 @@ export function readSubagentDeclaration(
         ? record.durationMs
         : null,
     stepsUnavailableReason: str(record.stepsUnavailableReason),
+    backgroundOpen:
+      typeof record.backgroundOpen === 'boolean' ? record.backgroundOpen : null,
   };
 }
 
@@ -102,6 +115,10 @@ export function mergeSubagentDeclarations(
     durationMs: next.durationMs ?? base.durationMs,
     stepsUnavailableReason:
       next.stepsUnavailableReason ?? base.stepsUnavailableReason,
+    // Same last-non-null rule, and it is what carries the pair: the `started`
+    // announcement says `true`, the settle says `false`, and an anchor-only row
+    // arriving between them (null) leaves whichever stands.
+    backgroundOpen: next.backgroundOpen ?? base.backgroundOpen,
   };
 }
 

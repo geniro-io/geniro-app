@@ -875,6 +875,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         stepsUnavailableReason: expect.stringContaining(
           'not the work inside it',
         ),
+        backgroundOpen: null,
       },
     ]);
     // AFTER the tool call it anchors to, so a consumer replaying in seq order
@@ -938,6 +939,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       model: 'claude-opus-5-thinking-high',
       durationMs: 13075,
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
+      backgroundOpen: null,
     });
     // Answered, not declined. The refusal is what this whole feature was lost
     // behind: the agent discards the outcome either way, so a `-32601` cost the

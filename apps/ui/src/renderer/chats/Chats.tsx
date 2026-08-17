@@ -393,6 +393,20 @@ export function Chats({
   const [activities, setActivities] = useState<ReadonlyMap<string, string>>(
     new Map(),
   );
+  /**
+   * What each run SAID as it last settled — the agent's closing words, or the
+   * failure's message, as the daemon announced them.
+   *
+   * Its own map beside {@link activities} rather than a field on the run row:
+   * it describes a MOMENT (this settle) and not the row's current state, and it
+   * arrives on the same push channel — a background thread's row is only as
+   * fresh as the last list fetch, so writing it there would mix a live fact
+   * into stale ones. Read by the notification rules, which is the one place
+   * that has to tell the user what happened without opening the chat.
+   */
+  const [settleSummaries, setSettleSummaries] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
   // Messages written while the agent was still working — sent automatically,
   // one per settled turn, in order (Claude Code / Cursor-style queueing).
   // Keyed PER RUN and kept for the whole session: switching transcripts or
@@ -1486,6 +1500,13 @@ export function Chats({
       // is left exactly as it was, which is what lets a tool-call announce
       // fire during a parked turn without unparking it.
       const parked = event.awaiting;
+      // Recorded BEFORE the row update below, so the notification rules — which
+      // run off that row changing — already have the sentence when they fire.
+      if (event.summary !== undefined) {
+        setSettleSummaries((prev) =>
+          new Map(prev).set(event.runId, event.summary as string),
+        );
+      }
       if (status !== null || parked !== undefined) {
         setRuns((prev) =>
           prev.map((run) =>
@@ -3223,6 +3244,43 @@ export function Chats({
     subagentThreads,
   ]);
   /**
+   * What the side panel is holding RIGHT NOW, as two numbers for the header
+   * beside its toggle: delegates still working, and tasks still outstanding.
+   *
+   * The panel is where both live, and a closed panel said nothing about either
+   * — so a turn that had fanned out to four sub-agents looked exactly like one
+   * that had fanned out to none. Counted from the same state the panel renders
+   * (`agents[].threads`, `tasksByAgent`), never re-derived, so the badge and
+   * the list it points at cannot disagree.
+   *
+   * Only the LIVE half is counted: a finished delegate and a completed task are
+   * history, and a counter that included them would climb all turn and never
+   * come down, which is a total rather than a "current".
+   */
+  const sidePanelLive = useMemo(() => {
+    let subagents = 0;
+    for (const agent of agents) {
+      for (const thread of agent.threads) {
+        if (thread.kind === 'subagent' && thread.status === 'running') {
+          subagents += 1;
+        }
+      }
+    }
+    let tasks = 0;
+    for (const rows of tasksByAgent.values()) {
+      for (const task of rows) {
+        // `null` is a status the CLI named and the daemon did not recognise —
+        // counted as outstanding, since the one thing it certainly is not is
+        // finished.
+        if (task.status !== 'completed') {
+          tasks += 1;
+        }
+      }
+    }
+    return { subagents, tasks };
+  }, [agents, tasksByAgent]);
+
+  /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
    * launched it — an ID rather than the block itself, so the panel follows the
    * LIVE fold as the delegate keeps working instead of freezing the snapshot
@@ -3468,6 +3526,12 @@ export function Chats({
     [workflowNames],
   );
 
+  /** What this run said as it settled, from the live channel — see the map. */
+  const settleSummaryOf = useCallback(
+    (run: ChatRun): string | null => settleSummaries.get(run.id) ?? null,
+    [settleSummaries],
+  );
+
   /**
    * Tell the user, outside the app, when a thread stops to ask something or
    * ends — reading the SAME status the sidebar badge shows, so a banner and the
@@ -3479,6 +3543,7 @@ export function Chats({
     statusOf: sidebarRunStatus,
     labelOf: notificationLabel,
     awaitingOf: runAwaiting,
+    summaryOf: settleSummaryOf,
     activeRunId,
   });
 
@@ -3980,6 +4045,8 @@ export function Chats({
                         turnCount={threadWorked.turns}
                         sidePanelOpen={agentsPanelOpen}
                         onToggleSidePanel={toggleAgentsPanel}
+                        runningSubagents={sidePanelLive.subagents}
+                        openTasks={sidePanelLive.tasks}
                       />
                     ) : null}
 
@@ -4157,7 +4224,13 @@ export function Chats({
                       />
                     ) : null}
 
-                    <div className="flex flex-col gap-2 border-t border-border p-3">
+                    {/* No rule above the composer. The card below already has
+                        its own border and its own shadow, so the hairline was
+                        a second edge a few pixels above the first — it read as
+                        a stray line across the pane rather than as the
+                        boundary of anything. The transcript's own scroll and
+                        the card's elevation are what separate the two. */}
+                    <div className="flex flex-col gap-2 p-3">
                       <QueuedStrip
                         messages={queued}
                         steerUnavailableReason={steerUnavailableReason}
@@ -4446,6 +4519,14 @@ export function Chats({
                                           activeRun.agentKind ?? '',
                                         ) ?? null)
                                   }
+                                  // Whether the readout has to keep itself
+                                  // current. The BADGE reading, not the run
+                                  // row — the same authority the header and
+                                  // the sidebar use, so a panel that keeps
+                                  // re-reading and a chat that says it is
+                                  // running cannot disagree about whether
+                                  // anything is happening.
+                                  live={activeRunStatus === 'running'}
                                   // Opens UPWARD. This row sits at the bottom of the
                                   // composer, inside the app shell's
                                   // `overflow-hidden` main — roughly 20px below a

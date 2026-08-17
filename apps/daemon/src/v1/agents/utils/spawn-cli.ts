@@ -497,6 +497,15 @@ interface TurnState {
    */
   openWork: Set<string>;
   /**
+   * The DELEGATES among {@link openWork}, as work-id → launching tool call.
+   *
+   * Kept because only the `started` line says what a unit IS and which call
+   * produced it, while the settle may carry neither — so the pairing has to be
+   * remembered here to turn a settle back into "that delegate has finished".
+   * Everything else about background work stays identity-only, as it was.
+   */
+  delegateWork: Map<string, string>;
+  /**
    * The terminal event held back because {@link openWork} was not empty, to be
    * emitted when the last unit reports (or when the silence deadline gives up
    * on them).
@@ -936,6 +945,59 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   /**
+   * Tell the transcript that a DELEGATE is still out, and later that it is not.
+   *
+   * The transcript reads a delegate as finished when its launching tool call
+   * returns, which is right for one the agent waits for and wrong for one it
+   * does not: a fire-and-forget delegate's `Task` call returns in under a
+   * second while the delegate runs on (measured on claude 2.1.232 — three of
+   * them still working 50s after their blocks had closed, so the app reported
+   * none working while three were). This is the only signal that can correct
+   * it, so it is forwarded as a `subagent_info` announcement — the row that
+   * already carries facts ABOUT a delegate, keyed by the same launching call.
+   *
+   * Only for units the adapter named as delegates: the same channel carries
+   * shell commands and a delegate's own sub-work, and announcing those would
+   * put phantom sub-agents in the transcript.
+   */
+  const announceDelegateWork = (
+    turn: TurnState,
+    event: Extract<AgentEvent, { type: 'background_work' }>,
+  ): void => {
+    const toolCallId =
+      event.phase === 'started'
+        ? event.unit === 'agent'
+          ? event.toolCallId
+          : null
+        : // A settle names neither the kind nor (on one of the two channels) the
+          // call, so it is matched against what the `started` recorded. A unit
+          // that was never announced as a delegate is silently not one.
+          (turn.delegateWork.get(event.id) ?? null);
+    if (toolCallId === null) {
+      return;
+    }
+    if (event.phase === 'started') {
+      turn.delegateWork.set(event.id, toolCallId);
+    } else {
+      turn.delegateWork.delete(event.id);
+    }
+    turn.options.onEvent({
+      type: 'subagent_info',
+      id: toolCallId,
+      // Nulls throughout: this announcement claims ONE fact and must not
+      // overwrite a label, prompt or duration a richer announcement gave — the
+      // consumer merges by preferring the last NON-null per field.
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: event.phase === 'started',
+    });
+  };
+
+  /**
    * Deliver an event to the turn it belongs to; see {@link handleOrphanEvent}
    * for what happens when there is no turn to deliver it to.
    */
@@ -956,9 +1018,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // for good (see {@link TurnState.outstanding}).
       turn.outstanding.set(event.id, event);
     }
-    // Turn plumbing, consumed here and never forwarded: it says whether the
-    // turn's work is over, which is this function's business and no consumer's.
+    // Turn plumbing: it says whether the turn's work is over, which is this
+    // function's business and no consumer's. The ONE thing that IS forwarded is
+    // a delegate's liveness — see `announceDelegateWork` — because the
+    // transcript's own end-of-delegate signal (the launching call returning)
+    // fires instantly for one nobody is waiting on.
     if (event.type === 'background_work') {
+      announceDelegateWork(turn, event);
       if (event.phase === 'started') {
         turn.openWork.add(event.id);
       } else if (turn.openWork.delete(event.id) && turn.openWork.size === 0) {
@@ -1378,6 +1444,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       silenceTimer: null,
       outstanding: new Map(),
       openWork: new Set(),
+      delegateWork: new Map(),
       deferredTerminal: null,
     };
     current = turn;

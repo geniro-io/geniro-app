@@ -158,6 +158,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           model: event.model,
           durationMs: event.durationMs,
           stepsUnavailableReason: event.stepsUnavailableReason,
+          backgroundOpen: event.backgroundOpen,
         },
       };
     case 'task_list':

@@ -169,6 +169,19 @@ export function registerIpc(
     });
   });
 
+  // No input, and the SENDER's own window for the same reason `notify` uses it:
+  // a test banner's click must raise the window that asked for it.
+  ipcMain.handle(IPC.testNotification, (event) =>
+    notifications.testPost({
+      window: BrowserWindow.fromWebContents(event.sender),
+      onActivate: (runId) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(IPC.onNotificationActivated, runId);
+        }
+      },
+    }),
+  );
+
   ipcMain.handle(IPC.completeOnboarding, async (event, input: unknown) => {
     const { cliPaths } = onboardingInputSchema.parse(input);
     // Merge over existing overrides so a re-run of onboarding never clears a

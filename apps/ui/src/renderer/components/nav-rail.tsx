@@ -8,7 +8,7 @@ import {
   Terminal,
   Workflow,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { Logo } from './logo';
 import { StatusDot } from './status-dot';
@@ -73,8 +73,9 @@ function NavButton({
 /**
  * The app's persistent left navigation. The single home for switching between
  * the top-level surfaces (Chats, Graphs, Stats, Settings) plus the Geniro mark and the
- * live daemon-connection indicator. Collapses to an icon-only rail (state kept
- * for the session); collapsed items expose their label as a tooltip + aria-label.
+ * live daemon-connection indicator. Collapses to an icon-only rail — REMEMBERED
+ * across launches in `settings.json` — and collapsed items expose their label
+ * as a tooltip + aria-label.
  */
 export function NavRail({
   view,
@@ -93,6 +94,45 @@ export function NavRail({
   onToggleDebug: () => void;
 }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false);
+  // Whether the stored choice has been applied yet. Until it has, the width is
+  // NOT animated: the settings read resolves a frame or two after mount, and an
+  // animated correction would show every launch sliding the rail shut — which
+  // looks like the app forgetting and then remembering, rather than opening the
+  // way it was left.
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.geniro
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+        setCollapsed(settings.sidebarCollapsed);
+        setHydrated(true);
+      })
+      // Swallowed to the DEFAULT, not to a broken rail: an unreadable settings
+      // file must cost the remembered width and nothing else.
+      .catch(() => {
+        if (!cancelled) {
+          setHydrated(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleCollapsed = useCallback((): void => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      // Fire-and-forget: the rail has already moved, and a settings write that
+      // fails must not undo the gesture the user just made.
+      void window.geniro.updateSettings({ sidebarCollapsed: next });
+      return next;
+    });
+  }, []);
 
   const statusLabel = connected
     ? `connected${daemonVersion ? ` · v${daemonVersion}` : ''}`
@@ -101,7 +141,8 @@ export function NavRail({
   return (
     <nav
       className={cn(
-        'flex shrink-0 flex-col gap-1 border-r border-sidebar-border bg-sidebar p-3 transition-[width]',
+        'flex shrink-0 flex-col gap-1 border-r border-sidebar-border bg-sidebar p-3',
+        hydrated && 'transition-[width]',
         collapsed ? 'w-14' : 'w-[220px]',
       )}>
       <div
@@ -114,7 +155,7 @@ export function NavRail({
           type="button"
           aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
           title={collapsed ? 'Expand menu' : 'Collapse menu'}
-          onClick={() => setCollapsed((prev) => !prev)}
+          onClick={toggleCollapsed}
           className="flex size-7 items-center justify-center rounded-md text-sidebar-foreground/70 outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50">
           {collapsed ? (
             <PanelLeftOpen aria-hidden="true" className="size-4" />
@@ -150,7 +191,12 @@ export function NavRail({
             'mt-2 flex items-center border-t border-sidebar-border pt-3 text-xs text-muted-foreground',
             collapsed ? 'justify-center' : 'gap-2 px-3',
           )}>
-          <StatusDot tone={connected ? 'ok' : 'bad'} />
+          {/* Collapsed, the dot is the only thing left on this row beside the
+              debug trigger — a bare coloured pip with nothing to label it,
+              which reads as decoration rather than as status. The row's own
+              `title` still carries the state in words, and the connection
+              banner is what actually announces a drop. */}
+          {collapsed ? null : <StatusDot tone={connected ? 'ok' : 'bad'} />}
           {collapsed ? null : statusLabel}
           {/* The debug drawer's trigger, deliberately HERE. This row is
               already where the eye goes when something is wrong — it is the

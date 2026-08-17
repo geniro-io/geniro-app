@@ -7,7 +7,8 @@ import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { UsageEventDao } from '../dao/usage-event.dao';
-import type { UsageEventInput } from '../stats.types';
+import type { UsageEventInput, UsageRecordedEvent } from '../stats.types';
+import { UsageEventBus } from './usage-events.bus';
 import { UsageRecorderService } from './usage-recorder.service';
 
 /**
@@ -18,6 +19,9 @@ import { UsageRecorderService } from './usage-recorder.service';
  */
 describe('UsageRecorderService', () => {
   let bus: AgentEventBus;
+  let usageBus: UsageEventBus;
+  /** What the ledger bus announced — the live Stats page's only cue. */
+  let announced: UsageRecordedEvent[];
   let recorded: UsageEventInput[];
   let recordOnce: ReturnType<typeof vi.fn>;
   let run: {
@@ -62,12 +66,16 @@ describe('UsageRecorderService', () => {
       { getById: async () => run } as unknown as RunDao,
       { getByRunNode: async () => nodeState } as unknown as NodeStateDao,
       { recordOnce } as unknown as UsageEventDao,
+      usageBus,
     );
     service.onModuleInit();
   }
 
   beforeEach(() => {
     bus = new AgentEventBus();
+    usageBus = new UsageEventBus();
+    announced = [];
+    usageBus.all().subscribe((event) => announced.push(event));
     recorded = [];
     recordOnce = vi.fn(async (row: UsageEventInput) => {
       recorded.push(row);
@@ -99,6 +107,27 @@ describe('UsageRecorderService', () => {
       durationMs: 8_000,
       apiMs: 6_500,
     });
+  });
+
+  it('announces a NEWLY recorded turn, and says nothing for one already held', async () => {
+    start();
+
+    bus.publish({ runId: 'run-a', item: usageItem() });
+
+    await vi.waitFor(() => expect(announced).toHaveLength(1));
+    expect(announced[0]).toEqual({
+      runId: 'run-a',
+      nodeId: null,
+      occurredAt: '2026-08-14T09:30:00.000Z',
+    });
+
+    // A turn the ledger already holds moves no total, so an open Stats page
+    // must not be told to re-read for it.
+    recordOnce.mockResolvedValueOnce(false);
+    bus.publish({ runId: 'run-a', item: usageItem({ seq: 5 }) });
+
+    await vi.waitFor(() => expect(recordOnce).toHaveBeenCalledTimes(2));
+    expect(announced).toHaveLength(1);
   });
 
   it('stamps the turn with the ITEM’s timestamp, not the moment it was recorded', async () => {

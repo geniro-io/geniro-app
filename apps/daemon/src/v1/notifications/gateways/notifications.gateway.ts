@@ -22,6 +22,7 @@ import {
   extractStringField,
 } from '../../agents/utils/ws-payload';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 
 /**
@@ -118,6 +119,7 @@ export class NotificationsGateway
   private deltaSubscription?: Subscription;
   private statusSubscription?: Subscription;
   private debugSubscription?: Subscription;
+  private usageSubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
    *
@@ -134,6 +136,7 @@ export class NotificationsGateway
     private readonly approvals: ApprovalRegistry,
     private readonly presence: WsPresenceService,
     private readonly debugLog: DebugLogService,
+    private readonly usage: UsageEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -187,6 +190,25 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`run status bus errored: ${String(err)}`),
     });
+    // A recorded turn goes to EVERY client, like `run_status` and for the
+    // mirror-image reason: the page that cares is Stats, which belongs to no
+    // run's room — it is about all of them at once. It is a handful of bytes
+    // per finished turn, and without it an open Stats page kept showing the
+    // totals it was opened on while the agent went on spending. Isolated like
+    // its neighbours, so a throw here cannot take transcript delivery with it.
+    this.usageSubscription = this.usage.all().subscribe({
+      next: (event) => {
+        try {
+          server.emit('usage_recorded', event);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast usage_recorded for ${event.runId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`usage event bus errored: ${String(err)}`),
+    });
     // The debug log goes to the DEBUG_ROOM, not to every client — the one
     // stream here that nobody should receive by default. It carries the raw
     // agent conversation when that channel is on, at thousands of lines a
@@ -218,6 +240,7 @@ export class NotificationsGateway
     this.deltaSubscription?.unsubscribe();
     this.statusSubscription?.unsubscribe();
     this.debugSubscription?.unsubscribe();
+    this.usageSubscription?.unsubscribe();
   }
 
   /**

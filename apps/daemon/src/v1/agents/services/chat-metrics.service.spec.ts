@@ -50,6 +50,13 @@ function build(opts: {
   breakdown?: AgentContextUsage | null;
   breakdownUnavailableReason?: string | null;
   readContextUsage?: () => Promise<AgentContextUsage | null>;
+  /**
+   * What the run holds to be asked THROUGH. Defaults to a recorded session id,
+   * which is the shape every existing case was written against; `null` on both
+   * is the chat with nothing to ask at all.
+   */
+  agentSessionId?: string | null;
+  liveSession?: unknown;
 }) {
   const readContextUsage =
     opts.readContextUsage ??
@@ -71,9 +78,13 @@ function build(opts: {
       turnCompletePayloads: () => Promise.resolve(opts.payloads ?? []),
     } as unknown as ItemDao,
     {
-      getByRunNode: () => Promise.resolve({ agentSessionId: 'sess-1' }),
+      getByRunNode: () =>
+        Promise.resolve({
+          agentSessionId:
+            'agentSessionId' in opts ? opts.agentSessionId : 'sess-1',
+        }),
     } as unknown as NodeStateDao,
-    { peek: () => null } as unknown as AgentSessionRegistry,
+    { peek: () => opts.liveSession ?? null } as unknown as AgentSessionRegistry,
     {
       for: () =>
         ({
@@ -156,12 +167,47 @@ describe('ChatMetricsService', () => {
   });
 
   it('tells the user how to get one back when the chat holds no process', async () => {
-    const { service } = build({ breakdown: null });
+    // NOTHING to ask through: no live process and no recorded session id.
+    const { service, readContextUsage } = build({
+      breakdown: null,
+      agentSessionId: null,
+    });
 
     const metrics = await service.read('run-1');
 
     expect(metrics.context).toBeNull();
     expect(metrics.breakdownReason).toContain('send a message');
+    // And it was not asked, because there was nobody to ask.
+    expect(readContextUsage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT tell the user to send a message when the agent was there and stayed silent', async () => {
+    // The reported shape: an agent mid-turn whose context request did not come
+    // back. "Send a message to take a fresh reading" is the cure for the case
+    // above and a red herring here — the channel exists, so looking again is
+    // what produces a reading, and a message costs the user a turn for nothing.
+    const { service, readContextUsage } = build({
+      breakdown: null,
+      liveSession: { ask: () => Promise.resolve(null) },
+    });
+
+    const metrics = await service.read('run-1');
+
+    expect(readContextUsage).toHaveBeenCalled();
+    expect(metrics.context).toBeNull();
+    expect(metrics.breakdownReason).not.toContain('send a message');
+    expect(metrics.breakdownReason).toContain('did not answer');
+  });
+
+  it('reads a THROWN live reading as silence, not as an absent agent', async () => {
+    const { service } = build({
+      readContextUsage: () => Promise.reject(new Error('stdin gone')),
+      liveSession: { ask: () => Promise.reject(new Error('stdin gone')) },
+    });
+
+    const metrics = await service.read('run-1');
+
+    expect(metrics.breakdownReason).toContain('did not answer');
   });
 
   it('answers the totals even when the breakdown could not be taken', async () => {

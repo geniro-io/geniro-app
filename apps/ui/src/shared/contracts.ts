@@ -180,20 +180,55 @@ export function resolveDaemonInspect(
 export const DAEMON_INSPECT_PORT = 9229;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// App updates (GitHub Releases version check — the ad-hoc build reports a newer
-// release but does not self-install; the user updates via brew / the script)
+// App updates (GitHub Releases → download → checksum → swap the bundle in
+// place; see main/update-service.ts and main/update-installer.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Outcome of an app-update check. `dev` = unpackaged launch, checks disabled;
- * `available` carries the update command in `message` (Geniro notifies but does
- * not self-update — see main/updater.ts).
+ * Where the app is in noticing, fetching and applying an update.
+ *
+ * One phase list for both surfaces that show it — the banner over the views and
+ * the Settings section — because they are two views of one process and a second
+ * vocabulary is where the two would start disagreeing about what is happening.
+ *
+ * `ready` is the brief window between a swapped bundle and the relaunch: the
+ * update is already ON DISK there, so a failure after it is not a failed update.
  */
-export interface UpdateCheckResult {
-  status: 'dev' | 'up-to-date' | 'available' | 'error';
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'downloading'
+  | 'installing'
+  | 'ready'
+  | 'error';
+
+/** The whole of what main knows about updating, pushed on every change. */
+export interface UpdateState {
+  phase: UpdatePhase;
+  /** The version being offered/fetched/installed; null when there is none. */
   version: string | null;
+  /** 0–1 while `downloading`, null in every other phase. */
+  progress: number | null;
+  /** One line for the user: the failure, or what is happening right now. */
   message: string | null;
+  /** The running app's version, so a screen can state it without a second call. */
+  currentVersion: string;
+  /**
+   * Whether THIS install can replace itself.
+   *
+   * False for an unpackaged launch and for a bundle the user cannot write (a
+   * copy owned by another account, a read-only mount, a translocated quarantine
+   * copy). The surfaces read it to decide between an "Update now" button and
+   * naming {@link UPDATE_COMMAND} — an update button that cannot work is worse
+   * than a sentence saying which command does.
+   */
+  canInstall: boolean;
 }
+
+/** The one command that updates an install this app cannot replace itself. */
+export const UPDATE_COMMAND = 'brew upgrade --cask geniro';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // System notifications (a banner outside the app, for a thread nobody is
@@ -350,8 +385,25 @@ export interface GeniroApi {
   pickWorkflowImport(): Promise<string | null>;
   /** Open a native save dialog for a workflow export; target path or null. */
   pickWorkflowExport(defaultName: string): Promise<string | null>;
-  /** Check the GitHub Releases feed for an app update (no-op in dev). */
-  checkForUpdates(): Promise<UpdateCheckResult>;
+  /** The current update state, for a screen that just mounted. */
+  getUpdateState(): Promise<UpdateState>;
+  /**
+   * Check the GitHub Releases feed NOW, resolving with the resulting state.
+   *
+   * The same check the launch and the periodic timer run — a manual press is
+   * not a second code path, it only skips the wait.
+   */
+  checkForUpdates(): Promise<UpdateState>;
+  /**
+   * Download, verify and swap in the available update, then relaunch.
+   *
+   * Resolves with the state at the END of the attempt: `error` when it could
+   * not be applied, otherwise `ready` — and by then the app is already on its
+   * way out, so nothing that resolves after it will be seen.
+   */
+  installUpdate(): Promise<UpdateState>;
+  /** Subscribe to update-state changes (check progress, download progress). */
+  onUpdateState(listener: (state: UpdateState) => void): () => void;
   /** Read a folder's git state (repo? branch? branches? dirty?). */
   getGitInfo(dir: string): Promise<GitInfo>;
   /**
@@ -430,7 +482,10 @@ export const IPC = {
   completeOnboarding: 'geniro:completeOnboarding',
   pickWorkflowImport: 'geniro:pickWorkflowImport',
   pickWorkflowExport: 'geniro:pickWorkflowExport',
+  getUpdateState: 'geniro:getUpdateState',
   checkForUpdates: 'geniro:checkForUpdates',
+  installUpdate: 'geniro:installUpdate',
+  onUpdateState: 'geniro:onUpdateState',
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',
   switchBranch: 'geniro:switchBranch',

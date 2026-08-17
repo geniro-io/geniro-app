@@ -117,11 +117,13 @@ jobs:
           body_path: CHANGES.md
           generate_release_notes: false
 
-  # Build the ad-hoc macOS app (no Apple Developer ID) and attach the .dmg + .zip
-  # to the release, so it can be installed via Homebrew or the install script.
-  # This is NOT signed/notarized — the cask/install script strip the quarantine
-  # bit so the ad-hoc app launches. The app never silently self-updates; it only
-  # reports newer releases and points at `brew upgrade` / the install script.
+  # Build the ad-hoc macOS app (no Apple Developer ID) and attach the .dmg,
+  # .zip and SHA256SUMS.txt to the release, so it can be installed via Homebrew
+  # or the install script. This is NOT signed/notarized — the cask/install
+  # script strip the quarantine bit so the ad-hoc app launches. The app updates
+  # ITSELF from these assets (download → checksum → swap the bundle → relaunch),
+  # which is why the checksum file is not optional: with no code signature it is
+  # the only integrity check between this build and an executing app.
   build-app:
     runs-on: macos-14 # arm64 runner — the only published arch
     name: Build & attach macOS app
@@ -167,8 +169,31 @@ jobs:
 
       - name: Build macOS app (ad-hoc)
         # build-mac.mjs always produces an ad-hoc (unsigned) build with no
-        # publish feed — the app reports updates and points at brew/curl.
+        # publish feed — Squirrel.Mac cannot validate an ad-hoc signature, so
+        # the app applies updates itself (see apps/ui/src/main/updater.ts).
         run: pnpm --filter @geniro/ui build:mac
+
+      # The integrity check for a build Gatekeeper validates nothing about.
+      # BOTH consumers require it: the in-app updater REFUSES to install a
+      # release that publishes no SHA256SUMS.txt, and install.sh degrades to
+      # TLS-only with a warning without one.
+      - name: Publish the artifact checksums
+        id: sha
+        working-directory: release/dist
+        env:
+          V: ${{ steps.tag.outputs.version }}
+        run: |
+          shasum -a 256 \
+            "Geniro-${V}-arm64.dmg" \
+            "Geniro-${V}-arm64-mac.zip" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          # The zip's digest again on its own, for the Homebrew cask stanza.
+          SHA="$(awk -v f="Geniro-${V}-arm64-mac.zip" '$2 == f || $2 == "*" f {print $1}' SHA256SUMS.txt)"
+          if [[ -z "$SHA" ]]; then
+            echo "error: no digest for the macOS zip in SHA256SUMS.txt" >&2
+            exit 1
+          fi
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Attach artifacts to the release
         env:
@@ -178,21 +203,22 @@ jobs:
           gh release upload "v${V}" \
             "release/dist/Geniro-${V}-arm64.dmg" \
             "release/dist/Geniro-${V}-arm64-mac.zip" \
+            "release/dist/SHA256SUMS.txt" \
             --clobber
 
-      - name: Compute the zip sha256 (for the Homebrew cask)
-        id: sha
-        env:
-          V: ${{ steps.tag.outputs.version }}
-        run: |
-          SHA="$(shasum -a 256 "release/dist/Geniro-${V}-arm64-mac.zip" | awk '{print $1}')"
-          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
-
   # Update the Homebrew cask in the tap repo. Opt-in: gated on the repo variable
-  # HOMEBREW_TAP_REPO (e.g. "geniro-io/homebrew-tap"); until it and the
-  # HOMEBREW_TAP_TOKEN secret (a PAT with write to that repo — GITHUB_TOKEN can't
-  # push cross-repo) are set, this job is skipped and the release still ships the
-  # .dmg/.zip for the install script.
+  # HOMEBREW_TAP_REPO (e.g. "geniro-io/homebrew-tap") ALONE — with it unset the
+  # job is skipped and the release still ships the .dmg/.zip for the install
+  # script.
+  #
+  # It also needs the HOMEBREW_TAP_TOKEN secret: a PAT with write to that repo,
+  # because GITHUB_TOKEN cannot push cross-repo. That one is deliberately NOT in
+  # the `if` — a missing or expired token FAILS the job loudly rather than
+  # skipping it silently. Measured 2026-08-17: the PAT had gone bad on
+  # 2026-08-03, every run since died here on `Bad credentials`, and the cask sat
+  # at 1.22.0 while 22 further releases shipped — nobody noticed for two weeks
+  # even WITH the red job, so a green skip would have hidden it for good. The
+  # loud failure is the only signal this has.
   bump-cask:
     runs-on: ubuntu-22.04
     name: Bump Homebrew cask
@@ -223,7 +249,20 @@ jobs:
             homepage "https://github.com/geniro-io/geniro-app"
 
             depends_on arch: :arm64
-            depends_on macos: ">= :sonoma"
+            # A bare symbol, not ">= :sonoma": Homebrew deprecated the string
+            # comparison form and the bare symbol already means "this version or
+            # newer", so the requirement is unchanged. Observed live on
+            # 2026-08-17 — every \`brew\` command touching this cask printed
+            # "Calling string comparison format for \`depends_on macos:\` is
+            # deprecated", loudly enough to bury the output of \`brew outdated\`.
+            depends_on macos: :sonoma
+
+            # The app replaces its own bundle in place, so the version on disk
+            # can be ahead of the cask's. Without this, \`brew upgrade\` would
+            # keep reinstalling over a self-updated app and report it outdated
+            # forever; with it, brew leaves an app that updates itself alone
+            # (\`--greedy\` still forces the reinstall).
+            auto_updates true
 
             app "Geniro.app"
 

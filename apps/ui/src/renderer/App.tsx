@@ -19,6 +19,8 @@ import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
+import { UpdateBanner, updateBannerVisible } from './updates/update-banner';
+import { useUpdateState } from './updates/use-update-state';
 
 // Code-split the conditionally-rendered views: Graphs drags @xyflow/react +
 // elkjs and Settings its own tree — eager imports would put both in the
@@ -68,6 +70,16 @@ export function App(): React.JSX.Element {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+  /**
+   * The offer the user has waved away, and whether they engaged with one.
+   *
+   * Per-launch and deliberately not persisted: an update declined on Tuesday
+   * should still be offered on Wednesday — the whole point of the strip is that
+   * a version behind is a state worth fixing, not a preference.
+   */
+  const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null);
+  const [updateEngaged, setUpdateEngaged] = useState(false);
+  const update = useUpdateState();
   const clientRef = useRef<DaemonClient | null>(null);
   // One set of clients per launch handle. Built here rather than inside the
   // panel so a toggle does not construct five API objects, and so the UI error
@@ -245,6 +257,24 @@ export function App(): React.JSX.Element {
             onRetry={() => void connectDaemon()}
           />
         )}
+        {/* Beside the connection strip and for the same reason — it is about
+            the app, not about whichever view is open — but BELOW it: a daemon
+            that is not answering is the more urgent of the two, and an update
+            offer must not push it off the top of the pane. */}
+        {update.state &&
+        updateBannerVisible(update.state, dismissedUpdate, updateEngaged) ? (
+          <UpdateBanner
+            state={update.state}
+            onInstall={() => {
+              setUpdateEngaged(true);
+              void update.install();
+            }}
+            onDismiss={() => {
+              setUpdateEngaged(false);
+              setDismissedUpdate(update.state?.version ?? null);
+            }}
+          />
+        ) : null}
         {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Graphs. */}
         <div className={cn('min-h-0 flex-1', view !== 'chats' && 'hidden')}>

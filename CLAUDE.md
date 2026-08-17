@@ -14,7 +14,7 @@ The app is an **Electron UI** that also supervises a **bundled local daemon** ov
 
 **Tech stack**: TypeScript 6.x, Node.js 24+, NestJS 11 (Fastify), MikroORM (`@mikro-orm/sqlite` / better-sqlite3), React 19 + Tailwind CSS v4 (electron-vite renderer), pnpm 11 + Turbo 2.10 monorepo, swc (daemon + packages) / electron-vite (UI), Vitest 4, ESLint 10 + Prettier 3.
 
-**Status**: **All four v1 milestones are built** — M1 (UI + infrastructure), M2 (single-agent chat via CLI adapters), M3 (workflow graphs + DAG fan-out execution), M4 (CLI handoff, Settings, update notifier, macOS packaging). The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing. (`.geniro/planning/` is local working state, gitignored — not committed.)
+**Status**: **All four v1 milestones are built** — M1 (UI + infrastructure), M2 (single-agent chat via CLI adapters), M3 (workflow graphs + DAG fan-out execution), M4 (CLI handoff, Settings, app self-update, macOS packaging). The plan and milestones live in `.geniro/planning/geniro-app-v1/` (`spec.md` + `milestone-1..4.md`) — this is the authoritative source for scope and sequencing. (`.geniro/planning/` is local working state, gitignored — not committed.)
 
 **Agents (M2+)** are driven **headlessly via their CLIs only** — `claude -p`, and `cursor-agent` over its first-party **ACP** server (`cursor-agent acp`). No SDKs, no LangGraph host-side, no Python.
 

@@ -309,6 +309,7 @@ describe('subagentThreadsByAgent', () => {
       durationMs: null,
       lastRowAt: null,
       stepsUnavailableReason: null,
+      backgroundOpen: null,
       closed: false,
       entries: [],
       ...over,

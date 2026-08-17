@@ -388,6 +388,7 @@ describe('mapEventToItem — the sub-agent declaration', () => {
         model: null,
         durationMs: null,
         stepsUnavailableReason: 'cursor-agent reports the delegation only',
+        backgroundOpen: null,
       }),
     ).toEqual({
       kind: 'subagent_info',
@@ -400,6 +401,7 @@ describe('mapEventToItem — the sub-agent declaration', () => {
         model: null,
         durationMs: null,
         stepsUnavailableReason: 'cursor-agent reports the delegation only',
+        backgroundOpen: null,
       },
     });
   });
@@ -419,6 +421,7 @@ describe('mapEventToItem — the sub-agent declaration', () => {
       model: 'claude-opus-5',
       durationMs: 13075,
       stepsUnavailableReason: null,
+      backgroundOpen: null,
     });
     expect(item?.payload).not.toHaveProperty('parentToolUseId');
     expect(item?.payload.id).toBe('toolu_018bc');

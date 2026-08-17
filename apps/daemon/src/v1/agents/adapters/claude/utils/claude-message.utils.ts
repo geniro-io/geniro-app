@@ -23,6 +23,7 @@ import {
   CLAUDE_TASK_NOTIFICATION_SUBTYPE,
   CLAUDE_TASK_STARTED_SUBTYPE,
   CLAUDE_TASK_TERMINAL_STATUSES,
+  CLAUDE_TASK_TYPE_AGENT,
   CLAUDE_TASK_UPDATED_SUBTYPE,
 } from '../claude.const';
 import {
@@ -319,7 +320,24 @@ function mapClaudeLine(
         const id = asString(root.task_id);
         return id === null
           ? []
-          : [{ type: 'background_work', id, phase: 'started' }];
+          : [
+              {
+                type: 'background_work',
+                id,
+                phase: 'started',
+                // `local_agent` is this CLI's word for a delegate; a `local_bash`
+                // on the same channel is the shell command one of them ran, and
+                // `owned_by_subagent` marks work a delegate started rather than
+                // work that IS one (probed 2026-08-17 on 2.1.232 — one turn
+                // produced both, from one Task call).
+                unit:
+                  asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
+                  root.owned_by_subagent !== true
+                    ? 'agent'
+                    : 'other',
+                toolCallId: asString(root.tool_use_id),
+              },
+            ];
       }
       if (
         asString(root.subtype) === CLAUDE_TASK_UPDATED_SUBTYPE ||
@@ -334,7 +352,19 @@ function mapClaudeLine(
         return id !== null &&
           status !== null &&
           CLAUDE_TASK_TERMINAL_STATUSES.has(status)
-          ? [{ type: 'background_work', id, phase: 'settled' }]
+          ? [
+              {
+                type: 'background_work',
+                id,
+                phase: 'settled',
+                // A settle says nothing about WHAT settled — `task_updated`
+                // carries only the id and a status patch — so the kind is not
+                // guessed here. The consumer remembers it from the `started`,
+                // which is the only line that states it.
+                unit: 'other',
+                toolCallId: asString(root.tool_use_id),
+              },
+            ]
           : [];
       }
       if (asString(root.subtype) === 'init') {

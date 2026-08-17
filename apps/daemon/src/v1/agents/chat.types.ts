@@ -592,6 +592,22 @@ export interface RunStatusEvent {
    */
   status: RunStatus | null;
   activity: string | null;
+  /**
+   * What the run has to SAY about a status it just reached — the agent's
+   * closing words, or a failure's own message. Absent on every announce that
+   * is not a settle.
+   *
+   * It exists for the client that is NOT looking at this chat: a system
+   * notification has to be able to say what happened, and the only other source
+   * — the run row's `lastMessage` — is enriched by list endpoints alone, so for
+   * a background thread it still holds the USER's message from before the turn.
+   * A banner reading back what you typed is worse than no banner.
+   *
+   * Untrimmed and unbounded here on purpose: what fits in a banner is the
+   * presenting side's decision, and truncating twice would leave the transcript
+   * and the notification disagreeing about the same sentence.
+   */
+  summary?: string;
 }
 
 /**

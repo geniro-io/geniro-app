@@ -526,6 +526,21 @@ type AgentEventBody =
        * delegate's own conversation is absent. Null for a CLI that streams it.
        */
       stepsUnavailableReason: string | null;
+      /**
+       * Whether this delegate is still working in the BACKGROUND — `true` while
+       * it is out, `false` once the CLI reports it done, `null` when nothing has
+       * been said either way.
+       *
+       * The three states are load-bearing, because the usual end-of-delegate
+       * signal is the launching tool call RETURNING, and a fire-and-forget
+       * delegate returns at once: measured on claude 2.1.232, a turn told not to
+       * wait got its `Task` result back in under a second while the delegate ran
+       * on for a further 50, so the transcript closed its block and the app
+       * reported no delegates working while three were. `null` therefore has to
+       * mean "no claim" rather than "not running" — every other producer emits
+       * nothing here and keeps the old reading, where the tool result is the end.
+       */
+      backgroundOpen: boolean | null;
     }
   | {
       /**
@@ -599,6 +614,32 @@ type AgentEventBody =
       /** The CLI's own id for this unit of work. */
       id: string;
       phase: 'started' | 'settled';
+      /**
+       * WHAT this unit is, when the CLI says — a delegate (`agent`) or anything
+       * else it runs in the background (a shell command, an indexing pass).
+       *
+       * It exists because the two need different treatment downstream and only
+       * the adapter can tell them apart: measured on claude 2.1.232, one turn's
+       * `task_started` lines carried `task_type: 'local_agent'` for the delegate
+       * AND `task_type: 'local_bash'` for the `sleep` that delegate then ran, on
+       * the same channel. Counting the second as a sub-agent would report two
+       * delegates where the user launched one.
+       *
+       * `'other'` is the safe default for a CLI that says nothing: it keeps the
+       * turn plumbing (which only cares about identity) and claims nothing about
+       * delegates.
+       */
+      unit: 'agent' | 'other';
+      /**
+       * The tool call that launched it, when the CLI ties one to it — which is
+       * what joins this unit to the sub-agent block already in the transcript,
+       * since that block is keyed by exactly that id.
+       *
+       * Null on a settle whose channel omits it; the correlation is then done by
+       * {@link id}, which is why `runCliSession` remembers the pair from the
+       * `started` rather than expecting both ends to carry it.
+       */
+      toolCallId: string | null;
     }
   | {
       /**

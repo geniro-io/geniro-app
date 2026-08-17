@@ -54,14 +54,17 @@ export class ChatMetricsService {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    const [context, payloads] = await Promise.all([
+    const [breakdown, payloads] = await Promise.all([
       this.readBreakdown(runId, run.agentKind, em),
       this.itemDao.turnCompletePayloads(runId, em),
     ]);
+    const context = breakdown.context;
     return {
       context,
       breakdownReason:
-        context === null ? this.breakdownReason(run.agentKind) : null,
+        context === null
+          ? this.breakdownReason(run.agentKind, breakdown.asked)
+          : null,
       // The rule every figure obeys — null until SOME turn reported it, so a
       // chat on a CLI that reports no usage reads as "not measured" and never
       // as "cost nothing" — lives once in `utils/usage-figures`, which the
@@ -73,7 +76,14 @@ export class ChatMetricsService {
   }
 
   /**
-   * Ask the run's live process, or answer null.
+   * Ask the run's live process, or answer null — and say whether there was
+   * anything to ask in the first place.
+   *
+   * The second half is what separates the two sentences the panel can show.
+   * Without it every empty reading was reported as "send a message to take a
+   * fresh reading", which is the cure for one cause and a red herring for the
+   * other: an agent that WAS there and did not answer in time gets asked again
+   * by simply looking again, and sending it a message fixes nothing.
    *
    * Never throws: a readout is not worth failing a request over, and the one
    * thing a caller could do about a failure — show the panel without a
@@ -83,34 +93,52 @@ export class ChatMetricsService {
     runId: string,
     agentKind: AgentKind | null,
     em: EntityManager,
-  ): Promise<ContextBreakdownWire | null> {
+  ): Promise<{ context: ContextBreakdownWire | null; asked: boolean }> {
     // Only the DECLARED reason short-circuits. `breakdownReason` also answers
     // for the run that simply has nothing to read right now, and testing THAT
     // here would mean never asking an adapter at all — the whole feature, off,
     // with a plausible sentence in its place.
     if (agentKind === null || this.declaredReason(agentKind) !== null) {
-      return null;
+      return { context: null, asked: false };
     }
+    // BOTH channels are offered and the adapter takes what it needs: claude
+    // answers from the live process, cursor from the session store it wrote
+    // to disk — which is why the id is fetched even when a process exists.
+    const live = this.sessions.peek(runId);
+    let sessionId: string | null = null;
     try {
-      // BOTH channels are offered and the adapter takes what it needs: claude
-      // answers from the live process, cursor from the session store it wrote
-      // to disk — which is why the id is fetched even when a process exists.
       const state = await this.nodeStateDao.getByRunNode(
         runId,
         SINGLE_AGENT_NODE,
         em,
       );
-      return await this.adapters.for(agentKind).readContextUsage({
-        live: this.sessions.peek(runId),
-        sessionId: state?.agentSessionId ?? null,
-      });
+      sessionId = state?.agentSessionId ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `context session lookup for run ${runId} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // Whether a channel EXISTED is decided here, before the ask — the reading
+    // failing is precisely the case the two sentences have to tell apart, so it
+    // cannot be inferred from the reading.
+    const asked = live !== null || sessionId !== null;
+    if (!asked) {
+      return { context: null, asked };
+    }
+    try {
+      const context = await this.adapters
+        .for(agentKind)
+        .readContextUsage({ live, sessionId });
+      return { context, asked };
     } catch (err) {
       this.logger.warn(
         `context breakdown for run ${runId} failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      return null;
+      return { context: null, asked };
     }
   }
 
@@ -123,14 +151,17 @@ export class ChatMetricsService {
    * Collapsing them into one blank space is how "why is there nothing here?"
    * gets asked.
    */
-  private breakdownReason(agentKind: AgentKind | null): string {
+  private breakdownReason(agentKind: AgentKind | null, asked: boolean): string {
     // A run row's `agentKind` is nullable, and a workflow run genuinely has
     // none — its nodes each name their own. There is nothing to ask, and no
     // adapter to ask for a sentence.
     if (agentKind === null) {
       return 'this run names no single agent, so there is no one context window to report';
     }
-    return this.declaredReason(agentKind) ?? NO_LIVE_PROCESS_REASON;
+    return (
+      this.declaredReason(agentKind) ??
+      (asked ? NO_ANSWER_REASON : NO_LIVE_PROCESS_REASON)
+    );
   }
 
   /**
@@ -157,3 +188,16 @@ export class ChatMetricsService {
  */
 const NO_LIVE_PROCESS_REASON =
   'the breakdown is read from the running agent — send a message in this chat to take a fresh reading';
+
+/**
+ * What the panel says when there WAS an agent to ask and the reading did not
+ * come back — a control request that timed out, or a reply that could not be
+ * read.
+ *
+ * A separate sentence because the cure is the opposite one: the channel is
+ * there, so looking again is what gets a reading, while the sentence above
+ * tells the user to send a message — advice that costs them a turn and fixes
+ * nothing here.
+ */
+const NO_ANSWER_REASON =
+  'the agent did not answer the context request in time — the reading is taken again while this stays open';

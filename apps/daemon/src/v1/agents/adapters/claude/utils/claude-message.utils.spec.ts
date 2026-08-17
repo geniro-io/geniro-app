@@ -1088,7 +1088,42 @@ describe('mapClaudeMessage — background tasks', () => {
         session_id: 's1',
       }),
     ).toEqual([
-      { type: 'background_work', id: 'ad83f0a35d8a3dfc9', phase: 'started' },
+      {
+        type: 'background_work',
+        id: 'ad83f0a35d8a3dfc9',
+        phase: 'started',
+        // A DELEGATE, and the call that launched it — what lets the transcript
+        // keep that sub-agent's block open past the instant return.
+        unit: 'agent',
+        toolCallId: 'toolu_01LWpVdfmqPnsMuftxq7YiAA',
+      },
+    ]);
+  });
+
+  it('does not call a delegate’s own shell command a delegate', () => {
+    // Probed 2026-08-17 on 2.1.232: ONE Task call produced two `task_started`
+    // lines — the delegate, and the `sleep` that delegate then ran. Both are
+    // background work the turn must outlive; reading the second as a sub-agent
+    // would report two where the user launched one.
+    expect(
+      mapClaudeMessage({
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'bx0yxbert',
+        owned_by_subagent: true,
+        tool_use_id: 'toolu_01JGZBzkWjmavxf5ztmdNu83',
+        description: 'Sleep for 20 seconds',
+        task_type: 'local_bash',
+        session_id: 's1',
+      }),
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'bx0yxbert',
+        phase: 'started',
+        unit: 'other',
+        toolCallId: 'toolu_01JGZBzkWjmavxf5ztmdNu83',
+      },
     ]);
   });
 
@@ -1104,7 +1139,15 @@ describe('mapClaudeMessage — background tasks', () => {
         patch: { status: 'completed', end_time: 1786635753021 },
       }),
     ).toEqual([
-      { type: 'background_work', id: 'ad83f0a35d8a3dfc9', phase: 'settled' },
+      {
+        type: 'background_work',
+        id: 'ad83f0a35d8a3dfc9',
+        phase: 'settled',
+        // A settle states neither: the consumer matches it against what the
+        // 'started' recorded, which is the only line that says what a unit is.
+        unit: 'other',
+        toolCallId: null,
+      },
     ]);
     expect(
       mapClaudeMessage({
@@ -1114,7 +1157,17 @@ describe('mapClaudeMessage — background tasks', () => {
         status: 'stopped',
         tool_use_id: 'toolu_x',
       }),
-    ).toEqual([{ type: 'background_work', id: 'bblzv799n', phase: 'settled' }]);
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'bblzv799n',
+        phase: 'settled',
+        unit: 'other',
+        // This channel DOES name the call; the other does not, which is why the
+        // consumer never depends on either naming it.
+        toolCallId: 'toolu_x',
+      },
+    ]);
     expect(
       mapClaudeMessage({
         type: 'system',
@@ -1122,7 +1175,15 @@ describe('mapClaudeMessage — background tasks', () => {
         task_id: 'bblzv799n',
         patch: { status: 'killed', end_time: 1786635772095 },
       }),
-    ).toEqual([{ type: 'background_work', id: 'bblzv799n', phase: 'settled' }]);
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'bblzv799n',
+        phase: 'settled',
+        unit: 'other',
+        toolCallId: null,
+      },
+    ]);
   });
 
   it('leaves the work OPEN for a status it does not recognise', () => {

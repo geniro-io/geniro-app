@@ -1177,6 +1177,51 @@ describe('buildSubagentBlocks', () => {
     expect(JSON.stringify(topLevel)).not.toContain('reading the diff');
   });
 
+  it('keeps a fire-and-forget delegate RUNNING after its launching call returns', () => {
+    // The reported case, end to end. A delegate the agent does not wait for has
+    // its `Task` call answered in under a second ("started"), so `returned` is
+    // true while the delegate runs on for another minute — measured on claude
+    // 2.1.232 with three of them. Without the CLI's own lifecycle row the block
+    // reads `completed` and the header counts no delegates at all.
+    const entries = fold([
+      call('Task', 'task-bg', {
+        subagent_type: 'general-purpose',
+        description: 'Sleep 50 then report ok',
+      }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(block.returned).toBe(true);
+    expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('lets the same delegate finish when the CLI says it has', () => {
+    const entries = fold([
+      call('Task', 'task-bg', { description: 'Sleep 50 then report ok' }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: false }),
+    ]);
+
+    expect(subagentBlockStatus(onlyBlock(entries))).toBe('completed');
+  });
+
+  it('leaves a delegate that claims nothing reading exactly as before', () => {
+    // Every other CLI announces no lifecycle, so `null` must not become a
+    // third behaviour: the launching call returning is still the end.
+    const entries = fold([
+      call('Task', 'task-plain', { description: 'Review the diff' }),
+      item('subagent_info', { id: 'task-plain', label: 'Review the diff' }),
+      result('task-plain', 'done'),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(block.backgroundOpen).toBeNull();
+    expect(subagentBlockStatus(block)).toBe('completed');
+  });
+
   it('strips the launching Task pair out of the main tool group', () => {
     // The block IS the delegation's rendering. Left in the group, the same
     // fact was told twice — "Delegated to 1 subagent" directly above a card

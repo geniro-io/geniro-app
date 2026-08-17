@@ -26,6 +26,19 @@ export async function writeRunStatus(
   status: RunStatus,
   /** What the run is doing right now, for a badge nobody is looking at. */
   activity: string | null = null,
+  /**
+   * What the run has to SAY about this status — the agent's closing words, or
+   * the failure's own message.
+   *
+   * It rides the announcement because the client that needs it is the one NOT
+   * looking: a system notification about a background thread has to be able to
+   * say what happened, and the run row it would otherwise read from is only as
+   * fresh as the last list fetch — for a chat nobody has open, that is the
+   * user's own message from before the turn started.
+   *
+   * Null on every non-terminal write, where there is nothing to summarise.
+   */
+  summary: string | null = null,
 ): Promise<void> {
   await deps.runDao.updateById(runId, { status }, em);
   // `awaiting: null` on EVERY status write, which is the one place it can be
@@ -39,5 +52,11 @@ export async function writeRunStatus(
   // and saying so here is what keeps a `needs-input` badge from outliving the
   // turn it belonged to — the card is gone from the screen, and the badge would
   // have gone on claiming the user was the blocker.
-  deps.bus.publishRunStatus({ runId, status, activity, awaiting: null });
+  deps.bus.publishRunStatus({
+    runId,
+    status,
+    activity,
+    awaiting: null,
+    ...(summary === null ? {} : { summary }),
+  });
 }

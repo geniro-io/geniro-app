@@ -24,12 +24,23 @@ export function ContextPanel({
   metrics,
   loading,
   error,
+  live = false,
 }: {
   /** Null until the first fetch lands. */
   metrics: ChatMetricsDto | null;
   loading: boolean;
   /** Why the fetch failed, or null. */
   error: string | null;
+  /**
+   * Whether the agent is working right now.
+   *
+   * The thread's figures are summed from turns that have FINISHED, so a turn in
+   * flight contributes nothing to them — which read as `0 turns` under a live
+   * context reading while the agent was visibly working, and as an unchanged
+   * cost for as long as the turn lasted. The count is not faked here (a running
+   * turn's cost is genuinely unknown until the CLI reports it); it is NAMED.
+   */
+  live?: boolean;
 }): React.JSX.Element {
   return (
     <div className="flex flex-col gap-3 text-xs">
@@ -37,7 +48,7 @@ export function ContextPanel({
       {metrics && !metrics.context && metrics.breakdownReason ? (
         <p className="text-muted-foreground">{metrics.breakdownReason}</p>
       ) : null}
-      {metrics ? <Totals totals={metrics.totals} /> : null}
+      {metrics ? <Totals totals={metrics.totals} live={live} /> : null}
       {/* Kept BELOW whatever has already arrived rather than replacing it: a
           refetch on a panel the user is reading must not blank the figures
           they are mid-sentence about. */}
@@ -202,12 +213,26 @@ function Breakdown({
 
 function Totals({
   totals,
+  live,
 }: {
   totals: ChatMetricsDto['totals'];
+  live: boolean;
 }): React.JSX.Element {
   const parts = [
     totals.costUsd === null ? null : formatUsd(totals.costUsd),
-    `${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`,
+    // A turn in flight is STATED rather than counted, and it replaces the count
+    // outright while there is nothing to count — `0 turns` is the one reading
+    // that is both technically true and read by everyone as "this is broken",
+    // since it appears under a live window on a thread that is plainly working.
+    // Once a turn has finished the count leads and the running one trails it,
+    // so no figure is ever lost to the phrase.
+    totals.turns === 0
+      ? live
+        ? 'turn in progress'
+        : '0 turns'
+      : `${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}${
+          live ? ' · 1 in progress' : ''
+        }`,
     totals.workedMs === null
       ? null
       : `worked ${formatDuration(totals.workedMs)}`,

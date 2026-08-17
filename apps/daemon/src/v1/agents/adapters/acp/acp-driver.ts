@@ -1472,6 +1472,10 @@ export class AcpTurnDriver implements TurnDriver {
       ...facts,
       stepsUnavailableReason:
         this.options.delegate?.stepsUnavailableReason ?? null,
+      // This protocol reports no background lifecycle for a delegate, so it
+      // claims nothing about one: null leaves the transcript's own reading (the
+      // launching call returning) exactly as it was for every ACP agent.
+      backgroundOpen: null,
     };
   }
 

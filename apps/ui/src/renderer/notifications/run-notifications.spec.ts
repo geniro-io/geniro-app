@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+/** One settled trigger, for the body rules below. */
+const settled = (status: 'completed' | 'failed') =>
+  ({ runId: 'r1', kind: 'turn-end', status }) as const;
+
 import type { RunStatusKind } from '../chats/run-status';
 import { diffRunNotifications, notificationBody } from './run-notifications';
 
@@ -160,5 +164,70 @@ describe('notificationBody', () => {
         null,
       ),
     ).toBe('The turn finished.');
+  });
+
+  it('says what the agent actually said, not that something happened', () => {
+    // The reported complaint: a banner with no content in it. "The turn
+    // finished." is true of every turn that ever finished, so it tells the
+    // reader nothing the banner's existence had not already told them.
+    expect(
+      notificationBody(
+        settled('completed'),
+        null,
+        'Fixed the parser — 3 tests green.',
+      ),
+    ).toBe('Fixed the parser — 3 tests green.');
+  });
+
+  it('leads a failure with the failure’s own message', () => {
+    expect(
+      notificationBody(settled('failed'), null, 'claude exited with code 1'),
+    ).toBe('Failed: claude exited with code 1');
+  });
+
+  it('opens on the first line that reads as prose, not on a heading or a fence', () => {
+    // An agent's answer routinely opens with a heading or a code fence, and a
+    // banner reading "```ts" is worse than the plain sentence.
+    expect(
+      notificationBody(
+        settled('completed'),
+        null,
+        '## Result\n\n```ts\nconst x = 1;\n```\nAll three checks pass.',
+      ),
+    ).toBe('Result');
+    expect(
+      notificationBody(settled('completed'), null, '```\ncode only\n```'),
+    ).toBe('code only');
+  });
+
+  it('truncates a long answer on a word, and marks that it was cut', () => {
+    const long = `${'word '.repeat(80)}end`;
+    const body = notificationBody(settled('completed'), null, long);
+
+    expect(body.length).toBeLessThanOrEqual(221);
+    expect(body.endsWith('…')).toBe(true);
+    expect(body).not.toContain('wor…');
+  });
+
+  it('falls back to the plain sentence when the text carries nothing readable', () => {
+    // Whitespace, and an absent summary, are the same thing to a reader.
+    expect(notificationBody(settled('completed'), null, '   \n\n')).toBe(
+      'The turn finished.',
+    );
+    expect(notificationBody(settled('failed'), null, null)).toBe(
+      'The turn failed.',
+    );
+  });
+
+  it('never lets a settle summary hijack a QUESTION banner', () => {
+    // A parked run is not reporting an outcome — it is asking. The phrase is
+    // what the sidebar row says under the same badge, and the two must agree.
+    expect(
+      notificationBody(
+        { runId: 'a', kind: 'question', status: 'needs-input' },
+        null,
+        'some earlier answer',
+      ),
+    ).toBe('Waiting for you.');
   });
 });

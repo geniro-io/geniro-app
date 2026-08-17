@@ -25,11 +25,23 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     tool?: string;
     work?: string;
     phase?: 'started' | 'settled';
+    /** What the unit IS, when the line says — a delegate or anything else. */
+    unit?: 'agent' | 'other';
+    /** The call that launched it, as a delegate's `started` line carries. */
+    call?: string;
     finalText?: string;
     ask?: string;
   };
   if (typeof row.work === 'string' && row.phase !== undefined) {
-    return [{ type: 'background_work', id: row.work, phase: row.phase }];
+    return [
+      {
+        type: 'background_work',
+        id: row.work,
+        phase: row.phase,
+        unit: row.unit ?? 'other',
+        toolCallId: row.call ?? null,
+      },
+    ];
   }
   // A card the CLI is now blocked on, waiting for a verdict.
   if (typeof row.ask === 'string') {
@@ -938,6 +950,74 @@ describe('a turn whose background work outlives its result', () => {
     await handle?.done;
 
     expect(events).toEqual([{ ...COMPLETE, finalText: 'LAUNCHED' }]);
+  });
+
+  it('announces a DELEGATE’s background lifecycle, keyed by its launching call', async () => {
+    // The one thing forwarded off this channel, and the reason it must be: a
+    // delegate the agent does not wait for has its `Task` call answered at once,
+    // so the transcript reads it as finished while it runs on. These two rows
+    // are what let the block — and the header's counter — say otherwise.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+    // The settle names neither the kind nor the call — matched by work id.
+    line(child, { work: 'task-1', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([
+      {
+        type: 'subagent_info',
+        id: 'toolu_a',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: null,
+        backgroundOpen: true,
+      },
+      {
+        type: 'subagent_info',
+        id: 'toolu_a',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: null,
+        backgroundOpen: false,
+      },
+      COMPLETE,
+    ]);
+  });
+
+  it('says nothing about background work that is not a delegate', async () => {
+    // The same channel carries a delegate's own shell command. Announcing one
+    // would put a phantom sub-agent in the transcript, under the id of whatever
+    // tool call happened to launch it.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-bash',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_bash',
+    });
+    line(child, { work: 'task-bash', phase: 'settled', call: 'toolu_bash' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([COMPLETE]);
   });
 
   it('never hands a background_work event to the turn', async () => {

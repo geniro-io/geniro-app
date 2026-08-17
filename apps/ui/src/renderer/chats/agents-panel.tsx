@@ -719,6 +719,10 @@ export function AgentsPanel({
                           ? null
                           : (usageReasons?.get(agent.agent) ?? null)
                       }
+                      // This card's OWN status, not the run's: the panel lists
+                      // several agents and only the working one's readout has
+                      // anything to keep current.
+                      live={agent.status === 'running'}
                       // The same box as the two icon buttons beside it, so the
                       // one `gap-0.5` produces one gap. The ring is 14px and
                       // their glyphs are 14px inside a 24px button, so left as

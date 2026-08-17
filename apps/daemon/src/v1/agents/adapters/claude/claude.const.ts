@@ -815,6 +815,18 @@ export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
 
 /**
+ * This CLI's `task_type` for a unit of background work that IS a delegate.
+ *
+ * Named because the mapper and its spec both spell it, and because the
+ * distinction is the whole point: probed 2026-08-17 on 2.1.232, one Task call
+ * produced a `task_started` with `task_type:'local_agent'` (the delegate) and a
+ * second with `task_type:'local_bash'` and `owned_by_subagent:true` (the shell
+ * command that delegate then ran). Both are background work the turn must
+ * outlive; only the first is a sub-agent anything should count or draw.
+ */
+export const CLAUDE_TASK_TYPE_AGENT = 'local_agent';
+
+/**
  * Task statuses meaning the work is OVER, however it ended.
  *
  * An allowlist, not a "not running" test, and the direction matters: an

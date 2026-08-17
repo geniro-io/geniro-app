@@ -253,7 +253,13 @@ export const ChatListItem = memo(function ChatListItem({
         </span>
       ) : null}
       <span className="flex items-center gap-1 text-xs">
-        <RunStatusIcon status={status} />
+        {/* Every glyph but the SPINNER leads its label. A spinner is the one
+            that draws the eye on its own, and a moving thing in front of the
+            word it belongs to pushed the whole line about; it goes to the far
+            right instead — the slot a running row leaves empty (the relative
+            time below is for stopped runs only), and where the group header
+            above already puts its own. */}
+        {status === 'running' ? null : <RunStatusIcon status={status} />}
         {/* Never wrapped: the status word is the shortest thing on the line and
             the one that must stay readable, so the activity phrase beside it
             (which already truncates) is what gives up room. Before this,
@@ -285,6 +291,11 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="ml-auto pl-2 text-muted-foreground">
             {formatRelativeTime(lastActivityAt)}
           </span>
+        ) : null}
+        {status === 'running' ? (
+          // `ml-auto` and no padding: the glyph is a border-box `size-3`, so a
+          // `pl-*` here would eat its own drawn area rather than space it.
+          <RunStatusIcon status={status} className="ml-auto" />
         ) : null}
       </span>
     </NavListItem>

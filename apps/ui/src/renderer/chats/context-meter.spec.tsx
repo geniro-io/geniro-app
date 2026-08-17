@@ -383,6 +383,7 @@ describe('the expanded readout the meter opens onto', () => {
   function tree(
     load: ChatMetricsLoader,
     runId: string | null,
+    live = false,
   ): React.ReactNode {
     return (
       <ChatMetricsLoaderContext.Provider value={load}>
@@ -390,6 +391,7 @@ describe('the expanded readout the meter opens onto', () => {
           contextTokens={62_444}
           contextWindowTokens={1_000_000}
           runId={runId}
+          live={live}
         />
       </ChatMetricsLoaderContext.Provider>
     );
@@ -398,8 +400,9 @@ describe('the expanded readout the meter opens onto', () => {
   function renderWithLoader(
     load: ChatMetricsLoader,
     runId: string | null = 'run-1',
+    live = false,
   ): void {
-    render(tree(load, runId));
+    render(tree(load, runId, live));
   }
 
   it('asks nothing for a pointer that merely CROSSED the ring', async () => {
@@ -713,6 +716,96 @@ describe('the expanded readout the meter opens onto', () => {
 
     expect(load).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain('This thread');
+  });
+
+  it('keeps re-reading while the agent works, and stops once it settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const load = vi.fn().mockResolvedValue(METRICS);
+      // OPEN and LIVE: the panel is being watched while a turn runs.
+      renderWithLoader(load, 'run-1', true);
+      openMeter();
+      await act(async () => {});
+      expect(load).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(load).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(load).toHaveBeenCalledTimes(3);
+
+      // The turn settles: one final reading (the last turn's cost lands with
+      // it), and then the timer is gone — a finished chat's figures cannot
+      // change on their own, so re-reading it would ask a question whose answer
+      // is already on screen.
+      render(tree(load, 'run-1', false));
+      await act(async () => {});
+      const afterSettle = load.mock.calls.length;
+      expect(afterSettle).toBe(4);
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(load).toHaveBeenCalledTimes(afterSettle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never re-reads a chat nobody is looking at, however live it is', async () => {
+    vi.useFakeTimers();
+    try {
+      const load = vi.fn().mockResolvedValue(METRICS);
+      // LIVE but CLOSED — the readout is not open, so there is no reader to
+      // keep current, and the read is a multi-second question to the agent.
+      renderWithLoader(load, 'run-1', true);
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says a turn is in progress instead of counting the thread as empty', async () => {
+    // The reported reading: a live context window above, `0 turns` below, on a
+    // thread whose agent was visibly working. The count is the daemon's sum
+    // over FINISHED turns, so the first turn contributes nothing to it.
+    const load = vi.fn().mockResolvedValue({
+      ...METRICS,
+      totals: { ...TOTALS, turns: 0, costUsd: null },
+    });
+    renderWithLoader(load, 'run-1', true);
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('turn in progress');
+    expect(container.textContent).not.toContain('0 turns');
+  });
+
+  it('keeps the finished count and names the running turn beside it', async () => {
+    const load = vi.fn().mockResolvedValue(METRICS);
+    renderWithLoader(load, 'run-1', true);
+    openMeter();
+    await act(async () => {});
+
+    // Both, because both are true — and a count replaced by the phrase would
+    // lose three turns' worth of spend from the line.
+    expect(container.textContent).toContain('3 turns · 1 in progress');
+  });
+
+  it('leaves a settled thread reading exactly as it did', async () => {
+    const load = vi.fn().mockResolvedValue(METRICS);
+    renderWithLoader(load, 'run-1', false);
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('3 turns');
+    expect(container.textContent).not.toContain('in progress');
   });
 
   it('keeps the summary alone when nothing provided a loader', async () => {

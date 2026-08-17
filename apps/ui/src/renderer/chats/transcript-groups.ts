@@ -186,6 +186,19 @@ export interface SubagentBlockEntry {
    */
   returned: boolean;
   /**
+   * The CLI's own word on whether this delegate is still working, outranking
+   * {@link returned} while it is `true`.
+   *
+   * `returned` is normally the end of a delegate, and for one the agent WAITS
+   * for it is. For a fire-and-forget delegate the launching call returns in
+   * under a second and the delegate runs on — measured on claude 2.1.232, three
+   * of them still working 50s after their blocks read `done` — so the block
+   * needs a signal that survives the return. `null` is "the CLI said nothing",
+   * which is every agent but claude's background tasks, and leaves the old
+   * reading untouched.
+   */
+  backgroundOpen: boolean | null;
+  /**
    * That result was an error — `isError` on the `tool_result` payload, which
    * `apps/daemon/src/v1/agents/utils/event-to-item.ts` persists verbatim.
    */
@@ -509,6 +522,14 @@ export function subagentBlockStatus(
   if (block.failed) {
     return 'failed';
   }
+  // Ahead of `returned`, and ONLY when the CLI has actually said so: a delegate
+  // nobody is waiting for has its launching call answered immediately, so the
+  // return says the delegation was accepted rather than that the work is over.
+  // Ranked below `failed` because a delegate that errored is finished whatever
+  // its lifecycle channel last announced.
+  if (block.backgroundOpen === true) {
+    return 'running';
+  }
   if (block.returned) {
     return 'completed';
   }
@@ -739,6 +760,7 @@ export function buildSubagentBlocks(
       model: declared?.model ?? null,
       durationMs: declared?.durationMs ?? null,
       stepsUnavailableReason: declared?.stepsUnavailableReason ?? null,
+      backgroundOpen: declared?.backgroundOpen ?? null,
       returned: launch?.result != null,
       failed: payload?.isError === true,
       // Only stringify a body that EXISTS. `toolResultText(null)` returns

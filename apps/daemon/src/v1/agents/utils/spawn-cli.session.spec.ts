@@ -337,7 +337,13 @@ describe('a run-scoped session outlives its turns', () => {
     await handle?.done;
 
     expect(events).toEqual([
-      { type: 'error', message: expect.stringContaining('SIGKILL') },
+      {
+        type: 'error',
+        message: expect.stringContaining('SIGKILL'),
+        // The signal as a FIELD too, so a report of the kill needs no prose
+        // parsing — see `AgentErrorDetail`.
+        detail: { signal: 'SIGKILL' },
+      },
     ]);
     expect(session.alive).toBe(false);
   });
@@ -861,23 +867,24 @@ describe('a turn whose background work outlives its result', () => {
     await Promise.resolve();
 
     // The `result` line arrived and was HELD: no terminal event, no settle, and
-    // the run therefore never reads `completed` while the work is out.
-    expect(events).toEqual([]);
+    // the run therefore never reads `completed` while the work is out. What the
+    // turn DOES say is that it is now held, and by how much — the one signal
+    // that separates "the agent is working" from "the agent has stopped and we
+    // are waiting on its listeners".
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
     expect(settled).toBe(false);
     expect(session.idle).toBe(false);
 
     // …and the delegate's own output still has a turn to land in, which is the
     // whole reason to hold it open rather than merely relabel the badge.
     line(child, { tool: 'toolu_late' });
-    expect(events).toEqual([
-      {
-        type: 'tool_result',
-        id: 'toolu_late',
-        name: null,
-        result: 'ok',
-        isError: false,
-      },
-    ]);
+    expect(events.at(-1)).toEqual({
+      type: 'tool_result',
+      id: 'toolu_late',
+      name: null,
+      result: 'ok',
+      isError: false,
+    });
 
     line(child, { work: 'task-1', phase: 'settled' });
     await handle?.done;
@@ -897,11 +904,16 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { work: 'task-1', phase: 'settled' });
     await Promise.resolve();
 
-    expect(events).toEqual([]);
+    // Held, and the count came DOWN as the first unit reported — the sentence
+    // under the badge counts off the delegates instead of standing still.
+    expect(events).toEqual([
+      { type: 'turn_held', open: 2 },
+      { type: 'turn_held', open: 1 },
+    ]);
 
     line(child, { work: 'task-2', phase: 'settled' });
     await handle?.done;
-    expect(events).toEqual([COMPLETE]);
+    expect(events.at(-1)).toEqual(COMPLETE);
   });
 
   it('is not released by a report for work it never opened', async () => {
@@ -916,15 +928,19 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { work: 'somebody-elses-task', phase: 'settled' });
     await Promise.resolve();
 
-    // Still held — the stray report closed nothing this turn was waiting on.
-    expect(events).toEqual([]);
+    // Still held — the stray report closed nothing this turn was waiting on,
+    // so the count it re-announces is unchanged.
+    expect(events).toEqual([
+      { type: 'turn_held', open: 1 },
+      { type: 'turn_held', open: 1 },
+    ]);
 
     line(child, { work: 'task-1', phase: 'settled' });
     // A second report for the same task must not release a second terminal.
     line(child, { work: 'task-1', phase: 'settled' });
     await handle?.done;
 
-    expect(events).toEqual([COMPLETE]);
+    expect(events.at(-1)).toEqual(COMPLETE);
   });
 
   it('keeps the FIRST result, which is the one that answers the prompt', async () => {
@@ -943,13 +959,14 @@ describe('a turn whose background work outlives its result', () => {
     });
     await Promise.resolve();
 
-    // Neither result ended the turn — the second one least of all.
-    expect(events).toEqual([]);
+    // Neither result ended the turn — the second one least of all. The hold is
+    // announced ONCE: the second result did not re-enter the hold.
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
 
     line(child, { work: 'task-1', phase: 'settled' });
     await handle?.done;
 
-    expect(events).toEqual([{ ...COMPLETE, finalText: 'LAUNCHED' }]);
+    expect(events.at(-1)).toEqual({ ...COMPLETE, finalText: 'LAUNCHED' });
   });
 
   it('announces a DELEGATE’s background lifecycle, keyed by its launching call', async () => {
@@ -1076,7 +1093,7 @@ describe('a turn whose background work outlives its result', () => {
     child.emit('close', 0, null);
     await handle?.done;
 
-    expect(events).toEqual([COMPLETE]);
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }, COMPLETE]);
     expect(session.alive).toBe(false);
   });
 
@@ -1096,13 +1113,161 @@ describe('a turn whose background work outlives its result', () => {
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     await handle?.done;
 
-    expect(events).toEqual([COMPLETE]);
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }, COMPLETE]);
     expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
       'never reported',
     );
     // And the process is left alive for the next turn, as every other
     // silence-deadline settle leaves it.
     expect(session.alive).toBe(true);
+  });
+
+  it('announces a delegate launched BETWEEN turns, so its block does not read done', async () => {
+    // The reported defect. The CLI carries on by itself, and a delegate it
+    // launches THERE was invisible: no announcement, so the block closed the
+    // moment its `Task` call was answered and the transcript said `done` over
+    // an agent that had not started working yet.
+    const between: AgentEvent[] = [];
+    const { child } = openSession(undefined, undefined, (e) => between.push(e));
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+
+    expect(between).toEqual([
+      {
+        type: 'subagent_info',
+        id: 'toolu_a',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: null,
+        backgroundOpen: true,
+      },
+    ]);
+
+    // …and its close is announced on the same channel, so the block does not
+    // spin for the rest of the conversation either.
+    line(child, { work: 'task-1', phase: 'settled' });
+    expect(between.at(-1)).toEqual({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: false,
+    });
+  });
+
+  it('holds the NEXT turn open for work that started between turns', async () => {
+    // Background work belongs to the PROCESS, not to whichever turn happened to
+    // be open when the CLI announced it. Tracked per turn, work launched
+    // off-turn held nothing, and the next turn settled the run `completed` with
+    // the delegate still going.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, () => {});
+
+    line(child, { work: 'task-1', phase: 'started' });
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('does not settle the run on a continuation’s result while its work is out', async () => {
+    // The same rule for the path with no turn to hold. The CLI's own
+    // continuation prints a `result` line, the owner settles the run on it, and
+    // the badge went back to `completed` seconds after a delegate was launched.
+    const between: AgentEvent[] = [];
+    const { child } = openSession(undefined, undefined, (e) => between.push(e));
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(between.some((e) => e.type === 'turn_complete')).toBe(false);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    expect(between.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('hands a held off-turn result over when a real turn opens', async () => {
+    // Held, not dropped: that row carries the continuation's own usage and cost,
+    // and it belongs to what happened BEFORE this turn — so it is handed over
+    // first rather than filed among this turn's rows.
+    const between: AgentEvent[] = [];
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (e) =>
+      between.push(e),
+    );
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    expect(between).toEqual([]);
+
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    expect(between).toEqual([COMPLETE]);
+
+    // The turn that just opened is still held by the same outstanding unit.
+    line(child, { done: true });
+    await Promise.resolve();
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+  });
+
+  it('gives up on an off-turn hold whose work never reports', async () => {
+    // The bound. Without one, a unit that never reports strands a real result
+    // for the life of the session and the run reads `running` for good.
+    vi.useFakeTimers();
+    const between: AgentEvent[] = [];
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { child } = openSession(undefined, logger, (e) => between.push(e));
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+
+    expect(between).toEqual([COMPLETE]);
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'never reported',
+    );
+  });
+
+  it('does not let a unit the deadline gave up on hold the next turn too', async () => {
+    // The cost of moving the set to session scope, paid here: a unit written off
+    // by one turn's deadline must not silently hold every turn after it.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, {
+      warn: vi.fn(),
+      debug: vi.fn(),
+    });
+    const first = session.startTurn({ onEvent: () => {} });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await first?.done;
+
+    const second = session.startTurn({ onEvent: (e) => events.push(e) });
+    line(child, { done: true });
+    await second?.done;
+
+    expect(events).toEqual([COMPLETE]);
   });
 
   it('does not defer on a lifetime whose turn ends with its process', async () => {
@@ -1964,6 +2129,65 @@ describe('a turn whose prompt is held back until the CLI is ready', () => {
 
     expect(child.stdin.written).not.toContain('PROMPT');
     expect(events).toEqual([{ type: 'turn_cancelled' }]);
+  });
+
+  it('does NOT settle on a turn_complete that arrives while the prompt is still held', async () => {
+    // TRACED in the reporter's own daemon log (2026-08-17 19:14): a fresh
+    // claude process printed an empty `result` 2.9s in while the MCP-readiness
+    // gate was still holding the prompt (9 servers, ready at 6.5s). geniro
+    // settled the turn on it and marked the run completed; the gate then found
+    // `turn.settled` and DROPPED the prompt. The user's message was persisted,
+    // never sent and never answered — "✓ done · 0s · $0.0000" over silence.
+    const gate = heldGate();
+    const events: AgentEvent[] = [];
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { session, child } = openSession(undefined, logger);
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: (e) => events.push(e),
+    });
+    // The CLI completes a turn nobody has asked it for.
+    line(child, { done: true });
+    await Promise.resolve();
+
+    // Nothing settled: there is no answer to a prompt that has not gone out.
+    expect(events).toEqual([]);
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      "ignoring a turn_complete that arrived before this turn's prompt was sent",
+    );
+
+    // …and the gate can still do its job, which is the whole point.
+    gate.release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(child.stdin.written).toBe('PROMPT\n');
+
+    // The turn then ends on the CLI's answer to the prompt it was actually sent.
+    line(child, { done: true });
+    await handle?.done;
+    expect(events).toEqual([COMPLETE]);
+  });
+
+  it('still settles on an ERROR raised while the prompt is held', async () => {
+    // The other direction of the same rule. A CLI that cannot run the turn has
+    // nothing to gain from waiting, and swallowing its failure would hang the
+    // composer on a turn nothing will ever end — so only `turn_complete` is
+    // ignored, never a failure or a cancel.
+    const gate = heldGate();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+
+    const handle = session.startTurn({
+      stdinPayload: 'PROMPT\n',
+      holdPrompt: gate.holdPrompt,
+      onEvent: (e) => events.push(e),
+    });
+    line(child, { failed: true });
+    await handle?.done;
+
+    expect(events).toEqual([{ type: 'error', message: 'result: is_error' }]);
   });
 
   it('sends the prompt anyway when the gate itself fails', async () => {

@@ -372,6 +372,11 @@ describe('the expanded readout the meter opens onto', () => {
       ],
     },
     breakdownReason: null,
+    // The account's own limits are a SEPARATE reading on the same route (see
+    // `ContextPanel`'s `Plan`); these fixtures are about the window, so they
+    // carry the shape a claude chat with no plan reading answers with.
+    plan: null,
+    planReason: 'plan limits are read from the running agent',
     totals: TOTALS,
   };
 
@@ -674,6 +679,8 @@ describe('the expanded readout the meter opens onto', () => {
       Promise.resolve({
         context: null,
         breakdownReason: 'cursor-agent has no channel for one',
+        plan: null,
+        planReason: 'cursor-agent does not report its plan limits',
         totals: TOTALS,
       }),
     );
@@ -873,6 +880,79 @@ describe('the expanded readout the meter opens onto', () => {
 
     expect(container.textContent).toContain('3 turns');
     expect(container.textContent).not.toContain('in progress');
+  });
+
+  it('shows every plan window with its percentage and time to reset', async () => {
+    // The deferred half of the context-readout report: "show claude
+    // subscription limits per thread — the 5-hour window usage and the time
+    // remaining". ALL the windows, not just the shortest: a five-hour window
+    // refills over lunch while a seven-day one does not, so a readout showing
+    // only the first tells a user they have room on the day they are cut off.
+    // Offsets from NOW rather than a frozen clock: the panel reads the real
+    // `Date.now()` on render, and fake timers here would have to survive the
+    // loader's own promise. The extra 30s keeps the minute floor off the
+    // boundary for the life of the test.
+    const inMinutes = (minutes: number): string =>
+      new Date(Date.now() + minutes * 60_000 + 30_000).toISOString();
+    renderWithLoader(() =>
+      Promise.resolve({
+        ...METRICS,
+        plan: {
+          plan: 'max',
+          windows: [
+            {
+              key: 'session',
+              label: 'Current session',
+              percent: 43,
+              resetsAt: inMinutes(3 * 60 + 50),
+            },
+            {
+              key: 'weekly_all',
+              label: 'Current week',
+              percent: 30,
+              resetsAt: inMinutes(5 * 24 * 60 + 3 * 60),
+            },
+          ],
+        },
+        planReason: null,
+      }),
+    );
+    openMeter();
+    await act(async () => {});
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('Plan limits');
+    expect(text).toContain('max');
+    expect(text).toContain('Current session');
+    expect(text).toContain('43% · resets in 3h 50m');
+    // The second window, and the DAY tier — a seven-day reset is routinely
+    // days out, and `115h 50m` is a number nobody converts.
+    expect(text).toContain('Current week');
+    expect(text).toContain('30% · resets in 5d 3h');
+    expect(container.querySelectorAll('[data-plan-window]')).toHaveLength(2);
+  });
+
+  it('says WHY there are no plan limits instead of leaving the section out', async () => {
+    // The same rule the breakdown follows: an absent reading with no sentence
+    // is the blank space the whole `unavailableReason` family exists to
+    // replace — and here it would read as "this account has no limits".
+    renderWithLoader(() =>
+      Promise.resolve({
+        ...METRICS,
+        plan: null,
+        planReason: 'cursor-agent does not report its plan limits',
+      }),
+    );
+    openMeter();
+    await act(async () => {});
+
+    expect(container.textContent).toContain('Plan limits');
+    expect(container.textContent).toContain(
+      'cursor-agent does not report its plan limits',
+    );
+    // And no bar under it — a 0% track beside that sentence is exactly the
+    // "no limits" reading it exists to prevent.
+    expect(container.querySelectorAll('[data-plan-window]')).toHaveLength(0);
   });
 
   it('keeps the summary alone when nothing provided a loader', async () => {

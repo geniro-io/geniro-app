@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { formatTokens } from './agent-activity';
 import { MessageBubble } from './message-bubble';
+import { NestedThreadContext } from './subagent-context';
 import type { RunSettleAt } from './transcript-groups';
 
 /**
@@ -181,7 +182,14 @@ export function WorkingRow({
   since?: number | null;
 }): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
-  const activity = useContext(RunActivityContext);
+  const runActivity = useContext(RunActivityContext);
+  // A delegate's own thread does NOT get the run's activity phrase. The run's
+  // is the PARENT's — "running Agent" for the very delegation this block is —
+  // so printing it inside the block would have the delegate report its own
+  // launch as the work it is doing. Nested, the honest reading is the state and
+  // the clock, which is what the row said before any phrase existed.
+  const nested = useContext(NestedThreadContext);
+  const activity = nested ? null : runActivity;
   useSecondsTick();
   const elapsed = formatElapsed(Date.now() - (since ?? mountedAt));
   return (

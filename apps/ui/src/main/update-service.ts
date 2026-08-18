@@ -33,14 +33,21 @@ import {
  */
 
 /**
- * Six hours between automatic checks.
+ * Five minutes between automatic checks.
  *
- * Long enough that a machine left running for a week makes a handful of calls
- * to an unauthenticated GitHub endpoint, short enough that a release cut in the
- * morning reaches someone who never quits the app. The launch check is what
- * covers everybody else.
+ * It was six hours, on the reasoning that a machine left running for a week
+ * should make only a handful of calls to an unauthenticated GitHub endpoint.
+ * That is comfortably affordable at this cadence too: the limit on that
+ * endpoint is 60 requests per hour per IP, and this spends 12 — a fifth of it,
+ * leaving room for the other callers on the same machine.
+ *
+ * What the long interval actually cost was the point of the feature. A release
+ * cut while the app is open could sit unnoticed for most of a working day, and
+ * the app never quits on macOS, so the launch check does not cover it either.
+ * The user's own ask was to be told promptly and be able to act on it from
+ * where the version is already shown.
  */
-const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
+const CHECK_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Wait before the launch check.
@@ -251,14 +258,33 @@ export class UpdateService {
       // for the rest of the launch.
       this.busy = false;
     }
-    const ready = this.emit({
+    // The new bundle is on disk. The app does NOT restart itself here, and that
+    // is the user's own ask ("after update there should be a reload button to
+    // relaunch app"): a relaunch quits this process, which takes the daemon and
+    // every turn running under it with it — so choosing the moment belongs to
+    // the person who might be mid-conversation. `ready` is the state that says
+    // "installed, waiting on you"; {@link relaunch} is the button.
+    return this.emit({
       phase: 'ready',
       progress: null,
       message: null,
       currentVersion: release.version,
     });
+  }
+
+  /**
+   * Restart into the bundle {@link install} swapped in.
+   *
+   * Only from `ready`. Anywhere else there is nothing new on disk to come back
+   * into, so a stray press would quit the app and change nothing — which is
+   * indistinguishable from a crash.
+   */
+  relaunch(): UpdateState {
+    if (this.state.phase !== 'ready') {
+      return this.state;
+    }
     this.deps.relaunch();
-    return ready;
+    return this.state;
   }
 
   /**

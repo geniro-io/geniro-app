@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '../adapters/adapter.types';
-import { mapEventToItem, terminalStatus } from './event-to-item';
+import {
+  closesADelegate,
+  mapEventToItem,
+  terminalStatus,
+} from './event-to-item';
 
 // The one event→transcript projection BOTH execution paths (chat service and
 // graph executor) persist through — each arm is pinned with a worked-example
@@ -462,5 +466,45 @@ describe('terminalStatus', () => {
     for (const event of midTurn) {
       expect(terminalStatus(event)).toBeNull();
     }
+  });
+});
+
+describe('closesADelegate', () => {
+  /** The announcement `spawn-cli` makes about one delegate's liveness. */
+  const announce = (backgroundOpen: boolean | null): AgentEvent => ({
+    type: 'subagent_info',
+    id: 'toolu_a',
+    label: null,
+    kind: null,
+    prompt: null,
+    model: null,
+    durationMs: null,
+    stepsUnavailableReason: null,
+    backgroundOpen,
+  });
+
+  it('is true only for the announcement that a delegate has STOPPED', () => {
+    expect(closesADelegate(announce(false))).toBe(true);
+    expect(closesADelegate(announce(true))).toBe(false);
+  });
+
+  it('reads an announcement that claims nothing about liveness as no close', () => {
+    // A `subagent_info` carrying a delegate's FACTS says nothing about whether
+    // it is running; reading null as a close would silence the run every time
+    // the CLI described the delegate it had just launched.
+    expect(closesADelegate(announce(null))).toBe(false);
+  });
+
+  it('is false for every other event', () => {
+    expect(closesADelegate({ type: 'text', text: 'hi' })).toBe(false);
+    expect(
+      closesADelegate({
+        type: 'background_work',
+        id: 'task-1',
+        phase: 'settled',
+        unit: 'agent',
+        toolCallId: 'toolu_a',
+      }),
+    ).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import {
   mapClaudeStreamEvent,
   mapClaudeThinkingTokens,
 } from './claude-message.utils';
+import { ClaudeSessionCostLedger } from './claude-usage.utils';
 
 /** A stream_event line as captured from a live claude-opus-5 turn. */
 const textDelta = (text: string): Record<string, unknown> => ({
@@ -23,22 +24,28 @@ const CONTROL_REQUEST =
 describe('mapClaudeMessage', () => {
   it('extracts the session id from system/init', () => {
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 'sess-1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([{ type: 'session', sessionId: 'sess-1' }]);
   });
 
   it('harvests init slash_commands alongside the session id, dropping non-strings', () => {
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 'sess-1',
-        slash_commands: ['review', 42, '', 'compact'],
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-1',
+          slash_commands: ['review', 42, '', 'compact'],
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       { type: 'session', sessionId: 'sess-1' },
       { type: 'slash_commands', commands: ['review', 'compact'] },
@@ -52,16 +59,19 @@ describe('mapClaudeMessage', () => {
     // from cold (6.7s measured against nine of them). A wrong field name here
     // ships green and silently leaves the panel on that cold path.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 'sess-1',
-        mcp_servers: [
-          { name: 'codegraph', status: 'connected' },
-          { name: 'ticktick', status: 'pending' },
-          { name: 'claude.ai n8n', status: 'failed' },
-        ],
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-1',
+          mcp_servers: [
+            { name: 'codegraph', status: 'connected' },
+            { name: 'ticktick', status: 'pending' },
+            { name: 'claude.ai n8n', status: 'failed' },
+          ],
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       { type: 'session', sessionId: 'sess-1' },
       {
@@ -106,11 +116,14 @@ describe('mapClaudeMessage', () => {
     // Where the CLI's own config could still be read the overlay put it right,
     // which is what kept this invisible. Where it could not, the panel fell
     // back to `status === 'disabled'` and rendered a switched-off server as on.
-    const [event] = mapClaudeMessage({
-      type: 'system',
-      subtype: 'init',
-      mcp_servers: [{ name: 'probe-server', status: 'disabled' }],
-    });
+    const [event] = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'init',
+        mcp_servers: [{ name: 'probe-server', status: 'disabled' }],
+      },
+      new ClaudeSessionCostLedger(),
+    );
 
     expect(event).toEqual({
       type: 'mcp_servers',
@@ -124,16 +137,19 @@ describe('mapClaudeMessage', () => {
     // The server is real either way. Dropping it would shrink the listing on a
     // CLI wording change; calling it `failed` would invent a problem. A row
     // with no usable name is the one thing genuinely not listable.
-    const [event] = mapClaudeMessage({
-      type: 'system',
-      subtype: 'init',
-      mcp_servers: [
-        { name: 'reworded', status: 'needs-auth' },
-        { name: 'no-status' },
-        { status: 'connected' },
-        'not-an-object',
-      ],
-    });
+    const [event] = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'init',
+        mcp_servers: [
+          { name: 'reworded', status: 'needs-auth' },
+          { name: 'no-status' },
+          { status: 'connected' },
+          'not-an-object',
+        ],
+      },
+      new ClaudeSessionCostLedger(),
+    );
 
     expect(event).toEqual({
       type: 'mcp_servers',
@@ -151,12 +167,15 @@ describe('mapClaudeMessage', () => {
     // remembered window — init's is the one that can. A wrong field name here
     // ships green and leaves the feature inert.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 'sess-1',
-        model: 'claude-opus-5[1m]',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-1',
+          model: 'claude-opus-5[1m]',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       { type: 'session', sessionId: 'sess-1' },
       { type: 'turn_model', model: 'claude-opus-5[1m]' },
@@ -165,31 +184,43 @@ describe('mapClaudeMessage', () => {
 
   it('says nothing about the model when init names none', () => {
     expect(
-      mapClaudeMessage({ type: 'system', subtype: 'init', model: 42 }),
+      mapClaudeMessage(
+        { type: 'system', subtype: 'init', model: 42 },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
   it('ignores non-init system events (hook_*, post_turn_summary)', () => {
     expect(
-      mapClaudeMessage({ type: 'system', subtype: 'hook_started' }),
+      mapClaudeMessage(
+        { type: 'system', subtype: 'hook_started' },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
     expect(
-      mapClaudeMessage({ type: 'system', subtype: 'post_turn_summary' }),
+      mapClaudeMessage(
+        { type: 'system', subtype: 'post_turn_summary' },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
   it('maps assistant text/thinking/tool_use blocks in order', () => {
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [
-          { type: 'thinking', thinking: 'let me think' },
-          { type: 'text', text: 'hello' },
-          { type: 'tool_use', id: 't1', name: 'Read', input: { path: '/x' } },
-        ],
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'let me think' },
+            { type: 'text', text: 'hello' },
+            { type: 'tool_use', id: 't1', name: 'Read', input: { path: '/x' } },
+          ],
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events).toEqual([
       { type: 'reasoning', text: 'let me think' },
       { type: 'text', text: 'hello' },
@@ -199,20 +230,23 @@ describe('mapClaudeMessage', () => {
 
   it('maps a user tool_result block', () => {
     expect(
-      mapClaudeMessage({
-        type: 'user',
-        message: {
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: 't1',
-              content: 'file body',
-              is_error: false,
-            },
-          ],
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't1',
+                content: 'file body',
+                is_error: false,
+              },
+            ],
+          },
         },
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'tool_result',
@@ -230,15 +264,18 @@ describe('mapClaudeMessage', () => {
    * unremarked in one database until a SQL query went looking.
    */
   const permissionFailure = (content: unknown): unknown =>
-    mapClaudeMessage({
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [
-          { type: 'tool_result', tool_use_id: 't9', content, is_error: true },
-        ],
+    mapClaudeMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 't9', content, is_error: true },
+          ],
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
 
   it('raises a notice when a tool result is the permission channel failing', () => {
     const events = permissionFailure(
@@ -364,38 +401,42 @@ describe('mapClaudeMessage', () => {
 
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
-      mapClaudeMessage({
-        type: 'result',
-        subtype: 'success',
-        is_error: false,
-        result: 'pong',
-        stop_reason: 'end_turn',
-        usage: {
-          // Turn-wide roll-up: three requests' worth of the same conversation.
-          input_tokens: 12,
-          output_tokens: 3,
-          cache_creation_input_tokens: 100,
-          cache_read_input_tokens: 2_700,
-          iterations: [
-            {
-              input_tokens: 4,
-              output_tokens: 3,
-              cache_creation_input_tokens: 12,
-              cache_read_input_tokens: 996,
-            },
-          ],
-        },
-        modelUsage: {
-          'claude-opus-5[1m]': {
-            inputTokens: 12,
-            cacheReadInputTokens: 2_700,
-            contextWindow: 1_000_000,
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'pong',
+          stop_reason: 'end_turn',
+          usage: {
+            // Turn-wide roll-up: three requests' worth of the same conversation.
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_creation_input_tokens: 100,
+            cache_read_input_tokens: 2_700,
+            iterations: [
+              {
+                input_tokens: 4,
+                output_tokens: 3,
+                cache_creation_input_tokens: 12,
+                cache_read_input_tokens: 996,
+              },
+            ],
           },
+          modelUsage: {
+            'claude-opus-5[1m]': {
+              inputTokens: 12,
+              cacheReadInputTokens: 2_700,
+              contextWindow: 1_000_000,
+            },
+          },
+          session_id: 'sess-result',
+          total_cost_usd: 0.14,
+          duration_ms: 7618,
+          duration_api_ms: 7176,
         },
-        total_cost_usd: 0.14,
-        duration_ms: 7618,
-        duration_api_ms: 7176,
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'turn_complete',
@@ -435,28 +476,34 @@ describe('mapClaudeMessage', () => {
     // terminated — so the real work that followed got no completion and its
     // cost was never counted.
     expect(
-      mapClaudeMessage({
-        type: 'result',
-        is_error: false,
-        result: null,
-        stop_reason: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-        total_cost_usd: 0,
-      }),
+      mapClaudeMessage(
+        {
+          type: 'result',
+          is_error: false,
+          result: null,
+          stop_reason: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          total_cost_usd: 0,
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
   it('keeps a completion that reports a stop reason but no tokens', () => {
     // The drop is narrow on purpose: only a result saying NOTHING is discarded,
     // so a real completion can never be swallowed by it.
-    const [event] = mapClaudeMessage({
-      type: 'result',
-      is_error: false,
-      result: null,
-      stop_reason: 'end_turn',
-      usage: { input_tokens: 0, output_tokens: 0 },
-      total_cost_usd: 0,
-    });
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        is_error: false,
+        result: null,
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 0, output_tokens: 0 },
+        total_cost_usd: 0,
+      },
+      new ClaudeSessionCostLedger(),
+    );
     expect(event).toMatchObject({
       type: 'turn_complete',
       stopReason: 'end_turn',
@@ -465,11 +512,14 @@ describe('mapClaudeMessage', () => {
 
   it('maps an error result to an error event', () => {
     expect(
-      mapClaudeMessage({
-        type: 'result',
-        is_error: true,
-        result: 'context limit exceeded',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'result',
+          is_error: true,
+          result: 'context limit exceeded',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([{ type: 'error', message: 'context limit exceeded' }]);
   });
 
@@ -479,41 +529,69 @@ describe('mapClaudeMessage', () => {
     // — reported back as "i have error, i dont know why". The subtype is the
     // only thing the line does say, and it is searchable.
     expect(
-      mapClaudeMessage({
-        type: 'result',
-        subtype: 'error_during_execution',
-        is_error: true,
-      }),
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
-      { type: 'error', message: 'claude run failed (error_during_execution)' },
+      {
+        type: 'error',
+        message: 'claude run failed (error_during_execution)',
+        // …and the same word as a FIELD, which is what a reader can search
+        // and a report can carry without the sentence around it.
+        detail: { code: 'error_during_execution' },
+      },
     ]);
   });
 
   it('keeps the CLI’s own sentence alone when it has one', () => {
     // A subtype appended to an explanation is machine noise on the end of it.
     expect(
-      mapClaudeMessage({
-        type: 'result',
-        subtype: 'error_max_turns',
-        is_error: true,
-        result: 'reached the turn limit',
-      }),
-    ).toEqual([{ type: 'error', message: 'reached the turn limit' }]);
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'error_max_turns',
+          is_error: true,
+          result: 'reached the turn limit',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'reached the turn limit',
+        detail: { code: 'error_max_turns' },
+      },
+    ]);
   });
 
   it('ignores unknown event types and non-objects', () => {
-    expect(mapClaudeMessage({ type: 'rate_limit_event', tier: 'x' })).toEqual(
+    expect(
+      mapClaudeMessage(
+        { type: 'rate_limit_event', tier: 'x' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
+    expect(mapClaudeMessage('garbage', new ClaudeSessionCostLedger())).toEqual(
       [],
     );
-    expect(mapClaudeMessage('garbage')).toEqual([]);
-    expect(mapClaudeMessage(null)).toEqual([]);
-    expect(mapClaudeMessage(42)).toEqual([]);
+    expect(mapClaudeMessage(null, new ClaudeSessionCostLedger())).toEqual([]);
+    expect(mapClaudeMessage(42, new ClaudeSessionCostLedger())).toEqual([]);
   });
 });
 
 describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
   it('maps a can_use_tool control_request to an approval_request event', () => {
-    expect(mapClaudeMessage(JSON.parse(CONTROL_REQUEST))).toEqual([
+    expect(
+      mapClaudeMessage(
+        JSON.parse(CONTROL_REQUEST),
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
       {
         type: 'approval_request',
         id: 'req-1',
@@ -524,16 +602,19 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
   });
 
   it('carries requires_user_interaction — the question-vs-permission discriminator (M4)', () => {
-    const events = mapClaudeMessage({
-      type: 'control_request',
-      request_id: 'req-q',
-      request: {
-        subtype: 'can_use_tool',
-        tool_name: 'AskUserQuestion',
-        input: { questions: [] },
-        requires_user_interaction: true,
+    const events = mapClaudeMessage(
+      {
+        type: 'control_request',
+        request_id: 'req-q',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'AskUserQuestion',
+          input: { questions: [] },
+          requires_user_interaction: true,
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events).toEqual([
       expect.objectContaining({
         type: 'approval_request',
@@ -542,7 +623,10 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
       }),
     ]);
     // A plain permission carries no flag — the event must not fake one.
-    const plain = mapClaudeMessage(JSON.parse(CONTROL_REQUEST));
+    const plain = mapClaudeMessage(
+      JSON.parse(CONTROL_REQUEST),
+      new ClaudeSessionCostLedger(),
+    );
     expect(
       (plain[0] as { requiresUserInteraction?: boolean })
         .requiresUserInteraction,
@@ -553,19 +637,22 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
     // Captured verbatim from `claude -p --output-format stream-json --verbose`
     // on 2.1.220 (2026-07-29), trimmed to the fields under test. Fabricating
     // this line would pin our own guess about the CLI, not the CLI.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      message: {
-        content: [{ type: 'text', text: 'A teapot.' }],
-        usage: {
-          input_tokens: 2,
-          cache_creation_input_tokens: 36569,
-          cache_read_input_tokens: 18366,
-          output_tokens: 1,
-          service_tier: 'standard',
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'A teapot.' }],
+          usage: {
+            input_tokens: 2,
+            cache_creation_input_tokens: 36569,
+            cache_read_input_tokens: 18366,
+            output_tokens: 1,
+            service_tier: 'standard',
+          },
         },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     // Prompt side only — output tokens are not context — and cache traffic
     // counts, because on a resumed session it IS the context.
     expect(events).toEqual([
@@ -578,10 +665,13 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
     // A CLI build that omits it must degrade to "the meter waits", never to a
     // zero that reads as an empty context.
     expect(
-      mapClaudeMessage({
-        type: 'assistant',
-        message: { content: [{ type: 'text', text: 'hi' }] },
-      }),
+      mapClaudeMessage(
+        {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'hi' }] },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([{ type: 'text', text: 'hi' }]);
   });
 
@@ -590,17 +680,23 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
     // unrecognized subtype becomes visible is by leaving the function. If this
     // ever goes back to `[]` the daemon is silently blind again.
     expect(
-      mapClaudeMessage({
-        type: 'control_request',
-        request_id: 'r',
-        request: { subtype: 'initialize' },
-      }),
+      mapClaudeMessage(
+        {
+          type: 'control_request',
+          request_id: 'r',
+          request: { subtype: 'initialize' },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([{ type: 'unhandled_control', subtype: 'initialize' }]);
   });
 
   it('reports a control_request with no readable subtype rather than swallowing it', () => {
     expect(
-      mapClaudeMessage({ type: 'control_request', request_id: 'r' }),
+      mapClaudeMessage(
+        { type: 'control_request', request_id: 'r' },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([{ type: 'unhandled_control', subtype: '<none>' }]);
   });
 });
@@ -621,20 +717,23 @@ describe('mapClaudeMessage — sub-agent origin', () => {
 
   it('marks a sub-agent tool call with the call that started it', () => {
     expect(
-      mapClaudeMessage({
-        type: 'assistant',
-        parent_tool_use_id: AGENT_TOOL_USE_ID,
-        message: {
-          content: [
-            {
-              type: 'tool_use',
-              id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
-              name: 'Bash',
-              input: { command: 'echo hello-from-subagent' },
-            },
-          ],
+      mapClaudeMessage(
+        {
+          type: 'assistant',
+          parent_tool_use_id: AGENT_TOOL_USE_ID,
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
+                name: 'Bash',
+                input: { command: 'echo hello-from-subagent' },
+              },
+            ],
+          },
         },
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'tool_call',
@@ -649,11 +748,14 @@ describe('mapClaudeMessage — sub-agent origin', () => {
   it('leaves a main-thread line unmarked, rather than stamping a null', () => {
     // `parent_tool_use_id: null` is what the CLI sends for the ordinary case,
     // and it must not become a key on every row in the database.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      parent_tool_use_id: null,
-      message: { content: [{ type: 'text', text: 'done.' }] },
-    });
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: { content: [{ type: 'text', text: 'done.' }] },
+      },
+      new ClaudeSessionCostLedger(),
+    );
     expect(events).toEqual([{ type: 'text', text: 'done.' }]);
     expect(events[0]).not.toHaveProperty('parentToolUseId');
   });
@@ -663,19 +765,22 @@ describe('mapClaudeMessage — sub-agent origin', () => {
     // which is exactly why the stamp is applied around the switch and not
     // inside one case.
     expect(
-      mapClaudeMessage({
-        type: 'user',
-        parent_tool_use_id: AGENT_TOOL_USE_ID,
-        message: {
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
-              content: 'hello-from-subagent',
-            },
-          ],
+      mapClaudeMessage(
+        {
+          type: 'user',
+          parent_tool_use_id: AGENT_TOOL_USE_ID,
+          message: {
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_01W3VZjfLcUZ1wi9o3NJD7sW',
+                content: 'hello-from-subagent',
+              },
+            ],
+          },
         },
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'tool_result',
@@ -694,19 +799,22 @@ describe('mapClaudeMessage — sub-agent origin', () => {
     // next main-thread line snapped it back. The usage below is deliberately
     // well-formed — dropping it is a decision about WHOSE context it is, not a
     // parse failure.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      parent_tool_use_id: AGENT_TOOL_USE_ID,
-      message: {
-        content: [{ type: 'text', text: 'looking' }],
-        usage: {
-          input_tokens: 4,
-          cache_creation_input_tokens: 11_000,
-          cache_read_input_tokens: 0,
-          output_tokens: 9,
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: AGENT_TOOL_USE_ID,
+        message: {
+          content: [{ type: 'text', text: 'looking' }],
+          usage: {
+            input_tokens: 4,
+            cache_creation_input_tokens: 11_000,
+            cache_read_input_tokens: 0,
+            output_tokens: 9,
+          },
         },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events.some((event) => event.type === 'context_progress')).toBe(
       false,
     );
@@ -721,14 +829,17 @@ describe('mapClaudeMessage — sub-agent origin', () => {
     // a sub-agent row — while the renderer half of the twin rejects `''` and
     // calls the same row the main thread's. Two readings of one shape must not
     // disagree about who wrote it.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      parent_tool_use_id: '',
-      message: {
-        content: [{ type: 'text', text: 'hi' }],
-        usage: { input_tokens: 7, cache_read_input_tokens: 3 },
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: '',
+        message: {
+          content: [{ type: 'text', text: 'hi' }],
+          usage: { input_tokens: 7, cache_read_input_tokens: 3 },
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events).toContainEqual({
       type: 'context_progress',
       contextTokens: 10,
@@ -739,19 +850,22 @@ describe('mapClaudeMessage — sub-agent origin', () => {
   it('still reports the MAIN thread’s context from the same shape', () => {
     // The companion to the test above: without this pair, gating the meter on
     // "has no parent" and gating it on "always off" look identical.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      parent_tool_use_id: null,
-      message: {
-        content: [{ type: 'text', text: 'looking' }],
-        usage: {
-          input_tokens: 4,
-          cache_creation_input_tokens: 11_000,
-          cache_read_input_tokens: 0,
-          output_tokens: 9,
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          content: [{ type: 'text', text: 'looking' }],
+          usage: {
+            input_tokens: 4,
+            cache_creation_input_tokens: 11_000,
+            cache_read_input_tokens: 0,
+            output_tokens: 9,
+          },
         },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events).toContainEqual({
       type: 'context_progress',
       contextTokens: 4 + 11_000,
@@ -826,16 +940,19 @@ describe('mapClaudeMessage — context compaction', () => {
     // The metadata shape is the CLI's own schema (2.1.226):
     // `{ trigger: 'manual'|'auto', pre_tokens, post_tokens? }`.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'compact_boundary',
-        session_id: 's1',
-        compact_metadata: {
-          trigger: 'auto',
-          pre_tokens: 180_000,
-          post_tokens: 32_000,
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'compact_boundary',
+          session_id: 's1',
+          compact_metadata: {
+            trigger: 'auto',
+            pre_tokens: 180_000,
+            post_tokens: 32_000,
+          },
         },
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'context_compacted',
@@ -851,7 +968,10 @@ describe('mapClaudeMessage — context compaction', () => {
     // The EVENT is the point — it is what explains the context meter dropping.
     // A boundary carrying no numbers must not be swallowed for lack of them.
     expect(
-      mapClaudeMessage({ type: 'system', subtype: 'compact_boundary' }),
+      mapClaudeMessage(
+        { type: 'system', subtype: 'compact_boundary' },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'context_compacted',
@@ -862,11 +982,14 @@ describe('mapClaudeMessage — context compaction', () => {
       },
     ]);
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'compact_boundary',
-        compact_metadata: { trigger: 'manual' },
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'manual' },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'context_compacted',
@@ -884,12 +1007,15 @@ describe('mapClaudeMessage — context compaction', () => {
     // subtype checks and returned [], so a 46-second compaction was announced as
     // nothing at all — the reported defect.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'status',
-        status: 'compacting',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'status',
+          status: 'compacting',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'context_compacted',
@@ -908,14 +1034,17 @@ describe('mapClaudeMessage — context compaction', () => {
     // the user waiting on a compaction that never happened, still at full
     // context — so unlike the success path this one earns a durable row.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'status',
-        status: null,
-        compact_result: 'failed',
-        compact_error: 'Not enough messages to compact.',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'status',
+          status: null,
+          compact_result: 'failed',
+          compact_error: 'Not enough messages to compact.',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'notice',
@@ -941,13 +1070,16 @@ describe('mapClaudeMessage — context compaction', () => {
     // Unpinned, a later "always append the reason" tidy-up ships a dangling
     // " — " or the word "undefined" in a user-facing notice.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'status',
-        status: null,
-        compact_result: 'failed',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'status',
+          status: null,
+          compact_result: 'failed',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       { type: 'notice', message: 'the conversation was not compacted' },
       {
@@ -965,13 +1097,16 @@ describe('mapClaudeMessage — context compaction', () => {
     // status pair; a success notice would duplicate the boundary event AND the
     // summary row, giving three lines for one compaction.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'status',
-        status: null,
-        compact_result: 'success',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'status',
+          status: null,
+          compact_result: 'success',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
@@ -980,17 +1115,20 @@ describe('mapClaudeMessage — context compaction', () => {
     // `content` is a plain STRING, and the block loop that arm runs sees nothing
     // in a string — which is why the summary never reached the transcript.
     expect(
-      mapClaudeMessage({
-        type: 'user',
-        message: {
-          role: 'user',
-          content:
-            'This session is being continued from a previous conversation…\n\nSummary: the user asked for numbers.',
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content:
+              'This session is being continued from a previous conversation…\n\nSummary: the user asked for numbers.',
+          },
+          isReplay: false,
+          isSynthetic: true,
+          session_id: 's1',
         },
-        isReplay: false,
-        isSynthetic: true,
-        session_id: 's1',
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'notice',
@@ -1009,21 +1147,24 @@ describe('mapClaudeMessage — context compaction', () => {
     // The other side of the `origin` contract: only CLI-authored text carries it.
     // A daemon advisory must stay exactly the shape it was, or every existing
     // notice's transcript row changes appearance with this diff.
-    const events = mapClaudeMessage({
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: 't1',
-            content:
-              'Tool permission request failed: AbortError: Stream closed',
-          },
-        ],
+    const events = mapClaudeMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 't1',
+              content:
+                'Tool permission request failed: AbortError: Stream closed',
+            },
+          ],
+        },
+        session_id: 's1',
       },
-      session_id: 's1',
-    });
+      new ClaudeSessionCostLedger(),
+    );
     const notice = events.find((event) => event.type === 'notice');
     expect(notice).toBeDefined();
     expect(notice && 'origin' in notice).toBe(false);
@@ -1040,17 +1181,20 @@ describe('mapClaudeMessage — context compaction', () => {
     // without the replay guard the summary would be lifted again and persisted
     // once more on every resume.
     expect(
-      mapClaudeMessage({
-        type: 'user',
-        message: {
-          role: 'user',
-          content:
-            'This session is being continued from a previous conversation…',
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content:
+              'This session is being continued from a previous conversation…',
+          },
+          isReplay: true,
+          isSynthetic: true,
+          session_id: 's1',
         },
-        isReplay: true,
-        isSynthetic: true,
-        session_id: 's1',
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
@@ -1059,15 +1203,18 @@ describe('mapClaudeMessage — context compaction', () => {
     // above: this one is a replay that carries NO `isSynthetic`, so it is barred
     // twice over — worth keeping as the shape actually observed on the wire.
     expect(
-      mapClaudeMessage({
-        type: 'user',
-        message: {
-          role: 'user',
-          content: '<local-command-stdout>Compacted </local-command-stdout>',
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: '<local-command-stdout>Compacted </local-command-stdout>',
+          },
+          isReplay: true,
+          session_id: 's1',
         },
-        isReplay: true,
-        session_id: 's1',
-      }),
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
@@ -1076,11 +1223,14 @@ describe('mapClaudeMessage — context compaction', () => {
     // them: a genuine user line is not synthetic. Drop the isSynthetic check and
     // this fails.
     expect(
-      mapClaudeMessage({
-        type: 'user',
-        message: { role: 'user', content: 'please fix the login bug' },
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'user',
+          message: { role: 'user', content: 'please fix the login bug' },
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
@@ -1088,11 +1238,14 @@ describe('mapClaudeMessage — context compaction', () => {
     // The compaction arm is keyed on its own subtype, so `init` must still map
     // to the session/commands/model events it always did.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'init',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'init',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([{ type: 'session', sessionId: 's1' }]);
   });
 });
@@ -1105,16 +1258,19 @@ describe('mapClaudeMessage — background tasks', () => {
   // — so a turn settled on the first `result` is settled mid-work.
   it('opens a unit of background work on task_started', () => {
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_started',
-        task_id: 'ad83f0a35d8a3dfc9',
-        tool_use_id: 'toolu_01LWpVdfmqPnsMuftxq7YiAA',
-        description: 'Delayed sleep echo task',
-        subagent_type: 'general-purpose',
-        task_type: 'local_agent',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'ad83f0a35d8a3dfc9',
+          tool_use_id: 'toolu_01LWpVdfmqPnsMuftxq7YiAA',
+          description: 'Delayed sleep echo task',
+          subagent_type: 'general-purpose',
+          task_type: 'local_agent',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'background_work',
@@ -1134,16 +1290,19 @@ describe('mapClaudeMessage — background tasks', () => {
     // background work the turn must outlive; reading the second as a sub-agent
     // would report two where the user launched one.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_started',
-        task_id: 'bx0yxbert',
-        owned_by_subagent: true,
-        tool_use_id: 'toolu_01JGZBzkWjmavxf5ztmdNu83',
-        description: 'Sleep for 20 seconds',
-        task_type: 'local_bash',
-        session_id: 's1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'bx0yxbert',
+          owned_by_subagent: true,
+          tool_use_id: 'toolu_01JGZBzkWjmavxf5ztmdNu83',
+          description: 'Sleep for 20 seconds',
+          task_type: 'local_bash',
+          session_id: 's1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'background_work',
@@ -1160,12 +1319,15 @@ describe('mapClaudeMessage — background tasks', () => {
     // and the same task was reported `killed` by one and `stopped` by the other
     // in one measured run, which is why neither spelling is trusted alone.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_updated',
-        task_id: 'ad83f0a35d8a3dfc9',
-        patch: { status: 'completed', end_time: 1786635753021 },
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_updated',
+          task_id: 'ad83f0a35d8a3dfc9',
+          patch: { status: 'completed', end_time: 1786635753021 },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'background_work',
@@ -1178,13 +1340,16 @@ describe('mapClaudeMessage — background tasks', () => {
       },
     ]);
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_notification',
-        task_id: 'bblzv799n',
-        status: 'stopped',
-        tool_use_id: 'toolu_x',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 'bblzv799n',
+          status: 'stopped',
+          tool_use_id: 'toolu_x',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'background_work',
@@ -1197,12 +1362,15 @@ describe('mapClaudeMessage — background tasks', () => {
       },
     ]);
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_updated',
-        task_id: 'bblzv799n',
-        patch: { status: 'killed', end_time: 1786635772095 },
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_updated',
+          task_id: 'bblzv799n',
+          patch: { status: 'killed', end_time: 1786635772095 },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([
       {
         type: 'background_work',
@@ -1219,29 +1387,38 @@ describe('mapClaudeMessage — background tasks', () => {
     // (bounded by the turn's silence deadline) rather than declaring work
     // finished while it is still running, which is the whole defect.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_updated',
-        task_id: 't1',
-        patch: { status: 'reticulating_splines' },
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_updated',
+          task_id: 't1',
+          patch: { status: 'reticulating_splines' },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
     // `task_progress` is the in-flight ping and carries no status at all.
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_progress',
-        task_id: 't1',
-        description: 'Running sleep 40 && echo delegate-finished-late',
-        last_tool_name: 'Bash',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: 't1',
+          description: 'Running sleep 40 && echo delegate-finished-late',
+          last_tool_name: 'Bash',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_notification',
-        task_id: 't1',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't1',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 
@@ -1249,14 +1426,20 @@ describe('mapClaudeMessage — background tasks', () => {
     // Identity is the whole content of the event — the set is keyed by it — so
     // an id-less line is unusable rather than a unit of anonymous work.
     expect(
-      mapClaudeMessage({ type: 'system', subtype: 'task_started' }),
+      mapClaudeMessage(
+        { type: 'system', subtype: 'task_started' },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
     expect(
-      mapClaudeMessage({
-        type: 'system',
-        subtype: 'task_notification',
-        status: 'completed',
-      }),
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_notification',
+          status: 'completed',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
     ).toEqual([]);
   });
 });
@@ -1278,5 +1461,54 @@ describe('mapClaudeThinkingTokens', () => {
     expect(mapClaudeThinkingTokens({ type: 'system' })).toEqual([]);
     expect(mapClaudeThinkingTokens({ estimated_tokens: 0 })).toEqual([]);
     expect(mapClaudeThinkingTokens({ estimated_tokens: 'lots' })).toEqual([]);
+  });
+});
+
+describe('mapClaudeMessage — what a failed turn reports about itself', () => {
+  it('carries the provider’s own account of an API failure', () => {
+    // Transcribed from a live 2.1.234 failure (`--model
+    // definitely-not-a-model`), fields verbatim. Every one of these was on the
+    // wire and dropped: the row reached the user as one sentence with nothing
+    // in it anyone could look up.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'result',
+          is_error: true,
+          terminal_reason: 'api_error',
+          api_error_status: 404,
+          session_id: '99691942-8ca6-415d-a4c5-975ed3aa4b73',
+          duration_ms: 986,
+          subtype: 'success',
+          result: 'There’s an issue with the selected model.',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'There’s an issue with the selected model.',
+        detail: {
+          // `terminal_reason`, NOT `subtype`: the line above says
+          // `"subtype":"success"` on a failure, which is exactly why appending
+          // it to the sentence was misleading.
+          code: 'api_error',
+          httpStatus: 404,
+          sessionId: '99691942-8ca6-415d-a4c5-975ed3aa4b73',
+          durationMs: 986,
+        },
+      },
+    ]);
+  });
+
+  it('says nothing extra when the CLI reported nothing extra', () => {
+    // A CLI that carries none of it must produce the row it always produced —
+    // an empty `detail` object would put a blank table under every failure.
+    expect(
+      mapClaudeMessage(
+        { type: 'result', is_error: true, result: 'it broke' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([{ type: 'error', message: 'it broke' }]);
   });
 });

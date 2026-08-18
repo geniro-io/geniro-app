@@ -3,7 +3,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
 import type { AgentKind } from '../../runs/runs.types';
-import type { ChatMetricsWire, ContextBreakdownWire } from '../chat.types';
+import type {
+  ChatMetricsWire,
+  ContextBreakdownWire,
+  PlanLimitsWire,
+} from '../chat.types';
 import { SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -54,16 +58,31 @@ export class ChatMetricsService {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    const [breakdown, payloads] = await Promise.all([
-      this.readBreakdown(runId, run.agentKind, em),
+    const [agent, payloads] = await Promise.all([
+      this.readFromAgent(runId, run.agentKind, em),
       this.itemDao.turnCompletePayloads(runId, em),
     ]);
-    const context = breakdown.context;
+    const { context, plan } = agent;
     return {
       context,
       breakdownReason:
         context === null
-          ? this.breakdownReason(run.agentKind, breakdown.asked)
+          ? this.absenceReason(
+              run.agentKind,
+              agent.asked,
+              'breakdownUnavailableReason',
+              CONTEXT_ABSENCE,
+            )
+          : null,
+      plan,
+      planReason:
+        plan === null
+          ? this.absenceReason(
+              run.agentKind,
+              agent.asked,
+              'planLimitsUnavailableReason',
+              PLAN_ABSENCE,
+            )
           : null,
       // The rule every figure obeys — null until SOME turn reported it, so a
       // chat on a CLI that reports no usage reads as "not measured" and never
@@ -76,30 +95,45 @@ export class ChatMetricsService {
   }
 
   /**
-   * Ask the run's live process, or answer null — and say whether there was
-   * anything to ask in the first place.
+   * Resolve the run's channels ONCE, then put both questions to the adapter —
+   * and say whether there was anything to ask in the first place.
    *
-   * The second half is what separates the two sentences the panel can show.
+   * Together, not one call each, for the reason the route answers both halves
+   * at once: the panel shows the window and the plan side by side, and two
+   * independent resolutions could hand it a reading of a live process beside a
+   * reading taken after that process was reaped.
+   *
+   * The `asked` half is what separates the two sentences the panel can show.
    * Without it every empty reading was reported as "send a message to take a
    * fresh reading", which is the cure for one cause and a red herring for the
    * other: an agent that WAS there and did not answer in time gets asked again
    * by simply looking again, and sending it a message fixes nothing.
    *
    * Never throws: a readout is not worth failing a request over, and the one
-   * thing a caller could do about a failure — show the panel without a
-   * breakdown — is what null already means.
+   * thing a caller could do about a failure — show the panel without it — is
+   * what null already means. Each question is caught SEPARATELY, so a CLI that
+   * answers one and not the other loses only that one.
    */
-  private async readBreakdown(
+  private async readFromAgent(
     runId: string,
     agentKind: AgentKind | null,
     em: EntityManager,
-  ): Promise<{ context: ContextBreakdownWire | null; asked: boolean }> {
-    // Only the DECLARED reason short-circuits. `breakdownReason` also answers
-    // for the run that simply has nothing to read right now, and testing THAT
-    // here would mean never asking an adapter at all — the whole feature, off,
-    // with a plausible sentence in its place.
-    if (agentKind === null || this.declaredReason(agentKind) !== null) {
-      return { context: null, asked: false };
+  ): Promise<{
+    context: ContextBreakdownWire | null;
+    plan: PlanLimitsWire | null;
+    asked: boolean;
+  }> {
+    const nothing = { context: null, plan: null, asked: false };
+    // A run naming no agent has nobody to ask; a CLI declaring a reason for
+    // BOTH questions has nothing to be asked for. A CLI declaring only one is
+    // still asked — the other half is a real feature, and short-circuiting on
+    // either reason would switch it off with a plausible sentence in its place.
+    if (
+      agentKind === null ||
+      (this.declaredReason(agentKind, 'breakdownUnavailableReason') !== null &&
+        this.declaredReason(agentKind, 'planLimitsUnavailableReason') !== null)
+    ) {
+      return nothing;
     }
     // BOTH channels are offered and the adapter takes what it needs: claude
     // answers from the live process, cursor from the session store it wrote
@@ -125,42 +159,65 @@ export class ChatMetricsService {
     // cannot be inferred from the reading.
     const asked = live !== null || sessionId !== null;
     if (!asked) {
-      return { context: null, asked };
+      return nothing;
     }
+    const adapter = this.adapters.for(agentKind);
+    const input = { live, sessionId };
+    const [context, plan] = await Promise.all([
+      this.attempt(runId, 'context breakdown', () =>
+        adapter.readContextUsage(input),
+      ),
+      this.attempt(runId, 'plan limits', () => adapter.readPlanLimits(input)),
+    ]);
+    return { context, plan, asked };
+  }
+
+  /** One adapter question, whose failure is a null reading and a log line. */
+  private async attempt<T>(
+    runId: string,
+    what: string,
+    ask: () => Promise<T | null>,
+  ): Promise<T | null> {
     try {
-      const context = await this.adapters
-        .for(agentKind)
-        .readContextUsage({ live, sessionId });
-      return { context, asked };
+      return await ask();
     } catch (err) {
       this.logger.warn(
-        `context breakdown for run ${runId} failed: ${
+        `${what} for run ${runId} failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      return { context: null, asked };
+      return null;
     }
   }
 
   /**
-   * Why there is no breakdown, in words the panel can show.
+   * Why one of the two readings is absent, in words the panel can show.
    *
    * Two causes, and the difference is exactly what the user needs: a CLI that
    * has no such channel will never have one, while a claude chat whose process
-   * has been reaped for idleness gets its breakdown back on the next message.
+   * has been reaped for idleness gets its reading back on the next message.
    * Collapsing them into one blank space is how "why is there nothing here?"
    * gets asked.
+   *
+   * Parameterized over WHICH reading rather than duplicated per reading: the
+   * branching is identical and only the sentences differ, and two copies of it
+   * is how one of them comes to lose the distinction the other keeps.
    */
-  private breakdownReason(agentKind: AgentKind | null, asked: boolean): string {
+  private absenceReason(
+    agentKind: AgentKind | null,
+    asked: boolean,
+    declared: DeclaredReasonField,
+    sentences: AbsenceSentences,
+  ): string {
     // A run row's `agentKind` is nullable, and a workflow run genuinely has
     // none — its nodes each name their own. There is nothing to ask, and no
     // adapter to ask for a sentence.
     if (agentKind === null) {
-      return 'this run names no single agent, so there is no one context window to report';
+      return sentences.noSingleAgent;
     }
     return (
-      this.declaredReason(agentKind) ??
-      (asked ? NO_ANSWER_REASON : NO_LIVE_PROCESS_REASON)
+      this.declaredReason(agentKind, declared) ??
+      (asked ? sentences.noAnswer : sentences.noLiveProcess)
     );
   }
 
@@ -168,36 +225,60 @@ export class ChatMetricsService {
    * What this CLI's own adapter says about having no such channel, or null
    * when it declares one.
    *
-   * Split out from {@link breakdownReason} because the two questions are
+   * Split out from {@link absenceReason} because the two questions are
    * different and only one of them is answerable before asking: "this agent
    * can never say" is a fact, while "there was nobody to ask just now" is only
    * known once the session has been tried.
    */
-  private declaredReason(agentKind: AgentKind): string | null {
-    return this.adapters.for(agentKind).getConfig().usage
-      .breakdownUnavailableReason;
+  private declaredReason(
+    agentKind: AgentKind,
+    field: DeclaredReasonField,
+  ): string | null {
+    return this.adapters.for(agentKind).getConfig().usage[field];
   }
 }
 
-/**
- * What the panel says for a CLI that CAN be asked but has no process running.
- *
- * Phrased as the cure rather than the cause: the breakdown is read from a live
- * agent, so the way to get one is to send a message. "No session" would be
- * true and useless.
- */
-const NO_LIVE_PROCESS_REASON =
-  'the breakdown is read from the running agent — send a message in this chat to take a fresh reading';
+/** Which of the adapter's declared "no such channel" sentences to consult. */
+type DeclaredReasonField =
+  'breakdownUnavailableReason' | 'planLimitsUnavailableReason';
 
-/**
- * What the panel says when there WAS an agent to ask and the reading did not
- * come back — a control request that timed out, or a reply that could not be
- * read.
- *
- * A separate sentence because the cure is the opposite one: the channel is
- * there, so looking again is what gets a reading, while the sentence above
- * tells the user to send a message — advice that costs them a turn and fixes
- * nothing here.
- */
-const NO_ANSWER_REASON =
-  'the agent did not answer the context request in time — the reading is taken again while this stays open';
+/** The three sentences one absent reading can need. */
+interface AbsenceSentences {
+  noSingleAgent: string;
+  /**
+   * What the panel says for a CLI that CAN be asked but has no process
+   * running — phrased as the cure rather than the cause, since the reading is
+   * taken from a live agent and the way to get one is to send a message. "No
+   * session" would be true and useless.
+   */
+  noLiveProcess: string;
+  /**
+   * What the panel says when there WAS an agent to ask and the reading did not
+   * come back — a control request that timed out, or a reply that could not be
+   * read.
+   *
+   * A separate sentence because the cure is the opposite one: the channel is
+   * there, so looking again is what gets a reading, while the sentence above
+   * tells the user to send a message — advice that costs them a turn and fixes
+   * nothing here.
+   */
+  noAnswer: string;
+}
+
+const CONTEXT_ABSENCE: AbsenceSentences = {
+  noSingleAgent:
+    'this run names no single agent, so there is no one context window to report',
+  noLiveProcess:
+    'the breakdown is read from the running agent — send a message in this chat to take a fresh reading',
+  noAnswer:
+    'the agent did not answer the context request in time — the reading is taken again while this stays open',
+};
+
+const PLAN_ABSENCE: AbsenceSentences = {
+  noSingleAgent:
+    'this run names no single agent, so there is no one account whose limits it could report',
+  noLiveProcess:
+    'plan limits are read from the running agent — send a message in this chat to take a fresh reading',
+  noAnswer:
+    'the agent did not answer the usage request in time — the reading is taken again while this stays open',
+};

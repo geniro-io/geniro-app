@@ -224,7 +224,8 @@ export interface AgentContextUsage {
 }
 
 /**
- * What a caller can offer an adapter that is being asked about a window.
+ * What a caller can offer an adapter that is being asked something about a
+ * run's agent — its context window, the plan limits behind its account.
  *
  * BOTH channels, because the two shipped CLIs answer from different places and
  * neither shape covers the other: claude answers from its RUNNING process, and
@@ -232,8 +233,11 @@ export interface AgentContextUsage {
  * with no process at all, and is its only route, since a cursor process does
  * not outlive its turn. An input carrying only a live session would make the
  * second unimplementable; one carrying only an id would make the first.
+ *
+ * Named for the CHANNELS rather than for one question, because it now serves
+ * two and neither owns it.
  */
-export interface AgentContextUsageInput {
+export interface AgentSessionReadInput {
   /**
    * The run's live CLI process, or null when it holds none — idle, reaped, or
    * a CLI that never keeps one.
@@ -241,6 +245,49 @@ export interface AgentContextUsageInput {
   live: AgentSession | null;
   /** That conversation's CLI session id, or null before the CLI names one. */
   sessionId: string | null;
+}
+
+/**
+ * One rate-limit window an account's plan enforces — the thing that actually
+ * stops a conversation, and the thing the app could not previously say anything
+ * about.
+ *
+ * A LIST of windows rather than one figure, because a plan enforces several at
+ * once and the binding one changes through the week: a five-hour session window
+ * refills over lunch while a seven-day one does not, so a readout showing only
+ * the first tells a user they have room on the day they are about to be cut off.
+ * Which windows exist is the CLI's business, never this app's.
+ */
+export interface AgentPlanWindow {
+  /**
+   * The CLI's own key for this window, opaque here — carried so a reader can
+   * tell two rows apart without parsing the label a human sees.
+   */
+  key: string;
+  /** What to call it on screen, in the CLI's own vocabulary. */
+  label: string;
+  /** How much of it is used, 0-100. */
+  percent: number;
+  /** When it refills (ISO 8601), or null when the CLI named no moment. */
+  resetsAt: string | null;
+}
+
+/**
+ * What the account behind one chat is allowed, as its CLI reports it.
+ *
+ * Per CHAT and not per app, which is the whole reason it rides the chat metrics
+ * route: a run carries its own `configDir`, so two threads open side by side can
+ * be signed in to different accounts on different plans, and one figure in a
+ * global header would be describing whichever of them the app happened to ask.
+ *
+ * Null from an adapter means "no reading", never "no limits" — an unlimited
+ * account and a CLI that cannot be asked must not render the same.
+ */
+export interface AgentPlanLimits {
+  /** The subscription in the CLI's own word ('pro', 'max', …), or null. */
+  plan: string | null;
+  /** In the CLI's own order, which is the order its own readout uses. */
+  windows: AgentPlanWindow[];
 }
 
 /**
@@ -301,6 +348,55 @@ export type AgentEvent = AgentEventOrigin & AgentEventBody;
  * the user to a command that cannot fix what they hit.
  */
 export type AgentErrorRecovery = 'cli-login';
+
+/**
+ * What was known about a failure BESIDES the sentence it was reported with.
+ *
+ * A failed turn used to reach the transcript as one line of prose and nothing
+ * else — "API Error: Connection lost mid-response. The response above may be
+ * incomplete." — which says what happened and nothing anyone could act on or
+ * hand to whoever runs the model. Every field here is something the CLI already
+ * put on the wire and geniro was dropping, measured on claude 2.1.234 by
+ * forcing a failure (`--model definitely-not-a-model`):
+ *
+ *   {"type":"assistant", … ,"error":"model_not_found",
+ *    "request_id":"req_011CeAL4KP2RkG9YEPGrdi2n","is_api_error_message":true}
+ *   {"type":"result","is_error":true,"terminal_reason":"api_error",
+ *    "api_error_status":404,"session_id":"…","duration_ms":986,
+ *    "subtype":"success", …}
+ *
+ * Note `subtype` on that line: it says `success` on a failure, which is why it
+ * is not the code and why appending it to the message was actively misleading.
+ *
+ * EVERY field is optional and none is invented: a CLI that reports none of this
+ * produces an error row byte-identical to the one it produced before. The
+ * renderer reads them back through a twin parser (`chats/error-payload.ts`).
+ */
+export interface AgentErrorDetail {
+  /**
+   * The CLI's own machine-readable name for what failed — `model_not_found`,
+   * `api_error`. Searchable in the vendor's vocabulary in a way prose is not.
+   */
+  code?: string;
+  /** The HTTP status the model's endpoint answered with. */
+  httpStatus?: number;
+  /**
+   * The provider's own id for the failed request.
+   *
+   * The single most useful field here and the one nothing else can substitute:
+   * it is what a provider can look up, and it exists nowhere in the app unless
+   * it is carried across from the line that reported it.
+   */
+  requestId?: string;
+  /** The CLI session the failure happened in. */
+  sessionId?: string;
+  /** How long the turn had been running when it failed. */
+  durationMs?: number;
+  /** The process's exit code, when it died rather than reported. */
+  exitCode?: number;
+  /** The signal that killed the process, when one did. */
+  signal?: string;
+}
 
 /**
  * WHICH thread of one turn produced an event.
@@ -432,7 +528,13 @@ type AgentEventBody =
       finalText: string | null;
     }
   | { type: 'turn_cancelled' }
-  | { type: 'error'; message: string; recovery?: AgentErrorRecovery }
+  | {
+      type: 'error';
+      message: string;
+      recovery?: AgentErrorRecovery;
+      /** See {@link AgentErrorDetail} — absent when the CLI reported nothing. */
+      detail?: AgentErrorDetail;
+    }
   | { type: 'session'; sessionId: string }
   | {
       /**
@@ -640,6 +742,32 @@ type AgentEventBody =
        * `started` rather than expecting both ends to carry it.
        */
       toolCallId: string | null;
+    }
+  | {
+      /**
+       * The turn is being HELD open: the CLI has finished talking, and geniro
+       * is keeping the turn alive only until the background work it started
+       * reports back.
+       *
+       * NOT produced by any adapter — `runCliSession` raises it, because it is
+       * the only thing that knows the difference between "the agent is working"
+       * and "the agent has stopped and we are waiting on its listeners". That
+       * distinction is invisible from outside: `background_work` alone does not
+       * imply the main thread has gone quiet (a delegate runs happily while its
+       * parent keeps editing files), and the CLI's own turn-end line is
+       * swallowed by the hold, so nothing downstream can see it arrive.
+       *
+       * It exists for two consumers that were both getting the state wrong.
+       * The badge said "running Read" about a turn whose read had returned
+       * minutes earlier; and the composer refused to send, holding the message
+       * in the queue on the grounds that "the agent is working" — reported as
+       * "if claude is running agents in background it's like it stopped to work
+       * until it gets a notification from them… we should not send the message
+       * to the queue while it's just waiting for listeners".
+       */
+      type: 'turn_held';
+      /** How many units of background work are still outstanding. */
+      open: number;
     }
   | {
       /**
@@ -2297,6 +2425,19 @@ export interface AdapterConfig {
      * and what put it there", which is exactly where cursor stands.
      */
     readonly breakdownUnavailableReason: string | null;
+    /**
+     * Why this CLI cannot be asked what the ACCOUNT behind it is allowed — the
+     * plan's rate-limit windows behind `AgentAdapter.readPlanLimits` — or
+     * `null` when it can.
+     *
+     * A third independent field for the same reason the second one exists: the
+     * three questions are answered by three different mechanisms, and a CLI can
+     * have any one of them without the others. Plan limits are not even about
+     * the conversation — they are about the subscription the conversation runs
+     * on — so a CLI reporting a perfect window breakdown may still have no way
+     * to say when the user will be cut off.
+     */
+    readonly planLimitsUnavailableReason: string | null;
   };
 
   // ── Handing the conversation to the user ────────────────────────────────

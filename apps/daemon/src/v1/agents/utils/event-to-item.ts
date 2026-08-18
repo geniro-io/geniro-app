@@ -62,6 +62,12 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // as `notice` events from the mapper, so they land as `system` rows below
       // without this arm having to carry text it does not have.
       return null;
+    case 'turn_held':
+      // Live state, not history: the hold is over by the time anyone replays
+      // this transcript, and a durable "waiting on 2 background tasks" row
+      // wedged between the agent's messages would be a permanent record of a
+      // moment. It rides the activity channel instead — see `AgentEvent`.
+      return null;
     case 'background_work':
       // Turn plumbing — `runCliSession` consumes it to decide when the turn is
       // really over and never forwards it, so this arm is unreachable in
@@ -251,9 +257,34 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: {
           message: event.message,
           ...(event.recovery ? { recovery: event.recovery } : {}),
+          // Likewise `detail` — the facts the failure reported about itself
+          // (`AgentErrorDetail`), read back by the same twin parser. Absent
+          // when the CLI said nothing beyond its sentence, so an error row from
+          // a CLI that reports none of it is byte-identical to what it was.
+          ...(event.detail ? { detail: event.detail } : {}),
         },
       };
   }
+}
+
+/**
+ * Whether this event announces that a DELEGATE has stopped working.
+ *
+ * The two directions of one announcement (`spawn-cli`'s `announceDelegateWork`)
+ * mean opposite things to the run's badge, and only one of them is the run
+ * working: a delegate STARTING is work beginning, a delegate FINISHING is work
+ * ending. Named here, beside {@link offTurnActivity}, because it is the same
+ * kind of question — what does this event say the run is DOING — and because a
+ * bare `event.backgroundOpen === false` at the read site says nothing about why
+ * that direction is treated differently.
+ *
+ * `backgroundOpen` is nullable and null is not a close: an announcement that
+ * carries the delegate's FACTS (its label, its prompt) claims nothing about its
+ * liveness, and reading that as "it has stopped" would silence a run every time
+ * the CLI described a delegate it had just launched.
+ */
+export function closesADelegate(event: AgentEvent): boolean {
+  return event.type === 'subagent_info' && event.backgroundOpen === false;
 }
 
 /** The run status a terminal event implies, or null for a mid-turn event. */

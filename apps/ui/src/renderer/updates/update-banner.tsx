@@ -1,4 +1,4 @@
-import { ArrowDownToLine, TriangleAlert, X } from 'lucide-react';
+import { ArrowDownToLine, RotateCw, TriangleAlert, X } from 'lucide-react';
 
 import type { UpdateState } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
@@ -55,11 +55,14 @@ export function updateBannerVisible(
 export function UpdateBanner({
   state,
   onInstall,
+  onRelaunch,
   onDismiss,
   className,
 }: {
   state: UpdateState;
   onInstall: () => void;
+  /** Restart into the installed bundle — offered only once one is `ready`. */
+  onRelaunch: () => void;
   onDismiss: () => void;
   className?: string;
 }): React.JSX.Element {
@@ -95,17 +98,30 @@ export function UpdateBanner({
               command that updates an install the app cannot replace itself. */}
           {state.message}
         </span>
-        {state.phase === 'available' ? (
-          state.canInstall ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
-              onClick={onInstall}>
-              Update now
-            </Button>
-          ) : null
+        {state.phase === 'available' && state.canInstall ? (
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+            onClick={onInstall}>
+            Update now
+          </Button>
+        ) : null}
+        {/* The swap is done and the new code is on disk; nothing reaches it
+            until the process restarts. The button is the whole of the user's
+            ask — the app used to quit from under them the moment the copy
+            finished, mid-turn or not. */}
+        {state.phase === 'ready' ? (
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+            onClick={onRelaunch}>
+            <RotateCw aria-hidden="true" className="size-3" />
+            Restart now
+          </Button>
         ) : null}
         {/* An install in flight has nothing to dismiss: closing the strip would
             hide a download that is still using the network and a swap that is

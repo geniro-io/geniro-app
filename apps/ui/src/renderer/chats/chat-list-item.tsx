@@ -17,11 +17,11 @@ import {
 /**
  * One chat-list row: the run's label (custom title, else its workflow's name,
  * else the agent), hover-revealed rename/delete controls, the latest message
- * as a one-line preview, and a status line — icon + tone per state, spinning
- * while running — with the last-activity time on the right (hidden while
- * running: the spinner IS the live signal). A running row additionally names
- * what the agent is doing, so the badge distinguishes work from a turn parked
- * waiting on the user.
+ * as a one-line preview, and a status line — icon + tone per state, always
+ * LEADING the status word, spinning while running — with the last-activity time
+ * on the right (hidden while running: the spinner IS the live signal). A
+ * running row additionally names what the agent is doing, so the badge
+ * distinguishes work from a turn parked waiting on the user.
  *
  * Filing it into a group is a DRAG, not a control on this row: a chat is moved
  * by dragging it into the group, which is one gesture where a menu was a click,
@@ -46,6 +46,7 @@ export const ChatListItem = memo(function ChatListItem({
   activity = null,
   awaiting = null,
   active,
+  unseen = false,
   onActivate,
   onRename,
   onDelete,
@@ -84,6 +85,14 @@ export const ChatListItem = memo(function ChatListItem({
    */
   awaiting?: RunAwaiting | null;
   active: boolean;
+  /**
+   * This thread finished, failed or asked something and the user has not
+   * opened it since — see {@link import('./use-unseen-runs')}. Drawn as the
+   * unread mark it is: a dot on the row and its name in the heavier weight,
+   * the pairing a mail client uses, so the row reads as new at a glance and
+   * nothing else about it moves.
+   */
+  unseen?: boolean;
   onActivate: (runId: string) => void;
   /** Commit a new title. Rejects to report the failure back into the row. */
   onRename: (runId: string, title: string) => Promise<void>;
@@ -161,6 +170,18 @@ export const ChatListItem = memo(function ChatListItem({
       onDragEnd={() => onDragEndRun?.()}
       onActivate={() => onActivate(runId)}>
       <span className="flex items-center gap-1.5">
+        {/* Leads the row, ahead of the workflow glyph: it is about the row as a
+            whole rather than about what kind of run it is, and the left edge is
+            where an eye scanning a list for "what is new" already goes. */}
+        {unseen ? (
+          <span
+            data-slot="unseen-dot"
+            title="Not opened since it last reported"
+            aria-label="not seen yet"
+            role="img"
+            className="size-1.5 shrink-0 rounded-full bg-primary"
+          />
+        ) : null}
         {isWorkflow ? (
           <WorkflowIcon
             aria-hidden="true"
@@ -203,7 +224,11 @@ export const ChatListItem = memo(function ChatListItem({
           />
         ) : (
           <>
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate text-sm font-medium',
+                unseen && 'font-semibold text-foreground',
+              )}>
               {label}
             </span>
             {/* Chats only: a workflow run's name comes from the workflow it
@@ -253,13 +278,13 @@ export const ChatListItem = memo(function ChatListItem({
         </span>
       ) : null}
       <span className="flex items-center gap-1 text-xs">
-        {/* Every glyph but the SPINNER leads its label. A spinner is the one
-            that draws the eye on its own, and a moving thing in front of the
-            word it belongs to pushed the whole line about; it goes to the far
-            right instead — the slot a running row leaves empty (the relative
-            time below is for stopped runs only), and where the group header
-            above already puts its own. */}
-        {status === 'running' ? null : <RunStatusIcon status={status} />}
+        {/* EVERY glyph leads its label, the spinner included. It was parked at
+            the far right for a while, on the theory that a moving thing in
+            front of its word would push the line about — it does not (both
+            glyphs are the same `size-3 shrink-0` box), and what it did instead
+            was give a running row a different shape from every other row in the
+            list, so the eye had to look in two places to read one column. */}
+        <RunStatusIcon status={status} />
         {/* Never wrapped: the status word is the shortest thing on the line and
             the one that must stay readable, so the activity phrase beside it
             (which already truncates) is what gives up room. Before this,
@@ -291,11 +316,6 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="ml-auto pl-2 text-muted-foreground">
             {formatRelativeTime(lastActivityAt)}
           </span>
-        ) : null}
-        {status === 'running' ? (
-          // `ml-auto` and no padding: the glyph is a border-box `size-3`, so a
-          // `pl-*` here would eat its own drawn area rather than space it.
-          <RunStatusIcon status={status} className="ml-auto" />
         ) : null}
       </span>
     </NavListItem>

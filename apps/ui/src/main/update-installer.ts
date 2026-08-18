@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, createWriteStream } from 'node:fs';
-import { access, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -38,6 +38,42 @@ const XATTR = '/usr/bin/xattr';
 
 /** A download is a ~150MB transfer; a check's 10s budget makes no sense here. */
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * Removing a freshly-written `.app` tree races macOS itself.
+ *
+ * REPORTED: `ENOTEMPTY: directory not empty, rmdir '…/update-1eJcO3/unpacked/
+ * Geniro.app/Contents/Resources'`. A bundle that has just been unpacked into
+ * Application Support is exactly what Spotlight's importers open, and a file
+ * appearing under a directory between its own emptying and its `rmdir` is what
+ * that error IS. `fs.rm` retries precisely this class (EBUSY / EMFILE / ENFILE /
+ * ENOTEMPTY / EPERM) when asked to, and asks for nothing by default —
+ * `maxRetries` is 0.
+ *
+ * Retrying is the cheap half of the fix. The half that matters is that a
+ * cleanup failure is not an install failure at all — see {@link discard}.
+ */
+const RM_RETRIES = 5;
+const RM_RETRY_DELAY_MS = 100;
+
+/**
+ * Delete a tree we own, and never let the deletion be the thing that fails.
+ *
+ * Every caller here is removing scratch AFTER the outcome is already decided:
+ * the new bundle is in place, or the old one has been put back. Left to throw,
+ * this step turned a completed update into "The update could not be installed"
+ * — the reported error, on an update that had already succeeded, which then
+ * skipped the relaunch and left the user on the old code with the new app
+ * beside it. Leftovers cost disk; a false failure costs the feature.
+ */
+async function discard(path: string): Promise<void> {
+  await rm(path, {
+    recursive: true,
+    force: true,
+    maxRetries: RM_RETRIES,
+    retryDelay: RM_RETRY_DELAY_MS,
+  }).catch(() => undefined);
+}
 
 /** How the caller is told about a running download. */
 export interface InstallProgress {
@@ -181,6 +217,22 @@ async function downloadTo(
 }
 
 /**
+ * Remove scratch directories a previous install left behind.
+ *
+ * Named-prefix only (`update-`, the `mkdtemp` template below), so this can
+ * never reach anything else that shares the work directory. Best-effort by
+ * construction: an unreadable work dir is a fresh install's normal state.
+ */
+async function sweepStaleScratch(workDir: string): Promise<void> {
+  const entries = await readdir(workDir).catch(() => [] as string[]);
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith('update-'))
+      .map((name) => discard(join(workDir, name))),
+  );
+}
+
+/**
  * Download, verify and swap in `release`.
  *
  * Resolves once the new bundle is in place; the caller relaunches. Everything
@@ -204,6 +256,11 @@ export async function installUpdate({
   }
 
   await mkdir(workDir, { recursive: true });
+  // Whatever an earlier run could not delete. `discard` swallows its own
+  // failure, which is right — but only because the next install sweeps up
+  // after it, or a directory macOS was holding open for a second would sit in
+  // Application Support with a release zip in it for good.
+  await sweepStaleScratch(workDir);
   const scratch = await mkdtemp(join(workDir, 'update-'));
   try {
     const expected = parseChecksums(await fetchText(release.checksums.url)).get(
@@ -234,7 +291,7 @@ export async function installUpdate({
 
     await swapBundle(staged, bundlePath);
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    await discard(scratch);
   }
 }
 
@@ -254,7 +311,15 @@ export async function installUpdate({
  */
 async function swapBundle(staged: string, bundlePath: string): Promise<void> {
   const backup = `${bundlePath}.old-${process.pid}`;
-  await rm(backup, { recursive: true, force: true });
+  // This one is BEFORE the commit point, so a failure here is a genuine refusal
+  // to start — renaming onto a leftover would be the destructive kind of
+  // surprise. It still retries, for the reason `discard` documents.
+  await rm(backup, {
+    recursive: true,
+    force: true,
+    maxRetries: RM_RETRIES,
+    retryDelay: RM_RETRY_DELAY_MS,
+  });
   await rename(bundlePath, backup);
   try {
     await execFileAsync(DITTO, [staged, bundlePath]);
@@ -270,5 +335,7 @@ async function swapBundle(staged: string, bundlePath: string): Promise<void> {
   await execFileAsync(XATTR, ['-dr', 'com.apple.quarantine', bundlePath]).catch(
     () => undefined,
   );
-  await rm(backup, { recursive: true, force: true });
+  // AFTER the commit point: the new bundle is already in place, so failing to
+  // remove the old one cannot be allowed to report the update as failed.
+  await discard(backup);
 }

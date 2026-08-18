@@ -62,6 +62,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.installUpdate) as ReturnType<
       GeniroApi['installUpdate']
     >,
+  relaunchForUpdate: () =>
+    ipcRenderer.invoke(IPC.relaunchForUpdate) as ReturnType<
+      GeniroApi['relaunchForUpdate']
+    >,
   onUpdateState: (listener) => {
     const handler = (_event: IpcRendererEvent, state: unknown): void => {
       listener(state as Parameters<typeof listener>[0]);

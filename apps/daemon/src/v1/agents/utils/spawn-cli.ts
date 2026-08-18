@@ -532,29 +532,9 @@ interface TurnState {
    */
   outstanding: Map<string, ApprovalRequestEvent>;
   /**
-   * Background work this turn started that has not reported back — see
-   * `AgentEvent`'s `background_work`.
-   *
-   * A turn is not over while this is non-empty, however plainly the CLI's
-   * turn-end line says otherwise: the process keeps working, and on claude it
-   * runs whole further turns of its own as each unit reports. Whatever it
-   * produces then would be a between-turn orphan — mostly dropped, and reported
-   * to the user as a `completed` run that was visibly still working.
-   */
-  openWork: Set<string>;
-  /**
-   * The DELEGATES among {@link openWork}, as work-id → launching tool call.
-   *
-   * Kept because only the `started` line says what a unit IS and which call
-   * produced it, while the settle may carry neither — so the pairing has to be
-   * remembered here to turn a settle back into "that delegate has finished".
-   * Everything else about background work stays identity-only, as it was.
-   */
-  delegateWork: Map<string, string>;
-  /**
-   * The terminal event held back because {@link openWork} was not empty, to be
-   * emitted when the last unit reports (or when the silence deadline gives up
-   * on them).
+   * The terminal event held back because background work was outstanding
+   * (`openWork` at SESSION scope), to be emitted when the last unit reports (or
+   * when the silence deadline gives up on them).
    *
    * The FIRST one is kept, not the last: it is the one that answers the user's
    * prompt and carries that turn's usage. A CLI's later self-initiated turns
@@ -563,6 +543,26 @@ interface TurnState {
    * context.
    */
   deferredTerminal: AgentEvent | null;
+  /**
+   * This turn's prompt has not been written yet — {@link CliTurnOptions.holdPrompt}
+   * is still deciding.
+   *
+   * While it is true, a `turn_complete` from the CLI cannot be about this turn:
+   * the turn's prompt has not been sent, so there is nothing for the CLI to have
+   * completed. Settling on one is how the user's message came to be thrown away
+   * — TRACED in the reporter's own daemon log (2026-08-17 19:14): a fresh
+   * process, the MCP-readiness gate holding the prompt, and claude printing an
+   * empty `result` (`duration_ms:42`, `total_cost_usd:0`, `result:""`) 2.9s in.
+   * geniro settled the turn on it and marked the run `completed`; the gate then
+   * finished at 6.5s, found `turn.settled` and DROPPED the prompt. The message
+   * was persisted, never sent, never answered, and the transcript said "✓ done ·
+   * 0s · $0.0000" over it — the reported "I didn't get an answer at all".
+   *
+   * The window is not narrow and is about to widen: the gate waits on every MCP
+   * server a folder defines (9 of them, 6.5s, on the traced run) and now allows
+   * a stalling one up to a minute.
+   */
+  promptHeld: boolean;
 }
 
 /**
@@ -601,6 +601,55 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * {@link handleOrphanEvent}.
    */
   let approvalEncoder: CliTurnOptions['buildApprovalResponse'];
+  /**
+   * Background work the CLI has started on this PROCESS and not reported on —
+   * see `AgentEvent`'s `background_work`.
+   *
+   * At SESSION scope, and that is the correction rather than a detail. It used
+   * to live on the turn that happened to be open when the `started` line
+   * arrived, which quietly assumed a delegate is launched inside a turn of
+   * ours. It routinely is not: the CLI carries on by itself between turns (a
+   * task-notification continuation runs a whole further turn), and a delegate
+   * launched THERE was invisible — no liveness announcement, so its block read
+   * `done` the moment its launching call returned, and nothing to hold the
+   * next turn, so the run settled `completed` with three agents still working.
+   * That is the reported "он пишет, что ждет агента А и Б, хотя у него статус
+   * done, complete": traced in the reporter's own daemon log (2026-08-18
+   * 10:29–10:31, run acd7b34c), three `Agent` calls with
+   * `run_in_background: true` and not one `subagent_info` row between them.
+   *
+   * A turn is not over while this is non-empty, however plainly the CLI's
+   * turn-end line says otherwise — and neither is an OFF-turn continuation; see
+   * {@link deferredOffTurnTerminal}.
+   */
+  const openWork = new Set<string>();
+  /**
+   * The DELEGATES among {@link openWork}, as work-id → launching tool call.
+   *
+   * Kept because only the `started` line says what a unit IS and which call
+   * produced it, while the settle may carry neither — so the pairing has to be
+   * remembered to turn a settle back into "that delegate has finished".
+   * Everything else about background work stays identity-only, as it was.
+   *
+   * Outlives {@link openWork}: the silence deadline can give up on a unit while
+   * the CLI still reports it later, and that late report is what closes the
+   * delegate's block. Session-scoped for the same reason as the set above.
+   */
+  const delegateWork = new Map<string, string>();
+  /**
+   * A terminal event that arrived with NO turn open while {@link openWork} was
+   * still outstanding, held until the work reports.
+   *
+   * The in-turn rule, applied to the path that has no turn to hold. A CLI
+   * continuation's own `result` line reaches the owner as an ordinary
+   * between-turn event, and the owner settles the run on it — so without this a
+   * run went back to `completed` moments after a delegate was launched, which
+   * is the same lie the turn hold exists to prevent, arriving through the other
+   * door.
+   */
+  let deferredOffTurnTerminal: AgentEvent | null = null;
+  /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
+  let offTurnHoldTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Notices raised with NO turn to carry them, held for the next one.
    *
@@ -838,8 +887,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       const held = turn.deferredTerminal;
       if (held) {
         opts.logger?.warn(
-          `${opts.command}: releasing the held '${held.type}' — ${turn.openWork.size} unit(s) of background work never reported`,
+          `${opts.command}: releasing the held '${held.type}' — ${openWork.size} unit(s) of background work never reported`,
         );
+        // Given up on, so they must not hold the NEXT turn either — the set is
+        // session-scoped now, and a unit this deadline has already written off
+        // would otherwise hold every turn after it for as long as the session
+        // lives. `delegateWork` is deliberately left alone: a late report is
+        // still what closes that delegate's block.
+        openWork.clear();
         finishTurn(turn, held);
         return;
       }
@@ -883,6 +938,34 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * next turn adopts it — see {@link pendingApprovals}.
    */
   function handleOrphanEvent(event: AgentEvent): void {
+    if (event.type === 'background_work') {
+      // Turn plumbing wherever it arrives. It is NOT forwarded to the owner as
+      // an event (it maps to no row, so the owner drops it anyway) — what the
+      // owner is told is the delegate liveness `trackBackgroundWork` announces
+      // from it, which is the only thing that can correct a block whose
+      // launching call returned the moment the delegate was accepted.
+      trackBackgroundWork(event);
+      return;
+    }
+    if (
+      event.type === 'turn_complete' &&
+      settlesOnTerminalEvent &&
+      openWork.size > 0
+    ) {
+      // The CLI's own continuation has stopped talking while work IT started is
+      // still running. Same rule as the in-turn hold, same reason: forwarding it
+      // now settles the run `completed` under delegates that are demonstrably
+      // still going. The FIRST one is kept, as in a turn — a later continuation
+      // reports on itself, not on the work being waited for.
+      if (deferredOffTurnTerminal === null) {
+        deferredOffTurnTerminal = event;
+        opts.logger?.debug?.(
+          `${opts.command}: holding an off-turn '${event.type}' — ${openWork.size} unit(s) of background work have not reported`,
+        );
+        armOffTurnHold();
+      }
+      return;
+    }
     if (event.type !== 'approval_request') {
       if (opts.onBetweenTurnEvent) {
         opts.onBetweenTurnEvent(event);
@@ -1045,7 +1128,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * put phantom sub-agents in the transcript.
    */
   const announceDelegateWork = (
-    turn: TurnState,
     event: Extract<AgentEvent, { type: 'background_work' }>,
   ): void => {
     const toolCallId =
@@ -1056,16 +1138,16 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         : // A settle names neither the kind nor (on one of the two channels) the
           // call, so it is matched against what the `started` recorded. A unit
           // that was never announced as a delegate is silently not one.
-          (turn.delegateWork.get(event.id) ?? null);
+          (delegateWork.get(event.id) ?? null);
     if (toolCallId === null) {
       return;
     }
     if (event.phase === 'started') {
-      turn.delegateWork.set(event.id, toolCallId);
+      delegateWork.set(event.id, toolCallId);
     } else {
-      turn.delegateWork.delete(event.id);
+      delegateWork.delete(event.id);
     }
-    turn.options.onEvent({
+    const announcement: AgentEvent = {
       type: 'subagent_info',
       id: toolCallId,
       // Nulls throughout: this announcement claims ONE fact and must not
@@ -1078,7 +1160,96 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       durationMs: null,
       stepsUnavailableReason: null,
       backgroundOpen: event.phase === 'started',
-    });
+    };
+    // To whoever can carry it. A delegate launched between turns is the whole
+    // reason this is not simply `turn.options.onEvent`: that path had no turn,
+    // so the announcement was dropped and the block stayed closed over a
+    // delegate that had not started working yet.
+    if (current) {
+      current.options.onEvent(announcement);
+      return;
+    }
+    opts.onBetweenTurnEvent?.(announcement);
+  };
+
+  /**
+   * Bound the off-turn hold, so a unit that never reports cannot strand a
+   * continuation's result for the life of the session.
+   *
+   * The turn's own silence deadline is the model, and the same window: this is
+   * the same "the CLI has gone quiet on us" question asked with no turn open.
+   * It releases rather than fails — the continuation FINISHED, and only the
+   * work it was waited on for went silent.
+   */
+  const armOffTurnHold = (): void => {
+    if (offTurnHoldTimer) {
+      clearTimeout(offTurnHoldTimer);
+    }
+    offTurnHoldTimer = setTimeout(() => {
+      offTurnHoldTimer = null;
+      const held = deferredOffTurnTerminal;
+      if (!held) {
+        return;
+      }
+      opts.logger?.warn(
+        `${opts.command}: releasing an off-turn '${held.type}' — ${openWork.size} unit(s) of background work never reported`,
+      );
+      // Written off exactly as the turn's deadline writes its own units off,
+      // and for the same reason: they must not hold anything after this.
+      openWork.clear();
+      releaseOffTurnHold();
+    }, TURN_SILENCE_DEADLINE_MS);
+    offTurnHoldTimer.unref?.();
+  };
+
+  /** Hand a held off-turn terminal to the owner, once. */
+  const releaseOffTurnHold = (): void => {
+    const held = deferredOffTurnTerminal;
+    deferredOffTurnTerminal = null;
+    if (offTurnHoldTimer) {
+      clearTimeout(offTurnHoldTimer);
+      offTurnHoldTimer = null;
+    }
+    if (held) {
+      opts.onBetweenTurnEvent?.(held);
+    }
+  };
+
+  /**
+   * Account for one unit of background work, wherever it arrived.
+   *
+   * The one place `openWork` moves, called from inside a turn and from
+   * {@link handleOrphanEvent} alike — because which of those a `task_started`
+   * lands in is the CLI's timing, not a fact about the work.
+   */
+  const trackBackgroundWork = (
+    event: Extract<AgentEvent, { type: 'background_work' }>,
+  ): void => {
+    announceDelegateWork(event);
+    if (event.phase === 'started') {
+      openWork.add(event.id);
+      return;
+    }
+    if (!openWork.delete(event.id) || openWork.size > 0) {
+      return;
+    }
+    // The last unit reported, so anything held for it is due. Only reached when
+    // this settle actually closed something that was being waited on — a stray
+    // `settled` for unknown work must release nothing.
+    const held = current?.deferredTerminal;
+    if (held && current) {
+      opts.logger?.debug?.(
+        `${opts.command}: releasing the held '${held.type}' — its background work has reported`,
+      );
+      finishTurn(current, held);
+      return;
+    }
+    if (deferredOffTurnTerminal) {
+      opts.logger?.debug?.(
+        `${opts.command}: releasing an off-turn '${deferredOffTurnTerminal.type}' — its background work has reported`,
+      );
+      releaseOffTurnHold();
+    }
   };
 
   /**
@@ -1108,21 +1279,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // transcript's own end-of-delegate signal (the launching call returning)
     // fires instantly for one nobody is waiting on.
     if (event.type === 'background_work') {
-      announceDelegateWork(turn, event);
-      if (event.phase === 'started') {
-        turn.openWork.add(event.id);
-      } else if (turn.openWork.delete(event.id) && turn.openWork.size === 0) {
-        // The last unit reported, so a held terminal event is now due. Only
-        // reached when this settle actually closed something we were waiting on
-        // — a stray `settled` for unknown work must not release the turn.
-        const held = turn.deferredTerminal;
-        if (held) {
-          opts.logger?.debug?.(
-            `${opts.command}: releasing the held '${held.type}' — its background work has reported`,
-          );
-          finishTurn(turn, held);
-          return;
-        }
+      trackBackgroundWork(event);
+      if (turn.deferredTerminal !== null) {
+        // Still held, by fewer (or more) units than a moment ago. Re-announced
+        // so the sentence under the badge counts down instead of standing at
+        // whatever it said when the hold began.
+        turn.options.onEvent({
+          type: 'turn_held',
+          open: openWork.size,
+        });
       }
       armSilenceDeadline(turn);
       return;
@@ -1139,6 +1304,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (turn.terminalEmitted) {
         return;
       }
+      // A completion for a prompt that has not been sent is not this turn's.
+      // See {@link TurnState.promptHeld} for the traced run this comes from:
+      // dropping it here is what keeps the gate's own release — which writes
+      // the prompt moments later — from finding a turn already settled and
+      // throwing the user's message away.
+      //
+      // `turn_complete` ONLY. A `turn_cancelled` is the user asking to stop
+      // before their message went out, which must still stop the turn, and an
+      // `error` before the prompt is a CLI that cannot run it — swallowing
+      // either would hang the composer on a turn nothing will ever end.
+      if (normalized.type === 'turn_complete' && turn.promptHeld) {
+        opts.logger?.warn(
+          `${opts.command}: ignoring a turn_complete that arrived before this turn's prompt was sent — the prompt is still held`,
+        );
+        armSilenceDeadline(turn);
+        return;
+      }
       // The CLI has stopped TALKING while work it started is still running, and
       // on a session lifetime the process is still there doing it. Hold the
       // terminal event: emitting it now ends the turn mid-work, and everything
@@ -1153,13 +1335,22 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (
         normalized.type === 'turn_complete' &&
         settlesOnTerminalEvent &&
-        turn.openWork.size > 0
+        openWork.size > 0
       ) {
         if (turn.deferredTerminal === null) {
           turn.deferredTerminal = normalized;
           opts.logger?.debug?.(
-            `${opts.command}: holding the turn open — ${turn.openWork.size} unit(s) of background work have not reported`,
+            `${opts.command}: holding the turn open — ${openWork.size} unit(s) of background work have not reported`,
           );
+          // Said OUT LOUD, because from here the run is a different thing than
+          // it was a moment ago and nothing else can tell: the agent has
+          // stopped, and the turn is alive only for its listeners. See
+          // `AgentEvent`'s `turn_held` for the two readings that were wrong
+          // without it.
+          turn.options.onEvent({
+            type: 'turn_held',
+            open: openWork.size,
+          });
         }
         armSilenceDeadline(turn);
         return;
@@ -1268,6 +1459,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       terminator.disarm();
       resolveClosed();
     }
+    // Nothing can report now, so nothing is being waited for: whatever was held
+    // for background work is handed over rather than dying with the process,
+    // which would leave the run reading `running` with no process behind it.
+    openWork.clear();
+    releaseOffTurnHold();
     if (current) {
       settleTurn(current, 'the process ended');
     }
@@ -1318,12 +1514,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         emit({
           type: 'error',
           message: `${opts.command} was terminated by ${signal}${detail ? `: ${detail}` : ''}`,
+          // The same facts as the sentence, in fields — the sentence is what
+          // the user reads, these are what a report can be built from without
+          // parsing English back apart.
+          detail: { signal },
         });
       } else if (code !== null && code !== 0) {
         const detail = stderrTail.trim();
         emit({
           type: 'error',
           message: `${opts.command} exited with code ${code}${detail ? `: ${detail}` : ''}`,
+          detail: { exitCode: code },
         });
       } else if (current.deferredTerminal) {
         // A CLEAN exit while a terminal event was held for background work: the
@@ -1527,11 +1728,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       interruptTimer: null,
       silenceTimer: null,
       outstanding: new Map(),
-      openWork: new Set(),
-      delegateWork: new Map(),
       deferredTerminal: null,
+      promptHeld: turnOptions.holdPrompt !== undefined,
     };
     current = turn;
+    // A continuation's result held for background work is handed over BEFORE
+    // this turn produces anything of its own — it belongs to what happened
+    // before, and holding it further would file it under this turn's rows. The
+    // owner will not settle the run on it (a real turn is running now, which is
+    // exactly the case `offTurnRuns` distinguishes), so what it costs is
+    // nothing and what it saves is the row, with its usage and its cost.
+    releaseOffTurnHold();
     // Kept at session scope so a request arriving AFTER this turn settles can
     // still be refused rather than dropped — see `handleOrphanEvent`.
     approvalEncoder = turnOptions.buildApprovalResponse;
@@ -1611,6 +1818,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             `${opts.command}: prompt gate failed, sending anyway: ${errorMessage(err)}`,
           );
         }
+        // Cleared BEFORE the drop check, not after the write: from here the
+        // prompt either goes out or is deliberately abandoned, and in both
+        // cases a later `turn_complete` is a real answer about a real state.
+        // Left set, a turn abandoned here would swallow every terminal event
+        // the CLI ever produced and hang the composer for good.
+        turn.promptHeld = false;
         // The user can have cancelled, or the child died, while we held. Both
         // make the payload something to drop rather than to write: a prompt
         // written into a stopped turn would run work nobody asked for, and one

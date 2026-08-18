@@ -47,6 +47,20 @@ file at the start of each run and at every phase-boundary refresh via
   contract in CLAUDE.md → *Design system (renderer)*.
 - `pnpm rebuild:native` is a required step, not a conditional one — see
   CLAUDE.md's Commands section (*Daily development*) for when and why.
+- **Browser automation is always `agent-browser` — the CLI, not a built-in tool.**
+  Every browser-driven step of testing and development goes through it: driving
+  the renderer, reproducing a UI bug, taking a verification screenshot, opening
+  a tracker/issue page to read its attachments, or any web page at all. Load its
+  usage guide first (`agent-browser skills get core`; `... get electron` for the
+  Electron shell, `... get dogfood` for exploratory QA) — the CLI serves the docs
+  for the installed version, so they never go stale. Prefer it over
+  playwright-mcp / `mcp__plugin_playwright_playwright__*` and over any other
+  built-in web tool; those stay unused unless agent-browser genuinely cannot do
+  the job. Use a named session
+  (`export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix <task>)"`)
+  so a run cannot hijack the page a human or another agent left open in the
+  shared default session.
+
 - **Guard added on one path — sweep sibling paths for bypasses.** When a change
   adds a guard or cleanup obligation on one call path (a claim/release pair,
   validation, dedup, an auth check), before finishing sweep every sibling path

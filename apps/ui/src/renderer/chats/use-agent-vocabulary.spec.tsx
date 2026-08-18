@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CliKind } from '../../shared/contracts';
 import { useAgentVocabulary } from './use-agent-vocabulary';
@@ -230,6 +230,59 @@ describe('useAgentVocabulary', () => {
       items: ['composer-2.5'],
       loading: false,
     });
+  });
+
+  it('retries a failed probe by itself, instead of holding the empty list', async () => {
+    // The reported "I can't choose cursor models": one failed probe left the
+    // picker showing only "default model" for the rest of the session, because
+    // nothing re-runs the fetch effect — re-opening the picker changes neither
+    // `kind` nor `fetchFor`. The daemon answered the same request with 15
+    // models, so the empty list was never an answer about the CLI.
+    vi.useFakeTimers();
+    try {
+      let attempt = 0;
+      const view = mount('cursor-agent', () => {
+        attempt += 1;
+        return attempt === 1
+          ? Promise.reject(new Error('probe failed'))
+          : Promise.resolve(['auto-smart', 'claude-opus-5']);
+      });
+      await act(async () => {});
+      expect(attempt).toBe(1);
+      expect(view.latest().items).toEqual([]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(attempt).toBe(2);
+      expect(view.latest().items).toEqual(['auto-smart', 'claude-opus-5']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops retrying a probe that keeps failing, rather than looping forever', async () => {
+    // Each attempt spawns a real CLI and handshakes twice, so the retry is
+    // bounded: past the cap the empty list is the honest answer and the user
+    // still has "default model", which starts a run.
+    vi.useFakeTimers();
+    try {
+      let attempt = 0;
+      const view = mount('cursor-agent', () => {
+        attempt += 1;
+        return Promise.reject(new Error('probe failed'));
+      });
+      await act(async () => {});
+      for (let i = 0; i < 6; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+      }
+      expect(attempt).toBe(3);
+      expect(view.latest()).toEqual({ items: [], loading: false });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clears the list when the kind goes away entirely', async () => {

@@ -236,6 +236,19 @@ export function App(): React.JSX.Element {
         view={view}
         onNavigate={setView}
         connected={connected}
+        // The offer, resolved HERE from main's one state so the rail renders it
+        // rather than deciding it. `canInstall` is main's own answer about this
+        // install (read-only volume, another account, a translocated copy), so
+        // the button only appears where pressing it can work.
+        updateVersion={
+          update.state?.phase === 'available' && update.state.canInstall
+            ? update.state.version
+            : null
+        }
+        onInstallUpdate={() => {
+          setUpdateEngaged(true);
+          void update.install();
+        }}
         daemonVersion={daemonVersion}
         debugOpen={debugOpen}
         onToggleDebug={() => setDebugOpen((open) => !open)}
@@ -269,6 +282,7 @@ export function App(): React.JSX.Element {
               setUpdateEngaged(true);
               void update.install();
             }}
+            onRelaunch={() => void update.relaunch()}
             onDismiss={() => {
               setUpdateEngaged(false);
               setDismissedUpdate(update.state?.version ?? null);

@@ -14,6 +14,7 @@ import {
   subagentBlockStatus,
   toolCallSummary,
   type ToolGroupEntry,
+  toolGroupOperations,
   toolGroupSummary,
   toolResultText,
   type TranscriptEntry,
@@ -432,6 +433,68 @@ describe('toolGroupSummary', () => {
     expect(toolGroupSummary(pairs.pairs)).toBe(
       'Read 1 file · ran 2 commands · edited 1 file · created 1 file',
     );
+  });
+
+  it('offers the SAME operations as glyphs, in the sentence’s own order', () => {
+    const group = groupTranscript([
+      call('Bash', 't1', { command: 'ls' }),
+      call('Edit', 't2', {
+        file_path: '/a.ts',
+        old_string: 'x',
+        new_string: 'y',
+      }),
+      call('Read', 't3', { file_path: '/c.ts' }),
+    ])[0] as ToolGroupEntry;
+
+    // The sentence reads "Read 1 file · ran 1 command · edited 1 file", and the
+    // glyph strip is an index INTO it — same operations, same order. Derived
+    // from a second pass they could disagree, which is the whole reason both
+    // come off one fold.
+    expect(toolGroupSummary(group.pairs)).toBe(
+      'Read 1 file · ran 1 command · edited 1 file',
+    );
+    expect(toolGroupOperations(group.pairs)).toEqual([
+      'read',
+      'execute',
+      'edit',
+    ]);
+  });
+
+  it('caps the glyphs at three even when the sentence names more', () => {
+    const group = groupTranscript([
+      call('Read', 't1', { file_path: '/c.ts' }),
+      call('Grep', 't2', { pattern: 'x' }),
+      call('Bash', 't3', { command: 'ls' }),
+      call('Edit', 't4', {
+        file_path: '/a.ts',
+        old_string: 'x',
+        new_string: 'y',
+      }),
+      call('Write', 't5', { file_path: '/b.ts', content: 'hi' }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe(
+      'Read 1 file · searched 1 time · ran 1 command · edited 1 file · created 1 file',
+    );
+    // Five phrases, three glyphs — the header is one line in a narrow column.
+    expect(toolGroupOperations(group.pairs)).toEqual([
+      'read',
+      'search',
+      'execute',
+    ]);
+  });
+
+  it('draws no glyph for work the sentence declines to name', () => {
+    // A delegation is counted but never spoken (its own block says it below),
+    // and an unclassifiable call falls to the bare total. Neither may acquire a
+    // picture asserting something the words withheld.
+    const group = groupTranscript([
+      call('Task', 't1', { description: 'go' }),
+      call('SomethingElse', 't2', {}),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Used 2 tools');
+    expect(toolGroupOperations(group.pairs)).toEqual([]);
   });
 
   describe('an agent that classifies its own calls', () => {
@@ -1195,6 +1258,53 @@ describe('buildSubagentBlocks', () => {
     const block = onlyBlock(entries);
     expect(block.returned).toBe(true);
     expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('stops a background delegate that never reported once the RUN itself settles', () => {
+    // The latch: an open `background_work` unit used to outrank everything, so
+    // a delegate whose CLI died before reporting kept the block — and with it
+    // the run badge, and with THAT the turn-end notification — running for
+    // good. An unsettled unit under a settled run is unreported work, not
+    // running work: the daemon holds the turn open precisely so the report can
+    // arrive, and settles anyway when it never does.
+    const entries = fold([
+      call('Task', 'task-bg', {
+        description: 'Stress-test the two approaches',
+      }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(subagentBlockStatus(block)).toBe('running');
+    expect(subagentBlockStatus(block, Date.parse('2026-08-18T10:00:00Z'))).toBe(
+      'completed',
+    );
+  });
+
+  it('keeps it running while it is still producing rows after that settle', () => {
+    // The other side, and the reason the settle is a MOMENT: a delegate that
+    // has spoken SINCE is working whatever the run row says — which is the
+    // reported "thread says completed while sub-agents are visibly working".
+    const spoke = {
+      ...delegated('message', { text: 'still reading' }, 'task-bg'),
+    };
+    spoke.createdAt = '2026-08-18T10:00:05.000Z';
+    const entries = fold([
+      call('Task', 'task-bg', {
+        description: 'Stress-test the two approaches',
+      }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      spoke,
+    ]);
+
+    expect(
+      subagentBlockStatus(
+        onlyBlock(entries),
+        Date.parse('2026-08-18T10:00:00Z'),
+      ),
+    ).toBe('running');
   });
 
   it('lets the same delegate finish when the CLI says it has', () => {

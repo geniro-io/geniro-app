@@ -29,7 +29,6 @@ import type {
   AdapterQuestion,
   AgentCommandOptions,
   AgentContextUsage,
-  AgentContextUsageInput,
   AgentMcpListingResult,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
@@ -38,6 +37,7 @@ import type {
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
+  AgentSessionReadInput,
   AgentSessionsInput,
   AgentTurnInput,
   TurnDriver,
@@ -610,6 +610,18 @@ export class CursorAcpAdapter extends AgentAdapter {
          * and `utils/cursor-context-store.utils.ts`.
          */
         breakdownUnavailableReason: null,
+        /**
+         * Nothing on this transport says anything about the ACCOUNT. ACP has
+         * no such method, cursor advertises no vendor extension for one, and
+         * the session store this adapter already reads for the window holds a
+         * per-conversation token accounting — not a subscription's remaining
+         * allowance. There is no `cursor-agent` subcommand for it either
+         * (`status --format json` answers `isAuthenticated` and the account,
+         * and nothing about limits), so the honest answer is a sentence rather
+         * than an empty section a user would read as "no limits".
+         */
+        planLimitsUnavailableReason:
+          'cursor-agent does not report its plan limits — neither ACP nor its own commands expose a usage allowance',
       },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
@@ -975,7 +987,7 @@ export class CursorAcpAdapter extends AgentAdapter {
    * NOT from the process, and it could not be: a cursor turn is one process
    * ({@link canHostSession}), so by the time anyone opens a readout there is
    * nothing running to ask. That is the whole reason
-   * {@link AgentContextUsageInput} carries a session id beside a live session
+   * {@link AgentSessionReadInput} carries a session id beside a live session
    * — this adapter uses only the id.
    *
    * The figures are the CLI's OWN, not an estimate: it writes a full
@@ -991,7 +1003,7 @@ export class CursorAcpAdapter extends AgentAdapter {
    * be taken.
    */
   override readContextUsage(
-    input: AgentContextUsageInput,
+    input: AgentSessionReadInput,
   ): Promise<AgentContextUsage | null> {
     if (!input.sessionId) {
       return Promise.resolve(null);

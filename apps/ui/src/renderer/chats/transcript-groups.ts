@@ -12,7 +12,12 @@ import {
 // live-row → agent-activity` import cycle.
 import type { AgentTaskRow, TaskAnnouncement } from './task-payload';
 import { foldTaskList, readTaskAnnouncement } from './task-payload';
-import { AGENT_TOOLS, toolKindOf, toolOperationOf } from './tool-kind';
+import {
+  AGENT_TOOLS,
+  toolKindOf,
+  type ToolOperation,
+  toolOperationOf,
+} from './tool-kind';
 import { resultDiffsOf, toolResultText } from './tool-render';
 import { payloadString } from './transcript-payload';
 
@@ -522,17 +527,6 @@ export function subagentBlockStatus(
   if (block.failed) {
     return 'failed';
   }
-  // Ahead of `returned`, and ONLY when the CLI has actually said so: a delegate
-  // nobody is waiting for has its launching call answered immediately, so the
-  // return says the delegation was accepted rather than that the work is over.
-  // Ranked below `failed` because a delegate that errored is finished whatever
-  // its lifecycle channel last announced.
-  if (block.backgroundOpen === true) {
-    return 'running';
-  }
-  if (block.returned) {
-    return 'completed';
-  }
   // Two independent things end a delegate that never returned, and neither
   // subsumes the other — the same pairing `ToolGroupEntry.closed` documents.
   // `closed` is its own turn ending; the run settling is the whole run
@@ -553,6 +547,30 @@ export function subagentBlockStatus(
     (runSettledAt === 'unknown' ||
       block.lastRowAt === null ||
       block.lastRowAt <= runSettledAt);
+  // Ahead of `returned`, and ONLY when the CLI has actually said so: a delegate
+  // nobody is waiting for has its launching call answered immediately, so the
+  // return says the delegation was accepted rather than that the work is over.
+  // Ranked below `failed` because a delegate that errored is finished whatever
+  // its lifecycle channel last announced.
+  //
+  // And ranked below the RUN settling, which it did not used to be. An open
+  // `background_work` unit is evidence of a delegate running only while the CLI
+  // is still able to report on it: the daemon holds the turn open precisely so
+  // that report can arrive, and it settles anyway when the unit never reports —
+  // a released hold, or a process that died with the delegate still out. So an
+  // unsettled unit under a settled run is UNREPORTED work, not running work,
+  // and reading it as running latched the badge on for good: measured on this
+  // tree with a CLI that printed `task_started` and exited, the daemon row read
+  // `completed` while the header, the sidebar row and the block all read
+  // `running` — with the process gone, forever. That latch is also what
+  // swallowed the turn-end notification, since the run never crossed into a
+  // settled state for the rules to see.
+  if (block.backgroundOpen === true && !endedByRun) {
+    return 'running';
+  }
+  if (block.returned) {
+    return 'completed';
+  }
   return block.closed || endedByRun ? 'stopped' : 'running';
 }
 
@@ -1321,6 +1339,75 @@ function diffPathOf(result: ChatItem | null): string | null {
  * answer for a call this cannot describe.
  */
 export function toolGroupSummary(pairs: readonly ToolPair[]): string {
+  const { spoken, accounted } = foldToolGroup(pairs);
+  const parts = spoken.map((phrase) => phrase.text);
+  if (parts.length === 0 || accounted < pairs.length) {
+    parts.unshift(`Used ${countOf(pairs.length, 'tool')}`);
+    return parts.join(' · ');
+  }
+  // The breakdown is now the whole line, so it opens the sentence.
+  const [first, ...rest] = parts;
+  return [first!.charAt(0).toUpperCase() + first!.slice(1), ...rest].join(
+    ' · ',
+  );
+}
+
+/**
+ * How many operation glyphs a collapsed group's header carries.
+ *
+ * Three because the header is a one-line summary sitting in a narrow column and
+ * a strip of glyphs long enough to need counting has stopped being a glance —
+ * and because the phrases behind them are already spelled out in the sentence
+ * beside it, so the icons are an index into that sentence rather than a
+ * replacement for it.
+ */
+const MAX_GROUP_OPERATION_ICONS = 3;
+
+/**
+ * The operations a collapsed group's header should draw glyphs for — the same
+ * ones {@link toolGroupSummary} SPEAKS, in the same order, capped.
+ *
+ * Off the same fold as the sentence, deliberately: a second pass over the pairs
+ * is how an icon strip comes to disagree with the words next to it (a group
+ * reading "read 2 files" under a terminal glyph). It also means the strip
+ * inherits the summary's own honesty rules for free — an operation the sentence
+ * cannot account for gets no glyph either, rather than a picture asserting
+ * something the text declined to.
+ *
+ * `delegate`, `delete` and `move` are counted by the fold and never spoken, so
+ * they draw nothing here either — see the note beside their phrases.
+ */
+export function toolGroupOperations(
+  pairs: readonly ToolPair[],
+): ToolOperation[] {
+  return foldToolGroup(pairs)
+    .spoken.map((phrase) => phrase.operation)
+    .slice(0, MAX_GROUP_OPERATION_ICONS);
+}
+
+/** `1 file` / `3 files` — the shared pluralizer for the phrases below. */
+function countOf(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+/** One thing a group is reported to have done: the operation, and its wording. */
+interface ToolGroupPhrase {
+  operation: ToolOperation;
+  text: string;
+}
+
+/**
+ * The ONE pass over a group's pairs, feeding both the header's sentence and its
+ * glyphs.
+ *
+ * Split out of {@link toolGroupSummary} rather than copied so the two readings
+ * cannot drift — the same reason `toolOperationOf` is one classifier serving
+ * both the summary and the per-row icon.
+ */
+function foldToolGroup(pairs: readonly ToolPair[]): {
+  spoken: ToolGroupPhrase[];
+  accounted: number;
+} {
   let commands = 0;
   let searches = 0;
   let fetches = 0;
@@ -1407,26 +1494,43 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
         break;
     }
   }
-  const count = (n: number, noun: string): string =>
-    `${n} ${noun}${n === 1 ? '' : 's'}`;
-  const parts: string[] = [];
+  const count = countOf;
+  const spoken: ToolGroupPhrase[] = [];
   if (opened.size > 0) {
-    parts.push(`read ${count(opened.size, 'file')}`);
+    spoken.push({
+      operation: 'read',
+      text: `read ${count(opened.size, 'file')}`,
+    });
   }
   if (searches > 0) {
-    parts.push(`searched ${count(searches, 'time')}`);
+    spoken.push({
+      operation: 'search',
+      text: `searched ${count(searches, 'time')}`,
+    });
   }
   if (commands > 0) {
-    parts.push(`ran ${count(commands, 'command')}`);
+    spoken.push({
+      operation: 'execute',
+      text: `ran ${count(commands, 'command')}`,
+    });
   }
   if (edited.size > 0) {
-    parts.push(`edited ${count(edited.size, 'file')}`);
+    spoken.push({
+      operation: 'edit',
+      text: `edited ${count(edited.size, 'file')}`,
+    });
   }
   if (created.size > 0) {
-    parts.push(`created ${count(created.size, 'file')}`);
+    spoken.push({
+      operation: 'create',
+      text: `created ${count(created.size, 'file')}`,
+    });
   }
   if (fetches > 0) {
-    parts.push(`fetched ${count(fetches, 'page')}`);
+    spoken.push({
+      operation: 'fetch',
+      text: `fetched ${count(fetches, 'page')}`,
+    });
   }
   // `delegations` is counted into `accounted` and then deliberately NOT
   // spoken: a delegation already renders as its own sub-agent block directly
@@ -1438,17 +1542,12 @@ export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   // delegations never reaches a reader at all: `buildSubagentBlocks` strips
   // those pairs out and drops the emptied group.
   if (mcpCalls > 0) {
-    parts.push(`called ${count(mcpCalls, 'MCP tool')}`);
+    spoken.push({
+      operation: 'mcp',
+      text: `called ${count(mcpCalls, 'MCP tool')}`,
+    });
   }
-  if (parts.length === 0 || accounted < pairs.length) {
-    parts.unshift(`Used ${count(pairs.length, 'tool')}`);
-    return parts.join(' · ');
-  }
-  // The breakdown is now the whole line, so it opens the sentence.
-  const [first, ...rest] = parts;
-  return [first!.charAt(0).toUpperCase() + first!.slice(1), ...rest].join(
-    ' · ',
-  );
+  return { spoken, accounted };
 }
 
 /** One-line argument preview for a tool row (the command, the path, …). */

@@ -81,6 +81,8 @@ export function NavRail({
   view,
   onNavigate,
   connected,
+  updateVersion,
+  onInstallUpdate,
   daemonVersion,
   debugOpen,
   onToggleDebug,
@@ -88,6 +90,17 @@ export function NavRail({
   view: AppView;
   onNavigate: (view: AppView) => void;
   connected: boolean;
+  /**
+   * The version waiting to be installed, or null when there is none to offer.
+   *
+   * Resolved by the caller from main's one `UpdateState` rather than read here:
+   * this row renders the offer, it does not decide there is one — the same
+   * split the banner and Settings already follow, so three surfaces cannot
+   * disagree about whether an update exists.
+   */
+  updateVersion: string | null;
+  /** Apply it. Absent when the app cannot replace its own install. */
+  onInstallUpdate?: () => void;
   daemonVersion: string | null;
   /** Whether the debug drawer is showing — the trigger's pressed state. */
   debugOpen: boolean;
@@ -137,6 +150,18 @@ export function NavRail({
   const statusLabel = connected
     ? `connected${daemonVersion ? ` · v${daemonVersion}` : ''}`
     : 'disconnected';
+  /**
+   * The same row with an Update button in it has no space for the word
+   * "connected" as well, and truncating swallowed the VERSION — the one part
+   * the user is reading when they compare it with the version on offer. The
+   * status DOT beside it already says connected, so the word is what gives way.
+   * A disconnected rail keeps its word: no dot colour is worth that much on its
+   * own, and there is no update to press while the daemon is unreachable.
+   */
+  const footerLabel =
+    updateVersion && connected && daemonVersion
+      ? `v${daemonVersion}`
+      : statusLabel;
 
   return (
     <nav
@@ -197,7 +222,30 @@ export function NavRail({
               `title` still carries the state in words, and the connection
               banner is what actually announces a drop. */}
           {collapsed ? null : <StatusDot tone={connected ? 'ok' : 'bad'} />}
-          {collapsed ? null : statusLabel}
+          {/* `truncate` rather than wrap: with the update button beside it the
+              label no longer has the row to itself, and "connected · v0.1.0"
+              broke onto a second line, making the footer two rows tall. */}
+          {collapsed ? null : <span className="truncate">{footerLabel}</span>}
+          {/* The update offer, HERE because this is the row that already states
+              which version is running — the user asked to be told about a new
+              one where the current one is written, and to act on it without
+              going anywhere. The banner over the views still exists and is not
+              replaced: it is what interrupts, this is what waits.
+
+              Rendered only when there is something to DO. An update the app
+              cannot install itself (a read-only volume, another account's
+              install) offers no button here — Settings carries the `brew`
+              sentence for that case, and a button that cannot work is worse
+              than none in a row this small. */}
+          {!collapsed && updateVersion && onInstallUpdate ? (
+            <button
+              type="button"
+              title={`Update to Geniro ${updateVersion}`}
+              onClick={onInstallUpdate}
+              className="ml-auto shrink-0 rounded-md bg-sidebar-primary px-2 py-0.5 text-[11px] font-medium text-sidebar-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-sidebar-ring/50">
+              Update
+            </button>
+          ) : null}
           {/* The debug drawer's trigger, deliberately HERE. This row is
               already where the eye goes when something is wrong — it is the
               only part of the shell that reports health — so the control for
@@ -210,7 +258,10 @@ export function NavRail({
             onClick={onToggleDebug}
             className={cn(
               'flex size-6 items-center justify-center rounded-md outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
-              collapsed ? 'mt-1' : 'ml-auto',
+              // `ml-auto` only when nothing else has claimed the gap: with an
+              // update button present, two auto margins split the space and
+              // push the status text off-centre.
+              collapsed ? 'mt-1' : updateVersion ? 'ml-1' : 'ml-auto',
               debugOpen
                 ? 'text-sidebar-primary-strong'
                 : 'text-sidebar-foreground/70',

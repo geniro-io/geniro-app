@@ -705,3 +705,66 @@ describe('turn_complete — how long the turn worked', () => {
     expect(container.textContent).toBe('✓ done · $0.2110');
   });
 });
+
+describe('TranscriptItem — a message sent into a running turn', () => {
+  const userMessage = (payload: unknown): ChatItem => ({
+    ...item('message', payload, null),
+    role: 'user',
+  });
+
+  it('says the agent picks it up when its current step finishes', () => {
+    // The gap this closes: the two ways a message reaches an agent look
+    // identical in the transcript, and only this one waits. Sent behind a long
+    // tool call, the agent visibly does nothing while the live row goes on
+    // naming the tool that was already running — both true, and read together
+    // as "the send did not take".
+    render(<TranscriptItem item={userMessage({ text: 'do this instead' })} />);
+    expect(container.querySelector('[data-role="mid-turn-note"]')).toBeNull();
+
+    render(
+      <TranscriptItem
+        item={userMessage({ text: 'do this instead', midTurn: true })}
+      />,
+    );
+    const note = container.querySelector('[data-role="mid-turn-note"]');
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain('turn already running');
+    // The message itself is untouched — the caption is an addition to the row,
+    // never a replacement for what the user actually wrote.
+    expect(container.textContent).toContain('do this instead');
+  });
+});
+
+describe('TranscriptItem — an error row carries what the failure reported', () => {
+  it('opens onto the provider’s own facts, and offers the report to copy', () => {
+    // End to end on the row itself: a `detail` on the payload has to reach the
+    // disclosure, or every fact the daemon now carries stops at the wire.
+    render(
+      <TranscriptItem
+        item={item(
+          'error',
+          {
+            message: 'API Error: Connection lost mid-response.',
+            detail: {
+              code: 'api_error',
+              httpStatus: 404,
+              requestId: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+            },
+          },
+          null,
+        )}
+        nodes={NODES}
+      />,
+    );
+
+    act(() => {
+      container.querySelector('button')?.click();
+    });
+
+    expect(container.textContent).toContain('req_011CeAL4KP2RkG9YEPGrdi2n');
+    expect(container.textContent).toContain('404');
+    expect(
+      container.querySelector('button[aria-label="Copy the error report"]'),
+    ).not.toBeNull();
+  });
+});

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
     sidebarCollapsed: false,
     notificationsEnabled: true,
     daemonInspect: false,
+    claudeBrowserTools: false,
   };
   return {
     handlers,

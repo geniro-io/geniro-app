@@ -36,6 +36,7 @@ import {
   isUserQuestion,
 } from '../utils/approval-answer';
 import {
+  closesADelegate,
   mapEventToItem,
   offTurnActivity,
   terminalStatus,
@@ -154,6 +155,18 @@ export class ChatService {
    * run over.
    */
   private readonly offTurnRuns = new Set<string>();
+
+  /**
+   * Runs whose turn is HELD for background work, and by how many units.
+   *
+   * In memory and per run, exactly like the approval registry the `awaiting`
+   * reading comes from, and on the run's WIRE row for exactly the same reason:
+   * the hold begins with one broadcast and then lasts as long as the delegates
+   * do. A window opened — or a chat revisited — after that broadcast has
+   * nothing else to read it off, and would put the user's next message into a
+   * queue that will not drain for minutes.
+   */
+  private readonly heldRuns = new Map<string, number>();
 
   constructor(
     private readonly em: EntityManager,
@@ -296,6 +309,34 @@ export class ChatService {
   }
 
   /**
+   * Announce that the turn is now (or is no longer) merely HELD for background
+   * work the agent started.
+   *
+   * The count rides as a FACT beside the phrase, not only inside it. The
+   * composer has to act on this — while a run is held the agent is idle and a
+   * message must go straight out rather than into the queue — and reading that
+   * decision off the wording of an English sentence is how a UI comes to break
+   * when someone improves the copy.
+   */
+  private announceRunHold(
+    runId: string,
+    open: number,
+    activity: string | null,
+  ): void {
+    if (open > 0) {
+      this.heldRuns.set(runId, open);
+    } else {
+      this.heldRuns.delete(runId);
+    }
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      activity,
+      holdingFor: open,
+    });
+  }
+
+  /**
    * Announce that a run has become parked on the user — or stopped being.
    *
    * Separate from {@link announceActivity} because the two say different
@@ -318,13 +359,27 @@ export class ChatService {
    *
    * Clearing the activity is also correct rather than incidental: whatever the
    * run was last said to be DOING, it is not doing it while it waits.
+   *
+   * What is NOT correct is leaving it cleared once the wait ENDS, which is what
+   * {@link resumedActivity} is for. The approved tool then runs with nothing
+   * naming it — the phrase is only ever written by a `tool_call`, and the call
+   * the user just approved had already announced itself BEFORE the card went
+   * up. Measured on a real `ask` turn: a 30s command approved by hand ran under
+   * "Working… 11s" from the moment Approve was pressed. That is the reported
+   * "the line does not match the work" again, on the commonest path there is.
+   * Used only when nothing is still awaiting — a second open card means the run
+   * is still parked and the phrase must stay down.
    */
-  private announceAwaiting(runId: string): void {
+  private announceAwaiting(
+    runId: string,
+    resumedActivity: string | null = null,
+  ): void {
+    const awaiting = this.approvals.awaitingFor(runId);
     this.bus.publishRunStatus({
       runId,
       status: null,
-      activity: null,
-      awaiting: this.approvals.awaitingFor(runId),
+      activity: awaiting === null ? resumedActivity : null,
+      awaiting,
     });
   }
 
@@ -1059,10 +1114,44 @@ export class ChatService {
         mapped.role,
         mapped.payload,
       );
-      if (mapped.kind === 'message') {
+      // Main thread only, exactly as in the in-turn path above: the tail holds
+      // the main agent's words, so a delegate's durable message must not take
+      // them away.
+      if (mapped.kind === 'message' && event.parentToolUseId === undefined) {
         this.partials.retire(runId, SINGLE_AGENT_NODE, null);
       }
-      await this.restatusAfterOffTurnEvent(em, runId, event);
+      // The ROW is written whatever produced it — a transcript that hides work
+      // is the other way of lying. What the RUN is doing is a different
+      // question, and a DELEGATE's row does not answer it.
+      //
+      // A delegate is the background work the turn was already held for, and
+      // its trailing rows land as it finishes. Restating them as the run
+      // working again put a `still working` spinner on screen at the exact
+      // moment the work ENDED — and nothing could ever take it down, because
+      // only a terminal event settles this state and a delegate winding up
+      // opens no turn of its own to produce one. Reproduced: the delegate's
+      // block reads `done`, the turn reads `✓ done`, and the row under them
+      // counts upward for as long as the chat is open. That is the reported
+      // "агент вроде как закончил работать, а он статуса не изменил — он всё
+      // ещё пишет still working".
+      //
+      // A delegate still working is not lost by this: the renderer derives it
+      // from the transcript (`subagentRunning`), which closes by itself when
+      // the delegate's block returns. The CLI genuinely carrying on — a
+      // task-notification continuation — writes MAIN-THREAD rows and still
+      // flips the run back to `running`, and its own result settles it again.
+      //
+      // The delegate LIFECYCLE announcement is main-thread and so passes that
+      // test, and its two directions mean opposite things. A delegate STARTING
+      // is the run working — that is the whole point of routing it here, since
+      // a delegate launched between turns is otherwise invisible and the run
+      // reads `completed` under agents that are demonstrably still going. A
+      // delegate FINISHING is the same "restated the end of work as the start
+      // of some" the paragraph above is about, and would latch the spinner on
+      // with nothing left to take it down.
+      if (event.parentToolUseId === undefined && !closesADelegate(event)) {
+        await this.restatusAfterOffTurnEvent(em, runId, event);
+      }
     } catch (err: unknown) {
       this.logger.error(
         `run ${runId} failed to persist a between-turn ${event.type}: ${
@@ -1329,6 +1418,80 @@ export class ChatService {
         preTokens: number | null;
         postTokens: number | null;
       } | null = null;
+      /**
+       * How many units of background work this turn is being HELD for — 0
+       * whenever the agent is itself still working.
+       *
+       * Per TURN, in this closure, like `compactedTokens` above: one turn's
+       * hold says nothing about the next.
+       *
+       * Fed by `turn_held`, which `runCliSession` raises, and NOT by counting
+       * `background_work` here. That was the first attempt and it was dead code
+       * on the real path: `spawn-cli` consumes those events as turn plumbing
+       * and never forwards them, so the tally never moved outside a spec that
+       * called this handler directly. It was also the wrong question — a
+       * delegate can be running while its parent edits files, and what both
+       * consumers need to know is whether the AGENT has stopped.
+       *
+       * It exists so the run can SAY what it is waiting for. A turn is held
+       * open while units are outstanding (`spawn-cli`'s `TurnState.openWork`),
+       * which is deliberate — a delegate that reports after the result line
+       * would otherwise have its whole output dropped — but the holding was
+       * invisible: the row went on showing the last tool name, so a finished
+       * answer sat under "running Read" with a climbing timer and no way to
+       * tell a live delegate from a dead one. That was the reported "он
+       * закончил, но пишет что он ещё в процессе".
+       */
+      let heldOnBackgroundWork = 0;
+      /**
+       * The MAIN thread's tool calls that have started and not yet returned,
+       * `id → name`, newest last (a `Map` keeps insertion order).
+       *
+       * A running tool is the most specific thing the run can be said to be
+       * doing, so it wins over the background tally: without this a delegate
+       * settling mid-`Bash` would rename the row to "waiting on 2 background
+       * tasks" while the parent was demonstrably running Bash.
+       *
+       * A SET of ids rather than the boolean this started as, because a model
+       * routinely issues several tool calls in ONE assistant message and their
+       * results come back independently. A boolean is taken down by whichever
+       * finishes first, so a batch of `Read`+`Edit` stopped naming the Edit the
+       * moment the Read returned — the same "the line does not match the work"
+       * complaint as the stale phrase, arriving from the other side. Keeping
+       * the names is what lets the announce fall back to a tool that IS still
+       * running instead of to silence.
+       */
+      const openMainTools = new Map<string, string>();
+      /**
+       * What to say while the main thread still has tools out: the most
+       * recently STARTED one that has not returned.
+       *
+       * Newest rather than oldest because it is the call the model made last
+       * and therefore the one the transcript has just shown the user — an
+       * `Edit` issued alongside a slow `Bash` should not report the Bash it was
+       * batched with. Null when nothing is out.
+       */
+      const runningToolActivity = (): string | null => {
+        let latest: string | null = null;
+        for (const name of openMainTools.values()) {
+          latest = name;
+        }
+        return latest === null ? null : `running ${latest}`;
+      };
+      /**
+       * What to say when the MAIN thread is not itself running a tool: either
+       * the background work being waited on, or nothing.
+       *
+       * Null leaves the run's own "Working…" standing, which is the honest
+       * phrase for an agent that is simply thinking.
+       */
+      const idleActivity = (): string | null => {
+        const count = heldOnBackgroundWork;
+        if (count === 0) {
+          return null;
+        }
+        return `waiting on ${count} background task${count === 1 ? '' : 's'}`;
+      };
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
           eventHandlingFailed = true;
@@ -1553,7 +1716,29 @@ export class ChatService {
             // carries no text delta to close it (see `endThinking`). Before the
             // persist, so the row stops saying "Thinking…" as the tool row
             // lands rather than a write later.
-            this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
+            //
+            // MAIN THREAD ONLY, like every other write into this plane: there
+            // is one stretch per run and it belongs to the agent the user is
+            // addressing. A delegate's rows arrive on this same stream while
+            // the parent is genuinely still reasoning, so letting one close the
+            // stretch took the "Thinking…" row away from an agent that had not
+            // stopped.
+            if (event.parentToolUseId === undefined) {
+              this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
+            }
+            if (event.type === 'turn_held') {
+              // ABOVE the `mapEventToItem` gate below, and it has to stay
+              // there: this event yields no ROW, so the `if (!mapped) return`
+              // is exactly what it falls into. Placed after it, the tally never
+              // counts anything and the phrase never appears — which is how the
+              // first version of this branch was written.
+              heldOnBackgroundWork = event.open;
+              // The agent has stopped talking, so nothing it was doing is still
+              // true — a tool left open by a turn that ended is not running.
+              openMainTools.clear();
+              this.announceRunHold(runId, event.open, idleActivity());
+              return;
+            }
             const mapped = mapEventToItem(event);
             if (!mapped) {
               return;
@@ -1599,7 +1784,43 @@ export class ChatService {
               // branch announced when the delegating tool call started, which
               // stands until the parent itself does something else — and
               // "running Agent" is the truth for the whole delegation.
+              openMainTools.set(event.id, event.name);
               this.announceActivity(runId, `running ${event.name}`);
+            }
+            if (
+              event.type === 'tool_result' &&
+              event.parentToolUseId === undefined
+            ) {
+              // The tool is DONE, so stop saying it is running.
+              //
+              // Without this the phrase set above is never taken down: it is
+              // only ever replaced by the NEXT tool call, so the last tool of a
+              // turn keeps its present tense for as long as the turn lasts.
+              // That is what put "running Read · 7m 57s" under a finished
+              // answer on a turn held open by background work — a claim that
+              // was false twice over, since the read had returned minutes
+              // earlier and nothing was reading anything.
+              //
+              // Null rather than a phrase of its own: what the agent does
+              // between tools is think, which is exactly what the run's own
+              // "Working…" already says. Inventing "thinking" here would also
+              // be a guess — the turn may equally be waiting on background work
+              // it started.
+              //
+              // MAIN THREAD ONLY, on the same measured reason as the announce
+              // above: a delegate's tool results arrive on this stream too, and
+              // clearing on one would take down the parent's "running Agent"
+              // while the delegation is still running.
+              //
+              // ...and only once this call's SIBLINGS have returned too. A
+              // batch issued in one assistant message returns one result at a
+              // time, so retiring the phrase on the first of them reports a
+              // still-running `Edit` as idle — see `openMainTools`.
+              openMainTools.delete(event.id);
+              this.announceActivity(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
             }
             if (event.type === 'approval_request') {
               const isQuestion = isUserQuestion(
@@ -1686,7 +1907,14 @@ export class ChatService {
                   // another card. Announced whether or not the verdict was
                   // delivered: an undeliverable one means the turn settled
                   // underneath the card, which is equally not-parked.
-                  this.announceAwaiting(runId);
+                  //
+                  // …and it carries what the run goes BACK to doing, because
+                  // the tool the user just approved announced itself before the
+                  // card went up and will not announce itself again.
+                  this.announceAwaiting(
+                    runId,
+                    runningToolActivity() ?? idleActivity(),
+                  );
                   if (delivered) {
                     enqueue(async () => {
                       await this.persist(
@@ -1734,12 +1962,27 @@ export class ChatService {
               mapped.role,
               mapped.payload,
             );
-            if (mapped.kind === 'message') {
-              // ONLY a message retires the tail: it is the durable copy of the
-              // very words being streamed. Retiring on any item would let a
-              // terminal one (turn_cancelled/error) erase the tail a moment
-              // before the finalizer flushes it — the text the user watched
-              // would vanish from the replayed transcript.
+            // ONLY a message retires the tail: it is the durable copy of the
+            // very words being streamed. Retiring on any item would let a
+            // terminal one (turn_cancelled/error) erase the tail a moment
+            // before the finalizer flushes it — the text the user watched
+            // would vanish from the replayed transcript.
+            //
+            // …and only the MAIN thread's message, which is the same rule
+            // `text_delta` follows above. There is one tail per run and it
+            // holds the words the user is watching appear; a DELEGATE's
+            // message is the durable copy of text that was never in it, so
+            // retiring on one threw away the head of a sentence the main
+            // agent was still writing. That is the reported "он начал
+            // стримить сообщения, а потом обрезал первую часть и достримил
+            // вторую" — the bubble restarted mid-word, and the whole message
+            // only appeared when its own durable row landed at the end. The
+            // screenshot's turn had a sub-agent producing rows throughout,
+            // which is exactly when it bites.
+            if (
+              mapped.kind === 'message' &&
+              event.parentToolUseId === undefined
+            ) {
               this.partials.retire(runId, SINGLE_AGENT_NODE, null);
               if (mapped.role === 'assistant') {
                 // Straight off the mapped payload, which is the shape the row
@@ -1865,6 +2108,11 @@ export class ChatService {
             });
           }
           this.partials.clearRun(runId);
+          // The turn is over, so nothing is being held for anything. Cleared
+          // on EVERY settle path (the finalizer runs for a failure and a cancel
+          // too), or a run that was held when it died would keep telling every
+          // window that opens afterwards that its agent is idle and waiting.
+          this.heldRuns.delete(runId);
           if (eventHandlingFailed) {
             const message = 'run event persistence failed';
             await this.setRunStatus(em, runId, 'failed').catch(
@@ -2009,6 +2257,28 @@ export class ChatService {
     return this.persist(em, runId, seq, 'message', 'user', {
       text,
       ...(attachments.length > 0 ? { images: attachments } : {}),
+      // TWIN PARSER: read by `apps/ui/src/renderer/chats/message-payload.ts`
+      // (`wasSentMidTurn`). An item payload is `z.unknown()` on the wire BY
+      // DESIGN, so no generated type carries this key — rename it here and that
+      // file must change with it.
+      //
+      // Stamped because the two ways a user message reaches an agent are NOT
+      // the same event, and only this one has a wait built into it. A message
+      // that starts a turn is read at once; this one is written onto the stdin
+      // of a turn already in flight, and the CLI acts on it at its next tool
+      // boundary — so while a long tool runs, nothing happens, and nothing on
+      // screen said why. What the user saw was their message posted, the live
+      // row still naming the tool that was running before they sent it, and an
+      // agent doing nothing: "я его мгновенно отправляю, у меня все еще
+      // пишется, что исполняется предыдущая команда, и он ничего не делает".
+      // Every part of that reading was correct and the conclusion — that the
+      // send did not take — was wrong, which is a gap in what the row SAYS
+      // rather than in what the daemon did.
+      //
+      // A durable flag on the message rather than a live status, because it is
+      // a fact about how this message was SENT: permanently true, needing no
+      // clearing, and still true when the transcript is replayed a week later.
+      midTurn: true,
     });
   }
 
@@ -2040,7 +2310,12 @@ export class ChatService {
    * that missed the transition has only this to learn it from.
    */
   private toRunWire(run: Run, lastMessage: string | null = null): RunWire {
-    return runToWire(run, lastMessage, this.approvals.awaitingFor(run.id));
+    return runToWire(
+      run,
+      lastMessage,
+      this.approvals.awaitingFor(run.id),
+      this.heldRuns.get(run.id) ?? 0,
+    );
   }
 
   private itemToWire(item: Item): ItemWire {

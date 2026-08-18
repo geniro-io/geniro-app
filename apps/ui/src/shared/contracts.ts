@@ -125,6 +125,22 @@ export interface Settings {
    * exact case the split exists to prevent.
    */
   daemonInspect: boolean | null;
+  /**
+   * Let a claude chat drive the user's browser through **Claude in Chrome**.
+   *
+   * The CLI ships those tools (`mcp__claude-in-chrome__*` — navigate, read the
+   * page, fill a form, run JS, read the console and network) and withholds them
+   * from the headless mode geniro drives, so this switch is what hands them
+   * back. OFF by default, unlike the other two tool families geniro restores:
+   * this one does nothing at all without Anthropic's Chrome extension
+   * installed and a browser running it, and it is 22 tool schemas in every
+   * prompt of every turn — a cost paid per turn for a toolbelt most runs never
+   * touch.
+   *
+   * Read when the daemon PROCESS is launched (it rides its env), so flipping it
+   * respawns the daemon, exactly like the CLI paths and the inspector.
+   */
+  claudeBrowserTools: boolean;
 }
 
 /** Default settings written on first launch when no settings file exists. */
@@ -143,6 +159,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarCollapsed: false,
   notificationsEnabled: true,
   daemonInspect: null,
+  claudeBrowserTools: false,
 };
 
 /**
@@ -405,13 +422,21 @@ export interface GeniroApi {
    */
   checkForUpdates(): Promise<UpdateState>;
   /**
-   * Download, verify and swap in the available update, then relaunch.
+   * Download, verify and swap in the available update.
    *
    * Resolves with the state at the END of the attempt: `error` when it could
-   * not be applied, otherwise `ready` — and by then the app is already on its
-   * way out, so nothing that resolves after it will be seen.
+   * not be applied, otherwise `ready`. It does NOT restart the app — see
+   * {@link relaunchForUpdate}.
    */
   installUpdate(): Promise<UpdateState>;
+  /**
+   * Quit and come back up on the freshly-installed bundle.
+   *
+   * Separate from {@link installUpdate} because restarting takes the daemon and
+   * every running turn with it, so the moment is the user's to pick. A no-op
+   * unless an update is actually `ready`.
+   */
+  relaunchForUpdate(): Promise<UpdateState>;
   /** Subscribe to update-state changes (check progress, download progress). */
   onUpdateState(listener: (state: UpdateState) => void): () => void;
   /** Read a folder's git state (repo? branch? branches? dirty?). */
@@ -524,6 +549,7 @@ export const IPC = {
   getUpdateState: 'geniro:getUpdateState',
   checkForUpdates: 'geniro:checkForUpdates',
   installUpdate: 'geniro:installUpdate',
+  relaunchForUpdate: 'geniro:relaunchForUpdate',
   onUpdateState: 'geniro:onUpdateState',
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',

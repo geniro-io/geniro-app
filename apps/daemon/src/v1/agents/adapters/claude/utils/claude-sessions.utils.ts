@@ -15,6 +15,7 @@ import {
   CLAUDE_SESSIONS_DIR_NAME,
 } from '../claude.const';
 import { mapClaudeMessage } from './claude-message.utils';
+import { ClaudeSessionCostLedger } from './claude-usage.utils';
 
 /**
  * Reading the conversations this CLI has already held, off its own profile.
@@ -232,8 +233,13 @@ export async function readClaudeSessionHistory(input: {
   }
   const events: AgentEvent[] = [];
   let dropped = 0;
+  // Inert by construction, and threaded only because the mapper's signature
+  // requires one: the sole line type carrying session cost totals is `result`,
+  // which `mapHistoryLine` drops before the mapper ever sees it (see its doc
+  // block). Scoped to this import so it cannot outlive the file being read.
+  const costLedger = new ClaudeSessionCostLedger();
   await eachJsonLine(path, null, (line) => {
-    for (const event of mapHistoryLine(line)) {
+    for (const event of mapHistoryLine(line, costLedger)) {
       events.push(event);
     }
     // Trimmed as we go rather than at the end: the point of the cap is to bound
@@ -263,13 +269,16 @@ export async function readClaudeSessionHistory(input: {
  * one `limit` trim away. Imported alone they would render as orphans in the
  * main thread.
  */
-function mapHistoryLine(line: Record<string, unknown>): AgentEvent[] {
+function mapHistoryLine(
+  line: Record<string, unknown>,
+  costLedger: ClaudeSessionCostLedger,
+): AgentEvent[] {
   if (line.isSidechain === true) {
     return [];
   }
   const type = line.type;
   if (type === 'assistant') {
-    return mapClaudeMessage(line);
+    return mapClaudeMessage(line, costLedger);
   }
   if (type !== 'user') {
     return [];
@@ -282,7 +291,7 @@ function mapHistoryLine(line: Record<string, unknown>): AgentEvent[] {
   // tool result would be read twice.
   const text = userText(line);
   return text === null
-    ? mapClaudeMessage(line)
+    ? mapClaudeMessage(line, costLedger)
     : [{ type: 'user_message', text }];
 }
 

@@ -22,7 +22,6 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentContextUsage,
-  AgentContextUsageInput,
   AgentEffort,
   AgentErrorRecovery,
   AgentEvent,
@@ -32,10 +31,12 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentPlanLimits,
   AgentSession,
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
+  AgentSessionReadInput,
   AgentSessionsInput,
   AgentSkillEntry,
   AgentSkillsInput,
@@ -1586,7 +1587,7 @@ export abstract class AgentAdapter {
    * adapter for a request LINE assumed the answer comes back over stdin (it is
    * claude's shape), and hanging it off the live session assumed a process
    * exists to ask (cursor's does not outlive its turn — its figures are on
-   * disk). {@link AgentContextUsageInput} therefore offers BOTH channels and
+   * disk). {@link AgentSessionReadInput} therefore offers BOTH channels and
    * each adapter takes what it needs.
    *
    * The VALUE half is `AdapterConfig.usage.breakdownUnavailableReason`: what to
@@ -1594,8 +1595,30 @@ export abstract class AgentAdapter {
    * `agent-adapter.spec.ts` pins that they do.
    */
   readContextUsage(
-    _input: AgentContextUsageInput,
+    _input: AgentSessionReadInput,
   ): Promise<AgentContextUsage | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * What the ACCOUNT behind this run is allowed — the plan's rate-limit
+   * windows and how much of each is spent — or null when this CLI has no way
+   * to say.
+   *
+   * A sibling of {@link readContextUsage} rather than part of it, because the
+   * two describe different things: one is this conversation's window, the other
+   * is the subscription every conversation on that account shares. They happen
+   * to travel the same channels, which is why they take the same input, and
+   * they are asked together so a panel cannot show one from a moment the other
+   * does not describe.
+   *
+   * The VALUE half is `AdapterConfig.usage.planLimitsUnavailableReason`: what
+   * to tell the user when this returns null. The two must agree, and
+   * `agent-adapter.spec.ts` pins that they do.
+   */
+  readPlanLimits(
+    _input: AgentSessionReadInput,
+  ): Promise<AgentPlanLimits | null> {
     return Promise.resolve(null);
   }
 

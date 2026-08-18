@@ -5,11 +5,16 @@ import { messageAttachments } from './attachment-payload';
 import { CliLoginContext } from './cli-login-context';
 import { compactionDetail, compactionFacts } from './compaction-payload';
 import { DisclosureRow } from './disclosure-row';
-import { errorRecoveryOf } from './error-payload';
+import {
+  errorFactsOf,
+  errorRecoveryOf,
+  errorReportText,
+} from './error-payload';
 import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { wasSentMidTurn } from './message-payload';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import { isCliAuthored, isInfoNotice } from './system-payload';
@@ -107,6 +112,21 @@ export const TranscriptItem = memo(function TranscriptItem({
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
           {text ? <MarkdownContent content={text} /> : null}
+          {/* Only for a message written into a turn already in flight, and only
+              then: it explains a wait the ordinary message does not have. See
+              `wasSentMidTurn` — the CLI reads it at its next tool boundary, so
+              behind a long tool call the agent visibly does nothing and the
+              live row goes on naming the tool that was running before the user
+              sent this. Both readings are right; without this line the
+              conclusion drawn from them is that the send never took. */}
+          {wasSentMidTurn(item.payload) ? (
+            <p
+              data-role="mid-turn-note"
+              className="m-0 text-[11px] text-muted-foreground">
+              Sent into the turn already running — the agent picks this up when
+              its current step finishes.
+            </p>
+          ) : null}
         </MessageBubble>
       );
     }
@@ -174,6 +194,11 @@ export const TranscriptItem = memo(function TranscriptItem({
         <DisclosureRow
           caption="error"
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
+          // What the failure said about itself, and the whole thing as one
+          // block of text — a failure is something the user has to hand to
+          // somebody, and a screenshot of a sentence is not a report.
+          facts={errorFactsOf(item)}
+          copyText={errorReportText(item)}
           // Offered only when the DAEMON recognised this failure as a lapsed
           // account session — the renderer never reads a CLI's wording itself,
           // so it cannot offer sign-in for a failure sign-in would not fix.

@@ -62,6 +62,7 @@ export function Settings({
   >({});
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [claudeBrowserTools, setClaudeBrowserTools] = useState(false);
   /** Where the on-demand banner got to: idle → testing → what happened. */
   const [notificationTest, setNotificationTest] = useState<
     'idle' | 'testing' | 'shown' | 'unknown'
@@ -137,6 +138,7 @@ export function Settings({
       }
       if (!notificationsDirtyRef.current) {
         setNotificationsEnabled(s.notificationsEnabled);
+        setClaudeBrowserTools(s.claudeBrowserTools);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -411,6 +413,17 @@ export function Settings({
     [persist],
   );
 
+  const onToggleBrowserTools = useCallback(
+    (next: boolean): void => {
+      setClaudeBrowserTools(next);
+      // Main restarts the daemon on this key: the flag rides the daemon's env
+      // and is read when a turn spawns its CLI, so there is nothing to apply to
+      // the process already running.
+      void persist({ claudeBrowserTools: next });
+    },
+    [persist],
+  );
+
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col gap-6 overflow-y-auto px-6 py-8">
       <header className="flex flex-col gap-1">
@@ -550,6 +563,32 @@ export function Settings({
       </section>
 
       <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Browser</h2>
+        <div className="flex items-center gap-3">
+          <Switch
+            id="settings-claude-browser-tools"
+            checked={claudeBrowserTools}
+            onCheckedChange={onToggleBrowserTools}
+          />
+          <Label
+            htmlFor="settings-claude-browser-tools"
+            className="cursor-pointer">
+            Let claude drive your browser (Claude in Chrome)
+          </Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Hands a claude chat the CLI’s own browser tools — open a page, read
+          it, fill a form, run JavaScript, read the console and network. They
+          need Anthropic’s Chrome extension installed and a browser running it;
+          without one the agent has the tools and nothing to drive.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Off by default because they are 22 extra tools in every prompt of
+          every turn, paid for on each. Flipping this restarts the daemon.
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-3">
         <h2 className="text-lg font-medium">Updates</h2>
         <div className="flex items-center gap-3">
           <Switch
@@ -581,11 +620,24 @@ export function Settings({
               Update now
             </Button>
           ) : null}
+          {/* Installed, waiting on the user. The restart quits the app and
+              takes the daemon and every running turn with it, so it is a press
+              rather than something that happens the moment the copy ends. */}
+          {update.state?.phase === 'ready' ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={() => void update.relaunch()}>
+              Restart now
+            </Button>
+          ) : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          Geniro checks GitHub Releases on launch and every few hours. An update
-          downloads, is verified against its published checksum and replaces the
-          app in place — nothing is installed until you press Update now.
+          Geniro checks GitHub Releases on launch and every few minutes. An
+          update downloads, is verified against its published checksum and
+          replaces the app in place — nothing is installed until you press
+          Update now, and nothing restarts until you press Restart now.
         </p>
         {update.state && updateLine ? (
           <p

@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, TurnIo } from '../adapter.types';
 import {
-  CLAUDE_MCP_READY_DEADLINE_MS,
+  CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
+  CLAUDE_MCP_READY_STALL_MS,
 } from './claude.const';
 import { ClaudeTurnDriver } from './claude-turn.driver';
 
@@ -182,6 +183,60 @@ describe('holding the first prompt until the MCP servers are up', () => {
     expect(g.events).toEqual([]);
   });
 
+  it('keeps waiting for a slow folder while discovery is still MOVING', async () => {
+    // The reported case: remote servers (claude.ai, Amplitude) had not finished
+    // dialling when the flat 15s ceiling expired, so their tools were missing
+    // from the first message even though the reading was visibly still
+    // changing. The gate now times a STALL, so progress renews the wait.
+    let poll = 0;
+    const g = gate((id) => {
+      poll += 1;
+      // Discovery keeps MOVING: a further server is found on each of the first
+      // 40 polls, and the two remote ones stay pending well past the stall
+      // window before connecting. Slow, but never stuck — exactly the folder
+      // the flat ceiling used to cut off.
+      const discovered = Array.from({ length: Math.min(poll, 40) }, (_, i) => ({
+        name: `local-${i}`,
+        status: 'connected' as const,
+      }));
+      return reply(id, [
+        ...discovered,
+        { name: 'claude.ai', status: poll < 45 ? 'pending' : 'connected' },
+        { name: 'Amplitude', status: poll < 45 ? 'pending' : 'connected' },
+      ]);
+    });
+
+    await g.driver.awaitPromptReady(g.io);
+
+    // Released because everything came up — NOT because a ceiling expired, so
+    // the turn keeps the tools and the user is told nothing.
+    expect(g.events).toEqual([]);
+    expect(g.clock).toBeGreaterThan(CLAUDE_MCP_READY_STALL_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_MAX_WAIT_MS);
+  });
+
+  it('gives up on a server that is STUCK, without waiting out the ceiling', async () => {
+    // The stall window is what keeps the patience above from becoming a hang:
+    // an unreachable host reports the same reading forever, so nothing changes
+    // and the prompt goes out well inside the hard ceiling.
+    const g = gate((id) =>
+      reply(id, [
+        { name: 'reachable', status: 'connected' },
+        { name: 'broken', status: 'pending' },
+      ]),
+    );
+
+    await g.driver.awaitPromptReady(g.io);
+
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_MAX_WAIT_MS);
+    const notice = g.events[0];
+    if (notice?.type !== 'notice') {
+      throw new Error(`expected a notice, got ${String(notice?.type)}`);
+    }
+    expect(notice.message).toContain('broken');
+    expect(notice.message).not.toContain('reachable');
+  });
+
   it('still stops for a CLI that never answers at all', async () => {
     // The other half of the same decision: retrying forever would hold the
     // user's message until the turn's 30-minute silence deadline settled it,
@@ -191,7 +246,7 @@ describe('holding the first prompt until the MCP servers are up', () => {
     await g.driver.awaitPromptReady(g.io);
 
     expect(g.polls).toBeGreaterThan(1);
-    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_DEADLINE_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toEqual([]);
   });
 
@@ -203,7 +258,7 @@ describe('holding the first prompt until the MCP servers are up', () => {
 
     await g.driver.awaitPromptReady(g.io);
 
-    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_DEADLINE_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toEqual([]);
   });
 
@@ -220,7 +275,7 @@ describe('holding the first prompt until the MCP servers are up', () => {
 
     await g.driver.awaitPromptReady(g.io);
 
-    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_DEADLINE_MS);
+    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toHaveLength(1);
     const notice = g.events[0];
     if (notice?.type !== 'notice') {
@@ -229,9 +284,11 @@ describe('holding the first prompt until the MCP servers are up', () => {
     expect(notice.message).toContain('playwright');
     // Only what was actually still starting.
     expect(notice.message).not.toContain('github');
-    // A degrade, so it wears the daemon's advisory chrome (severity absent =
-    // warning) rather than the quiet `info` used for machinery working.
-    expect(notice.severity).toBeUndefined();
+    // INFO rather than the advisory chrome this once asserted. The degrade is
+    // real, but nothing FAILED — the turn ran, the servers finish behind it and
+    // the next message has them. A red banner here was read as a fault to
+    // report ("i see this error") on a turn that had worked.
+    expect(notice.severity).toBe('info');
   });
 });
 
@@ -268,5 +325,197 @@ describe('the driver’s other half is the stateless default', () => {
 
     expect(driver.buildApprovalResponse('id-1', true, { a: 1 })).toBe('LINE\n');
     expect(buildApprovalResponse).toHaveBeenCalledWith('id-1', true, { a: 1 });
+  });
+});
+
+describe('the window a compaction left behind', () => {
+  /** A driver whose mapper replays one scripted line's events at a time. */
+  const driverOver = (script: AgentEvent[][]) => {
+    let line = 0;
+    return new ClaudeTurnDriver({
+      mapMessage: () => script[line++] ?? [],
+      buildApprovalResponse: () => undefined,
+    });
+  };
+
+  const compacted = (postTokens: number | null): AgentEvent => ({
+    type: 'context_compacted',
+    phase: 'finished',
+    trigger: 'manual',
+    preTokens: 515_000,
+    postTokens,
+  });
+
+  const completed = (contextTokens: number): AgentEvent => ({
+    type: 'turn_complete',
+    stopReason: 'end_turn',
+    finalText: null,
+    usage: {
+      inputTokens: 12,
+      outputTokens: 34,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      contextTokens,
+      contextWindowTokens: 200_000,
+      contextModel: null,
+      durationMs: null,
+      apiMs: null,
+      costUsd: 1,
+    },
+  });
+
+  it('announces the new reading at once, so the meter drops with the compaction', () => {
+    const driver = driverOver([[compacted(12_600)]]);
+
+    // The live plane's own event, beside the boundary rather than instead of
+    // it: the boundary is what names the pause, this is what moves the ring.
+    expect(driver.onMessage({})).toEqual([
+      compacted(12_600),
+      { type: 'context_progress', contextTokens: 12_600 },
+    ]);
+  });
+
+  it('stamps it onto the turn’s result, which still carries the pre-compaction prompt', () => {
+    const driver = driverOver([[compacted(12_600)], [completed(515_000)]]);
+    driver.onMessage({});
+
+    // Without this the reopened chat reads 515k — the prompt of the request the
+    // compaction has just replaced — for the rest of the conversation.
+    expect(driver.onMessage({})).toEqual([completed(12_600)]);
+  });
+
+  it('yields to a request that measured the window ITSELF after the compaction', () => {
+    const driver = driverOver([
+      [compacted(12_600)],
+      [{ type: 'context_progress', contextTokens: 30_000 }],
+      [completed(31_500)],
+    ]);
+    driver.onMessage({});
+    driver.onMessage({});
+
+    // An AUTO compaction happens mid-turn and the turn carries on: every
+    // request after it reports the real figure, and the result's is the latest
+    // of them. Only a turn that ENDED on its compaction needs the stamp.
+    expect(driver.onMessage({})).toEqual([completed(31_500)]);
+  });
+
+  it('invents nothing for a compaction that reported no post_tokens', () => {
+    const driver = driverOver([[compacted(null)], [completed(515_000)]]);
+
+    expect(driver.onMessage({})).toEqual([compacted(null)]);
+    expect(driver.onMessage({})).toEqual([completed(515_000)]);
+  });
+
+  it('ignores a DELEGATE’s compaction — the meter reports the conversation', () => {
+    const delegate: AgentEvent = {
+      ...compacted(900),
+      parentToolUseId: 'toolu_1',
+    };
+    const driver = driverOver([[delegate], [completed(515_000)]]);
+
+    expect(driver.onMessage({})).toEqual([delegate]);
+    expect(driver.onMessage({})).toEqual([completed(515_000)]);
+  });
+});
+
+describe('the request the provider failed', () => {
+  /** A driver whose mapper replays one scripted line's events at a time. */
+  const driverOver = (script: AgentEvent[][]): ClaudeTurnDriver => {
+    let line = 0;
+    return new ClaudeTurnDriver({
+      mapMessage: () => script[line++] ?? [],
+      buildApprovalResponse: () => undefined,
+    });
+  };
+
+  /** The synthetic line claude writes when the API refuses a request. */
+  const apiErrorLine = {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'API error' }],
+    },
+    error: 'model_not_found',
+    request_id: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+    is_api_error_message: true,
+  };
+
+  it('carries the request id from the line that reported it to the error', () => {
+    // The two halves arrive on DIFFERENT lines — the id on the synthetic
+    // assistant line, the failure one line later — so a per-line mapper cannot
+    // join them and this is the only place that can. The id is also the one
+    // field nothing else in the app can reconstruct, and the whole point of
+    // showing detail is being able to hand it over.
+    const driver = driverOver([
+      [{ type: 'text', text: 'API error' }],
+      [{ type: 'error', message: 'API error', detail: { httpStatus: 404 } }],
+    ]);
+
+    driver.onMessage(apiErrorLine);
+
+    expect(driver.onMessage({ type: 'result', is_error: true })).toEqual([
+      {
+        type: 'error',
+        message: 'API error',
+        detail: {
+          code: 'model_not_found',
+          requestId: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+          // The result line's own reading survives: it describes the turn's
+          // ending, while the remembered pair describes one request.
+          httpStatus: 404,
+        },
+      },
+    ]);
+  });
+
+  it('lets the failing line’s OWN code win over the remembered one', () => {
+    const driver = driverOver([
+      [],
+      [{ type: 'error', message: 'API error', detail: { code: 'api_error' } }],
+    ]);
+
+    driver.onMessage(apiErrorLine);
+
+    expect(driver.onMessage({})).toEqual([
+      {
+        type: 'error',
+        message: 'API error',
+        detail: {
+          code: 'api_error',
+          requestId: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+        },
+      },
+    ]);
+  });
+
+  it('reads nothing off an ordinary line, and spends what it read once', () => {
+    // `request_id` rides ordinary lines too — `is_api_error_message` is the
+    // only thing that says this one is a failure — and a second failure in the
+    // same turn must report its own facts or none, never the previous one's.
+    // One entry per onMessage call, including the two raw lines below, which
+    // the mapper sees like any other.
+    const driver = driverOver([
+      [],
+      [{ type: 'error', message: 'first' }],
+      [],
+      [{ type: 'error', message: 'second' }],
+    ]);
+
+    driver.onMessage({ type: 'assistant', request_id: 'req_ordinary' });
+    expect(driver.onMessage({})).toEqual([{ type: 'error', message: 'first' }]);
+
+    driver.onMessage(apiErrorLine);
+    expect(driver.onMessage({})).toEqual([
+      {
+        type: 'error',
+        message: 'second',
+        detail: {
+          code: 'model_not_found',
+          requestId: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+        },
+      },
+    ]);
+    expect(driver.onMessage({})).toEqual([]);
   });
 });

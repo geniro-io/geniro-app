@@ -622,6 +622,18 @@ export interface ChatMetricsDto {
     breakdownReason: string | null;
     /**
      * 
+     * @type {PlanLimits}
+     * @memberof ChatMetricsDto
+     */
+    plan: PlanLimits | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatMetricsDto
+     */
+    planReason: string | null;
+    /**
+     * 
      * @type {ChatTotals}
      * @memberof ChatMetricsDto
      */
@@ -1680,6 +1692,56 @@ export const NodeStatus = {
 } as const;
 export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
 
+/**
+ * 
+ * @export
+ * @interface PlanLimits
+ */
+export interface PlanLimits {
+    /**
+     * 
+     * @type {string}
+     * @memberof PlanLimits
+     */
+    plan: string | null;
+    /**
+     * 
+     * @type {Array<PlanWindow>}
+     * @memberof PlanLimits
+     */
+    windows: Array<PlanWindow>;
+}
+/**
+ * 
+ * @export
+ * @interface PlanWindow
+ */
+export interface PlanWindow {
+    /**
+     * the CLI's own key for the window — opaque, for keying rows
+     * @type {string}
+     * @memberof PlanWindow
+     */
+    key: string;
+    /**
+     * what to call it on screen
+     * @type {string}
+     * @memberof PlanWindow
+     */
+    label: string;
+    /**
+     * how much of the window is used, 0-100
+     * @type {number}
+     * @memberof PlanWindow
+     */
+    percent: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof PlanWindow
+     */
+    resetsAt: string | null;
+}
 
 /**
  * 
@@ -1753,6 +1815,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     awaiting: RunAwaiting | null;
+    /**
+     * Units of background work this run is being held for; 0 when the agent itself is working
+     * @type {number}
+     * @memberof RunDto
+     */
+    holdingFor: number;
     /**
      * 
      * @type {string}

@@ -76,6 +76,17 @@ export function useAttachments(): {
   addFromClipboard: (data: DataTransfer | null, owner?: number) => boolean;
   remove: (key: string) => void;
   clear: () => void;
+  /**
+   * Put a previously staged list back, unchanged.
+   *
+   * For per-thread drafts: switching threads saves whatever was staged and
+   * restores the incoming thread's own, so an image pasted into one
+   * conversation cannot be sent from another. Takes the staged shape rather
+   * than raw files because the base64 conversion has already happened — a
+   * restore must not redo work, and re-reading a `File` the clipboard no longer
+   * holds would fail anyway.
+   */
+  restore: (staged: StagedAttachment[]) => void;
   clearError: () => void;
   /** The send-body projection. */
   toWire: () => SendMessageDtoImagesInner[];
@@ -150,6 +161,10 @@ export function useAttachments(): {
     setError(null);
   }, []);
 
+  const restore = useCallback((staged: StagedAttachment[]): void => {
+    setAttachments(staged);
+  }, []);
+
   const clearError = useCallback((): void => setError(null), []);
 
   const toWire = useCallback(
@@ -164,6 +179,7 @@ export function useAttachments(): {
     addFromClipboard,
     remove,
     clear,
+    restore,
     clearError,
     toWire,
   };

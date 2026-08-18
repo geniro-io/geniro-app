@@ -65,11 +65,24 @@ export function runToWire(
    * started — say so without asking.
    */
   awaiting: RunAwaiting | null = null,
+  /**
+   * How many units of background work this run's turn is being held for, from
+   * the live turn state.
+   *
+   * Passed in for the same reason {@link awaiting} is — a pure projection of a
+   * row cannot read in-memory state — and on the ROW for the same reason too: a
+   * hold lasts as long as the delegates do, which is minutes, and the announce
+   * that starts it is a one-off event. Without it a window opened (or a chat
+   * revisited) mid-hold reads the run as a working agent and puts the user's
+   * message back in the queue.
+   */
+  holdingFor = 0,
 ): RunWire {
   return {
     id: run.id,
     status: run.status,
     awaiting,
+    holdingFor,
     title: run.title,
     agentKind: run.agentKind,
     workflowId: run.workflowId,

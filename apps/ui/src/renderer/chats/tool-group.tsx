@@ -7,11 +7,12 @@ import { type BlockStatus } from './block-shell';
 import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
 import { ToolBodyView } from './tool-body-view';
-import { ToolCallIcon } from './tool-icon';
+import { ToolCallIcon, ToolOperationIcon } from './tool-icon';
 import { formatToolName, toolInputBody, toolResultBody } from './tool-render';
 import {
   toolCallSummary,
   type ToolGroupEntry,
+  toolGroupOperations,
   toolGroupSummary,
   type ToolPair,
 } from './transcript-groups';
@@ -147,6 +148,7 @@ export const ToolGroup = memo(function ToolGroup({
   // while a run cancelled mid-turn ends a group no turn-end item ever closed.
   const settled = group.closed || runSettled;
   const running = !settled && group.pairs.some((pair) => pair.result === null);
+  const operations = toolGroupOperations(group.pairs);
   return (
     <div
       data-role="tool-group"
@@ -176,6 +178,30 @@ export const ToolGroup = memo(function ToolGroup({
         {group.parentToolUseId === null || nested ? null : (
           <span className="shrink-0 text-muted-foreground/70">sub-agent</span>
         )}
+        {/*
+          What the group DID, as glyphs, before the sentence that says the same
+          thing in words. The icons existed only once a group was EXPANDED, so
+          the one state a reader spends most of their time looking at — a
+          transcript of collapsed rows — was a column of identical grey text
+          they had to read word by word to scan.
+
+          Drawn from the same fold as the sentence beside them
+          (`toolGroupOperations`), so the strip can never name work the words
+          do not, and capped at three by that function.
+        */}
+        {operations.length > 0 ? (
+          <span
+            data-slot="tool-group-operations"
+            className="flex shrink-0 items-center gap-1">
+            {operations.map((operation) => (
+              <ToolOperationIcon
+                key={operation}
+                operation={operation}
+                className="size-3.5"
+              />
+            ))}
+          </span>
+        ) : null}
         <span className="truncate">{toolGroupSummary(group.pairs)}</span>
         {running ? <Spinner /> : null}
       </button>

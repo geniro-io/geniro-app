@@ -219,6 +219,75 @@ export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 
 /**
+ * Gives a HEADLESS turn this CLI's own `Artifact` tool — the thing it publishes
+ * a page to claude.ai with.
+ *
+ * Restoring parity, not enabling a feature geniro invented: the account these
+ * chats run as already holds published artifacts (`https://claude.ai/code/
+ * artifact/<uuid>`), made from that CLI's interactive sessions. It is only the
+ * headless mode geniro drives that ships without the tool, so an agent asked
+ * for one answered that "this session cannot publish" — with nothing on screen
+ * to say why, which is what got reported.
+ *
+ * Probe-verified on 2.1.234, reading `system/init`'s own tool list under the
+ * exact argv a chat turn uses: two runs minutes apart differed by exactly one
+ * tool, `Artifact`, present only in the one carrying this variable. Its sibling
+ * settings key (`enableArtifact` in a `--settings` file) was probed too and
+ * does NOT work — the CLI gates that key behind a per-account flag of its own,
+ * so the environment is the only lever geniro has.
+ *
+ * Undocumented, so treat this as a MEASUREMENT with an expiry: when the CLI
+ * ships the tool to headless sessions by itself, this line becomes a no-op and
+ * should go. The value is only ever read as "is it set" — `1` is the spelling
+ * the CLI's own truthiness check accepts.
+ */
+export const CLAUDE_ARTIFACT_ENV = 'CLAUDE_CODE_ARTIFACT';
+
+/**
+ * Gives a headless turn this CLI's own TASK tools — `TaskCreate`, `TaskUpdate`,
+ * `TaskGet`, `TaskList` — the checklist it keeps while working a multi-step job.
+ *
+ * Same shape of loss as {@link CLAUDE_ARTIFACT_ENV} and a sharper consequence
+ * here, because geniro already RENDERS that list: `claude-tasks.utils.ts` reads
+ * it off both directions of those very tool calls, and the transcript's task
+ * card and the side panel's rows are built from it. Without the tools the CLI
+ * never announces a list, so a feature the app ships could not fire on claude
+ * at all — a multi-step job showed anonymous tool rows instead.
+ *
+ * Probe-verified on 2.1.234 the same way as the artifact one: the same argv,
+ * with and without, differing by exactly those four names.
+ */
+export const CLAUDE_TODO_TOOLS_ENV = 'CLAUDE_CODE_ENABLE_TODO_TOOLS';
+
+/**
+ * Gives a turn the **Claude in Chrome** tools — the 22
+ * `mcp__claude-in-chrome__*` names (navigate, read_page, find, form_input,
+ * javascript_tool, tabs, console/network readers, screenshots…) that drive the
+ * user's own browser through Anthropic's Chrome extension.
+ *
+ * Probe-verified on 2.1.234: absent from a headless turn's tool list, and all
+ * 22 present with this set.
+ *
+ * OFF unless the user asks for it, which is the difference from the two above.
+ * They restore a handful of tools that work on their own; this one registers a
+ * whole toolbelt that does nothing at all without the extension installed and a
+ * browser running it — and it is 22 tool schemas in every prompt of every turn,
+ * paid for on each. So it rides a setting (`claudeBrowserTools`), reaching the
+ * daemon as `GENIRO_CLAUDE_BROWSER_TOOLS` and this adapter as one boolean.
+ */
+export const CLAUDE_BROWSER_TOOLS_ENV = 'CLAUDE_CODE_ENABLE_CFC';
+
+/**
+ * How the UI asks for the tools above: set on the DAEMON's env when the
+ * `claudeBrowserTools` setting is on.
+ *
+ * GENIRO_-prefixed, so `buildChildEnv` strips it from every spawned child — the
+ * daemon reads it here and hands the CLI its OWN variable instead, which is the
+ * same shape as the binary override in `utils/agent-binary.ts`.
+ */
+export const CLAUDE_BROWSER_TOOLS_SETTING_ENV = 'GENIRO_CLAUDE_BROWSER_TOOLS';
+
+/**
  * Restricts a turn to `--mcp-config` servers only.
  *
  * NEVER passed on a turn of the user's: an agent must see the same MCP servers

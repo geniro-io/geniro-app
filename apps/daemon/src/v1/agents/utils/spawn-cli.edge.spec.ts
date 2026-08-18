@@ -648,7 +648,11 @@ describe('runHeadlessCli exit backstop', () => {
       await vi.advanceTimersByTimeAsync(5000);
       expect(settled).toBe(true);
       expect(events).toEqual([
-        { type: 'error', message: 'claude exited with code 1' },
+        {
+          type: 'error',
+          message: 'claude exited with code 1',
+          detail: { exitCode: 1 },
+        },
       ]);
     } finally {
       vi.useRealTimers();
@@ -723,7 +727,11 @@ describe('runHeadlessCli exit backstop', () => {
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(events).toEqual([
-        { type: 'error', message: 'claude exited with code 1' },
+        {
+          type: 'error',
+          message: 'claude exited with code 1',
+          detail: { exitCode: 1 },
+        },
       ]);
     } finally {
       vi.useRealTimers();

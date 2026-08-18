@@ -3015,6 +3015,84 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(statuses.at(-1)?.activity).toContain('still working');
   });
 
+  it('puts the badge back to running for a delegate launched between turns', async () => {
+    // "он пишет, что ждет агента А и Б, хотя у него статус done, complete" —
+    // the CLI launched three agents while no turn of ours was open, and the run
+    // went on reading `completed` under them. The launch announcement is the
+    // evidence that it is working again.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: true,
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+  });
+
+  it('does not restart the badge when a delegate merely FINISHES off-turn', async () => {
+    // The other direction of the same announcement, and it must not read as the
+    // run working: nothing would ever take that spinner down, since a delegate
+    // winding up opens no turn of its own to produce a terminal event. The ROW
+    // is still written — it is what closes the delegate's block.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: false,
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(itemDao.items).toHaveLength(before + 1);
+    expect(itemDao.items.at(-1)?.kind).toBe('subagent_info');
+  });
+
   it('settles the run again on the continuation’s own result', async () => {
     // The other half: without this the run would be left `running` forever by
     // the row above, which is the same lie pointing the other way.
@@ -3866,5 +3944,178 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     claude.finish();
     await drain();
+  });
+});
+
+describe('ChatService — the live tail belongs to the MAIN thread', () => {
+  /** The words the main agent is watched writing, in two deltas. */
+  const HEAD = 'Критик запущен. Пока он работает — ';
+  const REST = 'вот три варианта.';
+
+  it('does NOT throw the tail away when a DELEGATE lands a message', async () => {
+    // The reported defect: a turn streamed, "обрезал первую часть сообщения и
+    // достримил вторую", and the whole message only appeared once its own
+    // durable row landed. There is ONE tail per run and it holds the main
+    // agent's words; a sub-agent's message is the durable copy of text that
+    // was never in it, so retiring on one restarted the bubble mid-sentence.
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Agent', input: {} });
+    claude.emit({ type: 'text_delta', text: HEAD });
+    await drain();
+    expect(deltas.at(-1)?.text).toBe(HEAD);
+
+    // The delegate reporting back — a durable row of its own, under the tool
+    // call that launched it.
+    claude.emit({
+      type: 'text',
+      text: 'delegate: both approaches hold',
+      parentToolUseId: 't1',
+    });
+    await drain();
+    expect(deltas.at(-1)?.text).toBe(HEAD);
+
+    // …and the main agent's next words EXTEND what is on screen rather than
+    // starting a second, headless bubble.
+    claude.emit({ type: 'text_delta', text: REST });
+    await drain();
+    expect(deltas.at(-1)?.text).toBe(`${HEAD}${REST}`);
+    claude.finish();
+    await drain();
+  });
+
+  it('still retires it when the MAIN agent’s own message lands', async () => {
+    // The other half, and what stops the fix above from becoming "never
+    // retire": the durable row IS those words, so the live copy has to go or
+    // the user reads the same sentence twice.
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'text_delta', text: HEAD });
+    await drain();
+    expect(deltas.at(-1)?.text).toBe(HEAD);
+
+    claude.emit({ type: 'text', text: `${HEAD}${REST}` });
+    await drain();
+    expect(deltas.at(-1)?.text).toBe('');
+    claude.finish();
+    await drain();
+  });
+
+  it('does NOT stop the main agent THINKING because a delegate spoke', async () => {
+    // Same rule, same plane: one reasoning stretch per run, and a delegate's
+    // rows arrive while the parent is genuinely still reasoning. Ending the
+    // stretch on one took the "Thinking…" row off an agent that had not
+    // stopped.
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Agent', input: {} });
+    claude.emit({ type: 'thinking_progress', tokens: 40 });
+    await drain();
+    expect(deltas.at(-1)?.thinkingStretch).toBe(1);
+
+    claude.emit({
+      type: 'text',
+      text: 'delegate: done',
+      parentToolUseId: 't1',
+    });
+    await drain();
+    expect(deltas.at(-1)?.thinkingStretch).toBe(1);
+    claude.finish();
+    await drain();
+  });
+});
+
+describe('ChatService — a DELEGATE winding up is not the run working again', () => {
+  /** A settled chat run whose CLI is still holding its session. */
+  async function settledRun(harness: ReturnType<typeof setup>) {
+    const { service, claude } = harness;
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    return run;
+  }
+
+  it('leaves the badge SETTLED when a delegate’s last row lands after the turn', async () => {
+    // Reported: a sub-agent reads `done`, the turn reads `✓ done`, and under
+    // them a `still working` spinner counts upward for ever. A delegate is the
+    // background work the turn was held for, and its trailing rows land as it
+    // FINISHES — so restating them as the run working again announced work at
+    // the exact moment it ended, and nothing could take the phrase down: only a
+    // terminal event settles this state, and a delegate winding up opens no
+    // turn of its own to produce one.
+    const harness = setup();
+    const { claude, runDao, itemDao, statuses } = harness;
+    const run = await settledRun(harness);
+    const before = itemDao.items.length;
+    statuses.length = 0;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text',
+      text: 'delegate: both approaches hold up',
+      parentToolUseId: 'toolu_task_1',
+    });
+    await drain();
+
+    // The ROW is still written — a transcript that hides work lies the other
+    // way — and the badge is left exactly as the turn left it.
+    expect(itemDao.items.length).toBeGreaterThan(before);
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    expect(statuses).toEqual([]);
+  });
+
+  it('still goes back to RUNNING when the CLI itself carries on', async () => {
+    // The other half: a task-notification continuation is the CLI opening real
+    // work of its own, on the MAIN thread, and it settles again on its own
+    // result. Without this the fix above would simply stop reporting the
+    // continuation the off-turn path exists for.
+    const harness = setup();
+    const { claude, runDao } = harness;
+    const run = await settledRun(harness);
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({
+      type: 'text',
+      text: 'the delegate reported — here is the answer',
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+
+    emit?.({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
   });
 });

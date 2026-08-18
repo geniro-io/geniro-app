@@ -5,7 +5,11 @@ import { messageAttachments } from './attachment-payload';
 import { CliLoginContext } from './cli-login-context';
 import { compactionDetail, compactionFacts } from './compaction-payload';
 import { DisclosureRow } from './disclosure-row';
-import { errorRecoveryOf } from './error-payload';
+import {
+  errorFactsOf,
+  errorRecoveryOf,
+  errorReportText,
+} from './error-payload';
 import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
@@ -190,6 +194,11 @@ export const TranscriptItem = memo(function TranscriptItem({
         <DisclosureRow
           caption="error"
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
+          // What the failure said about itself, and the whole thing as one
+          // block of text — a failure is something the user has to hand to
+          // somebody, and a screenshot of a sentence is not a report.
+          facts={errorFactsOf(item)}
+          copyText={errorReportText(item)}
           // Offered only when the DAEMON recognised this failure as a lapsed
           // account session — the renderer never reads a CLI's wording itself,
           // so it cannot offer sign-in for a failure sign-in would not fix.

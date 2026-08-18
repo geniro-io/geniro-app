@@ -27,6 +27,87 @@ export type ErrorRecovery = 'cli-login';
  * Absent on the overwhelming majority of error rows — the daemon stamps it only
  * for a failure whose cure it actually recognised.
  */
+/** One fact about a failure, ready to render and ready to copy. */
+export interface ErrorFact {
+  label: string;
+  value: string;
+}
+
+/**
+ * What the failure reported about itself, beside the sentence.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/adapter.types.ts`
+ * (`AgentErrorDetail`) is the producing shape and
+ * `apps/daemon/src/v1/agents/utils/event-to-item.ts` stamps it onto the item's
+ * payload under `detail`. An item payload is `z.unknown()` on the wire BY
+ * DESIGN, so no generated type spans the two sides: renaming a key there means
+ * renaming it here.
+ *
+ * Returned as ORDERED, already-worded rows rather than as the raw object,
+ * because there is exactly one thing this is for — putting the facts in front
+ * of a human and letting them copy the lot — and two renderings of one field
+ * name is how a panel and a clipboard report come to disagree. The order is
+ * most-actionable first: what the provider calls it, what it answered, and the
+ * id that lets them look the request up.
+ *
+ * Every field is optional on the wire, so an empty list means "the CLI said
+ * nothing else", never "we lost it".
+ */
+export function errorFactsOf(item: ChatItem): ErrorFact[] {
+  const payload: unknown = item.payload;
+  if (typeof payload !== 'object' || payload === null) {
+    return [];
+  }
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail !== 'object' || detail === null) {
+    return [];
+  }
+  const row = detail as Record<string, unknown>;
+  const facts: ErrorFact[] = [];
+  const text = (key: string, label: string): void => {
+    const value = row[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      facts.push({ label, value });
+    }
+  };
+  const number = (key: string, label: string, suffix = ''): void => {
+    const value = row[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      facts.push({ label, value: `${value}${suffix}` });
+    }
+  };
+  text('code', 'code');
+  number('httpStatus', 'http status');
+  text('requestId', 'request id');
+  number('exitCode', 'exit code');
+  text('signal', 'signal');
+  number('durationMs', 'failed after', 'ms');
+  text('sessionId', 'session');
+  return facts;
+}
+
+/**
+ * The whole failure as one block of text, for the clipboard.
+ *
+ * The point of the feature: a failure a user can hand to whoever runs the model
+ * without retyping it or screenshotting it. The sentence first — it is what the
+ * reader needs to recognise the report — then one `key: value` per line, which
+ * is the shape every issue tracker and chat window renders unharmed.
+ */
+export function errorReportText(item: ChatItem): string {
+  const payload: unknown = item.payload;
+  const message =
+    typeof payload === 'object' && payload !== null
+      ? ((payload as { message?: unknown }).message ?? '')
+      : '';
+  const lines = [typeof message === 'string' ? message : ''];
+  lines.push(`when: ${item.createdAt}`);
+  for (const fact of errorFactsOf(item)) {
+    lines.push(`${fact.label}: ${fact.value}`);
+  }
+  return lines.filter((line) => line !== '').join('\n');
+}
+
 export function errorRecoveryOf(item: ChatItem): ErrorRecovery | null {
   // `unknown`, not the generated field's own type: the payload is untyped on
   // the wire, so the generator gives it `any` and every read would be

@@ -1,3 +1,4 @@
+import { errorDetail } from '../../../utils/error-detail';
 import {
   asArray,
   asBoolean,
@@ -592,16 +593,28 @@ function mapClaudeLine(
         // that DID carry text keeps only that text: `result` is claude's own
         // sentence about what went wrong, and a subtype appended to it would be
         // machine noise on the end of an explanation.
-        const subtype = asString(root.subtype);
+        // What KIND of failure, in the CLI's own vocabulary. `terminal_reason`
+        // is the field that actually answers it (`api_error`); `subtype` is
+        // NOT — probed on 2.1.234, a failed line carries `"is_error":true`
+        // beside `"subtype":"success"`, so the fallback below used to append
+        // the word `success` to a failure sentence.
+        const code = asString(root.terminal_reason) ?? asString(root.subtype);
+        const detail = errorDetail({
+          code,
+          httpStatus: asNumber(root.api_error_status),
+          sessionId: asString(root.session_id),
+          durationMs: asNumber(root.duration_ms),
+        });
         return [
           {
             type: 'error',
             message:
               asString(root.result) ??
               asString(root.error) ??
-              (subtype === null
+              (code === null
                 ? CLAUDE_RUN_FAILED_MESSAGE
-                : `${CLAUDE_RUN_FAILED_MESSAGE} (${subtype})`),
+                : `${CLAUDE_RUN_FAILED_MESSAGE} (${code})`),
+            ...(detail ? { detail } : {}),
           },
         ];
       }

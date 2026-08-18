@@ -337,7 +337,13 @@ describe('a run-scoped session outlives its turns', () => {
     await handle?.done;
 
     expect(events).toEqual([
-      { type: 'error', message: expect.stringContaining('SIGKILL') },
+      {
+        type: 'error',
+        message: expect.stringContaining('SIGKILL'),
+        // The signal as a FIELD too, so a report of the kill needs no prose
+        // parsing — see `AgentErrorDetail`.
+        detail: { signal: 'SIGKILL' },
+      },
     ]);
     expect(session.alive).toBe(false);
   });
@@ -1114,6 +1120,154 @@ describe('a turn whose background work outlives its result', () => {
     // And the process is left alive for the next turn, as every other
     // silence-deadline settle leaves it.
     expect(session.alive).toBe(true);
+  });
+
+  it('announces a delegate launched BETWEEN turns, so its block does not read done', async () => {
+    // The reported defect. The CLI carries on by itself, and a delegate it
+    // launches THERE was invisible: no announcement, so the block closed the
+    // moment its `Task` call was answered and the transcript said `done` over
+    // an agent that had not started working yet.
+    const between: AgentEvent[] = [];
+    const { child } = openSession(undefined, undefined, (e) => between.push(e));
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+
+    expect(between).toEqual([
+      {
+        type: 'subagent_info',
+        id: 'toolu_a',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: null,
+        backgroundOpen: true,
+      },
+    ]);
+
+    // …and its close is announced on the same channel, so the block does not
+    // spin for the rest of the conversation either.
+    line(child, { work: 'task-1', phase: 'settled' });
+    expect(between.at(-1)).toEqual({
+      type: 'subagent_info',
+      id: 'toolu_a',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: false,
+    });
+  });
+
+  it('holds the NEXT turn open for work that started between turns', async () => {
+    // Background work belongs to the PROCESS, not to whichever turn happened to
+    // be open when the CLI announced it. Tracked per turn, work launched
+    // off-turn held nothing, and the next turn settled the run `completed` with
+    // the delegate still going.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, () => {});
+
+    line(child, { work: 'task-1', phase: 'started' });
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('does not settle the run on a continuation’s result while its work is out', async () => {
+    // The same rule for the path with no turn to hold. The CLI's own
+    // continuation prints a `result` line, the owner settles the run on it, and
+    // the badge went back to `completed` seconds after a delegate was launched.
+    const between: AgentEvent[] = [];
+    const { child } = openSession(undefined, undefined, (e) => between.push(e));
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(between.some((e) => e.type === 'turn_complete')).toBe(false);
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    expect(between.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('hands a held off-turn result over when a real turn opens', async () => {
+    // Held, not dropped: that row carries the continuation's own usage and cost,
+    // and it belongs to what happened BEFORE this turn — so it is handed over
+    // first rather than filed among this turn's rows.
+    const between: AgentEvent[] = [];
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (e) =>
+      between.push(e),
+    );
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    expect(between).toEqual([]);
+
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    expect(between).toEqual([COMPLETE]);
+
+    // The turn that just opened is still held by the same outstanding unit.
+    line(child, { done: true });
+    await Promise.resolve();
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
+    line(child, { work: 'task-1', phase: 'settled' });
+    await handle?.done;
+  });
+
+  it('gives up on an off-turn hold whose work never reports', async () => {
+    // The bound. Without one, a unit that never reports strands a real result
+    // for the life of the session and the run reads `running` for good.
+    vi.useFakeTimers();
+    const between: AgentEvent[] = [];
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const { child } = openSession(undefined, logger, (e) => between.push(e));
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+
+    expect(between).toEqual([COMPLETE]);
+    expect(logger.warn.mock.calls.map(String).join('\n')).toContain(
+      'never reported',
+    );
+  });
+
+  it('does not let a unit the deadline gave up on hold the next turn too', async () => {
+    // The cost of moving the set to session scope, paid here: a unit written off
+    // by one turn's deadline must not silently hold every turn after it.
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, {
+      warn: vi.fn(),
+      debug: vi.fn(),
+    });
+    const first = session.startTurn({ onEvent: () => {} });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await first?.done;
+
+    const second = session.startTurn({ onEvent: (e) => events.push(e) });
+    line(child, { done: true });
+    await second?.done;
+
+    expect(events).toEqual([COMPLETE]);
   });
 
   it('does not defer on a lifetime whose turn ends with its process', async () => {

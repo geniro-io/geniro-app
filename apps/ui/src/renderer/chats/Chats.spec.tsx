@@ -3945,6 +3945,86 @@ describe('Chats queued messages', () => {
     ).toContain('via keyboard');
   });
 
+  /** The turn ending because the user pressed Stop. */
+  function cancelled(seq: number, runId = 'r1'): ChatItem {
+    return {
+      id: `${runId}-cancel-${seq}`,
+      runId,
+      nodeId: null,
+      seq,
+      kind: 'turn_cancelled',
+      role: null,
+      payload: { usage: null, stopReason: null },
+      createdAt: 'now',
+    };
+  }
+
+  it('does NOT release the queue when the user STOPS the turn', async () => {
+    // Reported as "I stopped the thread, but see it continue working": the
+    // drain fired on the cancel like any other settle, so Stop was answered by
+    // a brand-new turn — the `cancelled` row and the new turn's `Working…` one
+    // in the same transcript.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'queued question'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'queued question');
+    await clickButton(container, 'Queue');
+
+    await act(async () => {
+      emitItem(cancelled(5));
+    });
+
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    // …and it is still there to send by hand, edit or drop.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('queued question');
+  });
+
+  it('does not release it on the NEXT visit either, off a cancelled tail', async () => {
+    // The replay path has its own drain decision, and the run ROW cannot be
+    // what stops it: a cancel that lands while another chat is open never
+    // reaches this run's row, so the row still says `running` and only the
+    // transcript's tail knows the turn was stopped.
+    const r1Items: ChatItem[] = [msg(1, 'user', 'go')];
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'completed' },
+    ]);
+    api.listRunItems.mockImplementation(({ runId }: { runId: string }) =>
+      Promise.resolve(runId === 'r1' ? [...r1Items] : []),
+    );
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'queued question'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // The turn is in flight — which is what puts a message in the queue at all.
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+
+    await type(container, 'queued question');
+    await clickButton(container, 'Queue');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('queued question');
+
+    // Stopped from somewhere this window is not looking at: the row keeps
+    // saying `running`, and the cancel only shows up in the transcript.
+    await clickRun(container, 'Second chat');
+    await act(async () => {
+      emitItem(cancelled(2));
+    });
+    r1Items.push(cancelled(2));
+
+    await clickRun(container, 'My chat');
+
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('queued question');
+  });
+
   it('drains ONE queued message per settled turn, in order', async () => {
     api.sendChatMessage
       // Both are held client-side, so the ONLY calls are the drain's.
@@ -4680,6 +4760,36 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('urgent');
+  });
+
+  it('a “send now” with no turn running does not leave the chat THINKING when it fails', async () => {
+    // Send-now is reachable with no turn in flight — the strip outlives one,
+    // and since Stop no longer releases the queue it is the ordinary way to
+    // send what Stop held back. There `startTurn` is what turns the working
+    // state on, so a refusal has to turn it off again: reported as "it wrote
+    // that the request is too large but at the same time started to think".
+    api.sendChatMessage.mockRejectedValueOnce(
+      new Error('daemon POST /v1/chats/r1/messages failed (413): too large'),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'urgent');
+    await clickButton(container, 'Queue');
+    // Stopped — the message stays queued and the turn is over.
+    await act(async () => {
+      emitItem(cancelled(5));
+    });
+    expect(composerButton(container, 'Stop')).toBeNull();
+
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(container.textContent).toContain('too large');
+    // The composer is the user's again — no Stop, and no live row spinning on
+    // a turn that never started.
+    expect(composerButton(container, 'Stop')).toBeNull();
+    expect(container.textContent).not.toContain('Working…');
   });
 
   it('withholds “send now” from a CLI with no mid-turn channel, and says why', async () => {
@@ -6518,8 +6628,21 @@ describe('Chats — a screenshot pasted into a question answer', () => {
 });
 
 describe('Chats — background sub-agents', () => {
+  /**
+   * When the run row settled, and the two moments a delegate's last row can sit
+   * either side of it — which is what decides whether it is still working.
+   *
+   * Real timestamps rather than the suite's `'now'` placeholder, because THIS
+   * is the fact under test: a delegate that has spoken since the settle is
+   * working whatever the row says, and one that has not is finished. With
+   * unparseable dates neither statement can be made at all.
+   */
+  const SETTLED_AT = '2026-08-18T10:00:00.000Z';
+  const SPOKE_AFTER = '2026-08-18T10:00:05.000Z';
+  const SPOKE_BEFORE = '2026-08-18T09:59:55.000Z';
+
   /** A row the CLI attributed to a delegate rather than to the main thread. */
-  function delegated(seq: number, text: string): ChatItem {
+  function delegated(seq: number, text: string, createdAt = 'now'): ChatItem {
     return {
       id: `i${seq}`,
       runId: 'r1',
@@ -6528,12 +6651,12 @@ describe('Chats — background sub-agents', () => {
       kind: 'message',
       role: 'assistant',
       payload: { text, parentToolUseId: 'task-1' },
-      createdAt: 'now',
+      createdAt,
     };
   }
 
   /** The `Task` call that launched it. */
-  function taskCall(seq: number): ChatItem {
+  function taskCall(seq: number, createdAt = 'now'): ChatItem {
     return {
       id: `i${seq}`,
       runId: 'r1',
@@ -6550,7 +6673,21 @@ describe('Chats — background sub-agents', () => {
           prompt: 'Look for off-by-one errors.',
         },
       },
-      createdAt: 'now',
+      createdAt,
+    };
+  }
+
+  /** The CLI's own "this delegate is running in the background" row. */
+  function backgroundOpen(seq: number, createdAt = 'now'): ChatItem {
+    return {
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'subagent_info',
+      role: null,
+      payload: { id: 'task-1', backgroundOpen: true },
+      createdAt,
     };
   }
 
@@ -6565,18 +6702,23 @@ describe('Chats — background sub-agents', () => {
     // deletable with the rest of the suite green, and both carry the reported
     // defect — "the thread says completed while sub-agents are visibly
     // working" — so they are pinned here, through a mounted Chats.
-    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listChats.mockResolvedValue([
+      { ...run1, status: 'completed', updatedAt: SETTLED_AT },
+    ]);
     api.listRunItems.mockResolvedValue([
       msg(0, 'user', 'find the bug'),
       taskCall(1),
-      delegated(2, 'reading the diff now'),
+      // The turn ENDED, and the delegate has spoken since — which is the whole
+      // shape of "the row says completed while the delegate is visibly working".
+      { ...terminal(2), createdAt: SETTLED_AT },
+      delegated(3, 'reading the diff now', SPOKE_AFTER),
     ]);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    // The run ROW says completed; the delegate has not returned, so the badge
-    // must not.
+    // The run ROW says completed; the delegate has spoken SINCE it settled, so
+    // the badge must not.
     expect(sidebarRow(container)).toContain('running');
     expect(sidebarRow(container)).not.toContain('completed');
 
@@ -6593,6 +6735,39 @@ describe('Chats — background sub-agents', () => {
         ?.getAttribute('aria-expanded'),
     ).toBe('false');
     expect(block?.textContent).not.toContain('reading the diff now');
+  });
+
+  it('settles the badge — and NOTIFIES — for a delegate that never reported', async () => {
+    // The latch this pins, measured on a real build with a CLI that printed
+    // `task_started` and exited: the daemon row read `completed` while the
+    // header, the sidebar row and the block all read `running`, with no process
+    // left to change any of them. The badge was the visible half; the
+    // notification was the reported one — the rules watch that same reading, so
+    // a run that never crosses into a settled state is never announced, which
+    // is "on chats finishing im not receiving it".
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    api.listChats.mockResolvedValue([{ ...run1, status: 'running' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      taskCall(1, SPOKE_BEFORE),
+      // The CLI said this delegate was running in the background and then never
+      // said another word about it — the state the process died in.
+      backgroundOpen(2, SPOKE_BEFORE),
+    ]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitItem({ ...terminal(3), createdAt: SETTLED_AT });
+    });
+
+    expect(sidebarRow(container)).toContain('completed');
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', kind: 'turn-end' }),
+    );
+    hasFocus.mockRestore();
   });
 
   it('settles the badge once the delegate returns', async () => {
@@ -6878,6 +7053,31 @@ describe('Chats — the sidebar groups threads into folders', () => {
     expect(header?.querySelector('[data-slot="group-busy"]')).toBeNull();
     expect(
       header?.querySelector('[data-slot="group-needs-input"]'),
+    ).not.toBeNull();
+  });
+
+  it('carries the unread mark up to a group that is FOLDED over it', async () => {
+    // A collapsed group hides its rows, so without this the one signal the
+    // highlight exists to give disappears exactly when the user cannot see the
+    // row — the same reason the parked-question glyph is up here.
+    api.listChats.mockResolvedValue([
+      { ...run1, groupId: 'g1' },
+      { ...run2, groupId: 'g1', status: 'running' },
+    ]);
+    groupApi.listRunGroups.mockResolvedValue([{ ...work, collapsed: true }]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    expect(
+      headerOf(container, 'Work')?.querySelector('[data-slot="group-unseen"]'),
+    ).toBeNull();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+
+    expect(
+      headerOf(container, 'Work')?.querySelector('[data-slot="group-unseen"]'),
     ).not.toBeNull();
   });
 
@@ -7281,5 +7481,466 @@ describe('Chats — the sidebar groups threads into folders', () => {
       groupId: 'g1',
       updateRunGroupDto: { autoCwd: null },
     });
+  });
+});
+
+describe('Chats — the message a FIRST send carries', () => {
+  /** Type a task into the landing composer and press Send. */
+  async function sendTask(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  it('does not hand the sent message back as the new-chat draft', async () => {
+    // Creating the run ACTIVATES it, and an activation parks whatever the
+    // composer holds as a draft — so with the message still on screen the thing
+    // parked was the message being sent, and the landing card handed it back
+    // the next time it was opened. Reported as "my message stays in the
+    // textarea".
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new', title: 'Fresh' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'analyze the login'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await sendTask(container, 'analyze the login');
+    expect(api.sendChatMessage).toHaveBeenCalled();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="New chat"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.querySelector('textarea')!.value).toBe('');
+  });
+
+  it('puts the row back — and the message — when the daemon refuses the send', async () => {
+    // The optimistic `running` is a mirror of a turn the daemon accepted. A
+    // refusal left it asserted with nothing running, so the chat read as
+    // working forever, and the next activation re-armed `streaming` off that
+    // same row: `Working… 4s` over a transcript with nothing in it.
+    api.createChat.mockResolvedValue({
+      ...run1,
+      id: 'r-new',
+      title: 'Fresh',
+      status: 'pending',
+    });
+    api.sendChatMessage.mockRejectedValue(
+      new Error('daemon POST /v1/chats/r-new/messages failed (413): too large'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await sendTask(container, 'analyze the login');
+
+    const row = (): HTMLElement =>
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Fresh'),
+      )!;
+    expect(row().textContent).not.toContain('running');
+    expect(row().textContent).toContain('pending');
+    // …and the message is the user's again, to edit or retry.
+    expect(container.querySelector('textarea')!.value).toBe(
+      'analyze the login',
+    );
+  });
+});
+
+describe('Chats — the pages a thread publishes', () => {
+  const URL_A =
+    'https://claude.ai/code/artifact/5f197e53-a2f2-492c-b199-601853f4823f';
+
+  function artifactCall(seq: number): ChatItem {
+    return {
+      id: `ac${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'tool_call',
+      role: null,
+      payload: {
+        id: 'toolu_art_1',
+        name: 'Artifact',
+        input: { action: 'publish', title: 'Coverage Audit' },
+      },
+      createdAt: 'now',
+    };
+  }
+
+  function artifactResult(seq: number): ChatItem {
+    return {
+      id: `ar${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'tool_result',
+      role: null,
+      payload: { id: 'toolu_art_1', result: `Published — ${URL_A}` },
+      createdAt: 'now',
+    };
+  }
+
+  const panel = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[aria-label="Artifacts"]');
+
+  it('opens the panel on a page published WHILE you are looking', async () => {
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(panel(container)).toBeNull();
+
+    await act(async () => {
+      emitItem(artifactCall(3));
+      emitItem(artifactResult(4));
+    });
+
+    const section = panel(container);
+    expect(section).not.toBeNull();
+    expect(section!.textContent).toContain('Coverage Audit');
+    // The link is what opens it — main hands an https target to the browser.
+    expect(section!.querySelector('a')?.getAttribute('href')).toBe(URL_A);
+  });
+
+  it('does NOT spring open on a chat that already had one', async () => {
+    // A replay carries every past turn's rows, so without a baseline the panel
+    // would open itself every time an old thread is re-opened.
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'publish it'),
+      artifactCall(2),
+      artifactResult(3),
+      terminal(4),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(panel(container)).toBeNull();
+  });
+});
+
+describe('Chats — a queue in a thread you are not watching', () => {
+  /** The other chat in the sidebar, live like the first one. */
+  const run2: ChatRun = {
+    ...run1,
+    id: 'r2',
+    title: 'Second chat',
+    status: 'running',
+  };
+
+  const QUEUED = 'and then post the summary';
+
+  /** Queue a follow-up in `My chat`, then go and read the other thread. */
+  async function queueThenLookAway(container: HTMLElement): Promise<void> {
+    await clickRun(container, 'My chat');
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, QUEUED);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="Queue"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await clickRun(container, 'Second chat');
+  }
+
+  it('sends it when that thread’s turn ends, without waiting to be opened', async () => {
+    // The reported defect: "after compacting it will not send message that was
+    // in queue — only after i will choose thread". Live items are delivered to
+    // the run's own ROOM and the client joins one at a time, so the turn ending
+    // in a background thread is invisible to the item handler that drains the
+    // open one. The client-wide `run_status` broadcast is the only witness.
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', QUEUED));
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    await queueThenLookAway(container);
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: QUEUED },
+    });
+  });
+
+  it('does NOT send it when that thread was STOPPED', async () => {
+    // Same rule the live path follows: Stop is the user closing the door, and
+    // a queue released by it opens a fresh turn behind them. The `completed`
+    // that follows is what proves this test is not vacuous — the same queue,
+    // the same broadcast channel, sent the moment the reason to hold it goes.
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', QUEUED));
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    await queueThenLookAway(container);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'cancelled', activity: null });
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the OPEN chat’s own live state alone when that send fails', async () => {
+    // A background drain runs a real turn in a thread that is not on screen,
+    // so its live-plane writes are scoped to the active run. Without that, the
+    // failure below tore down the open chat's working state — its Stop button
+    // replaced by Send while its own turn was still running — and raised a
+    // banner over a transcript the error has nothing to do with.
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.sendChatMessage.mockRejectedValue(
+      new Error('daemon POST /v1/chats/r1/messages failed (500): disk on fire'),
+    );
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    await queueThenLookAway(container);
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalled();
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+    expect(container.textContent).not.toContain('disk on fire');
+  });
+
+  it('keeps retrying a RUN_BUSY while you read another thread', async () => {
+    // The drain POSTs the instant the settle lands, which can beat the daemon's
+    // own release of the turn slot — hence the backoff. That retry used to
+    // ABORT as soon as the active run was not the one being drained, which for
+    // a background queue is ALWAYS: the one case the backoff exists for could
+    // never survive it, and the message sat there until the chat was opened.
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.sendChatMessage
+      .mockRejectedValueOnce(
+        // The daemon's real envelope — the renderer reads the 409 and the
+        // `code` out of it to tell "a turn is still in flight" from a failure.
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (409): ' +
+            '{"statusCode":409,"code":"RUN_BUSY",' +
+            '"message":"a turn is already in progress for this run",' +
+            '"fullMessage":"[RUN_BUSY] a turn is already in progress for this run",' +
+            '"fields":[]}',
+        ),
+      )
+      .mockResolvedValue(msg(10, 'user', QUEUED));
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    await queueThenLookAway(container);
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
+    });
+
+    // The first backoff is 300ms of real time — waited out on the observable
+    // rather than a fixed sleep, so this cannot go flaky under load.
+    for (let tick = 0; tick < 60; tick += 1) {
+      if (api.sendChatMessage.mock.calls.length >= 2) {
+        break;
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendChatMessage).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: QUEUED },
+    });
+  });
+});
+
+describe('Chats — a compaction ends on its own row', () => {
+  /** The CLI's own summary, marked by the daemon as a compaction boundary. */
+  const compacted = (seq: number): ChatItem => ({
+    id: `i${seq}`,
+    runId: 'r1',
+    nodeId: null,
+    seq,
+    kind: 'system',
+    role: null,
+    payload: {
+      message: 'This session is being continued from a previous conversation…',
+      origin: 'cli',
+      compaction: { preTokens: 539_800, postTokens: 16_500 },
+    },
+    createdAt: 'now',
+  });
+
+  const endings = (container: HTMLElement): number =>
+    (container.textContent?.match(/✓ done/g) ?? []).length;
+
+  it('prints no “done” under the compaction it already announced', async () => {
+    // Reported: "AFter conversation compacted we dont need to duplicate done
+    // message". The first turn here DID something and keeps its ending — that
+    // is what makes the count meaningful rather than a blanket suppression.
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'earlier question'),
+      msg(2, 'assistant', 'earlier answer'),
+      terminal(3),
+      msg(4, 'user', '/compact'),
+      compacted(5),
+      terminal(6),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('conversation compacted');
+    expect(endings(container)).toBe(1);
+  });
+
+  it('keeps the ending of a turn that compacted AND worked', async () => {
+    // An automatic compaction lands mid-turn; that turn's row is reporting on
+    // the work, not on the housekeeping.
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'refactor this'),
+      compacted(2),
+      msg(3, 'assistant', 'refactored three files'),
+      terminal(4),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('conversation compacted');
+    expect(endings(container)).toBe(1);
+  });
+});
+
+describe('Chats — a thread that reported while you were elsewhere stays marked', () => {
+  const run2: ChatRun = {
+    ...run1,
+    id: 'r2',
+    title: 'Second chat',
+    status: 'running',
+  };
+
+  const row = (container: HTMLElement, title: string): HTMLElement =>
+    [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+      (el) => el.textContent?.includes(title),
+    )!;
+
+  const marked = (container: HTMLElement, title: string): boolean =>
+    row(container, title).querySelector('[data-slot="unseen-dot"]') !== null;
+
+  it('marks it, and opening the thread is what clears the mark', async () => {
+    // The ask: "чтобы тред как-то хайлайтился до нажатия пользователя на него".
+    // A banner is gone in seconds — and macOS drops every app's while the
+    // display is shared — so the sidebar is where the fact has to survive.
+    api.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(marked(container, 'Second chat')).toBe(false);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+
+    await clickRun(container, 'Second chat');
+    expect(marked(container, 'Second chat')).toBe(false);
+  });
+
+  it('never marks the chat you are looking at', async () => {
+    // Its answer is the first thing on screen; a mark there would also strand
+    // itself, since the clear rides ACTIVATION and an active chat fires none.
+    //
+    // The open chat runs a REAL turn here — settled replay, then a turn that
+    // starts and finishes — because an active chat that is merely `streaming`
+    // shows `running` whatever the row says, so a settle broadcast would move
+    // no display status at all and the test would pass with the rule deleted.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }, run2]);
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'question'),
+      msg(2, 'assistant', 'answer'),
+      terminal(3),
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'My chat')).toBe(false);
+    // …and the SAME transition on the thread they are not looking at does mark
+    // it, which is what says the rule above is about the open chat rather than
+    // about settles in general.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('does not mark a thread the user STOPPED', async () => {
+    // The banner rule, inherited whole: `cancelled` is the outcome of pressing
+    // Stop, and telling someone what they just did is the feature everybody
+    // switches off. The `completed` that follows proves this is not vacuous.
+    api.listChats.mockResolvedValue([run1, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'cancelled', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(false);
+
+    // Two commits, not one: the mark rides a TRANSITION, and a run that went
+    // from cancelled straight to completed in a single reading never left a
+    // settled state.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(marked(container, 'Second chat')).toBe(true);
+  });
+
+  it('opens with nothing marked, however the history stands', async () => {
+    // The chat list loads with every past thread already finished, so a first
+    // reading that marked would open the app with every row lit up.
+    api.listChats.mockResolvedValue([
+      { ...run1, status: 'completed' },
+      { ...run2, status: 'failed' },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    expect(container.querySelector('[data-slot="unseen-dot"]')).toBeNull();
   });
 });

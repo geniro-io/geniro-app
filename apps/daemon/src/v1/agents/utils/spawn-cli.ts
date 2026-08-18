@@ -563,6 +563,26 @@ interface TurnState {
    * context.
    */
   deferredTerminal: AgentEvent | null;
+  /**
+   * This turn's prompt has not been written yet — {@link CliTurnOptions.holdPrompt}
+   * is still deciding.
+   *
+   * While it is true, a `turn_complete` from the CLI cannot be about this turn:
+   * the turn's prompt has not been sent, so there is nothing for the CLI to have
+   * completed. Settling on one is how the user's message came to be thrown away
+   * — TRACED in the reporter's own daemon log (2026-08-17 19:14): a fresh
+   * process, the MCP-readiness gate holding the prompt, and claude printing an
+   * empty `result` (`duration_ms:42`, `total_cost_usd:0`, `result:""`) 2.9s in.
+   * geniro settled the turn on it and marked the run `completed`; the gate then
+   * finished at 6.5s, found `turn.settled` and DROPPED the prompt. The message
+   * was persisted, never sent, never answered, and the transcript said "✓ done ·
+   * 0s · $0.0000" over it — the reported "I didn't get an answer at all".
+   *
+   * The window is not narrow and is about to widen: the gate waits on every MCP
+   * server a folder defines (9 of them, 6.5s, on the traced run) and now allows
+   * a stalling one up to a minute.
+   */
+  promptHeld: boolean;
 }
 
 /**
@@ -1124,6 +1144,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           return;
         }
       }
+      if (turn.deferredTerminal !== null) {
+        // Still held, by fewer (or more) units than a moment ago. Re-announced
+        // so the sentence under the badge counts down instead of standing at
+        // whatever it said when the hold began.
+        turn.options.onEvent({
+          type: 'turn_held',
+          open: turn.openWork.size,
+        });
+      }
       armSilenceDeadline(turn);
       return;
     }
@@ -1137,6 +1166,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       normalized.type === 'error'
     ) {
       if (turn.terminalEmitted) {
+        return;
+      }
+      // A completion for a prompt that has not been sent is not this turn's.
+      // See {@link TurnState.promptHeld} for the traced run this comes from:
+      // dropping it here is what keeps the gate's own release — which writes
+      // the prompt moments later — from finding a turn already settled and
+      // throwing the user's message away.
+      //
+      // `turn_complete` ONLY. A `turn_cancelled` is the user asking to stop
+      // before their message went out, which must still stop the turn, and an
+      // `error` before the prompt is a CLI that cannot run it — swallowing
+      // either would hang the composer on a turn nothing will ever end.
+      if (normalized.type === 'turn_complete' && turn.promptHeld) {
+        opts.logger?.warn(
+          `${opts.command}: ignoring a turn_complete that arrived before this turn's prompt was sent — the prompt is still held`,
+        );
+        armSilenceDeadline(turn);
         return;
       }
       // The CLI has stopped TALKING while work it started is still running, and
@@ -1160,6 +1206,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           opts.logger?.debug?.(
             `${opts.command}: holding the turn open — ${turn.openWork.size} unit(s) of background work have not reported`,
           );
+          // Said OUT LOUD, because from here the run is a different thing than
+          // it was a moment ago and nothing else can tell: the agent has
+          // stopped, and the turn is alive only for its listeners. See
+          // `AgentEvent`'s `turn_held` for the two readings that were wrong
+          // without it.
+          turn.options.onEvent({
+            type: 'turn_held',
+            open: turn.openWork.size,
+          });
         }
         armSilenceDeadline(turn);
         return;
@@ -1530,6 +1585,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       openWork: new Set(),
       delegateWork: new Map(),
       deferredTerminal: null,
+      promptHeld: turnOptions.holdPrompt !== undefined,
     };
     current = turn;
     // Kept at session scope so a request arriving AFTER this turn settles can
@@ -1611,6 +1667,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             `${opts.command}: prompt gate failed, sending anyway: ${errorMessage(err)}`,
           );
         }
+        // Cleared BEFORE the drop check, not after the write: from here the
+        // prompt either goes out or is deliberately abandoned, and in both
+        // cases a later `turn_complete` is a real answer about a real state.
+        // Left set, a turn abandoned here would swallow every terminal event
+        // the CLI ever produced and hang the composer for good.
+        turn.promptHeld = false;
         // The user can have cancelled, or the child died, while we held. Both
         // make the payload something to drop rather than to write: a prompt
         // written into a stopped turn would run work nobody asked for, and one

@@ -10,7 +10,7 @@ import {
   type BlockStatus,
   BlockTitle,
 } from './block-shell';
-import { formatElapsed, RunSettledContext } from './live-row';
+import { formatElapsed, RunSettledContext, WorkingRow } from './live-row';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
 import { TaskCount } from './task-list';
 import { taskProgress } from './task-payload';
@@ -206,6 +206,10 @@ export function SubagentThread({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const title = subagentTitle(block);
+  // Read from the SAME source the header's own spinner uses, so the block
+  // cannot show a live row under a header that says the delegate has stopped.
+  const runSettledAt = useContext(RunSettledContext);
+  const working = subagentBlockStatus(block, runSettledAt) === 'running';
   return (
     <NestedThreadContext.Provider value={true}>
       {block.prompt ? (
@@ -224,6 +228,22 @@ export function SubagentThread({
           chatAgentName={chatAgentName}
         />
       ))}
+      {/*
+        The same live row the main flow ends on, for a delegate that is still
+        going. Without it a sub-agent's thread — and the popup that shows the
+        same thread at full width — simply stopped at whatever it last said,
+        with nothing telling a delegate that is thinking apart from one that has
+        wedged. The header's spinner says it is running; this says the same
+        thing where the reader is actually looking, and carries the clock.
+
+        `lastRowAt` rather than mount time, exactly as the main flow's does:
+        reopening the popup would otherwise restart the count and report a
+        four-minute wait as one second.
+
+        It carries no PHRASE — see `WorkingRow`, which stands the activity down
+        inside a nested thread because the run's phrase belongs to the parent.
+      */}
+      {working ? <WorkingRow since={block.lastRowAt} /> : null}
       {block.result ? (
         <BlockResult label={`Result from ${title}`} text={block.result} />
       ) : null}

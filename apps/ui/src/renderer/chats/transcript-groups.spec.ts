@@ -14,6 +14,7 @@ import {
   subagentBlockStatus,
   toolCallSummary,
   type ToolGroupEntry,
+  toolGroupOperations,
   toolGroupSummary,
   toolResultText,
   type TranscriptEntry,
@@ -432,6 +433,68 @@ describe('toolGroupSummary', () => {
     expect(toolGroupSummary(pairs.pairs)).toBe(
       'Read 1 file · ran 2 commands · edited 1 file · created 1 file',
     );
+  });
+
+  it('offers the SAME operations as glyphs, in the sentence’s own order', () => {
+    const group = groupTranscript([
+      call('Bash', 't1', { command: 'ls' }),
+      call('Edit', 't2', {
+        file_path: '/a.ts',
+        old_string: 'x',
+        new_string: 'y',
+      }),
+      call('Read', 't3', { file_path: '/c.ts' }),
+    ])[0] as ToolGroupEntry;
+
+    // The sentence reads "Read 1 file · ran 1 command · edited 1 file", and the
+    // glyph strip is an index INTO it — same operations, same order. Derived
+    // from a second pass they could disagree, which is the whole reason both
+    // come off one fold.
+    expect(toolGroupSummary(group.pairs)).toBe(
+      'Read 1 file · ran 1 command · edited 1 file',
+    );
+    expect(toolGroupOperations(group.pairs)).toEqual([
+      'read',
+      'execute',
+      'edit',
+    ]);
+  });
+
+  it('caps the glyphs at three even when the sentence names more', () => {
+    const group = groupTranscript([
+      call('Read', 't1', { file_path: '/c.ts' }),
+      call('Grep', 't2', { pattern: 'x' }),
+      call('Bash', 't3', { command: 'ls' }),
+      call('Edit', 't4', {
+        file_path: '/a.ts',
+        old_string: 'x',
+        new_string: 'y',
+      }),
+      call('Write', 't5', { file_path: '/b.ts', content: 'hi' }),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe(
+      'Read 1 file · searched 1 time · ran 1 command · edited 1 file · created 1 file',
+    );
+    // Five phrases, three glyphs — the header is one line in a narrow column.
+    expect(toolGroupOperations(group.pairs)).toEqual([
+      'read',
+      'search',
+      'execute',
+    ]);
+  });
+
+  it('draws no glyph for work the sentence declines to name', () => {
+    // A delegation is counted but never spoken (its own block says it below),
+    // and an unclassifiable call falls to the bare total. Neither may acquire a
+    // picture asserting something the words withheld.
+    const group = groupTranscript([
+      call('Task', 't1', { description: 'go' }),
+      call('SomethingElse', 't2', {}),
+    ])[0] as ToolGroupEntry;
+
+    expect(toolGroupSummary(group.pairs)).toBe('Used 2 tools');
+    expect(toolGroupOperations(group.pairs)).toEqual([]);
   });
 
   describe('an agent that classifies its own calls', () => {

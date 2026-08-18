@@ -109,7 +109,7 @@ describe('UpdateService.check', () => {
 });
 
 describe('UpdateService.install', () => {
-  it('installs the release the user was offered, then relaunches', async () => {
+  it('installs the release the user was offered, and WAITS to be told to restart', async () => {
     const service = build();
     await service.check();
 
@@ -122,7 +122,23 @@ describe('UpdateService.install', () => {
     // The version the app now reports is the one on disk, not the one it
     // launched as.
     expect(state.currentVersion).toBe('1.4.0');
+    // The reported ask. Restarting quits the app and takes the daemon and every
+    // running turn with it, so the moment belongs to the user.
+    expect(relaunched).toBe(0);
+
+    service.relaunch();
     expect(relaunched).toBe(1);
+  });
+
+  it('will not restart when there is nothing installed to restart into', async () => {
+    // A press outside `ready` would quit the app and come back on the same
+    // build — indistinguishable from a crash.
+    const service = build();
+    await service.check();
+
+    service.relaunch();
+
+    expect(relaunched).toBe(0);
   });
 
   it('refuses when nothing has been offered, rather than installing "whatever is latest"', async () => {

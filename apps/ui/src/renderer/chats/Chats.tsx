@@ -156,7 +156,7 @@ import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
-import { useAttachments } from './use-attachments';
+import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useGitInfo } from './use-git-info';
 
 /**
@@ -250,6 +250,9 @@ function runAwaiting(run: ChatRun): RunAwaiting | null {
 }
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
+/** Draft key for the landing composer, which has no run id of its own. */
+const NEW_CHAT_DRAFT = '__new__';
+
 const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
 
 export function Chats({
@@ -280,9 +283,37 @@ export function Chats({
   const [liveText, setLiveText] =
     useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
   const [input, setInput] = useState('');
+  /**
+   * The unsent message each thread is holding, with its staged images.
+   *
+   * A draft belongs to the conversation it was written in: typing half a
+   * question in one thread, looking something up in another and coming back
+   * must find it still there — and must never let it be sent from the thread
+   * the user happened to be standing in. Before this there was ONE composer
+   * state for every thread, so switching carried the text across and the images
+   * with it.
+   *
+   * A ref, not state: nothing renders from the map itself — the composer reads
+   * the live `input`/`attachments`, and this is only consulted at the moment of
+   * a switch. As state it would re-render every thread row on each keystroke.
+   *
+   * Keyed by run id, with {@link NEW_CHAT_DRAFT} standing in for the landing
+   * card, which is a composer the user can equally leave half-filled.
+   */
+  // Live mirrors, so the swap below can read what is on screen without putting
+  // `input`/`attachments` in the switch callbacks' deps — which would rebuild
+  // them on every keystroke.
+  const inputRef = useRef('');
+  inputRef.current = input;
+  const draftsRef = useRef(
+    new Map<string, { text: string; images: StagedAttachment[] }>(),
+  );
   // Images pasted into whichever composer is on screen — the landing card and
   // the follow-up card are never mounted at once, so one stage serves both.
   const attachments = useAttachments();
+  const attachmentsRef = useRef<StagedAttachment[]>([]);
+  attachmentsRef.current = attachments.attachments;
+
   // What the composer targets: a bare CLI kind for a single-agent chat, or
   // `wf:<slug>` to run a library workflow as a team.
   const [target, setTarget] = useState<string>('claude');
@@ -397,6 +428,22 @@ export function Chats({
   const [activities, setActivities] = useState<ReadonlyMap<string, string>>(
     new Map(),
   );
+  /**
+   * Runs whose turn is HELD — the agent has finished and the process is alive
+   * only until the delegates it launched report back.
+   *
+   * It is deliberately not folded into `activities`: that map holds a sentence
+   * to display, and this is a fact the composer ACTS on. While a run is held
+   * the CLI is idle, so a message typed then goes straight out instead of into
+   * the queue — reported as "if claude is running agents in background it's
+   * like it stopped to work until it gets a notification from them… we should
+   * not send the message to the queue while it's just waiting for listeners".
+   */
+  const [holding, setHolding] = useState<ReadonlySet<string>>(new Set());
+  const holdingRef = useRef<ReadonlySet<string>>(holding);
+  useEffect(() => {
+    holdingRef.current = holding;
+  }, [holding]);
   /**
    * What each run SAID as it last settled — the agent's closing words, or the
    * failure's message, as the daemon announced them.
@@ -1312,24 +1359,63 @@ export function Chats({
    *  picked up by refetching at natural moments (mount, pressing +). */
   const refreshRuns = useCallback((): void => {
     void Promise.all([chatApi.listChats(), workflowApi.listWorkflowRuns()])
-      .then(([chats, workflowRuns]) =>
-        setRuns(
-          [...chats, ...workflowRuns].sort((a, b) =>
-            b.createdAt.localeCompare(a.createdAt),
-          ),
-        ),
-      )
+      .then(([chats, workflowRuns]) => {
+        const all = [...chats, ...workflowRuns].sort((a, b) =>
+          b.createdAt.localeCompare(a.createdAt),
+        );
+        setRuns(all);
+        // Seeded from the SNAPSHOT, not only from the live announce. The hold
+        // starts with one broadcast and then lasts as long as the delegates do,
+        // so a window opened after it — or one that just reconnected — would
+        // otherwise read a held run as a working agent and queue the user's
+        // message behind delegates that have minutes left to run.
+        setHolding(
+          new Set(all.filter((r) => r.holdingFor > 0).map((r) => r.id)),
+        );
+      })
       .catch((err: unknown) => setError(String(err)))
       // Either way the first fetch settled — "No chats yet" is reserved for a
       // resolved-but-empty list, never shown while the fetch is in flight.
       .finally(() => setRunsLoaded(true));
   }, [chatApi, workflowApi]);
 
+  /**
+   * Park the composer's contents under `from`, and put `to`'s back.
+   *
+   * One helper for both directions (thread → thread and thread → landing card)
+   * so the two cannot drift into saving different things. Called BEFORE the
+   * switch commits, since it reads what is still on screen.
+   */
+  const swapDraft = useCallback(
+    (from: string, to: string): void => {
+      const text = inputRef.current;
+      const images = attachmentsRef.current;
+      if (text.length > 0 || images.length > 0) {
+        draftsRef.current.set(from, { text, images });
+      } else {
+        // An emptied composer is not a draft — keeping one would restore text
+        // the user had deliberately cleared.
+        draftsRef.current.delete(from);
+      }
+      const incoming = draftsRef.current.get(to);
+      setInput(incoming?.text ?? '');
+      attachments.restore(incoming?.images ?? []);
+    },
+    [attachments],
+  );
+
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
       const previous = activeRunIdRef.current;
       if (previous && previous !== runId) {
         client.leaveRun(previous);
+      }
+      // Only on a genuine CHANGE of thread. `activateRun` is also called to
+      // re-open the thread already showing (a refresh, a re-select), and
+      // swapping a draft out and back through that path would hand the
+      // composer whatever the map held rather than what is on screen.
+      if (previous !== runId) {
+        swapDraft(previous ?? NEW_CHAT_DRAFT, runId);
       }
       // The steer outcome belongs to the run the user pressed it in.
       setSteerStatus(null);
@@ -1548,6 +1634,28 @@ export function Chats({
           next.delete(event.runId);
         } else {
           next.set(event.runId, event.activity);
+        }
+        return next;
+      });
+      setHolding((prev) => {
+        // A real STATUS transition ends whatever hold was in effect — a turn
+        // that settled is not held, and a new turn starting has no hold yet.
+        // An activity-only announce carrying no `holdingFor` says nothing and
+        // must leave the reading alone.
+        const held =
+          event.holdingFor !== undefined
+            ? event.holdingFor > 0
+            : status !== null
+              ? false
+              : prev.has(event.runId);
+        if (held === prev.has(event.runId)) {
+          return prev;
+        }
+        const next = new Set(prev);
+        if (held) {
+          next.add(event.runId);
+        } else {
+          next.delete(event.runId);
         }
         return next;
       });
@@ -2012,6 +2120,7 @@ export function Chats({
     if (previous) {
       client.leaveRun(previous);
     }
+    swapDraft(previous ?? NEW_CHAT_DRAFT, NEW_CHAT_DRAFT);
     activeRunIdRef.current = null;
     setActiveRunId(null);
     setItems([]);
@@ -2116,7 +2225,12 @@ export function Chats({
       attachments.clear();
       addItem(userItem, true);
     } catch (err) {
-      setError(String(err));
+      // The daemon's own sentence, exactly as `drainQueue` and `sendQueuedNow`
+      // already do it — this catch was the one send path left printing the raw
+      // envelope, and it is the path a FIRST message takes, so a refusal of the
+      // very thing it carried reached the user as
+      // `daemon POST /v1/chats/…/messages failed (413): {"statusCode":413,…}`.
+      setError(daemonErrorDetail(err) ?? String(err));
       setStreaming(false);
       // A failed send must leave the typed task editable (mirror drainQueue's
       // restoreHead) — but never clobber anything typed since. The staged
@@ -2301,7 +2415,17 @@ export function Chats({
     // Queueing is a chat-run concept — the workflow composer is disabled.
     const queueable =
       runsRef.current.find((r) => r.id === runId)?.workflowId == null;
-    if (streaming) {
+    // A HELD turn is not a working agent. Its CLI printed its turn-end line
+    // some time ago and the process is alive only so the delegates it launched
+    // have somewhere to report; it is sitting on an idle stdin. Holding a
+    // message back from it buys the user nothing — there is no turn in flight
+    // to be redirected, which is the entire reason the queue exists — and costs
+    // them the wait, since the drain does not fire until the last delegate
+    // returns, which can be many minutes. Reported as "if claude is running
+    // agents in background it's like it stopped to work until it gets a
+    // notification from them… we should not send the message to the queue while
+    // it's just waiting for listeners".
+    if (streaming && !holdingRef.current.has(runId)) {
       if (!queueable) {
         return;
       }
@@ -2344,7 +2468,8 @@ export function Chats({
         drainQueueRef.current(runId);
         return;
       }
-      setError(String(err));
+      // Same rule as the other three send paths: show what the daemon said.
+      setError(daemonErrorDetail(err) ?? String(err));
       if (!streaming) {
         setStreaming(false);
       }
@@ -3104,6 +3229,8 @@ export function Chats({
    */
   const activeActivity =
     activeRunId === null ? null : (activities.get(activeRunId) ?? null);
+  /** This chat's turn is held for background work — see {@link holding}. */
+  const activeRunHeld = activeRunId !== null && holding.has(activeRunId);
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
   // several agents share a flow. Keyed on the RUN (a workflow run always keeps
@@ -4408,7 +4535,7 @@ export function Chats({
                             placeholder={
                               activeRun?.workflowId
                                 ? 'Workflow runs take one task — press + to start another.'
-                                : streaming
+                                : streaming && !activeRunHeld
                                   ? 'Agent is working — your message will queue…'
                                   : 'Message the agent…'
                             }
@@ -4485,8 +4612,20 @@ export function Chats({
                                         // user could still edit or withdraw it.
                                         // Mid-turn delivery is now the strip's own
                                         // "send now", one click away.
-                                        aria-label="Queue"
-                                        title="Queue — goes out when the turn ends, or send it now from the queue above"
+                                        //
+                                        // …EXCEPT while the turn is merely held
+                                        // for background work, where there is no
+                                        // turn in flight to redirect: the agent
+                                        // has stopped and its stdin is idle, so
+                                        // this SENDS, and has to say so.
+                                        aria-label={
+                                          activeRunHeld ? 'Send' : 'Queue'
+                                        }
+                                        title={
+                                          activeRunHeld
+                                            ? 'Send — the agent is idle, waiting on its background tasks'
+                                            : 'Queue — goes out when the turn ends, or send it now from the queue above'
+                                        }
                                         onClick={() => void sendFollowUp()}>
                                         {/* NOT the ArrowUp that Send uses. The one
                                       thing the user has to understand before
@@ -4496,7 +4635,11 @@ export function Chats({
                                       below already marks a waiting message
                                       with, so the button and its result read as
                                       the same thing. */}
-                                        <Clock className="size-4 shrink-0" />
+                                        {activeRunHeld ? (
+                                          <ArrowUp className="size-4 shrink-0" />
+                                        ) : (
+                                          <Clock className="size-4 shrink-0" />
+                                        )}
                                       </Button>
                                     ) : null}
                                     <Button

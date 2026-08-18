@@ -903,6 +903,28 @@ describe('ChatService', () => {
     await drain();
   });
 
+  it('marks a mid-turn message as one, and leaves an ordinary message unmarked', async () => {
+    // The renderer captions it, because the two sends look identical in the
+    // transcript and only this one has a wait built into it: the CLI reads it
+    // at its next tool boundary, so behind a long tool call the agent does
+    // nothing and the live row keeps naming the tool that was already running.
+    // Reported as "я его мгновенно отправляю … и он ничего не делает".
+    const { service, claude } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    const first = await service.sendMessage(run.id, 'first');
+    const followUp = await service.sendMessage(run.id, 'and also this');
+
+    expect(followUp.payload).toMatchObject({ midTurn: true });
+    // The other half, and the one that makes the caption mean anything: a
+    // message that OPENED its turn is read at once and has nothing to explain,
+    // so a blanket stamp would caption every message in the app.
+    expect(first.payload).not.toHaveProperty('midTurn');
+
+    claude.finish();
+    await drain();
+  });
+
   it('gives a mid-turn message a seq the running turn has not already reserved', async () => {
     // THE duplicate-seq defect, reproduced on a real transcript: a user item
     // and the assistant's reply both landed on seq 5927, and the renderer —
@@ -3305,6 +3327,221 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: null,
       activity: 'running Bash',
     });
+    claude.finish();
+    await drain();
+  });
+
+  it('stops claiming a tool is running once that tool has returned', async () => {
+    // The reported defect: a finished answer sitting under a live row that read
+    // "running Read · 7m 57s". The phrase is only ever REPLACED by the next
+    // tool call, so the last tool of a turn kept its present tense for as long
+    // as the turn stayed open — and a turn held on background work stays open
+    // for up to the silence deadline.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('running Read');
+
+    claude.emit({
+      type: 'tool_result',
+      id: 't1',
+      name: 'Read',
+      result: 'ok',
+      isError: false,
+    });
+    await drain();
+    // Null, not another phrase: between tools the agent is thinking, which is
+    // what the run's own "Working…" already says.
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: null,
+      activity: null,
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('keeps naming a tool that is still out when a SIBLING of its batch returns', async () => {
+    // The other half of the same complaint ("the Running Edit line lags"): a
+    // model routinely issues several tool calls in ONE assistant message and
+    // their results come back one at a time. Tracked as a boolean, the phrase
+    // was retired by whichever finished FIRST — so a slow `Edit` batched with a
+    // fast `Read` stopped being named the instant the Read returned, and the
+    // row said "Working…" about a turn that was demonstrably editing a file.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+    claude.emit({ type: 'tool_call', id: 't2', name: 'Edit', input: {} });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('running Edit');
+
+    claude.emit({
+      type: 'tool_result',
+      id: 't1',
+      name: 'Read',
+      result: 'ok',
+      isError: false,
+    });
+    await drain();
+    // The Edit is still out, so it is still what the run is doing.
+    expect(statuses.at(-1)?.activity).toBe('running Edit');
+
+    claude.emit({
+      type: 'tool_result',
+      id: 't2',
+      name: 'Edit',
+      result: 'ok',
+      isError: false,
+    });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBeNull();
+    claude.finish();
+    await drain();
+  });
+
+  it('says what the approved tool is doing again once the card is answered', async () => {
+    // Measured on a real `ask` turn: a 30s command sat under "Working… 11s"
+    // from the moment Approve was pressed. Parking clears the phrase (correct —
+    // nothing is running while the user decides), but the approved call had
+    // already announced itself BEFORE the card went up and never announces
+    // again, so the clear outlived the wait it described.
+    const { service, claude, statuses, approvals } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('running Bash');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'a-1',
+      toolName: 'Bash',
+      input: {},
+    });
+    await drain();
+    // Parked: no phrase, because nothing moves without the user.
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: null,
+      activity: null,
+      awaiting: 'approval',
+    });
+
+    expect(approvals.resolve(run.id, 'a-1', true)).toBe(true);
+    await drain();
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: null,
+      activity: 'running Bash',
+      awaiting: null,
+    });
+
+    claude.emit({
+      type: 'tool_result',
+      id: 't1',
+      name: 'Bash',
+      result: 'ok',
+      isError: false,
+    });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBeNull();
+    claude.finish();
+    await drain();
+  });
+
+  it('says what a held turn is WAITING ON, not the last tool it ran', async () => {
+    // The reported "он закончил, но пишет что он ещё в процессе": the turn is
+    // held open while background work it started has not reported, which is
+    // deliberate — but the row went on naming the last tool, so a live delegate
+    // and a dead one looked identical.
+    //
+    // Driven by `turn_held`, which is what `runCliSession` actually emits. The
+    // first version of this counted `background_work` events instead, and
+    // `spawn-cli` consumes those as turn plumbing and never forwards them — so
+    // the branch under test could only ever run from a spec.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('running Read');
+
+    claude.emit({ type: 'turn_held', open: 2 });
+    await drain();
+    // The agent has STOPPED — so the tool it left open is not running either,
+    // and the run says what it is actually waiting for.
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: null,
+      activity: 'waiting on 2 background tasks',
+      holdingFor: 2,
+    });
+
+    claude.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('waiting on 1 background task');
+
+    claude.emit({ type: 'turn_held', open: 0 });
+    await drain();
+    // Nothing outstanding — back to the run's own "Working…", and the composer
+    // is told the hold is over in the same breath.
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: null,
+      activity: null,
+      holdingFor: 0,
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('does NOT clear the parent’s activity on a SUB-AGENT’s tool result', async () => {
+    // The mirror of the announce rule below: a delegate's results arrive on the
+    // same stream, and clearing on one would take down the "running Agent" that
+    // is the truth for the whole delegation.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Agent', input: {} });
+    await drain();
+    claude.emit({
+      type: 'tool_result',
+      id: 'sub',
+      name: 'Read',
+      result: 'ok',
+      isError: false,
+      parentToolUseId: 't1',
+    });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('running Agent');
     claude.finish();
     await drain();
   });

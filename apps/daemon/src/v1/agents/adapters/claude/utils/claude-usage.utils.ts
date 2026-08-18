@@ -1,5 +1,131 @@
-import { asArray, asNumber, asRecord } from '../../../utils/json-util';
+import {
+  asArray,
+  asNumber,
+  asRecord,
+  asString,
+} from '../../../utils/json-util';
 import type { AgentUsage } from '../../adapter.types';
+
+/**
+ * The running totals claude's own cost ledger reports, per CLI SESSION.
+ *
+ * `result.total_cost_usd` and `result.duration_api_ms` are NOT this turn's
+ * figures — they are the session's, and they keep climbing for as long as the
+ * process lives. Probe-verified on 2.1.233, two turns on one stdin session:
+ *
+ *   turn 1  total_cost_usd 0.1166802   duration_api_ms 2219
+ *   turn 2  total_cost_usd 0.1384620   duration_api_ms 4159
+ *
+ * Turn 2 cost $0.0218 and spent 1940ms in the API; the line says $0.1385 and
+ * 4159ms. The binary says the same thing outright — both fields are read off
+ * `pr.costLedger` (`totalCostUSD()` / `totalAPIDuration()`), one ledger per
+ * session (`costLedger: e.kind === "fork" ? e.root.costLedger : new ecs`).
+ *
+ * Recording the running total as the turn's own is how a chat that cost $141
+ * came to be billed at $1,356 on the Stats page: the ledger SUMS what it is
+ * given, so a climbing ladder is added to itself once per rung. This class is
+ * what turns the ladder back into steps.
+ *
+ * **Keyed by claude's own `session_id`, which is what makes it safe on a shared
+ * adapter.** One adapter instance serves N concurrent turns under graph
+ * fan-out, but a session id belongs to exactly one CLI process, and a run's
+ * turns are serialized behind RUN_BUSY — so two turns can never be reading and
+ * writing the same entry.
+ *
+ * Note what is deliberately NOT here: `usage.*` and `duration_ms` are already
+ * per-turn on the wire (same probe — `cache_creation_input_tokens` fell 18,212
+ * → 1,485, and `duration_ms` 2,395 → 2,093), so subtracting them would turn
+ * correct figures into nonsense.
+ */
+export class ClaudeSessionCostLedger {
+  /** Insertion-ordered, so the oldest entry is the first key — see `remember`. */
+  private readonly totals = new Map<string, SessionTotals>();
+
+  /**
+   * This turn's own cost and API time, from the session totals the line
+   * carries.
+   *
+   * A session id we have not seen contributes its full total, which is right
+   * for a first turn and is also the only honest answer for a session this
+   * process did not watch from the start (an adopted daemon, a restarted UI).
+   *
+   * A total that went DOWN means a new ledger behind a reused id, so the figure
+   * is taken whole rather than clamped to zero — the alternative silently drops
+   * a real turn's spend.
+   */
+  perTurn(
+    sessionId: string | null,
+    cumulative: SessionTotals,
+  ): { costUsd: number | null; apiMs: number | null } {
+    if (sessionId === null) {
+      // Nothing to key on. Reporting the running total would be the very bug
+      // this class exists to stop, and no `result` line has been observed
+      // without the field — so the honest answer is "not measured".
+      return { costUsd: null, apiMs: null };
+    }
+    const previous = this.totals.get(sessionId);
+    this.remember(sessionId, cumulative);
+    return {
+      costUsd: step(previous?.costUsd ?? null, cumulative.costUsd),
+      apiMs: step(previous?.apiMs ?? null, cumulative.apiMs),
+    };
+  }
+
+  /** Drop a finished session's entry. */
+  forget(sessionId: string): void {
+    this.totals.delete(sessionId);
+  }
+
+  /**
+   * Record the new high-water mark, evicting the oldest entry past the cap.
+   *
+   * The cap is the whole reason this is not a plain Map: a long-lived daemon
+   * sees a new session id per chat, and `forget` is best-effort — a SIGKILLed
+   * CLI never reports its own end. Losing the oldest entry costs one turn's
+   * delta on a session nobody has touched in hundreds of chats.
+   */
+  private remember(sessionId: string, totals: SessionTotals): void {
+    this.totals.delete(sessionId);
+    this.totals.set(sessionId, totals);
+    while (this.totals.size > MAX_TRACKED_SESSIONS) {
+      const oldest = this.totals.keys().next();
+      if (oldest.done === true) {
+        return;
+      }
+      this.totals.delete(oldest.value);
+    }
+  }
+}
+
+/** One session's running totals, as the last `result` line stated them. */
+interface SessionTotals {
+  costUsd: number | null;
+  apiMs: number | null;
+}
+
+/**
+ * How many sessions' running totals to keep. Two numbers per entry, so this is
+ * kilobytes at the cap — sized to never evict an entry still in use rather than
+ * to save memory.
+ */
+const MAX_TRACKED_SESSIONS = 512;
+
+/**
+ * One rung of the ladder: what this turn added to a session total.
+ *
+ * Null in either position yields null rather than a guess — an unmeasured
+ * figure must not become a measured zero, which is the same rule the whole
+ * usage path follows.
+ */
+function step(previous: number | null, current: number | null): number | null {
+  if (current === null) {
+    return null;
+  }
+  if (previous === null || current < previous) {
+    return current;
+  }
+  return current - previous;
+}
 
 /**
  * Read one claude `result` line's token accounting.
@@ -23,11 +149,22 @@ import type { AgentUsage } from '../../adapter.types';
  * (`claude-opus-5[1m]` → 1_000_000), which is the only reason the ring can stop
  * measuring every model against an assumed 200k.
  */
-export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
+export function readClaudeUsage(
+  root: Record<string, unknown>,
+  ledger: ClaudeSessionCostLedger,
+): AgentUsage {
   const usage = asRecord(root.usage);
   const iterations = usage ? asArray(usage.iterations) : [];
   const lastRequest = asRecord(iterations[iterations.length - 1]);
   const context = readContextWindow(root);
+  // The two SESSION-scoped fields, turned back into this turn's own. Required
+  // rather than optional: an overload that silently reported the running total
+  // when the ledger was left out is exactly the defect, and it would be
+  // invisible in every spec that did not pass one.
+  const step = ledger.perTurn(asString(root.session_id), {
+    costUsd: asNumber(root.total_cost_usd),
+    apiMs: asNumber(root.duration_api_ms),
+  });
   return {
     // Cumulative by nature and labelled as such — the turn's billed input.
     inputTokens: usage ? asNumber(usage.input_tokens) : null,
@@ -44,15 +181,21 @@ export function readClaudeUsage(root: Record<string, unknown>): AgentUsage {
     contextTokens: promptSideTokens(lastRequest),
     contextWindowTokens: context.window,
     contextModel: context.model,
-    costUsd: asNumber(root.total_cost_usd),
+    // THIS TURN's spend, not the session's running total — see
+    // {@link ClaudeSessionCostLedger} for the probe and for what summing the
+    // total instead did to the Stats page.
+    costUsd: step.costUsd,
     // The CLI's OWN clock for the turn, which is the number worth having: it
     // starts when the CLI begins working and so counts neither geniro's
     // MCP-readiness hold nor a stretch parked on an approval card. Probed on
     // 2.1.x (2026-08-14): `duration_ms` 7618 / `duration_api_ms` 7176 on a
     // one-tool turn. Both were being dropped, which is why a finished turn
     // could show its cost and never its time.
+    //
+    // `duration_ms` is genuinely per-turn and is read straight; `duration_api_ms`
+    // is the session roll-up and goes through the ledger with the cost.
     durationMs: asNumber(root.duration_ms),
-    apiMs: asNumber(root.duration_api_ms),
+    apiMs: step.apiMs,
   };
 }
 

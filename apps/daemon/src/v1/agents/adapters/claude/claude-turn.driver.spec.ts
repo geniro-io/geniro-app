@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, TurnIo } from '../adapter.types';
 import {
-  CLAUDE_MCP_READY_DEADLINE_MS,
+  CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
+  CLAUDE_MCP_READY_STALL_MS,
 } from './claude.const';
 import { ClaudeTurnDriver } from './claude-turn.driver';
 
@@ -182,6 +183,60 @@ describe('holding the first prompt until the MCP servers are up', () => {
     expect(g.events).toEqual([]);
   });
 
+  it('keeps waiting for a slow folder while discovery is still MOVING', async () => {
+    // The reported case: remote servers (claude.ai, Amplitude) had not finished
+    // dialling when the flat 15s ceiling expired, so their tools were missing
+    // from the first message even though the reading was visibly still
+    // changing. The gate now times a STALL, so progress renews the wait.
+    let poll = 0;
+    const g = gate((id) => {
+      poll += 1;
+      // Discovery keeps MOVING: a further server is found on each of the first
+      // 40 polls, and the two remote ones stay pending well past the stall
+      // window before connecting. Slow, but never stuck — exactly the folder
+      // the flat ceiling used to cut off.
+      const discovered = Array.from({ length: Math.min(poll, 40) }, (_, i) => ({
+        name: `local-${i}`,
+        status: 'connected' as const,
+      }));
+      return reply(id, [
+        ...discovered,
+        { name: 'claude.ai', status: poll < 45 ? 'pending' : 'connected' },
+        { name: 'Amplitude', status: poll < 45 ? 'pending' : 'connected' },
+      ]);
+    });
+
+    await g.driver.awaitPromptReady(g.io);
+
+    // Released because everything came up — NOT because a ceiling expired, so
+    // the turn keeps the tools and the user is told nothing.
+    expect(g.events).toEqual([]);
+    expect(g.clock).toBeGreaterThan(CLAUDE_MCP_READY_STALL_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_MAX_WAIT_MS);
+  });
+
+  it('gives up on a server that is STUCK, without waiting out the ceiling', async () => {
+    // The stall window is what keeps the patience above from becoming a hang:
+    // an unreachable host reports the same reading forever, so nothing changes
+    // and the prompt goes out well inside the hard ceiling.
+    const g = gate((id) =>
+      reply(id, [
+        { name: 'reachable', status: 'connected' },
+        { name: 'broken', status: 'pending' },
+      ]),
+    );
+
+    await g.driver.awaitPromptReady(g.io);
+
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_MAX_WAIT_MS);
+    const notice = g.events[0];
+    if (notice?.type !== 'notice') {
+      throw new Error(`expected a notice, got ${String(notice?.type)}`);
+    }
+    expect(notice.message).toContain('broken');
+    expect(notice.message).not.toContain('reachable');
+  });
+
   it('still stops for a CLI that never answers at all', async () => {
     // The other half of the same decision: retrying forever would hold the
     // user's message until the turn's 30-minute silence deadline settled it,
@@ -191,7 +246,7 @@ describe('holding the first prompt until the MCP servers are up', () => {
     await g.driver.awaitPromptReady(g.io);
 
     expect(g.polls).toBeGreaterThan(1);
-    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_DEADLINE_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toEqual([]);
   });
 
@@ -203,7 +258,7 @@ describe('holding the first prompt until the MCP servers are up', () => {
 
     await g.driver.awaitPromptReady(g.io);
 
-    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_DEADLINE_MS);
+    expect(g.clock).toBeLessThan(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toEqual([]);
   });
 
@@ -220,7 +275,7 @@ describe('holding the first prompt until the MCP servers are up', () => {
 
     await g.driver.awaitPromptReady(g.io);
 
-    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_DEADLINE_MS);
+    expect(g.clock).toBeGreaterThanOrEqual(CLAUDE_MCP_READY_STALL_MS);
     expect(g.events).toHaveLength(1);
     const notice = g.events[0];
     if (notice?.type !== 'notice') {
@@ -229,9 +284,11 @@ describe('holding the first prompt until the MCP servers are up', () => {
     expect(notice.message).toContain('playwright');
     // Only what was actually still starting.
     expect(notice.message).not.toContain('github');
-    // A degrade, so it wears the daemon's advisory chrome (severity absent =
-    // warning) rather than the quiet `info` used for machinery working.
-    expect(notice.severity).toBeUndefined();
+    // INFO rather than the advisory chrome this once asserted. The degrade is
+    // real, but nothing FAILED — the turn ran, the servers finish behind it and
+    // the next message has them. A red banner here was read as a fault to
+    // report ("i see this error") on a turn that had worked.
+    expect(notice.severity).toBe('info');
   });
 });
 

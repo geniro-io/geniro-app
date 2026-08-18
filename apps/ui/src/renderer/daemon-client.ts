@@ -73,6 +73,21 @@ export interface RunStatusEvent {
    */
   awaiting?: RunAwaiting | null;
   /**
+   * How many units of background work the run's turn is being HELD for, or
+   * `undefined` when this event says nothing about it.
+   *
+   * A held turn is one whose agent has FINISHED and whose process is being kept
+   * alive only until the delegates it launched report back. It is the state the
+   * composer has to tell apart from a working agent: a message typed then must
+   * go straight to the CLI, which is sitting idle waiting for those listeners,
+   * rather than into the send-later queue.
+   *
+   * A COUNT rather than a boolean because it is also what the badge's sentence
+   * is built from, and a fact both surfaces read cannot drift the way two
+   * readings of one English phrase can. `0` says the hold is over.
+   */
+  holdingFor?: number;
+  /**
    * What the run said as it reached this status — the agent's closing words, or
    * a failure's message. Absent on every announce that is not a settle.
    */
@@ -88,10 +103,8 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, status, activity, awaiting, summary } = data as Record<
-    string,
-    unknown
-  >;
+  const { runId, status, activity, awaiting, holdingFor, summary } =
+    data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
   }
@@ -121,6 +134,11 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     status: known ? null : (status as RunStatus),
     activity: typeof activity === 'string' && activity ? activity : null,
     ...(parked === undefined ? {} : { awaiting: parked }),
+    // Absent stays absent, exactly like `awaiting`: an ordinary activity
+    // announce says nothing about the hold and must not clear it.
+    ...(typeof holdingFor === 'number' && Number.isFinite(holdingFor)
+      ? { holdingFor: Math.max(0, Math.trunc(holdingFor)) }
+      : {}),
     ...(typeof summary === 'string' && summary !== '' ? { summary } : {}),
   };
 }

@@ -405,13 +405,21 @@ export interface GeniroApi {
    */
   checkForUpdates(): Promise<UpdateState>;
   /**
-   * Download, verify and swap in the available update, then relaunch.
+   * Download, verify and swap in the available update.
    *
    * Resolves with the state at the END of the attempt: `error` when it could
-   * not be applied, otherwise `ready` — and by then the app is already on its
-   * way out, so nothing that resolves after it will be seen.
+   * not be applied, otherwise `ready`. It does NOT restart the app — see
+   * {@link relaunchForUpdate}.
    */
   installUpdate(): Promise<UpdateState>;
+  /**
+   * Quit and come back up on the freshly-installed bundle.
+   *
+   * Separate from {@link installUpdate} because restarting takes the daemon and
+   * every running turn with it, so the moment is the user's to pick. A no-op
+   * unless an update is actually `ready`.
+   */
+  relaunchForUpdate(): Promise<UpdateState>;
   /** Subscribe to update-state changes (check progress, download progress). */
   onUpdateState(listener: (state: UpdateState) => void): () => void;
   /** Read a folder's git state (repo? branch? branches? dirty?). */
@@ -524,6 +532,7 @@ export const IPC = {
   getUpdateState: 'geniro:getUpdateState',
   checkForUpdates: 'geniro:checkForUpdates',
   installUpdate: 'geniro:installUpdate',
+  relaunchForUpdate: 'geniro:relaunchForUpdate',
   onUpdateState: 'geniro:onUpdateState',
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',

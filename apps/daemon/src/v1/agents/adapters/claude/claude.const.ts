@@ -466,13 +466,34 @@ export const CLAUDE_MCP_READY_REPLY_TIMEOUT_MS = 1_200;
 export const CLAUDE_MCP_READY_EMPTY_GRACE_MS = 2_000;
 
 /**
- * The whole gate's ceiling. A server that never leaves `pending` — a broken
- * command, an unreachable host — must not hold the user's first message
- * forever, so past this the prompt goes out with a notice naming what was
- * still starting. Set above the 6s the author's own 45-server folder took, and
- * far below the turn's silence deadline, which is the backstop behind it.
+ * How long the gate waits WITHOUT PROGRESS before giving up — a stall window,
+ * not a flat ceiling.
+ *
+ * A server that never leaves `pending` — a broken command, an unreachable host
+ * — must not hold the user's first message forever, so once nothing has
+ * CHANGED for this long the prompt goes out with a notice naming what was still
+ * starting. Set above the 6s the author's own 45-server folder took, and far
+ * below the turn's silence deadline, which is the backstop behind it.
+ *
+ * It used to be the whole ceiling, measured from the first poll, and that is
+ * what put "these MCP servers were still starting" on a real turn: remote
+ * servers (claude.ai, Amplitude) had not finished dialling at 15s, so their
+ * tools were missing from the message even though discovery was visibly still
+ * making progress. Timing the STALL rather than the total keeps the impatience
+ * pointed at what it was for — a server that is stuck — while a slow one that
+ * is still moving gets to finish.
  */
-export const CLAUDE_MCP_READY_DEADLINE_MS = 15_000;
+export const CLAUDE_MCP_READY_STALL_MS = 15_000;
+
+/**
+ * The hard ceiling behind the stall window, so a folder whose servers report
+ * churn forever still cannot hold the first message indefinitely.
+ *
+ * Only reachable by a folder that keeps CHANGING its reading for a full minute
+ * without ever settling; anything healthy releases the moment two identical
+ * readings show nothing pending, which is usually seconds.
+ */
+export const CLAUDE_MCP_READY_MAX_WAIT_MS = 60_000;
 
 /**
  * Said out loud when the deadline expires with servers still dialling: `%s` is
@@ -1045,3 +1066,67 @@ export const CLAUDE_CONTEXT_USAGE_SUBTYPE = 'get_context_usage';
  * short enough that a CLI which will never answer stops being waited for.
  */
 export const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 8_000;
+
+// ── The account's plan limits (probe block) ─────────────────────────────────
+//
+// `get_usage` is the THIRD undocumented control request this adapter drives,
+// found the same way as `mcp_status` and `get_context_usage` — by enumerating
+// the shipped binary's control subtypes — and probed live on 2.1.234 before
+// any prompt had been written, which is what makes it answerable at all here.
+//
+// Finding the name was not enough, and the binary says so: it also carries
+// "get_usage is not supported in this context (onGetUsage callback not
+// registered)", so appearing in the subtype list proves only that the name
+// exists. The measurement is that a headless `-p --output-format stream-json
+// --input-format stream-json` process answered it in under a second, on the
+// same stdin dialogue the other two ride.
+//
+// The reply (trimmed to what is projected):
+//
+//   {"subscription_type":"max","rate_limits_available":true,
+//    "rate_limits":{
+//      "five_hour":{"utilization":43,"resets_at":"2026-08-18T11:00:00+00:00",…},
+//      "seven_day":{"utilization":30,"resets_at":"2026-08-23T11:00:00+00:00",…},
+//      "seven_day_opus":null,"seven_day_sonnet":null, …,
+//      "limits":[{"kind":"session","group":"session","percent":43,
+//                 "severity":"normal","resets_at":"…","scope":null,
+//                 "is_active":true},
+//                {"kind":"weekly_all","group":"weekly","percent":30,…},
+//                {"kind":"weekly_scoped","group":"weekly","percent":0,
+//                 "scope":{"model":{"display_name":"Fable"}},…}]},
+//    "session":{…},"behaviors":{"day":{…},"week":{…}}}
+//
+// Three decisions the projection rests on:
+//
+//  - `limits[]` is read, NOT the named `five_hour`/`seven_day` map beside it.
+//    It is the list the CLI's own `/usage` dialog renders, so it already
+//    carries only the windows that apply to this account, in that CLI's order,
+//    and a model-scoped row brings its own `display_name` — which the named map
+//    cannot supply. The map's keys would also have to be labelled here, in this
+//    app's words, for windows the vendor is free to add.
+//  - A row whose `kind` is not one this adapter can NAME is dropped rather than
+//    labelled from its key. `weekly_scoped` is not a phrase to show anyone, and
+//    a wrong label on a limit is worse than one row fewer: the two rows that
+//    matter are always present, and a vendor's new window simply does not
+//    appear until it is read here on purpose.
+//  - `behaviors` (a local-transcript attribution scan the CLI itself marks
+//    "Approximate, excludes other devices") and `session` (this process's own
+//    cost, which the thread totals already report from durable rows) are both
+//    dropped. Neither is what "when am I cut off" asks.
+//
+// Same expiry warning as the two blocks above: an observation of one build, not
+// a contract. A renamed subtype or a reshaped reply degrades to "no reading",
+// which is exactly what a CLI without the channel already shows.
+
+/** The control subtype that reports the account's plan rate-limit windows. */
+export const CLAUDE_PLAN_LIMITS_SUBTYPE = 'get_usage';
+
+/**
+ * How long one plan-limits question waits for its answer.
+ *
+ * The same ceiling as its context sibling, and for the same reasoning — the
+ * measured reply was far quicker (under a second, against 1.2–3.3s there),
+ * but the two are asked together on one open of the readout, so a tighter
+ * bound here would only ever give up on a CLI the other is still waiting for.
+ */
+export const CLAUDE_PLAN_LIMITS_TIMEOUT_MS = 8_000;

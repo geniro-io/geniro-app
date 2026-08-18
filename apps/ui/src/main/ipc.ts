@@ -125,6 +125,7 @@ export function registerIpc(
   ipcMain.handle(IPC.getUpdateState, () => updates.getState());
   ipcMain.handle(IPC.checkForUpdates, () => updates.check());
   ipcMain.handle(IPC.installUpdate, () => updates.install());
+  ipcMain.handle(IPC.relaunchForUpdate, () => updates.relaunch());
 
   ipcMain.handle(IPC.getGitInfo, (_event, dir: unknown) =>
     readGitInfo(gitDirSchema.parse(dir)),

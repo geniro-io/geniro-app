@@ -2,10 +2,11 @@ import type { AgentEvent, TurnDriver, TurnIo } from '../adapter.types';
 import {
   CLAUDE_CONTROL_REQUEST_ID_PREFIX,
   CLAUDE_MCP_NOT_READY_MESSAGE,
-  CLAUDE_MCP_READY_DEADLINE_MS,
   CLAUDE_MCP_READY_EMPTY_GRACE_MS,
+  CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
   CLAUDE_MCP_READY_REPLY_TIMEOUT_MS,
+  CLAUDE_MCP_READY_STALL_MS,
 } from './claude.const';
 import {
   type ClaudeMcpStatusRow,
@@ -72,12 +73,19 @@ export class ClaudeTurnDriver implements TurnDriver {
   async awaitPromptReady(io: TurnIo): Promise<void> {
     const now = this.deps.now ?? Date.now;
     const startedAt = now();
-    const deadline = startedAt + CLAUDE_MCP_READY_DEADLINE_MS;
+    const ceiling = startedAt + CLAUDE_MCP_READY_MAX_WAIT_MS;
     let previousKey: string | null = null;
     let sawServers = false;
     let pending: string[] = [];
+    // When the reading last CHANGED. The gate gives up on a STALL rather than
+    // on a total elapsed time, so a folder whose servers are visibly still
+    // coming up keeps its wait while one that is stuck still releases promptly.
+    let lastChangeAt = startedAt;
 
-    while (now() < deadline) {
+    while (
+      now() < ceiling &&
+      now() - lastChangeAt < CLAUDE_MCP_READY_STALL_MS
+    ) {
       const reading = await this.poll(io);
       if (reading === 'refused') {
         // This CLI will not answer the question, so there is nothing to wait
@@ -106,6 +114,11 @@ export class ClaudeTurnDriver implements TurnDriver {
         // Nothing has ever been reported here, so there is nothing to dial.
         return;
       }
+      if (key !== previousKey) {
+        // Discovery moved — a server appeared, or one left `pending`. Whatever
+        // it did, this folder is not stuck, so the stall window starts again.
+        lastChangeAt = now();
+      }
       previousKey = key;
       await this.wait(CLAUDE_MCP_READY_POLL_MS);
     }
@@ -117,6 +130,16 @@ export class ClaudeTurnDriver implements TurnDriver {
       io.emit({
         type: 'notice',
         message: CLAUDE_MCP_NOT_READY_MESSAGE.replace('%s', pending.join(', ')),
+        // INFO, and this REPLACES an earlier deliberate choice of the advisory
+        // (warning) chrome on the grounds that a turn missing tools is a
+        // degrade. The degrade is real; the chrome was still wrong, and the
+        // user's own report is the evidence — "i see this error", about a turn
+        // that had run correctly. Nothing here failed: the servers were slow,
+        // the turn ran, they finish dialling behind it and the next message has
+        // them, which is exactly what the sentence goes on to say. Reserving the
+        // red banner for things that actually went wrong is what keeps it
+        // meaning anything.
+        severity: 'info',
       });
     }
   }

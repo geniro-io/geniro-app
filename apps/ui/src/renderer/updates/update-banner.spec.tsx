@@ -90,6 +90,7 @@ describe('UpdateBanner', () => {
       <UpdateBanner
         state={state()}
         onInstall={onInstall}
+        onRelaunch={vi.fn()}
         onDismiss={vi.fn()}
       />,
     );
@@ -105,6 +106,33 @@ describe('UpdateBanner', () => {
     expect(onInstall).toHaveBeenCalledOnce();
   });
 
+  it('offers a Restart button once the new bundle is on disk, and no dismiss', async () => {
+    // The reported ask: "after update there should be a reload button to
+    // relaunch app". It is a BUTTON rather than an automatic quit because the
+    // restart takes the daemon and every running turn with it.
+    const onRelaunch = vi.fn();
+    await render(
+      <UpdateBanner
+        state={state({ phase: 'ready', currentVersion: '1.4.0' })}
+        onInstall={vi.fn()}
+        onRelaunch={onRelaunch}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(container.textContent).toContain('restart to use it');
+    const button = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Restart now'),
+    )!;
+    expect(button).toBeDefined();
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onRelaunch).toHaveBeenCalledOnce();
+    // Nothing to dismiss: the update is already applied on disk.
+    expect(container.querySelector('[aria-label="Dismiss"]')).toBeNull();
+  });
+
   it('offers no Update button for a copy that cannot replace itself', async () => {
     await render(
       <UpdateBanner
@@ -113,6 +141,7 @@ describe('UpdateBanner', () => {
           message: 'Update with: brew upgrade --cask geniro',
         })}
         onInstall={vi.fn()}
+        onRelaunch={vi.fn()}
         onDismiss={vi.fn()}
       />,
     );
@@ -130,6 +159,7 @@ describe('UpdateBanner', () => {
       <UpdateBanner
         state={state({ phase: 'downloading', progress: 0.42 })}
         onInstall={vi.fn()}
+        onRelaunch={vi.fn()}
         onDismiss={vi.fn()}
       />,
     );
@@ -146,6 +176,7 @@ describe('UpdateBanner', () => {
       <UpdateBanner
         state={state({ phase: 'installing', progress: 1 })}
         onInstall={vi.fn()}
+        onRelaunch={vi.fn()}
         onDismiss={vi.fn()}
       />,
     );

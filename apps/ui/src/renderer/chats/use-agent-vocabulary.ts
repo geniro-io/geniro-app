@@ -16,6 +16,26 @@ export type AgentVocabularyState<T> = {
 const NOTHING_YET: never[] = [];
 
 /**
+ * How many times a failed probe is retried, and how long after the last
+ * failure.
+ *
+ * A failure used to be final for the session, which is what turned one bad
+ * probe into "I can't choose cursor models": the retry lives in an effect keyed
+ * on `[kind, fetchFor]`, and re-opening the picker changes neither — so the
+ * empty list was served on every later render, indistinguishable from a CLI
+ * that genuinely offers none. Reported against a cursor picker showing only
+ * "default model" while the daemon answered the same request with 15 models in
+ * 7.8s.
+ *
+ * Bounded and spaced because a probe is not free: each attempt spawns a real
+ * `cursor-agent acp` and handshakes twice. Three tries covers a CLI briefly
+ * busy or a cold start; past that the empty list is the honest answer and the
+ * user still has "default model", which starts a run.
+ */
+const MAX_FETCH_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 4_000;
+
+/**
  * One agent CLI's vocabulary for some picker — its models, its reasoning-effort
  * levels — fetched from the daemon and cached per kind for the session.
  *
@@ -44,6 +64,10 @@ export function useAgentVocabulary<T>(
   fetchFor: ((kind: CliKind) => Promise<T[]>) | null,
 ): AgentVocabularyState<T> {
   const cacheRef = useRef(new Map<CliKind, T[]>());
+  /** Failed attempts per kind, so a retry loop cannot outrun its own bound. */
+  const attemptsRef = useRef(new Map<CliKind, number>());
+  /** Bumped to re-run the fetch effect after a failure — see the constants. */
+  const [retry, setRetry] = useState(0);
   // What the last finished fetch answered, and WHICH kind it answered for.
   // Only ever read when it matches the kind being asked about.
   const [answered, setAnswered] = useState<{
@@ -74,6 +98,7 @@ export function useAgentVocabulary<T>(
     // takes to answer.
     setAnswered((previous) => (previous?.kind === kind ? null : previous));
     let stale = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     void fetchFor(kind)
       .then((fetched) => {
         cacheRef.current.set(kind, fetched);
@@ -84,16 +109,31 @@ export function useAgentVocabulary<T>(
       .catch(() => {
         // Deliberately NOT cached: a failed probe is not an answer about the
         // CLI, and selecting it again should ask again.
-        if (!stale) {
-          setAnswered({ kind, items: [] });
+        if (stale) {
+          return;
+        }
+        setAnswered({ kind, items: [] });
+        // ...and ASKING again is what this schedules. Without it "should ask
+        // again" was never true: nothing re-runs this effect on its own, so the
+        // empty list stood until the user switched agents or restarted.
+        const attempts = (attemptsRef.current.get(kind) ?? 0) + 1;
+        attemptsRef.current.set(kind, attempts);
+        if (attempts < MAX_FETCH_ATTEMPTS) {
+          timer = setTimeout(
+            () => setRetry((tick) => tick + 1),
+            RETRY_DELAY_MS,
+          );
         }
       });
     return () => {
       // The user switched agents mid-flight — a late answer for the previous
       // kind must not land in the picker for the current one.
       stale = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     };
-  }, [kind, fetchFor]);
+  }, [kind, fetchFor, retry]);
 
   // Resolved DURING RENDER, not in an effect, and that is the whole point: the
   // answer must belong to the kind being asked about in THIS commit. An

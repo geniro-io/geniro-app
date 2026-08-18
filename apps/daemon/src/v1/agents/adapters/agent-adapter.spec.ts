@@ -402,6 +402,62 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     session.close();
   });
 
+  it('claude declares no plan-limits reason, and cursor declares one', () => {
+    // The same two-halves rule as the breakdown above, on the third channel.
+    // Not a loop like that one, because the two adapters genuinely differ here:
+    // claude answers `get_usage` on its stdin dialogue, and cursor has no
+    // mechanism at all — so a shared assertion would have to be "null or a
+    // string", which pins nothing.
+    const { spawn } = fakeSpawn();
+
+    expect(
+      new ClaudeAdapter({ spawn }).getConfig().usage
+        .planLimitsUnavailableReason,
+    ).toBeNull();
+    const cursorReason = new CursorAcpAdapter({ spawn }).getConfig().usage
+      .planLimitsUnavailableReason;
+    expect(cursorReason).not.toBeNull();
+    // A SENTENCE, not a marker: it is rendered verbatim where the limits would
+    // have been, so an empty string or a code would reach the user as one.
+    expect(cursorReason).toMatch(/cursor-agent/);
+  });
+
+  it('claude asks its LIVE process for plan limits, and answers null with none', async () => {
+    // Same constraint as the breakdown: the account is not a property of the
+    // conversation, but the only channel to ask about it is the conversation's
+    // own process — so no process means no reading, and nothing written.
+    const { spawn, child } = fakeSpawn();
+    const claude = new ClaudeAdapter({ spawn });
+    const session = claude.startSession({ prompt: 'p', cwd: '/proj' });
+
+    expect(
+      await claude.readPlanLimits({ live: null, sessionId: 'sess-1' }),
+    ).toBeNull();
+    expect(child.stdin.written).not.toContain('get_usage');
+
+    void claude.readPlanLimits({ live: session, sessionId: null });
+    expect(child.stdin.written).toContain('get_usage');
+
+    session.close();
+  });
+
+  it('cursor answers null for plan limits without writing to its process', async () => {
+    // It declares a reason, so the base default stands — and the point of the
+    // pin is that it stays a pure null: an ACP process asked a claude control
+    // question would answer an error frame mid-session.
+    const { spawn, child } = fakeSpawn();
+    const cursor = new CursorAcpAdapter({ spawn });
+    const session = cursor.startSession({ prompt: 'p', cwd: '/proj' });
+    const before = child.stdin.written;
+
+    expect(
+      await cursor.readPlanLimits({ live: session, sessionId: 'sess-1' }),
+    ).toBeNull();
+    expect(child.stdin.written).toBe(before);
+
+    session.close();
+  });
+
   it('cursor reads its own store, and never writes to a process', async () => {
     // The case that forced the input to carry both channels: a cursor process
     // does not outlive its turn, so by the time a readout is opened there is

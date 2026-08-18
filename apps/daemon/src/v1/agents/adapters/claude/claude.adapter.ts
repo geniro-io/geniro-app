@@ -18,7 +18,6 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentContextUsage,
-  AgentContextUsageInput,
   AgentEvent,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
@@ -26,9 +25,11 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentPlanLimits,
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
+  AgentSessionReadInput,
   AgentSessionsInput,
   AgentTurnInput,
   FollowUpMessage,
@@ -77,6 +78,7 @@ import {
   CLAUDE_PERMISSION_MODE_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
+  CLAUDE_PLAN_LIMITS_TIMEOUT_MS,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RESUME_FLAG,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
@@ -110,6 +112,10 @@ import {
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { claudeModels } from './utils/claude-models.utils';
 import {
+  planLimitsRequestLine,
+  readPlanLimitsReply,
+} from './utils/claude-plan-limits.utils';
+import {
   optionLabelsOf,
   questionTextOf,
   withResponse,
@@ -118,6 +124,7 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
 
 /**
  * Drives `claude` headlessly. The prompt is sent as a stream-json user-message
@@ -405,6 +412,12 @@ export class ClaudeAdapter extends AgentAdapter {
          * `CLAUDE_CONTEXT_USAGE_SUBTYPE` in `claude.const.ts`.
          */
         breakdownUnavailableReason: null,
+        /**
+         * Answers the account's plan limits too, over `get_usage` — see
+         * {@link ClaudeAdapter.readPlanLimits} and the probe block at
+         * `CLAUDE_PLAN_LIMITS_SUBTYPE` in `claude.const.ts`.
+         */
+        planLimitsUnavailableReason: null,
       },
       handoff: {
         kind: 'resume-command',
@@ -518,7 +531,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * so the second answer describes a later moment than the first.
    */
   override readContextUsage(
-    input: AgentContextUsageInput,
+    input: AgentSessionReadInput,
   ): Promise<AgentContextUsage | null> {
     // This CLI answers from its RUNNING process — the control request is a
     // question on the live stdin dialogue — so with no process there is
@@ -536,6 +549,24 @@ export class ClaudeAdapter extends AgentAdapter {
       line: contextUsageRequestLine(requestId),
       read: (obj) => readContextUsageReply(obj, requestId),
       timeoutMs: CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
+    });
+  }
+
+  override readPlanLimits(
+    input: AgentSessionReadInput,
+  ): Promise<AgentPlanLimits | null> {
+    // Same channel and same constraint as the breakdown above: this CLI
+    // answers on its live stdin dialogue, so with no process there is nothing
+    // to ask. The account's plan is not a property of the conversation, but
+    // the only way to ASK about it here is through the conversation's process.
+    if (!input.live) {
+      return Promise.resolve(null);
+    }
+    const requestId = randomUUID();
+    return input.live.ask({
+      line: planLimitsRequestLine(requestId),
+      read: (obj) => readPlanLimitsReply(obj, requestId),
+      timeoutMs: CLAUDE_PLAN_LIMITS_TIMEOUT_MS,
     });
   }
 
@@ -1135,8 +1166,22 @@ export class ClaudeAdapter extends AgentAdapter {
     })}\n`;
   }
 
+  /**
+   * This CLI's per-SESSION cost roll-up, so a turn is billed for what IT spent.
+   *
+   * On the adapter rather than on the per-turn driver, and that is the one
+   * place in this class where shared mutable state is correct: the totals it
+   * subtracts span TURNS (they live as long as the CLI process, which
+   * `AgentSessionRegistry` now keeps between messages), so per-turn state could
+   * not hold them — the second turn would see an empty ledger and re-report the
+   * running total, which is the defect. It stays safe under graph fan-out
+   * because every entry is keyed by claude's own `session_id`, and a session id
+   * belongs to exactly one process; see {@link ClaudeSessionCostLedger}.
+   */
+  private readonly costLedger = new ClaudeSessionCostLedger();
+
   protected mapMessage(obj: unknown): AgentEvent[] {
-    return mapClaudeMessage(obj);
+    return mapClaudeMessage(obj, this.costLedger);
   }
 
   /**

@@ -10,6 +10,7 @@ import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { wasSentMidTurn } from './message-payload';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import { isCliAuthored, isInfoNotice } from './system-payload';
@@ -107,6 +108,21 @@ export const TranscriptItem = memo(function TranscriptItem({
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
           {text ? <MarkdownContent content={text} /> : null}
+          {/* Only for a message written into a turn already in flight, and only
+              then: it explains a wait the ordinary message does not have. See
+              `wasSentMidTurn` — the CLI reads it at its next tool boundary, so
+              behind a long tool call the agent visibly does nothing and the
+              live row goes on naming the tool that was running before the user
+              sent this. Both readings are right; without this line the
+              conclusion drawn from them is that the send never took. */}
+          {wasSentMidTurn(item.payload) ? (
+            <p
+              data-role="mid-turn-note"
+              className="m-0 text-[11px] text-muted-foreground">
+              Sent into the turn already running — the agent picks this up when
+              its current step finishes.
+            </p>
+          ) : null}
         </MessageBubble>
       );
     }

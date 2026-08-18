@@ -24,7 +24,11 @@ export function updateStatusLine(state: UpdateState): string {
     case 'installing':
       return `Installing Geniro ${state.version}…`;
     case 'ready':
-      return 'Update installed — restarting Geniro…';
+      // Not "restarting…". The app deliberately does not restart itself — the
+      // restart takes the daemon and every running turn with it — so this is a
+      // standing state waiting on the Restart button, and an ellipsis would
+      // promise something that is never going to happen on its own.
+      return `Geniro ${state.currentVersion} is installed — restart to use it.`;
     case 'error':
       return 'The update could not be installed.';
     default:

@@ -31,6 +31,7 @@ import {
   claudeTaskEventFromToolUse,
 } from './claude-tasks.utils';
 import {
+  type ClaudeSessionCostLedger,
   readClaudeAssistantContext,
   readClaudeUsage,
 } from './claude-usage.utils';
@@ -213,7 +214,10 @@ function readInitMcpServers(root: Record<string, unknown>): AgentMcpServer[] {
  * a one-line delegate, so every shape above is drivable from a spec without
  * spawning a process.
  */
-export function mapClaudeMessage(obj: unknown): AgentEvent[] {
+export function mapClaudeMessage(
+  obj: unknown,
+  costLedger: ClaudeSessionCostLedger,
+): AgentEvent[] {
   const root = asRecord(obj);
   if (!root) {
     return [];
@@ -229,7 +233,7 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
   // the same row the main thread's. Two readings of one shape must not disagree
   // about which thread wrote it.
   const parentToolUseId = asString(root.parent_tool_use_id) || null;
-  return mapClaudeLine(root, parentToolUseId).map((event) =>
+  return mapClaudeLine(root, parentToolUseId, costLedger).map((event) =>
     parentToolUseId === null ? event : { ...event, parentToolUseId },
   );
 }
@@ -243,6 +247,7 @@ export function mapClaudeMessage(obj: unknown): AgentEvent[] {
 function mapClaudeLine(
   root: Record<string, unknown>,
   parentToolUseId: string | null,
+  costLedger: ClaudeSessionCostLedger,
 ): AgentEvent[] {
   switch (asString(root.type)) {
     case 'system': {
@@ -600,7 +605,7 @@ function mapClaudeLine(
           },
         ];
       }
-      const usage = readClaudeUsage(root);
+      const usage = readClaudeUsage(root, costLedger);
       const stopReason = asString(root.stop_reason);
       const finalText = asString(root.result) ?? null;
       if (describesNoWork(usage, stopReason, finalText)) {

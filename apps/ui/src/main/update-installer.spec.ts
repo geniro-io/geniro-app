@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { chmodSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -196,6 +197,49 @@ describe('installUpdate', () => {
     // And no scratch directory left in userData.
     expect(await readdir(workDir)).toEqual([]);
     expect(stages).toEqual(['downloading', 'installing']);
+  });
+
+  it('does NOT fail the update when the scratch cleanup cannot finish', async () => {
+    // REPORTED verbatim: "The update could not be installed. ENOTEMPTY:
+    // directory not empty, rmdir '…/updates/update-1eJcO3/unpacked/Geniro.app/
+    // Contents/Resources'". That rmdir runs in the `finally`, AFTER the bundle
+    // has already been swapped — so a tidy-up losing a race with Spotlight
+    // reported a completed update as a failed one, and the service then skipped
+    // the relaunch. The scratch is made unremovable here (its parent goes
+    // read-only mid-install), which is the same shape of failure.
+    await installUpdate({
+      release: release(),
+      bundlePath,
+      workDir,
+      onStage: (stage) => {
+        if (stage === 'installing') {
+          // Entries can no longer be removed FROM workDir; everything inside
+          // the scratch directory itself still works, so the unpack succeeds.
+          chmodSync(workDir, 0o500);
+        }
+      },
+    });
+
+    // The update happened, and nothing threw.
+    expect(await installedVersion()).toBe('installed-1.4.0');
+    chmodSync(workDir, 0o700);
+    // …and the cleanup really did fail, so this is not passing by accident.
+    expect(
+      (await readdir(workDir)).some((name) => name.startsWith('update-')),
+    ).toBe(true);
+  });
+
+  it('sweeps a scratch directory an earlier run could not remove', async () => {
+    // The other half of swallowing that failure: without this, a directory
+    // macOS held open for a second would sit in Application Support with a
+    // release archive in it for good.
+    const stale = join(workDir, 'update-leftover');
+    await mkdir(stale, { recursive: true });
+    await writeFile(join(stale, 'Geniro.zip'), 'a previous download');
+
+    await installUpdate({ release: release(), bundlePath, workDir });
+
+    expect(await readdir(workDir)).toEqual([]);
   });
 
   it('reports download progress against the declared length', async () => {

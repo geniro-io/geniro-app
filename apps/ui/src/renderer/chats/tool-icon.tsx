@@ -57,6 +57,34 @@ export const TOOL_OPERATION_META: Record<
 };
 
 /**
+ * One operation's glyph, drawn from {@link TOOL_OPERATION_META}.
+ *
+ * Extracted so the two places that paint an operation — a tool ROW, and the
+ * strip on a collapsed group's header — share one component instead of two
+ * copies of "look up the meta, spread the tone, stamp `data-operation`". The
+ * `data-operation` attribute is what a test and an inspector read the meaning
+ * off, since a lucide class name changes with the icon rather than with what it
+ * means.
+ */
+export function ToolOperationIcon({
+  operation,
+  className,
+}: {
+  operation: ToolOperation;
+  className?: string;
+}): React.JSX.Element {
+  const meta = TOOL_OPERATION_META[operation];
+  const Icon = meta.icon;
+  return (
+    <Icon
+      aria-hidden="true"
+      data-operation={operation}
+      className={cn('size-3 shrink-0', meta.tone, className)}
+    />
+  );
+}
+
+/**
  * A tool row's leading glyph: WHAT the call did once it is settled, or HOW it
  * is going while that is still the news.
  *
@@ -86,16 +114,5 @@ export function ToolCallIcon({
   if (operation === null) {
     return <BlockStatusIcon status={status} className={className} />;
   }
-  const meta = TOOL_OPERATION_META[operation];
-  const Icon = meta.icon;
-  return (
-    <Icon
-      aria-hidden="true"
-      // Stated in the DOM for the reason `RunStatusIcon` states its status: the
-      // glyph IS the only place the operation is named on a collapsed row, and a
-      // lucide class name changes with the icon rather than with the meaning.
-      data-operation={operation}
-      className={cn('size-3 shrink-0', meta.tone, className)}
-    />
-  );
+  return <ToolOperationIcon operation={operation} className={className} />;
 }

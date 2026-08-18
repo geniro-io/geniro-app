@@ -56,12 +56,15 @@ afterEach(() => {
 function rail(
   view: AppView,
   onNavigate: (next: AppView) => void = () => undefined,
+  update?: { version: string | null; onInstall?: () => void },
 ): HTMLDivElement {
   return render(
     <NavRail
       view={view}
       onNavigate={onNavigate}
       connected
+      updateVersion={update?.version ?? null}
+      onInstallUpdate={update?.onInstall}
       daemonVersion="1.2.3"
       debugOpen={false}
       onToggleDebug={() => undefined}
@@ -159,5 +162,44 @@ describe('NavRail', () => {
     });
 
     expect(el.querySelectorAll('span.rounded-full')).toHaveLength(1);
+  });
+
+  it('offers the update where the running version is already shown', () => {
+    // The ask: "updates should show here, and the Update button should be right
+    // here" — pointing at the footer that states `connected · v1.46.0`.
+    const installed: string[] = [];
+    const el = rail('chats', () => undefined, {
+      version: '1.47.0',
+      onInstall: () => installed.push('pressed'),
+    });
+    const button = [...el.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Update',
+    );
+    expect(button).toBeTruthy();
+    expect(button?.title).toContain('1.47.0');
+    act(() => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(installed).toEqual(['pressed']);
+  });
+
+  it('offers nothing when there is no update to install', () => {
+    const el = rail('chats');
+    const button = [...el.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Update',
+    );
+    expect(button).toBeUndefined();
+  });
+
+  it('shows no button for an update this install cannot apply', () => {
+    // `canInstall: false` reaches here as a null version: a control that cannot
+    // work is worse than none in a row this small, and Settings carries the
+    // `brew` sentence for that case.
+    const el = rail('chats', () => undefined, { version: null });
+    expect(
+      [...el.querySelectorAll('button')].some(
+        (b) => b.textContent?.trim() === 'Update',
+      ),
+    ).toBe(false);
   });
 });

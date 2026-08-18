@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { AgentMcpListingWireSchema } from './chat.types';
+import {
+  AgentMcpListingWireSchema,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_REQUEST_BODY_BYTES,
+} from './chat.types';
 
 /** A settled listing with one row — the ordinary answered state. */
 const answered = {
@@ -78,5 +83,34 @@ describe('AgentMcpListingWireSchema — three fields, three legal states', () =>
       AgentMcpListingWireSchema.safeParse({ ...answered, pending: true })
         .success,
     ).toBe(true);
+  });
+});
+
+describe('MAX_REQUEST_BODY_BYTES — the transport must accept what the DTO does', () => {
+  it('fits the largest message the attachment limits permit, base64 and all', () => {
+    // Built for real and MEASURED rather than re-derived from the same formula:
+    // the defect this pins was two files disagreeing about one promise, and a
+    // spec that recomputed the arithmetic would have agreed with whichever one
+    // it copied. `sendMessageSchema` accepts eight images of
+    // MAX_ATTACHMENT_BYTES DECODED bytes, so the body on the wire carries their
+    // base64 (4 bytes per 3) plus the JSON around it — 53MB against Fastify's
+    // 1MB default, which is why eight pasted screenshots came back
+    // `413 Request body is too large` before any route could run.
+    const image = Buffer.alloc(MAX_ATTACHMENT_BYTES).toString('base64');
+    const body = JSON.stringify({
+      text: '',
+      images: Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE }, () => ({
+        mediaType: 'image/png',
+        data: image,
+      })),
+    });
+
+    expect(Buffer.byteLength(body)).toBeLessThanOrEqual(MAX_REQUEST_BODY_BYTES);
+    // And the slack is real headroom, not a rounding accident: the schema puts
+    // no ceiling on the message TEXT, so a body at the attachment limit must
+    // still leave room for something written beside the images.
+    expect(MAX_REQUEST_BODY_BYTES - Buffer.byteLength(body)).toBeGreaterThan(
+      512 * 1024,
+    );
   });
 });

@@ -189,6 +189,7 @@ const run1: ChatRun = {
   id: 'r1',
   status: 'running',
   awaiting: null,
+  holdingFor: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,
@@ -761,6 +762,79 @@ describe('Chats transcript auto-scroll', () => {
     expect(container.textContent).toContain('the newest reply');
   });
 
+  it('keeps an unsent draft with the thread it was written in', async () => {
+    // The ask: a message typed but not sent must stay in ITS thread when the
+    // user looks at another one — and must not follow them there, where the
+    // next Send would deliver it to the wrong conversation.
+    const run2: ChatRun = {
+      ...run1,
+      id: 'r2',
+      title: 'Second chat',
+      status: 'completed',
+    };
+    api.listChats.mockResolvedValue([run1, run2]);
+    api.listRunItems.mockResolvedValue([]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const type = async (text: string): Promise<void> => {
+      const textarea = container.querySelector('textarea')!;
+      await act(async () => {
+        const setValue = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value',
+        )!.set!;
+        setValue.call(textarea, text);
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    const composerValue = (): string =>
+      container.querySelector('textarea')?.value ?? '';
+
+    /** Paste one image into whichever composer is on screen. */
+    const pasteImage = async (name: string): Promise<void> => {
+      const textarea = container.querySelector('textarea')!;
+      const file = new File([new Uint8Array([137, 80, 78, 71])], name, {
+        type: 'image/png',
+      });
+      const event = new Event('paste', { bubbles: true });
+      Object.defineProperty(event, 'clipboardData', {
+        value: { files: [file] },
+      });
+      await act(async () => {
+        textarea.dispatchEvent(event);
+      });
+      // The staging reads the file as base64, so the strip appears a tick later.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+    const stagedImages = (): string[] =>
+      [...container.querySelectorAll('button[aria-label^="Remove "]')].map(
+        (b) => b.getAttribute('aria-label') ?? '',
+      );
+
+    await clickRun(container, 'My chat');
+    await type('half a question for the first thread');
+    await pasteImage('first-shot.png');
+    expect(stagedImages()).toEqual(['Remove first-shot.png']);
+
+    // Switching away must take the draft OUT of the composer — text AND the
+    // images staged with it, which would otherwise be sent from another thread.
+    await clickRun(container, 'Second chat');
+    expect(composerValue()).toBe('');
+    expect(stagedImages()).toEqual([]);
+
+    await type('something else entirely');
+    // ...and coming back must put the original one back, not the newer one.
+    await clickRun(container, 'My chat');
+    expect(composerValue()).toBe('half a question for the first thread');
+    expect(stagedImages()).toEqual(['Remove first-shot.png']);
+
+    await clickRun(container, 'Second chat');
+    expect(composerValue()).toBe('something else entirely');
+  });
+
   it('DOES follow the tail for a viewport already at the bottom', async () => {
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client, emitItem } = makeClient();
@@ -1020,6 +1094,7 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
         status: null,
         activity: null,
         awaiting: null,
+        holdingFor: 0,
       });
     });
     expect(secondRow().textContent).not.toContain('needs more info');
@@ -2132,6 +2207,7 @@ describe('Chats workflow runs', () => {
     id: 'w1',
     status: 'running',
     awaiting: null,
+    holdingFor: 0,
     title: 'Review team',
     agentKind: null,
     workflowId: 'review-team',
@@ -2619,6 +2695,7 @@ describe('Chats — handing a conversation to the user', () => {
       id: 'w1',
       status: 'running',
       awaiting: null,
+      holdingFor: 0,
       title: 'Review team',
       agentKind: null,
       workflowId: 'review-team',
@@ -3771,6 +3848,79 @@ describe('Chats queued messages', () => {
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
     expect(composerButton(container, 'Stop')).not.toBeNull();
+  });
+
+  it('SENDS rather than queues while the turn is only held for background work', async () => {
+    // The reported ask: "if claude is running agents in background it's like it
+    // stopped to work until it gets a notification from them… we should not
+    // send the message to the queue while it's just waiting for listeners".
+    // A held turn's CLI printed its turn-end line some time ago and is sitting
+    // on an idle stdin — there is no turn in flight for the message to
+    // redirect, which is the whole reason the queue exists, and the drain would
+    // not fire until the last delegate returned.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'create pr'));
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: 'waiting on 1 background task',
+        holdingFor: 1,
+      });
+    });
+    // The composer stops warning about a queue it is no longer going to use.
+    expect(container.querySelector('textarea')!.placeholder).toBe(
+      'Message the agent…',
+    );
+
+    await type(container, 'create pr');
+    await clickButton(container, 'Send');
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'create pr' },
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+
+  it('goes back to queueing once the hold is over and the agent works again', async () => {
+    // The hold is a MOMENT, not a mode: a run that is working again must queue
+    // exactly as it did before, or the whole reason the queue exists is gone
+    // for the rest of the conversation.
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: 'waiting on 1 background task',
+        holdingFor: 1,
+      });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: 'running Bash',
+        holdingFor: 0,
+      });
+    });
+
+    await type(container, 'later then');
+    await clickButton(container, 'Queue');
+
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('later then');
   });
 
   it('Cmd+Enter also queues while the agent is working', async () => {
@@ -4980,6 +5130,7 @@ describe('Chats sidebar list', () => {
         id: 'w1',
         status: 'running',
         awaiting: null,
+        holdingFor: 0,
         title: 'Big team',
         agentKind: null,
         workflowId: 'big-team',
@@ -5378,6 +5529,47 @@ describe('Chats follow-up send failure', () => {
     expect(container.querySelector('textarea')!.value).toBe(
       'precious follow-up',
     );
+  });
+
+  it("shows the daemon's own sentence for a refusal, not the JSON envelope", async () => {
+    // Reported with the envelope pasted verbatim out of the chat: eight
+    // screenshots came back
+    // `413 {"statusCode":413,"code":"INTERNAL_SERVER_ERROR","message":"Request
+    // body is too large","fullMessage":…,"fields":[]}` and the whole of it was
+    // the red strip. `drainQueue` and `sendQueuedNow` had already been taught
+    // to read the sentence out; the two paths a user actually presses Send on
+    // had not.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    api.sendChatMessage.mockRejectedValue(
+      new Error(
+        'daemon POST /v1/chats/r1/messages failed (413): ' +
+          '{"statusCode":413,"code":"INTERNAL_SERVER_ERROR",' +
+          '"message":"Request body is too large",' +
+          '"fullMessage":"Request body is too large","fields":[]}',
+      ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'look at these');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')?.click();
+    });
+
+    expect(container.textContent).toContain('Request body is too large');
+    // The wire noise is what made the strip unreadable — none of it survives.
+    expect(container.textContent).not.toContain('statusCode');
+    expect(container.textContent).not.toContain('INTERNAL_SERVER_ERROR');
+    expect(container.textContent).not.toContain('fullMessage');
   });
 });
 

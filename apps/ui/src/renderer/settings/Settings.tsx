@@ -581,11 +581,24 @@ export function Settings({
               Update now
             </Button>
           ) : null}
+          {/* Installed, waiting on the user. The restart quits the app and
+              takes the daemon and every running turn with it, so it is a press
+              rather than something that happens the moment the copy ends. */}
+          {update.state?.phase === 'ready' ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={() => void update.relaunch()}>
+              Restart now
+            </Button>
+          ) : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          Geniro checks GitHub Releases on launch and every few hours. An update
-          downloads, is verified against its published checksum and replaces the
-          app in place — nothing is installed until you press Update now.
+          Geniro checks GitHub Releases on launch and every few minutes. An
+          update downloads, is verified against its published checksum and
+          replaces the app in place — nothing is installed until you press
+          Update now, and nothing restarts until you press Restart now.
         </p>
         {update.state && updateLine ? (
           <p

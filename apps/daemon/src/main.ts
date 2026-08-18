@@ -27,6 +27,7 @@ import {
 import { writePidfile } from './utils/pidfile';
 import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from './v1/agents/adapters/cursor-acp/cursor-acp.adapter';
+import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { ChatService } from './v1/agents/services/chat.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import {
@@ -103,6 +104,10 @@ bootstrapper.addExtension(
       host: environment.host,
       portFallback: true,
       swagger: {},
+      // Fastify's default is 1MB, which silently under-cut the attachment
+      // contract by 40x — see MAX_REQUEST_BODY_BYTES, which is computed from
+      // that contract so the two can never again be set independently.
+      fastifyOptions: { bodyLimit: MAX_REQUEST_BODY_BYTES },
       // Allow the renderer (file://, or the electron-vite dev origin) to call
       // the loopback REST API directly. Safe here: the daemon binds 127.0.0.1
       // only and every non-public route is token-gated — same posture as the

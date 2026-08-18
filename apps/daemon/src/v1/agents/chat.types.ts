@@ -127,6 +127,35 @@ export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 /**
+ * The HTTP body ceiling the daemon hands Fastify (`main.ts`), DERIVED from the
+ * two limits above rather than chosen.
+ *
+ * It is derived because the two are one promise, and they had been made by
+ * different files that never checked each other: the schema accepts eight 5MB
+ * images while Fastify's own default `bodyLimit` is 1MB, so a message carrying
+ * eight pasted screenshots was refused by the transport 40x below the size the
+ * app had just told the user was fine. What that produced was not even a
+ * refusal about attachments — it was `413 {"code":"INTERNAL_SERVER_ERROR",
+ * "message":"Request body is too large"}`, raised before any route ran, so the
+ * per-image and per-message errors written for exactly this case could never be
+ * reached. Reported with the envelope pasted verbatim into the chat.
+ *
+ * A named constant computed from its inputs is what stops that recurring:
+ * raising `MAX_ATTACHMENTS_PER_MESSAGE` now raises the transport with it, and
+ * nobody has to know this line exists.
+ *
+ * Base64 is 4 bytes per 3, and the slack on top covers the JSON scaffolding and
+ * the message TEXT, which the schema deliberately does not bound (a pasted log
+ * is a legitimate message). Generous rather than tight on purpose: the daemon
+ * is loopback-only and single-user, and it already accepts holding this much
+ * base64 in memory for the CLI payload — the ceiling exists to bound a runaway
+ * body, not to second-guess a limit stated one line above it.
+ */
+export const MAX_REQUEST_BODY_BYTES =
+  Math.ceil((MAX_ATTACHMENT_BYTES * MAX_ATTACHMENTS_PER_MESSAGE * 4) / 3) +
+  1024 * 1024;
+
+/**
  * Ceiling on an image an agent referenced from its own markdown
  * ({@link LocalImageService}).
  *
@@ -212,6 +241,43 @@ export const ContextBreakdownWireSchema = z
 export type ContextBreakdownWire = z.infer<typeof ContextBreakdownWireSchema>;
 
 /**
+ * One rate-limit window of the plan behind this chat's account — a NAMED
+ * component, so the generated client gets a real type.
+ */
+const PlanWindowSchema = z
+  .object({
+    key: z
+      .string()
+      .describe("the CLI's own key for the window — opaque, for keying rows"),
+    label: z.string().describe('what to call it on screen'),
+    percent: z.number().describe('how much of the window is used, 0-100'),
+    resetsAt: z
+      .string()
+      .nullable()
+      .describe('ISO 8601 moment it refills, or null when the CLI named none'),
+  })
+  .meta({ id: 'PlanWindow' });
+
+/**
+ * What the account behind this chat is allowed, as its CLI reports it.
+ *
+ * On the CHAT route rather than a global one because a run carries its own
+ * `configDir`: two threads open side by side can be signed in to different
+ * accounts on different plans, and one figure in an app header would be
+ * describing whichever of them was asked last.
+ */
+export const PlanLimitsWireSchema = z
+  .object({
+    plan: z
+      .string()
+      .nullable()
+      .describe("the subscription in the CLI's own word ('pro', 'max', …)"),
+    windows: z.array(PlanWindowSchema),
+  })
+  .meta({ id: 'PlanLimits' });
+export type PlanLimitsWire = z.infer<typeof PlanLimitsWireSchema>;
+
+/**
  * What the whole thread has spent, summed over its finished turns.
  *
  * Summed on the DAEMON rather than in the renderer, though the renderer holds
@@ -259,6 +325,13 @@ export const ChatMetricsWireSchema = z.object({
     .nullable()
     .describe(
       'why there is no breakdown — a CLI without the channel, or a chat with no running agent to ask',
+    ),
+  plan: PlanLimitsWireSchema.nullable(),
+  planReason: z
+    .string()
+    .nullable()
+    .describe(
+      'why there are no plan limits — its own field beside breakdownReason because the two are separate channels and a CLI can answer one without the other',
     ),
   totals: ChatTotalsWireSchema,
 });
@@ -592,6 +665,22 @@ export interface RunStatusEvent {
    */
   awaiting?: RunAwaiting | null;
   /**
+   * How many units of background work this run's turn is being HELD for, or
+   * `undefined` when this event says nothing about it.
+   *
+   * A held turn is one whose AGENT has finished and whose process geniro is
+   * keeping alive only until the delegates it launched report back — see
+   * `AgentEvent`'s `turn_held`. `0` says the hold is over; a count says it is
+   * on, and the composer reads it to decide whether a message goes straight to
+   * the CLI or into the queue. It is a FACT rather than something to infer from
+   * `activity`, which is prose and is free to be reworded.
+   *
+   * Three states like {@link awaiting}, and for the same reason: only the two
+   * transitions know anything about it, and every other announce must leave the
+   * client's reading alone.
+   */
+  holdingFor?: number;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *
@@ -789,6 +878,22 @@ export const RunWireSchema = z.object({
   awaiting: RunAwaitingSchema.nullable().describe(
     'What this run is parked on waiting for the user, or null when it is not parked',
   ),
+  /**
+   * How many units of background work this run's turn is being HELD for — 0
+   * when the agent is itself working, or when nothing is running at all.
+   *
+   * On the snapshot for exactly the reason {@link awaiting} is: the hold begins
+   * with one announce and then lasts as long as the delegates do, so a window
+   * that opened afterwards has nothing else to read it off — and it would put
+   * the user's next message into a queue that will not drain for minutes.
+   */
+  holdingFor: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'Units of background work this run is being held for; 0 when the agent itself is working',
+    ),
   title: z.string().nullable(),
   agentKind: AgentKindSchema.nullable(),
   workflowId: z

@@ -5,6 +5,7 @@ import {
   claudeTaskEventFromToolResult,
   claudeTaskEventFromToolUse,
 } from './claude-tasks.utils';
+import { ClaudeSessionCostLedger } from './claude-usage.utils';
 
 /**
  * The payloads here are TRANSCRIBED from one `-p --output-format stream-json`
@@ -225,19 +226,22 @@ describe('through the message mapper', () => {
     // (the tool group, the activity line, the debug log), and only the
     // transcript hides it — by matching this call's id, which is why the event
     // carries it.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      message: {
-        content: [
-          {
-            type: 'tool_use',
-            id: 'toolu_01B2',
-            name: 'TaskUpdate',
-            input: { taskId: '2', status: 'in_progress' },
-          },
-        ],
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_01B2',
+              name: 'TaskUpdate',
+              input: { taskId: '2', status: 'in_progress' },
+            },
+          ],
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events.map((event) => event.type)).toEqual([
       'tool_call',
       'task_list',
@@ -251,20 +255,23 @@ describe('through the message mapper', () => {
     // The whole point of the ticket's second half. The origin is stamped by the
     // mapper's own envelope reader, so nothing about tasks had to know about
     // sub-agents — but nothing must strip it either, and this is what says so.
-    const events = mapClaudeMessage({
-      type: 'assistant',
-      parent_tool_use_id: 'toolu_parent',
-      message: {
-        content: [
-          {
-            type: 'tool_use',
-            id: 'toolu_child',
-            name: 'TaskUpdate',
-            input: { taskId: '1', status: 'completed' },
-          },
-        ],
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_parent',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_child',
+              name: 'TaskUpdate',
+              input: { taskId: '1', status: 'completed' },
+            },
+          ],
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     const task = events.find((event) => event.type === 'task_list');
     expect(task?.parentToolUseId).toBe('toolu_parent');
   });
@@ -272,19 +279,22 @@ describe('through the message mapper', () => {
   it('ignores a task result the tool reported as an ERROR', () => {
     // A failed call moved nothing, and its text is the failure rather than the
     // task — so a create that errored must not add a row.
-    const events = mapClaudeMessage({
-      type: 'user',
-      message: {
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: 'toolu_016k',
-            content: 'Task #1 created successfully: Read the file',
-            is_error: true,
-          },
-        ],
+    const events = mapClaudeMessage(
+      {
+        type: 'user',
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_016k',
+              content: 'Task #1 created successfully: Read the file',
+              is_error: true,
+            },
+          ],
+        },
       },
-    });
+      new ClaudeSessionCostLedger(),
+    );
     expect(events.map((event) => event.type)).toEqual(['tool_result']);
   });
 });

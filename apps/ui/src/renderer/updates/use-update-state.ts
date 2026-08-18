@@ -16,8 +16,10 @@ export interface UpdateController {
   state: UpdateState | null;
   /** Ask the release feed now (the Settings button). */
   check: () => Promise<void>;
-  /** Apply the available update and relaunch. */
+  /** Download, verify and swap in the available update. Does NOT restart. */
   install: () => Promise<void>;
+  /** Restart into an update that has finished installing (`ready`). */
+  relaunch: () => Promise<void>;
 }
 
 export function useUpdateState(): UpdateController {
@@ -83,5 +85,10 @@ export function useUpdateState(): UpdateController {
     [run],
   );
 
-  return { state, check, install };
+  const relaunch = useCallback(
+    () => run(() => window.geniro.relaunchForUpdate()),
+    [run],
+  );
+
+  return { state, check, install, relaunch };
 }

@@ -62,6 +62,12 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // as `notice` events from the mapper, so they land as `system` rows below
       // without this arm having to carry text it does not have.
       return null;
+    case 'turn_held':
+      // Live state, not history: the hold is over by the time anyone replays
+      // this transcript, and a durable "waiting on 2 background tasks" row
+      // wedged between the agent's messages would be a permanent record of a
+      // moment. It rides the activity channel instead — see `AgentEvent`.
+      return null;
     case 'background_work':
       // Turn plumbing — `runCliSession` consumes it to decide when the turn is
       // really over and never forwards it, so this arm is unreachable in

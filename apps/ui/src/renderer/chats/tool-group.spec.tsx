@@ -84,8 +84,22 @@ function rowStatuses(): (string | null)[] {
  * helpers read two different marks, and a row carries exactly one of them.
  */
 function rowOperations(): (string | null)[] {
+  return (
+    [...container.querySelectorAll('button[aria-expanded] [data-operation]')]
+      // The group HEADER is an `aria-expanded` button too, and it now carries
+      // operation glyphs of its own — so this helper has to say which of the two
+      // marks it is reading, or a header strip would be reported as row icons.
+      .filter((icon) => icon.closest(HEADER_OPERATIONS) === null)
+      .map((icon) => icon.getAttribute('data-operation'))
+  );
+}
+
+/** The strip on the COLLAPSED header — what the group says it did, as glyphs. */
+const HEADER_OPERATIONS = '[data-slot="tool-group-operations"]';
+
+function headerOperations(): (string | null)[] {
   return [
-    ...container.querySelectorAll('button[aria-expanded] [data-operation]'),
+    ...container.querySelectorAll(`${HEADER_OPERATIONS} [data-operation]`),
   ].map((icon) => icon.getAttribute('data-operation'));
 }
 
@@ -122,6 +136,57 @@ describe('ToolGroup', () => {
     expect(container.textContent).not.toContain('file-list');
     const header = container.querySelector('button[aria-expanded]');
     expect(header?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('shows what it did as glyphs WHILE COLLAPSED, matching its own summary', () => {
+    // The reported gap: the operation icons existed only once a group was
+    // expanded, so the state a reader spends most of their time in — a column
+    // of collapsed rows — was identical grey text they had to read word by word.
+    render(bashGroup());
+
+    const header = container.querySelector('button[aria-expanded]');
+    expect(header?.getAttribute('aria-expanded')).toBe('false');
+    // Collapsed, and the glyphs are already there — in the summary's own order.
+    expect(container.textContent).toContain('Read 1 file · ran 1 command');
+    expect(headerOperations()).toEqual(['read', 'execute']);
+    // …and no ROW has rendered, so these are the header's own.
+    expect(rowOperations()).toEqual([]);
+  });
+
+  it('caps the collapsed glyphs at three', () => {
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 't1',
+          name: 'Read',
+          input: { file_path: '/a' },
+        }),
+        toolItem('tool_result', { id: 't1', name: null, result: 'x' }),
+        toolItem('tool_call', {
+          id: 't2',
+          name: 'Grep',
+          input: { pattern: 'x' },
+        }),
+        toolItem('tool_result', { id: 't2', name: null, result: 'x' }),
+        toolItem('tool_call', {
+          id: 't3',
+          name: 'Bash',
+          input: { command: 'ls' },
+        }),
+        toolItem('tool_result', { id: 't3', name: null, result: 'x' }),
+        toolItem('tool_call', {
+          id: 't4',
+          name: 'Edit',
+          input: { file_path: '/b', old_string: 'a', new_string: 'b' },
+        }),
+        toolItem('tool_result', { id: 't4', name: null, result: 'x' }),
+      ]),
+    );
+
+    // The sentence names four things; the strip shows three. A row of glyphs
+    // long enough to need counting has stopped being a glance.
+    expect(container.textContent).toContain('edited 1 file');
+    expect(headerOperations()).toEqual(['read', 'search', 'execute']);
   });
 
   it('expands to one row per tool, and a row expands to the full input + result', () => {

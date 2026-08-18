@@ -54,3 +54,44 @@ export function contextCategoryColor(index: number): string {
     'bg-muted'
   );
 }
+
+/**
+ * How long until a plan window refills — `12m`, `3h 50m`, `4d 20h` — or null
+ * when the CLI named no moment, the moment cannot be parsed, or it has already
+ * passed.
+ *
+ * A DAY tier, which the app's two other duration formatters deliberately lack
+ * (`live-row`'s counts a stretch of work, `turn-duration`'s a turn), because a
+ * seven-day window is routinely five days out and `115h 20m` is a number nobody
+ * converts. Two units only: at four days away the minutes are noise, and at
+ * twelve minutes away the days are zero.
+ *
+ * Null for a moment in the PAST rather than `0m` or a negative: the window has
+ * refilled since this reading was taken, so the percentage beside it is what is
+ * stale — and a countdown reading `0m` under a stale figure claims a precision
+ * the reading does not have. The next open asks again.
+ */
+export function formatTimeUntil(
+  iso: string | null,
+  now: number,
+): string | null {
+  if (iso === null) {
+    return null;
+  }
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) {
+    return null;
+  }
+  const minutes = Math.floor((at - now) / 60_000);
+  if (minutes <= 0) {
+    return null;
+  }
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}

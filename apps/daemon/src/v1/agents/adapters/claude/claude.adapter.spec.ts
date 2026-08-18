@@ -91,7 +91,7 @@ describe('ClaudeAdapter', () => {
       'ant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n',
     );
     child.stdout.emitData(
-      '{"type":"result","is_error":false,"result":"hi","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1,"iterations":[{"input_tokens":1,"output_tokens":1}]},"total_cost_usd":0.01}\n',
+      '{"type":"result","is_error":false,"result":"hi","stop_reason":"end_turn","session_id":"sess-adapter","usage":{"input_tokens":1,"output_tokens":1,"iterations":[{"input_tokens":1,"output_tokens":1}]},"total_cost_usd":0.01}\n',
     );
     child.emit('close', 0, null);
     await handle.done;

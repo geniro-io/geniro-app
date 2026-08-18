@@ -36,6 +36,7 @@ import {
   isUserQuestion,
 } from '../utils/approval-answer';
 import {
+  closesADelegate,
   mapEventToItem,
   offTurnActivity,
   terminalStatus,
@@ -1113,10 +1114,44 @@ export class ChatService {
         mapped.role,
         mapped.payload,
       );
-      if (mapped.kind === 'message') {
+      // Main thread only, exactly as in the in-turn path above: the tail holds
+      // the main agent's words, so a delegate's durable message must not take
+      // them away.
+      if (mapped.kind === 'message' && event.parentToolUseId === undefined) {
         this.partials.retire(runId, SINGLE_AGENT_NODE, null);
       }
-      await this.restatusAfterOffTurnEvent(em, runId, event);
+      // The ROW is written whatever produced it — a transcript that hides work
+      // is the other way of lying. What the RUN is doing is a different
+      // question, and a DELEGATE's row does not answer it.
+      //
+      // A delegate is the background work the turn was already held for, and
+      // its trailing rows land as it finishes. Restating them as the run
+      // working again put a `still working` spinner on screen at the exact
+      // moment the work ENDED — and nothing could ever take it down, because
+      // only a terminal event settles this state and a delegate winding up
+      // opens no turn of its own to produce one. Reproduced: the delegate's
+      // block reads `done`, the turn reads `✓ done`, and the row under them
+      // counts upward for as long as the chat is open. That is the reported
+      // "агент вроде как закончил работать, а он статуса не изменил — он всё
+      // ещё пишет still working".
+      //
+      // A delegate still working is not lost by this: the renderer derives it
+      // from the transcript (`subagentRunning`), which closes by itself when
+      // the delegate's block returns. The CLI genuinely carrying on — a
+      // task-notification continuation — writes MAIN-THREAD rows and still
+      // flips the run back to `running`, and its own result settles it again.
+      //
+      // The delegate LIFECYCLE announcement is main-thread and so passes that
+      // test, and its two directions mean opposite things. A delegate STARTING
+      // is the run working — that is the whole point of routing it here, since
+      // a delegate launched between turns is otherwise invisible and the run
+      // reads `completed` under agents that are demonstrably still going. A
+      // delegate FINISHING is the same "restated the end of work as the start
+      // of some" the paragraph above is about, and would latch the spinner on
+      // with nothing left to take it down.
+      if (event.parentToolUseId === undefined && !closesADelegate(event)) {
+        await this.restatusAfterOffTurnEvent(em, runId, event);
+      }
     } catch (err: unknown) {
       this.logger.error(
         `run ${runId} failed to persist a between-turn ${event.type}: ${
@@ -1681,7 +1716,16 @@ export class ChatService {
             // carries no text delta to close it (see `endThinking`). Before the
             // persist, so the row stops saying "Thinking…" as the tool row
             // lands rather than a write later.
-            this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
+            //
+            // MAIN THREAD ONLY, like every other write into this plane: there
+            // is one stretch per run and it belongs to the agent the user is
+            // addressing. A delegate's rows arrive on this same stream while
+            // the parent is genuinely still reasoning, so letting one close the
+            // stretch took the "Thinking…" row away from an agent that had not
+            // stopped.
+            if (event.parentToolUseId === undefined) {
+              this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
+            }
             if (event.type === 'turn_held') {
               // ABOVE the `mapEventToItem` gate below, and it has to stay
               // there: this event yields no ROW, so the `if (!mapped) return`
@@ -1918,12 +1962,27 @@ export class ChatService {
               mapped.role,
               mapped.payload,
             );
-            if (mapped.kind === 'message') {
-              // ONLY a message retires the tail: it is the durable copy of the
-              // very words being streamed. Retiring on any item would let a
-              // terminal one (turn_cancelled/error) erase the tail a moment
-              // before the finalizer flushes it — the text the user watched
-              // would vanish from the replayed transcript.
+            // ONLY a message retires the tail: it is the durable copy of the
+            // very words being streamed. Retiring on any item would let a
+            // terminal one (turn_cancelled/error) erase the tail a moment
+            // before the finalizer flushes it — the text the user watched
+            // would vanish from the replayed transcript.
+            //
+            // …and only the MAIN thread's message, which is the same rule
+            // `text_delta` follows above. There is one tail per run and it
+            // holds the words the user is watching appear; a DELEGATE's
+            // message is the durable copy of text that was never in it, so
+            // retiring on one threw away the head of a sentence the main
+            // agent was still writing. That is the reported "он начал
+            // стримить сообщения, а потом обрезал первую часть и достримил
+            // вторую" — the bubble restarted mid-word, and the whole message
+            // only appeared when its own durable row landed at the end. The
+            // screenshot's turn had a sub-agent producing rows throughout,
+            // which is exactly when it bites.
+            if (
+              mapped.kind === 'message' &&
+              event.parentToolUseId === undefined
+            ) {
               this.partials.retire(runId, SINGLE_AGENT_NODE, null);
               if (mapped.role === 'assistant') {
                 // Straight off the mapped payload, which is the shape the row

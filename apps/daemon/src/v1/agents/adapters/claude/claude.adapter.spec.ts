@@ -27,13 +27,17 @@ import type {
 } from '../adapter.types';
 import { ClaudeAdapter } from './claude.adapter';
 import {
+  CLAUDE_ARTIFACT_ENV,
   CLAUDE_BASE_ARGS,
+  CLAUDE_BROWSER_TOOLS_ENV,
+  CLAUDE_BROWSER_TOOLS_SETTING_ENV,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
   CLAUDE_RESUME_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_TODO_TOOLS_ENV,
 } from './claude.const';
 
 /**
@@ -179,6 +183,82 @@ describe('ClaudeAdapter', () => {
     expect(without.captured.env).not.toHaveProperty(CLAUDE_CONFIG_DIR_ENV);
   });
 
+  it('gives the turn this CLI’s own artifact tool back', () => {
+    // Probe-verified on 2.1.234 against `system/init`'s own tool list: a
+    // headless turn reports 74 tools and no `Artifact`; the same argv with this
+    // variable set reports 99, `Artifact` among them. The account these chats
+    // run as already HOLDS published artifacts, made from that CLI's
+    // interactive sessions — so this restores parity rather than switching on
+    // something new, and without it an agent asked for one answers that the
+    // session cannot publish.
+    const turn = fakeSpawn();
+    new ClaudeAdapter({ spawn: turn.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(turn.captured.env?.[CLAUDE_ARTIFACT_ENV]).toBe('1');
+
+    // …and a caller that says otherwise still wins, like every other value
+    // this builder sets.
+    const overridden = fakeSpawn();
+    new ClaudeAdapter({
+      spawn: overridden.spawn,
+      waitForMcpServers: false,
+    }).start(
+      { prompt: 'go', cwd: '/proj', env: { [CLAUDE_ARTIFACT_ENV]: '' } },
+      () => {},
+    );
+    expect(overridden.captured.env?.[CLAUDE_ARTIFACT_ENV]).toBe('');
+  });
+
+  it('gives the turn this CLI’s own TASK tools back', () => {
+    // Probe-verified on 2.1.234, same method as the artifact one: the tool list
+    // gains exactly `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` with this
+    // set. geniro already RENDERS that list (`claude-tasks.utils.ts` reads it
+    // off those very calls), so without them a shipped feature could not fire.
+    const turn = fakeSpawn();
+    new ClaudeAdapter({ spawn: turn.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    expect(turn.captured.env?.[CLAUDE_TODO_TOOLS_ENV]).toBe('1');
+  });
+
+  it('hands over the browser tools only when the user asked for them', () => {
+    // 22 tool schemas in every prompt, and useless without the Chrome
+    // extension — so this one is a setting, arriving as a GENIRO_-prefixed var
+    // on the DAEMON's env and leaving as the CLI's own name.
+    const previous = process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
+    delete process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
+    try {
+      const off = fakeSpawn();
+      new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
+        { prompt: 'go', cwd: '/proj' },
+        () => {},
+      );
+      expect(off.captured.env).not.toHaveProperty(CLAUDE_BROWSER_TOOLS_ENV);
+
+      process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV] = '1';
+      const on = fakeSpawn();
+      new ClaudeAdapter({ spawn: on.spawn, waitForMcpServers: false }).start(
+        { prompt: 'go', cwd: '/proj' },
+        () => {},
+      );
+      expect(on.captured.env?.[CLAUDE_BROWSER_TOOLS_ENV]).toBe('1');
+      // …and the daemon's own name never reaches the child: `buildChildEnv`
+      // strips every GENIRO_ key, so the CLI is handed only its own.
+      expect(on.captured.env).not.toHaveProperty(
+        CLAUDE_BROWSER_TOOLS_SETTING_ENV,
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
+      } else {
+        process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV] = previous;
+      }
+    }
+  });
+
   it('reads `mcp list` under that same config directory', async () => {
     // The listing describes the servers a TURN will load, and those are
     // configured per profile — so a listing taken under the default profile
@@ -265,6 +345,7 @@ describe('ClaudeAdapter', () => {
       {
         type: 'error',
         message: 'claude exited with code 1: not authenticated',
+        detail: { exitCode: 1 },
       },
     ]);
   });
@@ -289,6 +370,7 @@ describe('ClaudeAdapter', () => {
         type: 'error',
         message: expect.stringContaining('OAuth session expired'),
         recovery: 'cli-login',
+        detail: { exitCode: 1 },
       },
     ]);
   });

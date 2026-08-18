@@ -1,7 +1,8 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import { ChevronRight, LogIn, TriangleAlert } from 'lucide-react';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 
+import { CopyButton } from '../components/copy-button';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 
@@ -52,6 +53,8 @@ export function DisclosureRow({
   message,
   tone = 'destructive',
   detail,
+  facts = [],
+  copyText,
   onSignIn,
 }: {
   /** Row caption, e.g. "flaky · error" or "conversation compacted". */
@@ -69,6 +72,24 @@ export function DisclosureRow({
    * line.
    */
   detail?: string;
+  /**
+   * What the failure reported about ITSELF — a code, an HTTP status, the
+   * provider's request id (`chats/error-payload.ts` → `errorFactsOf`).
+   *
+   * Shown INSIDE the expanded body rather than on the collapsed line: the
+   * sentence is what a reader recognises the failure by, and a row that led
+   * with `404 · req_011Ce…` would push it off a 260px-narrower transcript. The
+   * whole reason they are here at all is that a failure used to reach the user
+   * as one line of prose with nothing in it anyone could act on or quote.
+   */
+  facts?: readonly { label: string; value: string }[];
+  /**
+   * The failure as one block of text, for the clipboard — offered only when a
+   * caller has one to give. Copying is the point of the detail rather than a
+   * convenience on top of it: what a user does with an error is hand it to
+   * somebody, and retyping a request id off a screenshot is where that stops.
+   */
+  copyText?: string;
   /**
    * Sign the failing CLI back in, when the daemon recognised this failure as a
    * lapsed account session.
@@ -164,6 +185,18 @@ export function DisclosureRow({
           )}
         />
       </button>
+      {open && facts.length > 0 ? (
+        // A definition list, not prose: every row is `label: value`, and the
+        // values are ids and numbers that must stay selectable and unwrapped.
+        <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 px-3 pb-2 font-mono text-xs">
+          {facts.map((fact) => (
+            <Fragment key={fact.label}>
+              <dt className="opacity-70">{fact.label}</dt>
+              <dd className="m-0 break-all">{fact.value}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      ) : null}
       {open ? (
         <pre
           className={cn(
@@ -177,6 +210,14 @@ export function DisclosureRow({
           )}>
           {message}
         </pre>
+      ) : null}
+      {open && copyText !== undefined ? (
+        // Sibling of the toggle for the same reason the sign-in control is: a
+        // button inside a button is invalid, and the click would fold the row
+        // away on its way out.
+        <div className="flex justify-end px-3 pb-2">
+          <CopyButton text={copyText} label="Copy the error report" />
+        </div>
       ) : null}
       {onSignIn ? (
         // A SIBLING of the expand button, never inside it: a button nested in a

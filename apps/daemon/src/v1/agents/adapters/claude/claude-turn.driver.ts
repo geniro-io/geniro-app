@@ -59,6 +59,27 @@ interface OpenPoll {
 export class ClaudeTurnDriver implements TurnDriver {
   private polls = 0;
   private openPoll: OpenPoll | null = null;
+  /**
+   * What the window holds after a compaction that NOTHING has measured since —
+   * or null when the freshest reading is a request's own.
+   *
+   * Per-turn state, which is why it is here and not on the adapter: one adapter
+   * instance drives N concurrent turns under graph fan-out.
+   *
+   * It exists because a compaction leaves BOTH readings of the window wrong in
+   * the same direction. The live one is the prompt of the last request, which
+   * was the whole conversation the compaction has just replaced; the durable one
+   * is the `result` line's copy of that same request. So a chat that had just
+   * gone from 515k to 12.6k went on reporting 515k in the composer's ring — the
+   * defect this reads as, and the one the user reported as "after compact the
+   * current context wasn't updated".
+   *
+   * Cleared by the next {@link AgentEvent} `context_progress`, because that IS a
+   * measurement of the window and a later one: an AUTO compaction happens mid
+   * turn and every request after it reports the real figure, so only a turn that
+   * ENDED on its compaction needs this.
+   */
+  private compactedTo: number | null = null;
 
   constructor(private readonly deps: ClaudeTurnDriverDeps) {}
 
@@ -155,7 +176,134 @@ export class ClaudeTurnDriver implements TurnDriver {
         return [];
       }
     }
-    return this.deps.mapMessage(obj);
+    this.rememberApiFailure(obj);
+    return this.deps
+      .mapMessage(obj)
+      .flatMap((event) => this.trackWindow(event))
+      .map((event) => this.withFailureDetail(event));
+  }
+
+  /**
+   * The provider's own account of a failed request, kept until the `result`
+   * line that ends the turn on it.
+   *
+   * Per-turn state, so it belongs to the driver rather than the adapter (one
+   * adapter instance drives N concurrent turns), and it has to be state at all
+   * because the two halves arrive on DIFFERENT lines: the request id and the
+   * error code ride the synthetic `assistant` line that carries the failure's
+   * prose, and the failure itself is only declared one line later. A pure
+   * per-line mapper cannot join them, which is why this is here and not there.
+   *
+   * Probed on 2.1.234 (`--model definitely-not-a-model`):
+   *
+   *   {"type":"assistant","message":{…"model":"<synthetic>"…},
+   *    "error":"model_not_found","request_id":"req_011CeAL4…",
+   *    "is_api_error_message":true}
+   *
+   * `is_api_error_message` is what makes this readable at all: without it the
+   * line is indistinguishable from the agent talking, and `request_id` appears
+   * on ordinary lines too.
+   */
+  private apiFailure: { requestId?: string; code?: string } | null = null;
+
+  /** Read the failure facts off a synthetic api-error `assistant` line. */
+  private rememberApiFailure(obj: unknown): void {
+    if (typeof obj !== 'object' || obj === null) {
+      return;
+    }
+    const line = obj as {
+      is_api_error_message?: unknown;
+      request_id?: unknown;
+      error?: unknown;
+    };
+    if (line.is_api_error_message !== true) {
+      return;
+    }
+    const requestId =
+      typeof line.request_id === 'string' ? line.request_id : undefined;
+    const code = typeof line.error === 'string' ? line.error : undefined;
+    if (requestId === undefined && code === undefined) {
+      return;
+    }
+    this.apiFailure = {
+      ...(requestId ? { requestId } : {}),
+      ...(code ? { code } : {}),
+    };
+  }
+
+  /**
+   * Hand the remembered facts to the error event the turn ends on.
+   *
+   * The result line's own reading WINS where both have one — it describes the
+   * turn's ending, while this describes a request that may have been retried —
+   * and the id is only ever here, which is the whole reason for keeping it.
+   * Consumed once: a second failure in the same turn reports its own facts or
+   * none, never the previous one's.
+   */
+  private withFailureDetail(event: AgentEvent): AgentEvent {
+    if (event.type !== 'error' || this.apiFailure === null) {
+      return event;
+    }
+    const remembered = this.apiFailure;
+    this.apiFailure = null;
+    return {
+      ...event,
+      detail: {
+        ...(remembered.code ? { code: remembered.code } : {}),
+        ...(remembered.requestId ? { requestId: remembered.requestId } : {}),
+        ...event.detail,
+      },
+    };
+  }
+
+  /**
+   * Keep the turn's account of the window honest across a compaction — see
+   * {@link compactedTo}.
+   *
+   * Two things happen to a finished compaction that reported what it left
+   * behind: the figure is announced on the live plane at once (a
+   * `context_progress` is exactly "how full the window is now", so the composer's
+   * ring drops as the compaction lands instead of at the next request), and it
+   * is stamped onto this turn's `turn_complete` so a reopened chat reads the
+   * same number rather than the pre-compaction one the CLI's `result` carries.
+   *
+   * A compaction that reported NO `post_tokens` — 2.1.228 sends it only
+   * sometimes — changes nothing here. The reading is then simply unknown, and
+   * inventing one is the single thing a context meter must never do.
+   *
+   * MAIN THREAD ONLY, like the `context_progress` the mapper emits and for the
+   * same reason: a delegate's context is its own, and the meter reports the
+   * conversation.
+   */
+  private trackWindow(event: AgentEvent): AgentEvent[] {
+    if (event.parentToolUseId !== undefined) {
+      return [event];
+    }
+    if (event.type === 'context_progress') {
+      this.compactedTo = null;
+      return [event];
+    }
+    if (event.type === 'context_compacted' && event.phase === 'finished') {
+      const post = event.postTokens;
+      if (post === null || post <= 0) {
+        return [event];
+      }
+      this.compactedTo = post;
+      return [event, { type: 'context_progress', contextTokens: post }];
+    }
+    if (
+      event.type === 'turn_complete' &&
+      event.usage !== null &&
+      this.compactedTo !== null
+    ) {
+      return [
+        {
+          ...event,
+          usage: { ...event.usage, contextTokens: this.compactedTo },
+        },
+      ];
+    }
+    return [event];
   }
 
   buildApprovalResponse(

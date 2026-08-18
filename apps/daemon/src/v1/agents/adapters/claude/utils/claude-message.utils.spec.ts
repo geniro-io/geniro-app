@@ -538,7 +538,13 @@ describe('mapClaudeMessage', () => {
         new ClaudeSessionCostLedger(),
       ),
     ).toEqual([
-      { type: 'error', message: 'claude run failed (error_during_execution)' },
+      {
+        type: 'error',
+        message: 'claude run failed (error_during_execution)',
+        // …and the same word as a FIELD, which is what a reader can search
+        // and a report can carry without the sentence around it.
+        detail: { code: 'error_during_execution' },
+      },
     ]);
   });
 
@@ -554,7 +560,13 @@ describe('mapClaudeMessage', () => {
         },
         new ClaudeSessionCostLedger(),
       ),
-    ).toEqual([{ type: 'error', message: 'reached the turn limit' }]);
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'reached the turn limit',
+        detail: { code: 'error_max_turns' },
+      },
+    ]);
   });
 
   it('ignores unknown event types and non-objects', () => {
@@ -1449,5 +1461,54 @@ describe('mapClaudeThinkingTokens', () => {
     expect(mapClaudeThinkingTokens({ type: 'system' })).toEqual([]);
     expect(mapClaudeThinkingTokens({ estimated_tokens: 0 })).toEqual([]);
     expect(mapClaudeThinkingTokens({ estimated_tokens: 'lots' })).toEqual([]);
+  });
+});
+
+describe('mapClaudeMessage — what a failed turn reports about itself', () => {
+  it('carries the provider’s own account of an API failure', () => {
+    // Transcribed from a live 2.1.234 failure (`--model
+    // definitely-not-a-model`), fields verbatim. Every one of these was on the
+    // wire and dropped: the row reached the user as one sentence with nothing
+    // in it anyone could look up.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'result',
+          is_error: true,
+          terminal_reason: 'api_error',
+          api_error_status: 404,
+          session_id: '99691942-8ca6-415d-a4c5-975ed3aa4b73',
+          duration_ms: 986,
+          subtype: 'success',
+          result: 'There’s an issue with the selected model.',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'There’s an issue with the selected model.',
+        detail: {
+          // `terminal_reason`, NOT `subtype`: the line above says
+          // `"subtype":"success"` on a failure, which is exactly why appending
+          // it to the sentence was misleading.
+          code: 'api_error',
+          httpStatus: 404,
+          sessionId: '99691942-8ca6-415d-a4c5-975ed3aa4b73',
+          durationMs: 986,
+        },
+      },
+    ]);
+  });
+
+  it('says nothing extra when the CLI reported nothing extra', () => {
+    // A CLI that carries none of it must produce the row it always produced —
+    // an empty `detail` object would put a blank table under every failure.
+    expect(
+      mapClaudeMessage(
+        { type: 'result', is_error: true, result: 'it broke' },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([{ type: 'error', message: 'it broke' }]);
   });
 });

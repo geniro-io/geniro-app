@@ -734,3 +734,37 @@ describe('TranscriptItem — a message sent into a running turn', () => {
     expect(container.textContent).toContain('do this instead');
   });
 });
+
+describe('TranscriptItem — an error row carries what the failure reported', () => {
+  it('opens onto the provider’s own facts, and offers the report to copy', () => {
+    // End to end on the row itself: a `detail` on the payload has to reach the
+    // disclosure, or every fact the daemon now carries stops at the wire.
+    render(
+      <TranscriptItem
+        item={item(
+          'error',
+          {
+            message: 'API Error: Connection lost mid-response.',
+            detail: {
+              code: 'api_error',
+              httpStatus: 404,
+              requestId: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+            },
+          },
+          null,
+        )}
+        nodes={NODES}
+      />,
+    );
+
+    act(() => {
+      container.querySelector('button')?.click();
+    });
+
+    expect(container.textContent).toContain('req_011CeAL4KP2RkG9YEPGrdi2n');
+    expect(container.textContent).toContain('404');
+    expect(
+      container.querySelector('button[aria-label="Copy the error report"]'),
+    ).not.toBeNull();
+  });
+});

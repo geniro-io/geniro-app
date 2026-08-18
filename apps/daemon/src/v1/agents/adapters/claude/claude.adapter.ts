@@ -42,10 +42,13 @@ import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
+  CLAUDE_ARTIFACT_ENV,
   CLAUDE_AUTH_EXPIRED_MARKERS,
   CLAUDE_AUTH_LOGIN_ARGS,
   CLAUDE_AUTH_LOGOUT_ARGS,
   CLAUDE_BASE_ARGS,
+  CLAUDE_BROWSER_TOOLS_ENV,
+  CLAUDE_BROWSER_TOOLS_SETTING_ENV,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_CONFIG_LOCK_RETRIES,
   CLAUDE_CONFIG_LOCK_SUFFIX,
@@ -84,6 +87,7 @@ import {
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_TODO_TOOLS_ENV,
   CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
@@ -967,6 +971,18 @@ export class ClaudeAdapter extends AgentAdapter {
     // last word.
     const env = {
       ...claudeCredentialEnv(),
+      // Two tool families this CLI's headless mode drops and its interactive
+      // one keeps — its artifact publisher and its own task list, the latter
+      // feeding a transcript card geniro already renders. See their constants.
+      // Before `input.env` like everything else here, so a caller can still
+      // take either back off.
+      [CLAUDE_ARTIFACT_ENV]: '1',
+      [CLAUDE_TODO_TOOLS_ENV]: '1',
+      // Claude in Chrome, only when the user switched it on: 22 tool schemas
+      // in every prompt, useless without their browser extension.
+      ...(process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV]?.trim()
+        ? { [CLAUDE_BROWSER_TOOLS_ENV]: '1' }
+        : {}),
       ...(input.configDir ? { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } : {}),
       ...input.env,
     };

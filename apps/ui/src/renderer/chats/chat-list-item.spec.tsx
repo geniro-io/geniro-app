@@ -92,6 +92,23 @@ describe('ChatListItem', () => {
     expect(container.textContent).not.toContain('5m');
   });
 
+  it('LEADS the status word with its glyph — running exactly like completed', async () => {
+    // The spinner used to be pushed to the far right of the line while every
+    // other state kept its glyph in front of the word, so one column was read
+    // from two places. Asserted as document order inside the status line
+    // itself, which is the thing the eye actually follows.
+    for (const status of ['running', 'completed'] as const) {
+      const container = await mount(<ChatListItem {...props({ status })} />);
+      const icon = container.querySelector<SVGElement>(
+        `svg[data-status="${status}"]`,
+      );
+      expect(icon).not.toBeNull();
+      const line = icon!.parentElement!;
+      expect(line.firstElementChild).toBe(icon);
+      expect(line.textContent?.startsWith(status)).toBe(true);
+    }
+  });
+
   it('does not animate a terminal status icon', async () => {
     const container = await mount(
       <ChatListItem {...props({ status: 'failed' })} />,

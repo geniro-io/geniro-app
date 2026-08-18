@@ -74,12 +74,14 @@ import {
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { ApprovalModeSelect } from './approval-mode-select';
+import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
 import { CliLoginContext } from './cli-login-context';
+import { compactionOnlyTurnEnds } from './compaction-payload';
 import { ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
@@ -158,6 +160,7 @@ import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useGitInfo } from './use-git-info';
+import { useUnseenRuns } from './use-unseen-runs';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -197,12 +200,22 @@ const randomId = (): string => crypto.randomUUID();
  * The status row alone cannot decide it either: three writers touch it and it
  * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
  * That is why a terminal tail authorizes even while the row still says running.
+ *
+ * A CANCELLED turn authorizes nothing, from either witness. Stop is the user
+ * asking the thread to stop, and a queue released by it starts a fresh turn in
+ * answer — which is the same defect the live path has, just deferred to the
+ * next time the chat is opened.
  */
 function queueMayDrainAfterReplay(
   run: ChatRun | undefined,
   lastItem: ChatItem | undefined,
 ): boolean {
   if (run === undefined) {
+    return false;
+  }
+  const tailSettledAs =
+    lastItem === undefined ? null : settledRunStatus(lastItem);
+  if (tailSettledAs === 'cancelled' || run.status === 'cancelled') {
     return false;
   }
   const endedOnTerminal =
@@ -363,12 +376,29 @@ export function Chats({
   const [configDir, setConfigDir] = useState<string | null>(null);
   const [recentConfigDirs, setRecentConfigDirs] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // Live mirror, so a callback that must not be rebuilt on every delta can
+  // still ask whether a turn was in flight BEFORE it started one of its own —
+  // which is what tells a failed send whether the working state is its to
+  // clear. Assigned during render like `inputRef`, never from an effect.
+  const streamingRef = useRef(false);
+  streamingRef.current = streaming;
   const [error, setError] = useState<string | null>(null);
 
   // Held in a ref so the long-lived onItem subscription always filters against
   // the current run without re-subscribing.
   const activeRunIdRef = useRef<string | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * How many artifacts this run had ALREADY published when it was opened.
+   *
+   * Seeded from the replay in `activateRun` (see the effect that reads it), so
+   * "a page was just published" means a rise above what the thread arrived
+   * with, rather than the arrival itself.
+   */
+  const artifactBaseline = useRef<{ runId: string | null; count: number }>({
+    runId: null,
+    count: 0,
+  });
   // Set when a run is opened, cleared by the first render that has its items.
   // Opening a run must land on the NEWEST message, and the at-bottom gate below
   // cannot decide that: activateRun empties the transcript first, which clamps
@@ -671,7 +701,19 @@ export function Chats({
       // behaviour the queue exists to prevent, and Steer is the only sanctioned
       // way to reach a running turn. A replay's own drain decision is made once
       // by the caller, from the run's settled status.
-      if (live && (queuesRef.current[item.runId]?.length ?? 0) > 0) {
+      //
+      // …and NEVER on a CANCEL. Stop is the user asking for the thread to stop,
+      // and the drain answered it by starting a fresh turn on the spot — the
+      // reported "I stopped the thread, but see it continue working", with the
+      // `cancelled` row and the new turn's `Working…` one under it in the same
+      // transcript. The message stays at the head of the queue, where Send-now,
+      // Edit and Remove all still reach it; what it no longer does is let itself
+      // out through the door the user just closed.
+      if (
+        live &&
+        settledStatus !== 'cancelled' &&
+        (queuesRef.current[item.runId]?.length ?? 0) > 0
+      ) {
         drainQueueRef.current(item.runId);
       }
     }
@@ -1441,6 +1483,13 @@ export function Chats({
           return;
         }
         history.forEach((item) => addItem(item, false));
+        // The pages this thread arrived with — see `artifactBaseline`. Taken
+        // from the replayed rows themselves rather than from the memo, which
+        // has not been recomputed yet at this point in the activation.
+        artifactBaseline.current = {
+          runId,
+          count: artifactsFrom(history).length,
+        };
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
         // RUN_BUSY. Derive it from the run's status + whether the replayed
@@ -1621,6 +1670,34 @@ export function Chats({
               : run,
           ),
         );
+      }
+      // A queue in a thread the user is NOT looking at is released HERE, and
+      // nowhere else. Live items are delivered to the run's own room and the
+      // client joins one room at a time, so `addItem` — which fires the drain
+      // for the open chat — never sees a background turn end at all. Until
+      // this, such a queue waited for the user to OPEN that chat again: the
+      // reported "after compacting it will not send message that was in queue
+      // — only after i will choose thread", where the compaction ran for two
+      // minutes and the user read another thread while it did. Reproduced
+      // without any compaction: queue a follow-up, switch chats, and the turn
+      // that ends 20 seconds later leaves the message undelivered.
+      //
+      // The ACTIVE run is deliberately left to its terminal ITEM. This
+      // broadcast and that item race, and one drain per settle is the whole
+      // contract — the item is the finer-grained witness (it carries the
+      // stopReason a workflow's roll-up rides), so it stays the authority
+      // wherever it is available.
+      //
+      // `cancelled` is refused on the same grounds as the live path: Stop is
+      // the user closing the door, not a cue to open a fresh turn behind it.
+      if (
+        status !== null &&
+        status !== 'cancelled' &&
+        isSettledRunStatus(status) &&
+        event.runId !== activeRunIdRef.current &&
+        (queuesRef.current[event.runId]?.length ?? 0) > 0
+      ) {
+        drainQueueRef.current(event.runId);
       }
       setActivities((prev) => {
         const next = new Map(prev);
@@ -2098,9 +2175,22 @@ export function Chats({
     [sessionAgent, models, efforts, sessionConfigDir, chatApi, activateRun],
   );
 
-  const ensureRun = useCallback(async (): Promise<string | null> => {
+  /**
+   * The run the next message belongs to — the open one, or a freshly created
+   * chat.
+   *
+   * Answers with the RUN it created rather than its id alone, because a caller
+   * needs the status the daemon gave it and has nowhere else to read it: the
+   * row is only in `runs` after a commit, and `runsRef` is an effect-synced
+   * mirror a commit behind that. `null` for a run that already exists — the
+   * list has held that one all along.
+   */
+  const ensureRun = useCallback(async (): Promise<{
+    runId: string;
+    created: ChatRun | null;
+  } | null> => {
     if (activeRunIdRef.current) {
-      return activeRunIdRef.current;
+      return { runId: activeRunIdRef.current, created: null };
     }
     const cwd = await ensureFolder();
     if (!cwd) {
@@ -2110,7 +2200,7 @@ export function Chats({
     const run = await createChatRun(cwd);
     setRuns((prev) => [run, ...prev]);
     await activateRun(run.id);
-    return run.id;
+    return { runId: run.id, created: run };
   }, [ensureFolder, createChatRun, activateRun]);
 
   /** The sidebar's + : back to the new-run composer. Nothing is created —
@@ -2160,11 +2250,87 @@ export function Chats({
     }
   }, [deleting, chatApi, workflowApi, newChat]);
 
+  /**
+   * Start one turn: mark the run working, send, render the user message
+   * (addItem de-dupes when the WS copy arrives).
+   *
+   * The `running` written here is a MIRROR of a turn the daemon accepted, so a
+   * send that never landed puts it back. Without that, a refused message left
+   * the row saying `running` with nothing running and nothing left to correct
+   * it: the badge stayed wrong, and the next activation read the row, found no
+   * terminal item, and re-armed `streaming` — a chat reading `Working… 4s` over
+   * an empty transcript, forever, which is exactly what was reported. Rolled
+   * back only from `running`, and only to the status this call overwrote, so a
+   * genuinely busy run (a RUN_BUSY refusal) keeps the state it already had.
+   *
+   * Rethrows: every caller has its own way of putting the message back in front
+   * of the user, and swallowing here would lose it.
+   */
+  const startTurn = useCallback(
+    async (
+      runId: string,
+      text: string,
+      images?: SendMessageDtoImagesInner[],
+      /**
+       * What the run's status was, for a caller holding a row the list has yet
+       * to commit — a chat created by this very send. `runsRef` is an
+       * effect-synced mirror and cannot answer for one: it is a commit behind,
+       * so the rollback below read nothing and never fired.
+       */
+      statusBefore?: ChatRun['status'],
+    ): Promise<void> => {
+      // The live plane belongs to the chat that is ON SCREEN. A background
+      // drain (see the `run_status` handler) starts a real turn in a thread
+      // the user is not looking at — clearing THIS chat's error banner and
+      // arming its Stop button for it would describe the wrong conversation,
+      // and `streaming` is a single reading for the open transcript.
+      //
+      // Safe for the first send of a new chat: `ensureRun` awaits
+      // `activateRun`, which sets this ref before its first await.
+      if (runId === activeRunIdRef.current) {
+        setError(null);
+        setStreaming(true);
+      }
+      const before =
+        runsRef.current.find((run) => run.id === runId)?.status ??
+        statusBefore ??
+        null;
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === runId ? { ...run, status: 'running' } : run,
+        ),
+      );
+      try {
+        const userItem = await chatApi.sendChatMessage({
+          runId,
+          sendMessageDto: { text, ...(images?.length ? { images } : {}) },
+        });
+        addItem(userItem, true);
+      } catch (err) {
+        if (before !== null) {
+          setRuns((prev) =>
+            prev.map((run) =>
+              run.id === runId && run.status === 'running'
+                ? { ...run, status: before }
+                : run,
+            ),
+          );
+        }
+        throw err;
+      }
+    },
+    [chatApi, addItem],
+  );
+
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim();
     const images = attachments.toWire();
+    // The staged form of those same images, kept so a refusal can put the
+    // composer back exactly as it was — `toWire` is the send body, which the
+    // thumbnails cannot be rebuilt from.
+    const staged = attachments.attachments;
     // An image on its own is a complete message; only the fully empty composer
     // is a no-op.
     if ((!text && images.length === 0) || streaming) {
@@ -2203,27 +2369,27 @@ export function Chats({
         }
         return;
       }
-      const runId = await ensureRun();
-      if (!runId) {
+      // Emptied BEFORE the run is created, which is the whole fix: creating it
+      // ACTIVATES it, and an activation parks whatever the composer is holding
+      // as that thread's draft (`swapDraft`). With the message still on screen,
+      // the thing being parked was the message being sent — so it came back the
+      // next time the landing card was opened, and a switch landing inside the
+      // create/join/fetch window parked it on the new thread instead. The
+      // workflow branch above has always cleared first; this one did not.
+      setInput('');
+      attachments.clear();
+      const target = await ensureRun();
+      if (!target) {
+        // No folder chosen — the run was never made, so the message is still
+        // the user's to send. Putting it back is not optional: this path is
+        // reached by pressing Send.
+        setInput((current) => (current.length === 0 ? text : current));
+        attachments.restore(staged);
         return;
       }
-      setInput('');
-      setStreaming(true);
-      // The daemon flips the run to 'running' for the turn — mirror it in the
-      // sidebar list (the terminal item flips it back on settle).
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === runId ? { ...run, status: 'running' } : run,
-        ),
-      );
-      // Render the user message even if join raced the publish; addItem de-dupes
-      // when the WS copy arrives.
-      const userItem = await chatApi.sendChatMessage({
-        runId,
-        sendMessageDto: { text, ...(images.length ? { images } : {}) },
-      });
-      attachments.clear();
-      addItem(userItem, true);
+      // Renders the user message even if join raced the publish; addItem
+      // de-dupes when the WS copy arrives.
+      await startTurn(target.runId, text, images, target.created?.status);
     } catch (err) {
       // The daemon's own sentence, exactly as `drainQueue` and `sendQueuedNow`
       // already do it — this catch was the one send path left printing the raw
@@ -2234,9 +2400,16 @@ export function Chats({
       setStreaming(false);
       // A failed send must leave the typed task editable (mirror drainQueue's
       // restoreHead) — but never clobber anything typed since. The staged
-      // images are deliberately kept for the same reason: a retry should not
-      // require re-pasting the screenshot.
+      // images come back with it, so a retry does not require re-pasting the
+      // screenshot: they are PUT back now, rather than merely left alone, since
+      // the composer is emptied up front. Before, they were neither — the
+      // activation cleared them and this path never restored them, so the one
+      // send that could fail on its attachments was also the one that threw
+      // them away.
       setInput((current) => (current.length === 0 ? text : current));
+      if (attachmentsRef.current.length === 0) {
+        attachments.restore(staged);
+      }
     }
   }, [
     input,
@@ -2246,34 +2419,9 @@ export function Chats({
     ensureFolder,
     activateRun,
     ensureRun,
-    chatApi,
-    addItem,
+    startTurn,
     attachments,
   ]);
-
-  /** Start one follow-up turn: mark the run working, send, render the user
-   *  message (addItem de-dupes when the WS copy arrives). */
-  const startTurn = useCallback(
-    async (
-      runId: string,
-      text: string,
-      images?: SendMessageDtoImagesInner[],
-    ): Promise<void> => {
-      setError(null);
-      setStreaming(true);
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === runId ? { ...run, status: 'running' } : run,
-        ),
-      );
-      const userItem = await chatApi.sendChatMessage({
-        runId,
-        sendMessageDto: { text, ...(images?.length ? { images } : {}) },
-      });
-      addItem(userItem, true);
-    },
-    [chatApi, addItem],
-  );
 
   /** Send this run's next queued message after a settled turn (called via
    *  ref from the stable addItem callback, and from activateRun when a run
@@ -2343,8 +2491,18 @@ export function Chats({
               // A real failure (no turn started, so no terminal item will
               // fire another drain) — the message is still at the queue head
               // for the user to edit or remove, because we never took it out.
-              setError(daemonErrorDetail(err) ?? String(err));
-              setStreaming(false);
+              //
+              // Reported in the chat it happened in and only there: a
+              // background drain's banner would name a failure in a thread
+              // that is not on screen, over a transcript that has nothing to
+              // do with it — and `setStreaming(false)` would tear down the
+              // OPEN chat's live row while its own turn is still running.
+              // The queue itself is untouched either way, so the message is
+              // still there to be seen when the user opens that thread.
+              if (runId === activeRunIdRef.current) {
+                setError(daemonErrorDetail(err) ?? String(err));
+                setStreaming(false);
+              }
               return;
             }
             if (delay === undefined) {
@@ -2357,12 +2515,15 @@ export function Chats({
               return;
             }
             await new Promise((resolve) => setTimeout(resolve, delay));
-            // The user switched transcripts mid-retry: never send into a run
-            // they left. The message stays in that run's queue and goes out
-            // when they come back to it.
-            if (activeRunIdRef.current !== runId) {
-              return;
-            }
+            // Deliberately NOT abandoned when the user switches transcripts
+            // mid-retry. This used to return here, on the reading that a
+            // message must never be sent into a run the user has left — but
+            // queueing IS the instruction to send it when the turn ends, and
+            // leaving the thread does not withdraw it. All the early return
+            // bought was a delay: the very next visit to that chat drained
+            // the same message anyway, which is precisely the reported
+            // "after compacting it will not send message that was in queue —
+            // only after i will choose thread".
           }
         }
       } finally {
@@ -2548,6 +2709,13 @@ export function Chats({
         return;
       }
       setSteerStatus({ id, state: 'sending' });
+      // Whether a turn was ALREADY in flight when the press landed. Send-now is
+      // reachable with no turn running — the strip outlives one, and since a
+      // Stop no longer releases the queue it is the ordinary way to send what
+      // Stop held back — and there `startTurn` is what turns the working state
+      // on, so a refusal has to turn it off again. Reported as "it wrote that
+      // the request is too large but at the same time started to think".
+      const wasStreaming = streamingRef.current;
       try {
         await startTurn(runId, message.text, message.images);
         // Dropped by ID, never by index and never by object: the automatic
@@ -2575,6 +2743,9 @@ export function Chats({
           return;
         }
         clearSteerStatus(id);
+        if (!wasStreaming) {
+          setStreaming(false);
+        }
         // `String(err)` printed the whole
         // `daemon POST /v1/chats/<id>/messages failed (409): {"code":…}`
         // envelope as a red banner. The daemon writes a real sentence; show it.
@@ -3109,25 +3280,50 @@ export function Chats({
    * background sub-agent is still working is a fact about the folded
    * transcript, not one the run row carries.
    */
-  const durableEntries = useMemo(
-    () => buildTurnBlocks(buildSubagentBlocks(groupTranscript(items), items)),
-    [items],
-  );
+  const durableEntries = useMemo(() => {
+    // A turn that did nothing but compact the conversation ends on the
+    // compaction row itself, so the `✓ done` under it says nothing the line
+    // above did not — reported as "after conversation compacted we dont need
+    // to duplicate done message". Only the ROW goes: the item stays in
+    // `items`, so the turn still counts toward the header's worked/turns
+    // totals and its usage still reaches the ledger.
+    //
+    // Applied to the FOLD's output rather than inside `groupTranscript`,
+    // which cannot import the reader: `compaction-payload` reaches
+    // `agent-activity`, which imports `transcript-groups` back — a value
+    // cycle this directory has been bitten by before. A run-level turn end is
+    // always a top-level `item` entry (`ownerOf` gives it NO_OWNER), so
+    // filtering here reaches every one of them.
+    const redundant = compactionOnlyTurnEnds(items);
+    const flow =
+      redundant.size === 0
+        ? groupTranscript(items)
+        : groupTranscript(items).filter(
+            (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
+          );
+    return buildTurnBlocks(buildSubagentBlocks(flow, items));
+  }, [items]);
   /**
-   * The run STOPPED for a reason that outranks a delegate still being out.
+   * The run's row has SETTLED — whatever it settled as.
    *
-   * Only `failed` and `cancelled` — deliberately NOT every settled status, and
-   * not `isSettledRunStatus`. A `completed` row is exactly the stale value
-   * this whole signal exists to override (`displayRunStatus` documents the
-   * three writers that produce it), so treating it as a stop would let the
-   * badge suppress itself and the feature would do nothing. The two kept here
-   * are the same two `displayRunStatus` refuses to override for `streaming`,
-   * for the same reason: both are genuine settle paths, and a cancelled run is
-   * precisely where a delegate's last rows are still landing with no turn-end
-   * item to close it.
+   * `completed` is included, and it did not used to be. The reasoning against
+   * it was that a `completed` row is the stale value this signal exists to
+   * override, so treating it as a stop would let the badge suppress itself —
+   * true only while the override was the FACT of a delegate being unreturned.
+   * It is not: `subagentBlockStatus` reads the moment, so a delegate that has
+   * produced rows since the settle is still working and still overrides the
+   * row, which is the case the signal was written for (a run row reading
+   * `completed` while delegates were visibly working — and the daemon flips
+   * that row back to `running` for it besides).
+   *
+   * What excluding `completed` cost is the opposite failure, with no way out of
+   * it: a turn whose delegate never reported left the badge reading `running`
+   * for good — no process, no rows, no settle the notification rules could see.
+   * That is the reported "the sub-agent is done and the status never changed",
+   * and the reported "I get no notification when a chat finishes".
    */
   const runRowStopped =
-    activeRun?.status === 'failed' || activeRun?.status === 'cancelled';
+    activeRun !== null && isSettledRunStatus(activeRun.status);
   /**
    * WHEN it stopped, which is what a delegate's status is actually read
    * against — see {@link subagentBlockStatus}. The run row's own `updatedAt` is
@@ -3138,25 +3334,34 @@ export function Chats({
    * since?" answerable.
    */
   /**
-   * WHEN a run that HAS stopped stopped — the later of its own terminal item and
+   * WHEN a run that HAS stopped stopped — its own terminal ITEM, falling back to
    * the row's timestamp, or `'unknown'` when neither can be read.
    *
-   * The two together, never the row alone: items do not touch `updatedAt`, so a
-   * row can be older than the stop it describes and a row written in that gap
-   * then reads as "produced after the run settled" — see
-   * {@link lastTerminalItemAt} for the measurement. And never the item alone: a
-   * settle path that writes none still has to answer.
+   * The item FIRST, and never the later of the two, which is what this used to
+   * take. The argument for the max was that items do not touch `updatedAt`, so
+   * the row can sit before the stop it describes — true of the row the DAEMON
+   * writes, and not true of the one on screen: {@link addItem} mirrors every
+   * streamed message's timestamp onto `updatedAt` to keep the sidebar's "3m ago"
+   * live. So a delegate's own row pushes the row stamp past itself, and the max
+   * makes "has this delegate spoken since the run settled?" unanswerable — every
+   * delegate always reads as having spoken exactly no later than the settle.
+   * That is not a hypothetical: it is what the spec for the badge measured the
+   * moment the rule was asked about a `completed` run.
+   *
+   * The fallback still matters, because the case the max was reaching for is
+   * real in the other direction: a settle path that writes NO terminal item (a
+   * cancel) has nothing else to answer with.
    */
   const settleMomentOf = useCallback(
     (run: ChatRun | null, rows: readonly ChatItem[]): RunSettleAt => {
-      const rowAt = run ? Date.parse(run.updatedAt) : Number.NaN;
       const itemAt = lastTerminalItemAt(rows);
-      const known = [rowAt, itemAt].filter(
-        (at): at is number => at !== null && Number.isFinite(at),
-      );
+      if (itemAt !== null && Number.isFinite(itemAt)) {
+        return itemAt;
+      }
+      const rowAt = run ? Date.parse(run.updatedAt) : Number.NaN;
       // `'unknown'` and not null when nothing is readable: the run DID stop, and
       // losing that fact would put every spinner back — see {@link RunSettleAt}.
-      return known.length === 0 ? 'unknown' : Math.max(...known);
+      return Number.isFinite(rowAt) ? rowAt : 'unknown';
     },
     [],
   );
@@ -3538,6 +3743,36 @@ export function Chats({
     return kind ? () => void signInToCli(kind, configDir) : null;
   }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
 
+  /** The pages this thread has published to claude.ai, newest first. */
+  const artifacts = useMemo(() => artifactsFrom(items), [items]);
+  /**
+   * A NEW artifact opens the panel; a chat that already had one does not.
+   *
+   * The ask was for it to behave the way the CLI's own host does, which
+   * surfaces a preview the moment a page is published. What that must not turn
+   * into is a panel that springs open every time an old thread is re-opened —
+   * a replay carries every page the thread ever published and would otherwise
+   * read exactly like one arriving now. So the baseline is taken from the
+   * REPLAY, in `activateRun`, and only a rise above it counts.
+   */
+  useEffect(() => {
+    const seen = artifactBaseline.current;
+    // Deliberately does NOT seed itself. This effect also runs mid-replay, when
+    // the transcript is still empty, so a self-seeded baseline of 0 would read
+    // the replayed rows landing a moment later as a fresh publish — the exact
+    // behaviour the baseline exists to prevent.
+    if (seen.runId !== activeRunId) {
+      return;
+    }
+    if (artifacts.length > seen.count) {
+      artifactBaseline.current = {
+        runId: activeRunId,
+        count: artifacts.length,
+      };
+      setAgentsPanelOpen(true);
+    }
+  }, [activeRunId, artifacts.length]);
+
   const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
   /**
    * The agents panel's MCP rows. The folder is the RUN's, never the composer's
@@ -3713,6 +3948,24 @@ export function Chats({
     summaryOf: settleSummaryOf,
     activeRunId,
   });
+  // The lasting half of the same signal. A banner is gone in seconds — and on
+  // a Mac that is sharing its screen macOS drops every app's silently — so the
+  // sidebar keeps the mark until the thread is opened. Same rule, same reading
+  // of a run's status: see `use-unseen-runs`.
+  const { unseen, markSeen } = useUnseenRuns({
+    runs,
+    statusOf: sidebarRunStatus,
+    activeRunId,
+  });
+  // Opening the thread IS the acknowledgement. Keyed on the open chat rather
+  // than hung off one click handler, so every way into a thread clears it —
+  // the sidebar row, a clicked banner, the session picker — and none of them
+  // has to remember to.
+  useEffect(() => {
+    if (activeRunId !== null) {
+      markSeen(activeRunId);
+    }
+  }, [activeRunId, markSeen]);
 
   /**
    * Open the thread a clicked notification was about. Main has already raised
@@ -3860,6 +4113,7 @@ export function Chats({
                               key={run.id}
                               runId={run.id}
                               active={run.id === activeRunId}
+                              unseen={unseen.has(run.id)}
                               label={runLabel(run, workflowNames)}
                               isWorkflow={run.workflowId != null}
                               status={sidebarRunStatus(run)}
@@ -3949,6 +4203,9 @@ export function Chats({
                                 <GroupHeader
                                   group={group}
                                   summary={summary}
+                                  unseen={sectionRuns.some((run) =>
+                                    unseen.has(run.id),
+                                  )}
                                   dragging={
                                     drag?.kind === 'group' &&
                                     drag.id === group.id
@@ -4809,6 +5066,7 @@ export function Chats({
                     // to prevent, merely moved to the second chat.
                     key={activeRun?.id ?? 'no-run'}
                     agents={agents}
+                    artifacts={artifacts}
                     tasksByAgent={tasksByAgent}
                     terminalReasons={terminalReasons}
                     usageReasons={usageReasons}

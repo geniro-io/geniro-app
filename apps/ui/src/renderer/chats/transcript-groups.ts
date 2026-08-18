@@ -527,17 +527,6 @@ export function subagentBlockStatus(
   if (block.failed) {
     return 'failed';
   }
-  // Ahead of `returned`, and ONLY when the CLI has actually said so: a delegate
-  // nobody is waiting for has its launching call answered immediately, so the
-  // return says the delegation was accepted rather than that the work is over.
-  // Ranked below `failed` because a delegate that errored is finished whatever
-  // its lifecycle channel last announced.
-  if (block.backgroundOpen === true) {
-    return 'running';
-  }
-  if (block.returned) {
-    return 'completed';
-  }
   // Two independent things end a delegate that never returned, and neither
   // subsumes the other — the same pairing `ToolGroupEntry.closed` documents.
   // `closed` is its own turn ending; the run settling is the whole run
@@ -558,6 +547,30 @@ export function subagentBlockStatus(
     (runSettledAt === 'unknown' ||
       block.lastRowAt === null ||
       block.lastRowAt <= runSettledAt);
+  // Ahead of `returned`, and ONLY when the CLI has actually said so: a delegate
+  // nobody is waiting for has its launching call answered immediately, so the
+  // return says the delegation was accepted rather than that the work is over.
+  // Ranked below `failed` because a delegate that errored is finished whatever
+  // its lifecycle channel last announced.
+  //
+  // And ranked below the RUN settling, which it did not used to be. An open
+  // `background_work` unit is evidence of a delegate running only while the CLI
+  // is still able to report on it: the daemon holds the turn open precisely so
+  // that report can arrive, and it settles anyway when the unit never reports —
+  // a released hold, or a process that died with the delegate still out. So an
+  // unsettled unit under a settled run is UNREPORTED work, not running work,
+  // and reading it as running latched the badge on for good: measured on this
+  // tree with a CLI that printed `task_started` and exited, the daemon row read
+  // `completed` while the header, the sidebar row and the block all read
+  // `running` — with the process gone, forever. That latch is also what
+  // swallowed the turn-end notification, since the run never crossed into a
+  // settled state for the rules to see.
+  if (block.backgroundOpen === true && !endedByRun) {
+    return 'running';
+  }
+  if (block.returned) {
+    return 'completed';
+  }
   return block.closed || endedByRun ? 'stopped' : 'running';
 }
 

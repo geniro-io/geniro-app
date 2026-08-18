@@ -1260,6 +1260,53 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
+  it('stops a background delegate that never reported once the RUN itself settles', () => {
+    // The latch: an open `background_work` unit used to outrank everything, so
+    // a delegate whose CLI died before reporting kept the block — and with it
+    // the run badge, and with THAT the turn-end notification — running for
+    // good. An unsettled unit under a settled run is unreported work, not
+    // running work: the daemon holds the turn open precisely so the report can
+    // arrive, and settles anyway when it never does.
+    const entries = fold([
+      call('Task', 'task-bg', {
+        description: 'Stress-test the two approaches',
+      }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(subagentBlockStatus(block)).toBe('running');
+    expect(subagentBlockStatus(block, Date.parse('2026-08-18T10:00:00Z'))).toBe(
+      'completed',
+    );
+  });
+
+  it('keeps it running while it is still producing rows after that settle', () => {
+    // The other side, and the reason the settle is a MOMENT: a delegate that
+    // has spoken SINCE is working whatever the run row says — which is the
+    // reported "thread says completed while sub-agents are visibly working".
+    const spoke = {
+      ...delegated('message', { text: 'still reading' }, 'task-bg'),
+    };
+    spoke.createdAt = '2026-08-18T10:00:05.000Z';
+    const entries = fold([
+      call('Task', 'task-bg', {
+        description: 'Stress-test the two approaches',
+      }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      spoke,
+    ]);
+
+    expect(
+      subagentBlockStatus(
+        onlyBlock(entries),
+        Date.parse('2026-08-18T10:00:00Z'),
+      ),
+    ).toBe('running');
+  });
+
   it('lets the same delegate finish when the CLI says it has', () => {
     const entries = fold([
       call('Task', 'task-bg', { description: 'Sleep 50 then report ok' }),

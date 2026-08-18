@@ -350,6 +350,55 @@ export type AgentEvent = AgentEventOrigin & AgentEventBody;
 export type AgentErrorRecovery = 'cli-login';
 
 /**
+ * What was known about a failure BESIDES the sentence it was reported with.
+ *
+ * A failed turn used to reach the transcript as one line of prose and nothing
+ * else — "API Error: Connection lost mid-response. The response above may be
+ * incomplete." — which says what happened and nothing anyone could act on or
+ * hand to whoever runs the model. Every field here is something the CLI already
+ * put on the wire and geniro was dropping, measured on claude 2.1.234 by
+ * forcing a failure (`--model definitely-not-a-model`):
+ *
+ *   {"type":"assistant", … ,"error":"model_not_found",
+ *    "request_id":"req_011CeAL4KP2RkG9YEPGrdi2n","is_api_error_message":true}
+ *   {"type":"result","is_error":true,"terminal_reason":"api_error",
+ *    "api_error_status":404,"session_id":"…","duration_ms":986,
+ *    "subtype":"success", …}
+ *
+ * Note `subtype` on that line: it says `success` on a failure, which is why it
+ * is not the code and why appending it to the message was actively misleading.
+ *
+ * EVERY field is optional and none is invented: a CLI that reports none of this
+ * produces an error row byte-identical to the one it produced before. The
+ * renderer reads them back through a twin parser (`chats/error-payload.ts`).
+ */
+export interface AgentErrorDetail {
+  /**
+   * The CLI's own machine-readable name for what failed — `model_not_found`,
+   * `api_error`. Searchable in the vendor's vocabulary in a way prose is not.
+   */
+  code?: string;
+  /** The HTTP status the model's endpoint answered with. */
+  httpStatus?: number;
+  /**
+   * The provider's own id for the failed request.
+   *
+   * The single most useful field here and the one nothing else can substitute:
+   * it is what a provider can look up, and it exists nowhere in the app unless
+   * it is carried across from the line that reported it.
+   */
+  requestId?: string;
+  /** The CLI session the failure happened in. */
+  sessionId?: string;
+  /** How long the turn had been running when it failed. */
+  durationMs?: number;
+  /** The process's exit code, when it died rather than reported. */
+  exitCode?: number;
+  /** The signal that killed the process, when one did. */
+  signal?: string;
+}
+
+/**
  * WHICH thread of one turn produced an event.
  *
  * A CLI that runs sub-agents emits their output on the SAME stream as the main
@@ -479,7 +528,13 @@ type AgentEventBody =
       finalText: string | null;
     }
   | { type: 'turn_cancelled' }
-  | { type: 'error'; message: string; recovery?: AgentErrorRecovery }
+  | {
+      type: 'error';
+      message: string;
+      recovery?: AgentErrorRecovery;
+      /** See {@link AgentErrorDetail} — absent when the CLI reported nothing. */
+      detail?: AgentErrorDetail;
+    }
   | { type: 'session'; sessionId: string }
   | {
       /**

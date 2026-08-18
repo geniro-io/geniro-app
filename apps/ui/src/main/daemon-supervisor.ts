@@ -641,6 +641,13 @@ export class DaemonSupervisor {
         // this supervisor spawns.
         GENIRO_IDLE_EXIT_MS: String(DAEMON_IDLE_EXIT_MS),
         ...(claudeBin ? { GENIRO_CLAUDE_BIN: claudeBin } : {}),
+        // Claude in Chrome, when the user asked for it. GENIRO_-prefixed like
+        // every other daemon config, so it is stripped from each agent child
+        // and translated by that CLI's own adapter into the variable the CLI
+        // reads — geniro never hands a child a name it did not mint.
+        ...(settings.claudeBrowserTools
+          ? { GENIRO_CLAUDE_BROWSER_TOOLS: '1' }
+          : {}),
         ...(cursorBin ? { GENIRO_CURSOR_BIN: cursorBin } : {}),
         // No GENIRO_PORT: the daemon owns its default port and records the
         // actual bound host + port in the pidfile, which we read back below.

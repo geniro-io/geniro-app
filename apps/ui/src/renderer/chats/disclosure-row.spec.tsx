@@ -200,3 +200,60 @@ describe('DisclosureRow', () => {
     });
   });
 });
+
+describe('the facts under a failure', () => {
+  const FACTS = [
+    { label: 'code', value: 'api_error' },
+    { label: 'http status', value: '404' },
+    { label: 'request id', value: 'req_011CeAL4KP2RkG9YEPGrdi2n' },
+  ];
+
+  it('keeps them behind the disclosure, with the sentence on the collapsed line', () => {
+    // The sentence is what a reader recognises the failure by, and a row that
+    // led with `404 · req_011Ce…` would push it out of a 260px-narrower
+    // transcript. The detail is for the moment someone opens the row to report
+    // it.
+    act(() =>
+      root.render(
+        <DisclosureRow
+          caption="error"
+          message="API Error: Connection lost mid-response."
+          facts={FACTS}
+          copyText="the whole report"
+        />,
+      ),
+    );
+
+    expect(container.textContent).toContain('Connection lost mid-response');
+    expect(container.textContent).not.toContain('req_011CeAL4KP2RkG9YEPGrdi2n');
+    expect(
+      container.querySelector('button[aria-label="Copy the error report"]'),
+    ).toBeNull();
+
+    act(() => {
+      container.querySelector('button')?.click();
+    });
+
+    expect(container.textContent).toContain('http status');
+    expect(container.textContent).toContain('req_011CeAL4KP2RkG9YEPGrdi2n');
+    // …and the whole thing is copyable, which is what a failure is FOR: it
+    // gets handed to somebody.
+    expect(
+      container.querySelector('button[aria-label="Copy the error report"]'),
+    ).not.toBeNull();
+  });
+
+  it('renders exactly as before for a failure that reported none', () => {
+    act(() =>
+      root.render(<DisclosureRow caption="error" message="it broke" />),
+    );
+    act(() => {
+      container.querySelector('button')?.click();
+    });
+
+    expect(container.querySelector('dl')).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Copy the error report"]'),
+    ).toBeNull();
+  });
+});

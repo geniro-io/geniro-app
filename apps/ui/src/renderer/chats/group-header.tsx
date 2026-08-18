@@ -65,6 +65,7 @@ export type GroupCommand =
 export const GroupHeader = memo(function GroupHeader({
   group,
   summary,
+  unseen = false,
   dragging = false,
   autoFocusName = false,
   onNameFocused,
@@ -76,6 +77,13 @@ export const GroupHeader = memo(function GroupHeader({
 }: {
   group: RunGroupDto;
   summary: RunGroupSummary;
+  /**
+   * At least one thread in this group has reported something the user has not
+   * opened since — see {@link import('./use-unseen-runs')}. Kept OFF
+   * {@link RunGroupSummary}, which is derived from the rows' display statuses
+   * alone: this is about what the user has looked at, which no status carries.
+   */
+  unseen?: boolean;
   /** This is the group currently being dragged — dimmed while it travels. */
   dragging?: boolean;
   /**
@@ -434,15 +442,30 @@ export const GroupHeader = memo(function GroupHeader({
           </Popover>
         </span>
         {/* LAST in the row, after the options button, so the glyph sits flush
-            with the right edge — level with the spinners on the chat rows
-            below it. Before this it came BEFORE that button, which is
-            `opacity-0` until the row is hovered but still occupies its 20px
-            box, so the header's spinner floated ~23px short of every card's
-            and read as a stray mark in the middle of the row.
+            with the right edge. Before this it came BEFORE that button, which
+            is `opacity-0` until the row is hovered but still occupies its 20px
+            box, so the header's glyph floated ~23px short of the edge and read
+            as a stray mark in the middle of the row. It is a SUMMARY of the
+            rows below rather than one row's own status — which is why it stays
+            here while the rows lead with theirs.
             A parked thread outranks a working one, and both survive a fold —
             which is the whole point of putting them here. A collapsed group
             that hid an unanswered question would be a worse sidebar than no
             groups at all. */}
+        {/* The same unread mark the rows carry, summarised — a group folded
+            over a thread that just finished would otherwise hide the very
+            signal the highlight exists to give, exactly as it would for a
+            parked question. Its own axis rather than a third arm of the
+            ternary below: "something in here is new" and "something in here is
+            working" are both true of a group that has one of each. */}
+        {unseen ? (
+          <span
+            data-slot="group-unseen"
+            role="img"
+            aria-label={`${group.name} has a thread you have not opened`}
+            className="size-1.5 shrink-0 rounded-full bg-primary"
+          />
+        ) : null}
         {summary.needsInput ? (
           <MessageCircleQuestion
             data-slot="group-needs-input"

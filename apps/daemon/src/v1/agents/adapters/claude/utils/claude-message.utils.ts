@@ -13,6 +13,7 @@ import type {
   AgentUsage,
 } from '../../adapter.types';
 import {
+  CLAUDE_ABORTED_TERMINAL_REASONS,
   CLAUDE_COMPACT_BOUNDARY_SUBTYPE,
   CLAUDE_COMPACT_FAILED_NOTICE,
   CLAUDE_COMPACT_RESULT_FAILED,
@@ -26,6 +27,7 @@ import {
   CLAUDE_TASK_TERMINAL_STATUSES,
   CLAUDE_TASK_TYPE_AGENT,
   CLAUDE_TASK_UPDATED_SUBTYPE,
+  CLAUDE_TURN_ABORTED_MESSAGE,
 } from '../claude.const';
 import {
   claudeTaskEventFromToolResult,
@@ -116,13 +118,32 @@ function hasFailureMarkers(text: string): boolean {
  * waiting. The test is deliberately narrow — every genuine completion observed
  * carries `stop_reason: 'end_turn'` plus real token counts — so a legitimate
  * result can never be silently discarded by it.
+ *
+ * **An EMPTY `result` string is no text, and reading it as text is what let two
+ * of these through.** Reconstructed from the author's own `geniro.db` and debug
+ * log (2026-08-18, 2.1.234, run `4144f28e`, twice within 40 minutes): the user
+ * sent `status?`, and 2.7s later the turn settled on a line whose every figure
+ * was zero — `✓ done · 0s · $0.0000` under their message, with no answer above
+ * it. Cross-checked against the CLI's OWN session file, the turn it actually
+ * ran in that window was not the user's prompt at all but a `<task-notification>`
+ * it had queued for itself (`<status>stopped</status>`, from a delegate started
+ * in an earlier turn), and it produced nothing for it. So the line was the
+ * absence of an answer in every sense — and only `result: ""` rather than
+ * `result: null` kept it out of this guard. The user's own prompt was answered
+ * ten seconds later, on a turn geniro had already declared finished, which is
+ * how it reached them as "I periodically get errors like this".
+ *
+ * The next reader's lead, unprobed here: such a line reportedly names itself —
+ * `origin:{kind:"task-notification"}` (see `CLAUDE_TASK_STARTED_SUBTYPE`). That
+ * would say WHY the line is not ours instead of inferring it from zeros, and it
+ * is worth reading off a live capture before it is written into code.
  */
 function describesNoWork(
   usage: AgentUsage,
   stopReason: string | null,
   finalText: string | null,
 ): boolean {
-  if (stopReason !== null || finalText !== null) {
+  if (stopReason !== null || (finalText !== null && finalText.trim() !== '')) {
     return false;
   }
   return (
@@ -382,9 +403,14 @@ function mapClaudeLine(
         // init's `slash_commands` is the session's authoritative invokable
         // set (built-ins + plugins + skills + commands) — harvested for the
         // composer's `/` autocomplete. Verified live on 2.1.211.
+        //
+        // Names and NOTHING else: the field is an array of plain strings, so
+        // every entry reports a null description and the sentence beside it in
+        // the popup comes from this CLI's disk scan instead (`skillRoots`).
         const commands = asArray(root.slash_commands)
           .map((entry) => asString(entry))
-          .filter((entry): entry is string => entry !== null && entry !== '');
+          .filter((entry): entry is string => entry !== null && entry !== '')
+          .map((name) => ({ name, description: null }));
         if (commands.length > 0) {
           events.push({ type: 'slash_commands', commands });
         }
@@ -605,15 +631,24 @@ function mapClaudeLine(
           sessionId: asString(root.session_id),
           durationMs: asNumber(root.duration_ms),
         });
+        // A turn the CLI ABORTED did not fail, and this CLI says so itself —
+        // see {@link CLAUDE_ABORTED_TERMINAL_REASONS} for the two predicates
+        // it carries and the `is_error: true` it ships anyway. Only the
+        // FALLBACK changes: a line that came with its own sentence keeps it,
+        // by the same rule as every other failure here.
+        const aborted =
+          code !== null && CLAUDE_ABORTED_TERMINAL_REASONS.has(code);
         return [
           {
             type: 'error',
             message:
               asString(root.result) ??
               asString(root.error) ??
-              (code === null
-                ? CLAUDE_RUN_FAILED_MESSAGE
-                : `${CLAUDE_RUN_FAILED_MESSAGE} (${code})`),
+              (aborted
+                ? CLAUDE_TURN_ABORTED_MESSAGE
+                : code === null
+                  ? CLAUDE_RUN_FAILED_MESSAGE
+                  : `${CLAUDE_RUN_FAILED_MESSAGE} (${code})`),
             ...(detail ? { detail } : {}),
           },
         ];

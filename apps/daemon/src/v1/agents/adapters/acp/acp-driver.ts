@@ -1,6 +1,7 @@
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
 import type {
   AgentEvent,
+  AgentReportedCommand,
   AgentTask,
   AgentTurnInput,
   AgentUsage,
@@ -35,6 +36,7 @@ import {
 } from './acp-jsonrpc';
 import {
   acpOffersModel,
+  readAcpConfigOption,
   readAcpCurrentModelId,
   readAcpModelConfigId,
   readAcpModels,
@@ -210,6 +212,23 @@ export interface AcpTodoUpdate {
   toolCallId: string | null;
 }
 
+/**
+ * How full one agent's window is, as read from OUTSIDE the protocol.
+ *
+ * Deliberately the three fields a meter needs and nothing else — not
+ * `AgentContextUsage`, which is a whole breakdown for a panel. The driver's job
+ * here is one figure and its denominator; anything richer would make this seam
+ * the second place a breakdown is defined.
+ */
+export interface AcpContextReading {
+  /** What the window currently holds, or null when the source cannot say. */
+  usedTokens: number | null;
+  /** What it is measured against, or null. */
+  windowTokens: number | null;
+  /** Which model that window belongs to, when the source named one. */
+  model: string | null;
+}
+
 export interface AcpDriverOptions {
   /** The turn being driven — prompt, cwd, resume id, MCP endpoint. */
   input: AgentTurnInput;
@@ -233,6 +252,26 @@ export interface AcpDriverOptions {
   delegate?: AcpDelegateProtocol;
   /** How this agent reports its own task list, or absent when it does not. */
   todos?: AcpTodoProtocol;
+  /**
+   * How full this agent's window is, read OFF-PROTOCOL — absent for an agent
+   * that reports it on the wire, or not at all.
+   *
+   * ACP has no context accounting: an agent sends no `usage_update` and its
+   * prompt reply carries no window, so an ACP turn's meter had nothing to draw
+   * and the ring sat empty for the life of the chat. A CLI can still KEEP that
+   * accounting somewhere the adapter can read — cursor writes a full breakdown
+   * per turn into its own session store — and this is the seam that brings it
+   * onto the same plane every other agent's figures ride. The reading itself is
+   * the adapter's business; what the driver owns is WHEN to take one, which is
+   * why this is a function of the session id and not a value.
+   *
+   * SYNCHRONOUS on purpose: it is consulted from the two handlers that build an
+   * event list and return it, so an async reading would have to be published
+   * out of band, past the ordering every other event in the turn is subject to.
+   * An adapter whose source cannot be read synchronously should cache it rather
+   * than make this seam async for everyone.
+   */
+  readContext?: (sessionId: string) => AcpContextReading | null;
   /**
    * Agent→client methods this client refuses WITHOUT narrating it — the ones
    * whose own agent absorbs the refusal, so nothing about the turn changed.
@@ -283,8 +322,26 @@ export interface AcpDriverOptions {
    */
   modelSelection?: {
     model: string | null;
-    parameters: readonly { id: string; value: string }[];
+    parameters: readonly AcpModelParameter[];
   } | null;
+}
+
+/**
+ * One config option a turn sets after its model — a reasoning effort, a context
+ * size.
+ *
+ * `alternateIds` exists because a config option's id belongs to the MODEL, and
+ * one agent's models can name the same axis differently: cursor's
+ * `claude-opus-5` calls it `effort` and its `gpt-5.2` calls it `reasoning`
+ * (probed 2026-08-19 on 2026.08.11-e8db854). The adapter knows its own CLI's
+ * spellings; the driver picks whichever one the current model enumerated. Left
+ * empty, `id` is sent verbatim — which is every agent whose axis has one name.
+ */
+export interface AcpModelParameter {
+  id: string;
+  value: string;
+  /** Other ids this SAME setting is known by, most-preferred first. */
+  alternateIds?: readonly string[];
 }
 
 function textOf(content: unknown): string | null {
@@ -732,10 +789,13 @@ export class AcpTurnDriver implements TurnDriver {
     }
     if (kind === 'set_mode') {
       // A refused mode is a degrade, not a failure: the turn still runs, just
-      // in the agent's default mode. Say so rather than silently downgrading.
+      // in the agent's default mode. Say so rather than silently downgrading —
+      // and say it at `warning`, which is what "a degrade, not a failure" has
+      // meant all along and could not be expressed until the severity existed.
       return [
         {
           type: 'notice',
+          severity: 'warning',
           message: `agent declined session mode '${this.requestedModeId ?? ''}': ${message}`,
         },
       ];
@@ -758,10 +818,18 @@ export class AcpTurnDriver implements TurnDriver {
       // quietly thinking at `high` is a wrong turn that reports success — and
       // this arm is genuinely reachable, since a value is only offered for SOME
       // models and a legacy chat's stored id can name one the model dropped.
+      //
+      // A `warning`, not the default severity. Nothing failed: the turn ran and
+      // went on running, which is precisely what made the full-width red panel
+      // wrong — reported as "a strange error … and then it carried on working".
+      // The frame is now only sent where it CANNOT be checked first (see
+      // `applyModelParameters`), so this arm is the honest remainder rather than
+      // the ordinary case it used to be.
       return [
         {
           type: 'notice',
-          message: `agent declined model setting '${this.requestedParameter ?? ''}': ${message} — this turn keeps the agent's current value for it`,
+          severity: 'warning',
+          message: `the agent declined '${this.requestedParameter ?? ''}' (${message}) — the turn keeps its own value for it`,
         },
       ];
     }
@@ -893,6 +961,11 @@ export class AcpTurnDriver implements TurnDriver {
       ];
     }
     events.push({ type: 'session', sessionId: this.sessionId });
+    // Before the prompt goes out, so a RESUMED conversation shows what it
+    // already holds for the whole of this turn instead of only once the turn
+    // ends. A fresh session has written nothing yet and reads as no figure,
+    // which is the honest answer for a window that holds nothing.
+    this.emitContextReading(events);
 
     const modeId = this.pickMode(root);
     if (modeId !== null) {
@@ -972,7 +1045,15 @@ export class AcpTurnDriver implements TurnDriver {
     // choosing a different effort is the ordinary case for a chat left on
     // "default model". Both early returns below therefore fall through to them.
     if (!wanted || readAcpCurrentModelId(sessionResult) === wanted) {
-      this.applyModelParameters(selection.parameters, events);
+      // The one path where the reply on hand DESCRIBES the model this turn will
+      // run on — nothing is switching — so a parameter it does not offer can be
+      // answered here instead of by a refusal from the agent.
+      this.applyModelParameters(
+        selection.parameters,
+        events,
+        sessionResult,
+        true,
+      );
       return;
     }
     // The offers check applies only when the agent actually ENUMERATED a
@@ -1028,8 +1109,15 @@ export class AcpTurnDriver implements TurnDriver {
         events,
       );
       // AFTER the model frame, never instead of it: a parameter's own existence
-      // depends on which model is current, so this ordering is the contract.
-      this.applyModelParameters(selection.parameters, events);
+      // depends on which model is current, so this ordering is the contract —
+      // and it is also why nothing may be checked locally here. This reply
+      // describes the model being switched AWAY from.
+      this.applyModelParameters(
+        selection.parameters,
+        events,
+        sessionResult,
+        false,
+      );
       return;
     }
     this.request(
@@ -1038,45 +1126,174 @@ export class AcpTurnDriver implements TurnDriver {
       'set_model',
       events,
     );
-    this.applyModelParameters(selection.parameters, events);
+    this.applyModelParameters(
+      selection.parameters,
+      events,
+      sessionResult,
+      false,
+    );
   }
 
   /**
    * Set the model's own parameters — a reasoning effort, a context size — after
    * the model frame and before the prompt.
    *
-   * Sent optimistically, and that is the same call `applyModel` makes one level
-   * up: the options a `session/new` reply carries describe the model that was
-   * current when it was written, so a parameter belonging to the model this turn
-   * is switching TO cannot be checked against it. Asking the agent and letting
-   * it answer is strictly better than refusing locally on a reply that never
-   * claimed to describe the new model — a refusal becomes one notice, while a
-   * local refusal is a setting silently dropped.
-   *
    * Each frame carries `configId`/`value`, which is the only shape this protocol
    * has for a parameter. An agent with no config-option support answers
    * `-32601` and the turn continues on its defaults.
+   *
+   * `describesTurnModel` is the whole of what makes a LOCAL answer legitimate,
+   * and it is why this cannot simply check every parameter. A config option's
+   * available values belong to the model that was current when the reply was
+   * written, so:
+   *
+   * - When the turn is NOT switching models, that reply describes the model this
+   *   turn will run on, so the vocabulary on hand is the right one and a value
+   *   outside it can be refused here — with a sentence naming what the model
+   *   does take, rather than by spending a round-trip to be told `Invalid
+   *   params`.
+   * - When the turn IS switching, the reply describes the PREVIOUS model and
+   *   says nothing about the new one, so the frame goes out optimistically and
+   *   the agent answers. Waiting for the model reply first would make it
+   *   checkable — that reply carries the new model's full option list — and it
+   *   was measured rather than assumed: the agent does NOT serialize the model
+   *   switch against the prompt, so deferring the prompt behind that reply cost
+   *   ~1.4s of added latency per turn (first `session/update` at ~1.6s
+   *   pipelined vs ~3.0s deferred, cursor-agent 2026.08.11-e8db854). A second
+   *   of every turn is too much to pay for a better message on a minority path.
+   *
+   * The vocabulary really is per-MODEL, which the config's `efforts` list had
+   * recorded as a possibility and this now answers with measurements (same
+   * build, 2026-08-19): `claude-opus-5` offers `low|medium|high|xhigh|max`,
+   * `grok-4.6` offers the same minus `max`, and `auto-smart` and `composer-2.5`
+   * enumerate no `effort` option at all — so a chat that remembers `max` per CLI
+   * and is then pointed at Grok asks for a value that model has never had.
    */
   private applyModelParameters(
-    parameters: readonly { id: string; value: string }[],
+    parameters: readonly AcpModelParameter[],
     events: AgentEvent[],
+    sessionResult: unknown,
+    describesTurnModel: boolean,
   ): void {
     if (this.sessionId === null) {
       return;
     }
     for (const parameter of parameters) {
-      this.requestedParameter = `${parameter.id}=${parameter.value}`;
+      const configId = describesTurnModel
+        ? this.resolveParameterId(parameter, sessionResult)
+        : parameter.id;
+      if (
+        describesTurnModel &&
+        this.refuseUnofferedParameter(
+          { ...parameter, id: configId },
+          sessionResult,
+          events,
+        )
+      ) {
+        continue;
+      }
+      this.requestedParameter = `${configId}=${parameter.value}`;
       this.request(
         ACP_AGENT_METHODS.sessionSetConfigOption,
         {
           sessionId: this.sessionId,
-          configId: parameter.id,
+          configId,
           value: parameter.value,
         },
         'set_model_parameter',
         events,
       );
     }
+  }
+
+  /**
+   * Which SPELLING of this setting the current model actually offers.
+   *
+   * One setting can be named differently by different models of one agent, and
+   * that is a real property of this protocol rather than a quirk to paper over:
+   * a config option's id belongs to the model, and the vendor is free to call
+   * the same axis two things. Measured on cursor-agent 2026.08.11-e8db854 —
+   * `claude-opus-5` and `grok-4.6` call the reasoning axis `effort`, `gpt-5.2`
+   * calls it `reasoning`, and sending the other name is
+   * `-32602 Unknown model config option`. So a caller that knows its CLI's
+   * spellings supplies them (`alternateIds`) and the FIRST one this model
+   * enumerates wins.
+   *
+   * Only reachable where the reply describes the turn's model, for the same
+   * reason the refusal above is: the ids on a reply about a different model say
+   * nothing about this one. Nothing offered, nothing known — the caller's own
+   * id goes out and the agent answers.
+   */
+  private resolveParameterId(
+    parameter: AcpModelParameter,
+    sessionResult: unknown,
+  ): string {
+    for (const id of [parameter.id, ...(parameter.alternateIds ?? [])]) {
+      if (readAcpConfigOption(sessionResult, id) !== null) {
+        return id;
+      }
+    }
+    return parameter.id;
+  }
+
+  /**
+   * Whether this parameter is one the CURRENT model cannot take — and if so,
+   * says so instead of sending it.
+   *
+   * Only ever consulted against a reply that describes the model the turn will
+   * run on (see `describesTurnModel` above). Silence is not a refusal here
+   * either: an agent that enumerated NO options for this id has said nothing
+   * about it, so the frame still goes out and the agent answers.
+   *
+   * The notice is a `warning`, not the default severity: nothing failed. The
+   * turn runs, on this model's own value for the setting, and the previous
+   * rendering — the full-width red panel every daemon advisory wears — is what
+   * got this reported as "a strange error … and then it carried on working".
+   */
+  private refuseUnofferedParameter(
+    parameter: { id: string; value: string },
+    sessionResult: unknown,
+    events: AgentEvent[],
+  ): boolean {
+    const option = readAcpConfigOption(sessionResult, parameter.id);
+    if (option === null) {
+      // The model offers no such setting AT ALL, which for cursor is `effort` on
+      // `auto-smart` and `composer-2.5` — the agent's own words for it are
+      // `Unknown model config option: effort`.
+      if (!this.sessionOffersConfigOptions(sessionResult)) {
+        return false;
+      }
+      events.push({
+        type: 'notice',
+        severity: 'warning',
+        message: `this model has no '${parameter.id}' setting — the turn runs without it`,
+      });
+      return true;
+    }
+    if (option.options.length === 0) {
+      return false;
+    }
+    if (option.options.some(({ value }) => value === parameter.value)) {
+      return false;
+    }
+    events.push({
+      type: 'notice',
+      severity: 'warning',
+      message: `this model does not offer '${parameter.id}=${parameter.value}' — the turn runs at '${option.currentValue ?? 'its own value'}' (it offers ${option.options.map(({ value }) => value).join(', ')})`,
+    });
+    return true;
+  }
+
+  /**
+   * Whether the reply enumerated a config-option list at all.
+   *
+   * The guard on the "no such setting" arm above: an agent that sent no
+   * `configOptions` (the pre-1.0 shape, or one that simply says nothing) has
+   * not declared the absence of anything, and reading its silence as a refusal
+   * would drop every parameter on that transport.
+   */
+  private sessionOffersConfigOptions(sessionResult: unknown): boolean {
+    return asArray(asRecord(sessionResult)?.configOptions).length > 0;
   }
 
   /**
@@ -1221,17 +1438,55 @@ export class AcpTurnDriver implements TurnDriver {
       this.usage.outputTokens = asNumber(promptUsage.outputTokens);
     }
     const text = this.textChunks.join('');
-    return [
-      // The turn is over, so the last block has no more chunks coming — this
-      // is the ONLY close for a reply that ended without a tool call after it.
-      ...this.flushPending(),
-      {
-        type: 'turn_complete',
-        usage: this.buildUsage(),
-        stopReason: rawStopReason,
-        finalText: text.length > 0 ? text : null,
-      },
-    ];
+    // The turn is over, so the last block has no more chunks coming — this
+    // is the ONLY close for a reply that ended without a tool call after it.
+    const events: AgentEvent[] = [...this.flushPending()];
+    // AHEAD of `turn_complete`, which is what settles the run: the live plane a
+    // context reading rides is cleared on settle, so one emitted after it would
+    // be published into a state the client has already been told to drop.
+    this.emitContextReading(events);
+    events.push({
+      type: 'turn_complete',
+      usage: this.buildUsage(),
+      stopReason: rawStopReason,
+      finalText: text.length > 0 ? text : null,
+    });
+    return events;
+  }
+
+  /**
+   * Take one off-protocol context reading, when this agent has a source for
+   * one, and put it on the turn's event stream.
+   *
+   * Total by construction — a source that throws, has nothing yet, or cannot
+   * name a used figure is simply no reading. This is a meter, and no meter is
+   * worth failing a turn over.
+   */
+  private emitContextReading(events: AgentEvent[]): void {
+    const read = this.options.readContext;
+    if (read === undefined || this.sessionId === null) {
+      return;
+    }
+    let reading: AcpContextReading | null;
+    try {
+      reading = read(this.sessionId);
+    } catch (err) {
+      this.options.logger?.warn(
+        `acp context reading failed (the turn is unaffected): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+    if (reading === null || reading.usedTokens === null) {
+      return;
+    }
+    events.push({
+      type: 'context_progress',
+      contextTokens: reading.usedTokens,
+      contextWindowTokens: reading.windowTokens,
+      contextModel: reading.model,
+    });
   }
 
   /**
@@ -1676,12 +1931,26 @@ export class AcpTurnDriver implements TurnDriver {
         // The session's invokable set for this cwd — feeds the composer's `/`
         // autocomplete. Useful during a replay too (it is current state, not
         // history), so it is deliberately outside the replay guard.
+        //
+        // The DESCRIPTION is read alongside the name because this transport is
+        // the only place it exists: an ACP agent may have no on-disk convention
+        // geniro can scan, and dropping the sentence left every row in the
+        // popup a bare word. Verified against cursor-agent 2026.08.11-e8db854,
+        // whose 27 entries all carry one.
         const commands = asArray(update.availableCommands)
           .map((entry) => {
             const record = asRecord(entry);
-            return record ? asString(record.name) : null;
+            const name = record ? asString(record.name) : null;
+            return name === null || name.length === 0
+              ? null
+              : {
+                  name,
+                  description: record ? asString(record.description) : null,
+                };
           })
-          .filter((name): name is string => name !== null && name.length > 0);
+          .filter(
+            (command): command is AgentReportedCommand => command !== null,
+          );
         return commands.length > 0
           ? [{ type: 'slash_commands', commands }]
           : [];

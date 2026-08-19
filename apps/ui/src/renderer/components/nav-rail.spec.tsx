@@ -3,7 +3,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_SETTINGS, type Settings } from '../../shared/contracts';
+import {
+  DEFAULT_SETTINGS,
+  type Settings,
+  UPDATE_COMMAND,
+  type UpdateState,
+} from '../../shared/contracts';
+import { footerUpdate } from '../updates/update-status';
 import { type AppView, NavRail } from './nav-rail';
 
 (
@@ -56,21 +62,54 @@ afterEach(() => {
 function rail(
   view: AppView,
   onNavigate: (next: AppView) => void = () => undefined,
-  update?: { version: string | null; onInstall?: () => void },
+  update?: {
+    state: UpdateState | null;
+    engaged?: boolean;
+    onInstall?: () => void;
+    onRelaunch?: () => void;
+  },
 ): HTMLDivElement {
   return render(
     <NavRail
       view={view}
       onNavigate={onNavigate}
       connected
-      updateVersion={update?.version ?? null}
+      // Through the REAL projection, not a hand-made value: what this row shows
+      // for a given phase is the thing under test, so a fixture that skipped
+      // `footerUpdate` would pin the markup against a shape nothing produces.
+      update={footerUpdate(update?.state ?? null, update?.engaged ?? false)}
       onInstallUpdate={update?.onInstall}
+      onRelaunchUpdate={update?.onRelaunch}
       daemonVersion="1.2.3"
       debugOpen={false}
       onToggleDebug={() => undefined}
     />,
   );
 }
+
+/** An `UpdateState` with only the fields a case cares about spelled out. */
+function updateState(patch: Partial<UpdateState>): UpdateState {
+  return {
+    phase: 'idle',
+    version: null,
+    progress: null,
+    message: null,
+    currentVersion: '1.2.3',
+    canInstall: true,
+    ...patch,
+  };
+}
+
+/**
+ * The rail's update control, whatever phase it is in.
+ *
+ * By `data-slot` rather than by its text: the label is what several of these
+ * cases are asserting ON, so finding it by that text would make each test pass
+ * by construction — and the phases genuinely differ, from a version to a
+ * percentage to nothing at all when collapsed.
+ */
+const updateControl = (el: HTMLElement): HTMLButtonElement | null =>
+  el.querySelector<HTMLButtonElement>('[data-slot="update-control"]');
 
 const buttonNamed = (el: HTMLElement, label: string): HTMLButtonElement =>
   [...el.querySelectorAll('button')].find(
@@ -141,6 +180,39 @@ describe('NavRail', () => {
     expect(updateSettings).toHaveBeenCalledWith({ sidebarCollapsed: false });
   });
 
+  it('is the window’s title bar, and lets its one control still be pressed', () => {
+    // The OS strip is hidden, so this row IS the drag handle — a window with no
+    // `app-region: drag` cannot be moved at all. The catch is the other half: a
+    // control inside a drag region never receives the click, so the toggle has
+    // to opt out or the rail can no longer be collapsed.
+    const el = rail('chats');
+    const titlebar = el.querySelector('[data-slot="titlebar"]');
+
+    expect(titlebar?.classList.contains('app-drag')).toBe(true);
+    const toggle = titlebar?.querySelector('[aria-label="Collapse menu"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.classList.contains('app-no-drag')).toBe(true);
+  });
+
+  it('gives the toggle a row of its own once the lights fill the title bar', async () => {
+    // Collapsed the rail is 64px and the traffic lights are 62 of them, so the
+    // toggle cannot share that row — it moves below rather than being drawn
+    // under the system's own buttons.
+    getSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      sidebarCollapsed: true,
+    });
+    const el = rail('chats');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const titlebar = el.querySelector('[data-slot="titlebar"]');
+    expect(titlebar).toBeTruthy();
+    expect(titlebar?.querySelector('[aria-label="Expand menu"]')).toBeNull();
+    expect(el.querySelector('[aria-label="Expand menu"]')).toBeTruthy();
+  });
+
   it('drops the connection dot while collapsed, and keeps it while open', async () => {
     getSettings.mockResolvedValue({
       ...DEFAULT_SETTINGS,
@@ -165,16 +237,15 @@ describe('NavRail', () => {
   });
 
   it('offers the update where the running version is already shown', () => {
-    // The ask: "updates should show here, and the Update button should be right
-    // here" — pointing at the footer that states `connected · v1.46.0`.
+    // The ask: "the update control should only be at the bottom left, where the
+    // current version is" — pointing at the footer that states `· v1.46.0`.
     const installed: string[] = [];
     const el = rail('chats', () => undefined, {
-      version: '1.47.0',
+      state: updateState({ phase: 'available', version: '1.47.0' }),
       onInstall: () => installed.push('pressed'),
     });
-    const button = [...el.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Update',
-    );
+
+    const button = updateControl(el);
     expect(button).toBeTruthy();
     expect(button?.title).toContain('1.47.0');
     act(() => {
@@ -183,23 +254,102 @@ describe('NavRail', () => {
     expect(installed).toEqual(['pressed']);
   });
 
-  it('offers nothing when there is no update to install', () => {
-    const el = rail('chats');
-    const button = [...el.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Update',
-    );
-    expect(button).toBeUndefined();
+  it('states the offer without a filled button', () => {
+    // The other half of the same ask — "not a button, something more compact".
+    // A primary-filled pill is the loudest thing in the shell for an offer with
+    // no deadline, so the control must not carry the sidebar's primary FILL.
+    // Asserted on the class the fill would come from, because that is the
+    // observable the complaint was actually about.
+    const el = rail('chats', () => undefined, {
+      state: updateState({ phase: 'available', version: '1.47.0' }),
+      onInstall: () => undefined,
+    });
+
+    const button = updateControl(el);
+    expect(button?.className).not.toContain('bg-sidebar-primary');
+    // …and it says the version rather than the word "Update", so the row reads
+    // as `v1.2.3 … 1.47.0` — the comparison the user makes at a glance.
+    expect(button?.textContent?.trim()).toBe('1.47.0');
   });
 
-  it('shows no button for an update this install cannot apply', () => {
-    // `canInstall: false` reaches here as a null version: a control that cannot
-    // work is worse than none in a row this small, and Settings carries the
-    // `brew` sentence for that case.
-    const el = rail('chats', () => undefined, { version: null });
+  it('offers nothing when there is no update to install', () => {
+    expect(updateControl(rail('chats'))).toBeNull();
+  });
+
+  it('offers a non-interactive readout, never a dead button, for an update this install cannot apply', () => {
+    // A control that cannot work is worse than none in a row this small, so
+    // this copy's only remaining channel is a readout naming the command
+    // that DOES work — not silence, and not a press that would fail.
+    const el = rail('chats', () => undefined, {
+      state: updateState({
+        phase: 'available',
+        version: '1.47.0',
+        canInstall: false,
+        message: `Update with: ${UPDATE_COMMAND}`,
+      }),
+    });
+    // Not the pressable control — the rail's own rule is "no dead affordance".
+    expect(updateControl(el)).toBeNull();
+
+    const readout = el.querySelector('[data-slot="update-readout"]');
+    expect(readout).toBeTruthy();
+    expect(readout?.tagName).not.toBe('BUTTON');
+    expect(readout?.getAttribute('title')).toContain(UPDATE_COMMAND);
+  });
+
+  it('reports a download in flight, and refuses to be pressed', () => {
+    // The strip that used to carry a progress bar is gone, so this row is the
+    // only thing left that can say a download is happening at all.
+    const el = rail('chats', () => undefined, {
+      state: updateState({
+        phase: 'downloading',
+        version: '1.47.0',
+        progress: 0.62,
+      }),
+    });
+
+    const button = updateControl(el);
+    expect(button?.textContent?.trim()).toBe('62%');
+    expect(button?.disabled).toBe(true);
+  });
+
+  it('offers a restart once the swap is done, and relaunches rather than reinstalling', () => {
+    const pressed: string[] = [];
+    const el = rail('chats', () => undefined, {
+      state: updateState({ phase: 'ready', version: '1.47.0' }),
+      onInstall: () => pressed.push('install'),
+      onRelaunch: () => pressed.push('relaunch'),
+    });
+
+    act(() => {
+      updateControl(el)?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    // The distinction is the whole point of the phase: the bundle is already on
+    // disk, so installing again would re-download it and never restart.
+    expect(pressed).toEqual(['relaunch']);
+  });
+
+  it('reports a failed install the user started, and stays silent about one they did not', () => {
+    const failed = updateState({
+      phase: 'error',
+      message: 'checksum did not match',
+    });
+
+    // Nothing was pressed, so this is a background check that could not reach
+    // GitHub — not a fault to put a warning glyph in the status row for.
     expect(
-      [...el.querySelectorAll('button')].some(
-        (b) => b.textContent?.trim() === 'Update',
-      ),
-    ).toBe(false);
+      updateControl(rail('chats', () => undefined, { state: failed })),
+    ).toBeNull();
+
+    const engaged = rail('chats', () => undefined, {
+      state: failed,
+      engaged: true,
+      onInstall: () => undefined,
+    });
+    // main's own words, carried through rather than re-worded here.
+    expect(updateControl(engaged)?.title).toContain('checksum did not match');
   });
 });

@@ -3,13 +3,13 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import type {
-  AgentEffortWire,
+  AgentEffortListingWire,
   AgentModelWire,
   AgentSessionListingWire,
   AgentSkillWire,
 } from '../chat.types';
 import {
-  AgentEffortDto,
+  AgentEffortListingDto,
   AgentModelDto,
   AgentSessionListingDto,
   AgentSkillDto,
@@ -72,10 +72,16 @@ export class SkillsController {
     );
   }
 
+  /**
+   * The effort levels available for one CLI, narrowed to one MODEL when the
+   * caller names one — see {@link ListEffortsQueryDto}.
+   */
   @Get('efforts')
   @ApiOperation({ operationId: 'listAgentEfforts' })
-  @ZodResponse({ status: 200, type: [AgentEffortDto] })
-  listEfforts(@Query() query: ListEffortsQueryDto): AgentEffortWire[] {
-    return this.effortsService.list(query.agent);
+  @ZodResponse({ status: 200, type: AgentEffortListingDto })
+  listEfforts(
+    @Query() query: ListEffortsQueryDto,
+  ): Promise<AgentEffortListingWire> {
+    return this.effortsService.list(query.agent, query.model ?? null);
   }
 }

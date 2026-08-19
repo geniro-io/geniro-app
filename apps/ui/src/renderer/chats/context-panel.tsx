@@ -47,6 +47,21 @@ export function ContextPanel({
   live?: boolean;
 }): React.JSX.Element {
   return (
+    // Ordered by what a reader came for, not by where the figures came from.
+    // The two HEADLINE readings lead — how full this window is, and how much of
+    // the account's allowance is left — and the itemization that explains the
+    // first comes after both.
+    //
+    // The reported bug is what the old order did to the second one. The panel
+    // is a 26rem scroll box, and the plan limits sat under every drill-down
+    // section: the deferred rows, one row per instruction file, and one row per
+    // MCP SERVER. On a machine with twelve servers that is a screen and a half
+    // above them, and the popover's own bottom edge reads as the end of the
+    // content — so "the weekly-limits feature — I open it on claude and see
+    // nothing" was a section that had been pushed off the visible panel. The
+    // limits are also the item with the shortest shelf life on here: a window
+    // breakdown keeps until the next turn, an allowance is the thing about to
+    // stop the conversation.
     <div className="flex flex-col gap-3 text-xs">
       {metrics?.context ? <Breakdown context={metrics.context} /> : null}
       {metrics && !metrics.context && metrics.breakdownReason ? (
@@ -63,6 +78,7 @@ export function ContextPanel({
         </div>
       ) : null}
       {metrics ? <Totals totals={metrics.totals} live={live} /> : null}
+      {metrics?.context ? <ContextDetail context={metrics.context} /> : null}
       {/* Kept BELOW whatever has already arrived rather than replacing it: a
           refetch on a panel the user is reading must not blank the figures
           they are mid-sentence about. */}
@@ -92,7 +108,6 @@ function Breakdown({
   // in the bar — one live reading had 274k deferred against a 98k total, which
   // in one bar would report a window nearly four times fuller than it is.
   const loaded = context.categories.filter((row) => !row.deferred);
-  const deferred = context.categories.filter((row) => row.deferred);
   const used =
     context.totalTokens ?? loaded.reduce((sum, row) => sum + row.tokens, 0);
   const window = context.maxTokens;
@@ -181,6 +196,35 @@ function Breakdown({
           Auto-compacts at {formatTokens(context.autoCompactAtTokens)}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * What is IN the window, itemized — the drill-down behind {@link Breakdown}'s
+ * bar.
+ *
+ * Split out of it so the panel can put the two headline readings first and this
+ * after them: these three sections are open-ended (one row per instruction
+ * file, one per MCP server) and on a well-equipped machine they are longer than
+ * the popover, which is what buried the plan limits under them. See the comment
+ * on {@link ContextPanel}'s container.
+ */
+function ContextDetail({
+  context,
+}: {
+  context: ContextBreakdown;
+}): React.JSX.Element | null {
+  const deferred = context.categories.filter((row) => row.deferred);
+  if (
+    deferred.length === 0 &&
+    context.memoryFiles.length === 0 &&
+    context.servers.length === 0
+  ) {
+    return null;
+  }
+  return (
+    <>
       {deferred.length > 0 ? (
         <Section
           title="Available, not loaded"
@@ -221,7 +265,7 @@ function Breakdown({
           }))}
         />
       ) : null}
-    </div>
+    </>
   );
 }
 

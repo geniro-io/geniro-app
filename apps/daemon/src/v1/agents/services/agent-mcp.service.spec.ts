@@ -21,7 +21,7 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
-import { AgentMcpService } from './agent-mcp.service';
+import { AgentMcpService, BLOCKING_LIST_TIMEOUT_MS } from './agent-mcp.service';
 import { AgentVersionService } from './agent-version.service';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { ProcessRegistry } from './process-registry';
@@ -1570,5 +1570,54 @@ describe('the turn harvest', () => {
     expect(row).toMatchObject({ status: 'connected', detail: null });
     // ...but the command line, which does not depend on the status, survives.
     expect(row?.target).toBe('node flaky.js');
+  });
+});
+
+/**
+ * Who may hold a socket open across a cold dial, and who may not.
+ *
+ * The panel's read is answered inside the first-paint budget and the dial
+ * finishes behind it, so it must inherit the ADAPTER's deadline — which is
+ * sized for a genuinely cold dial of the user's own servers (claude: two
+ * minutes). Capping it here is what produced "could not read MCP servers —
+ * claude did not answer" on a listing that was merely slow.
+ *
+ * The toggle is the opposite: its whole answer IS the resulting listing, so it
+ * awaits the dial inside the request and must give up before the renderer's own
+ * 60s route timeout arrives in front of it.
+ */
+describe('cold-dial deadlines', () => {
+  it('leaves the panel read on the adapter’s own deadline', async () => {
+    const cwd = realDir();
+    const { service, listMcpServers } = harness(() =>
+      Promise.resolve([server('a')]),
+    );
+
+    await service.list(AgentKind.Claude, cwd);
+
+    // Not "some other number" — ABSENT, so `listMcpServers` falls through to
+    // its own `options.timeoutMs ?? CLAUDE_MCP_LIST_TIMEOUT_MS` default.
+    const [, options] = listMcpServers.mock.calls[0] as [
+      unknown,
+      { timeoutMs?: number } | undefined,
+    ];
+    expect(options?.timeoutMs).toBeUndefined();
+  });
+
+  it('caps a toggle’s blocking read so the request cannot outlive the client', async () => {
+    const cwd = realDir();
+    const { service, listMcpServers } = harness(() =>
+      Promise.resolve([server('a')]),
+    );
+
+    // No prior `list`, so the cache is cold and the toggle's own read really
+    // does dial — which is the only path this cap governs.
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', false);
+
+    const [, options] = listMcpServers.mock.calls[0] as [
+      unknown,
+      { timeoutMs?: number } | undefined,
+    ];
+    expect(options?.timeoutMs).toBe(BLOCKING_LIST_TIMEOUT_MS);
   });
 });

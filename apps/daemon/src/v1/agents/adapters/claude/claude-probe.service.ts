@@ -172,6 +172,36 @@ export class ClaudeProbeService {
           prompt: CLAUDE_MODE_PROBE_PROMPT,
           cwd,
           approvalMode: mode,
+          // `--strict-mcp-config` with an empty config: this probe reads ONE
+          // `system/init` line and is cancelled on it, so it has no use for a
+          // single MCP server — and loading them is not free the way "started
+          // and then reaped" suggests.
+          //
+          // MEASURED 2026-08-19 against the reporter's own machine. A stdio
+          // server declared as `docker run -i --rm …` (their `telegram`) leaves
+          // a container RUNNING when its client goes away: `--rm` is the
+          // daemon's `AutoRemove`, which fires when a container EXITS, and a
+          // `-i` container whose attach client died never does. Killing the
+          // `docker run` client at 0.05s, 0.3s, 3s — SIGTERM or SIGKILL —
+          // left the container `running` every time; only a kill inside the
+          // first ~20ms, before `docker create` returned, left nothing. So a
+          // turn that boots the user's servers and is cancelled a second later
+          // leaks one container per such server, permanently. A plain
+          // `claude -p "reply with exactly: ok"` leaked two; the same turn with
+          // this flag pair leaked zero.
+          //
+          // Two probes run per round (`acceptEdits`, `plan`) and a round runs
+          // per new `claude --version`, so this was up to four abandoned
+          // containers per binary upgrade, on top of the ones a real chat run
+          // legitimately starts. The reporter had accumulated 370.
+          //
+          // The leak itself is the CLI's, not geniro's — the same one-shot
+          // leaks with geniro nowhere in the picture — but geniro is what
+          // launches claude for reasons the user never asked for, and a probe
+          // that reads argv acceptance has no business touching their servers
+          // at all. `listReportedCommands` already isolates for this reason;
+          // this call site was simply missed.
+          isolateMcpServers: true,
           // The daemon's own capability read: this turn exists to learn whether
           // the CLI accepts a `--permission-mode` value, its reply is parsed
           // rather than rendered, and it is cancelled at the init line. So it

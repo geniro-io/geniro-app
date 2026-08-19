@@ -10,7 +10,7 @@ import {
 import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
 import type { DaemonSupervisor } from './daemon-supervisor';
-import { readGitInfo, switchBranch } from './git-info';
+import { pullBranch, readGitInfo, switchBranch } from './git-info';
 import {
   branchNameSchema,
   gitDirSchema,
@@ -143,6 +143,9 @@ export function registerIpc(
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>
     switchBranch(gitDirSchema.parse(dir), branchNameSchema.parse(branch)),
+  );
+  ipcMain.handle(IPC.pullBranch, (_event, dir: unknown) =>
+    pullBranch(gitDirSchema.parse(dir)),
   );
 
   // Reveals, never opens, and only inside the daemon's log directory — the

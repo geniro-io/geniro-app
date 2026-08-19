@@ -129,13 +129,14 @@ function disclosure(): HTMLButtonElement | null {
 }
 
 /**
- * The block's status chip — the ONE place the block states its status now that
- * the body's footer no longer repeats it. Matched by the classes
- * `StatusBadge` gives it, since it carries no role or test id of its own.
+ * The block's status PILL — which only two statuses get. `running` and `done`
+ * are a spinner and a check now (the pill on every settled delegate was the
+ * loudest thing in a run of them), so this returning null is itself a fact
+ * some tests assert.
  */
 function badge(): Element | null {
   return container.querySelector(
-    '[data-role="block-shell"] span[class*="rounded"][class*="text-[10px]"]',
+    '[data-role="block-shell"] [data-slot="block-status-badge"]',
   );
 }
 
@@ -429,6 +430,13 @@ describe('SubagentBlock', () => {
       '[aria-label="Open Review the diff in a panel"]',
     );
     expect(control).not.toBeNull();
+    // The button IS the hit target — it sits beside the disclosure with no gap,
+    // so nothing around it enlarges the target. It carries the `size-6` box
+    // rather than the `size-5` one, which is the 24px minimum WCAG 2.5.8 asks
+    // for. jsdom loads no stylesheet, so what is asserted is the class the
+    // component emits, not a measured box: an equivalent spelling (`h-6 w-6`)
+    // would fail this while satisfying the guideline.
+    expect(control?.className).toContain('size-6');
 
     act(() =>
       control?.dispatchEvent(new MouseEvent('click', { bubbles: true })),

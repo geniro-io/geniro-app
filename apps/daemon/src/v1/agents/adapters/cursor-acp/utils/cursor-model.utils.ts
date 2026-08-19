@@ -1,4 +1,7 @@
-import { CURSOR_EFFORT_PARAMETER_ID } from '../cursor-acp.const';
+import {
+  CURSOR_EFFORT_PARAMETER_ID,
+  CURSOR_EFFORT_PARAMETER_IDS,
+} from '../cursor-acp.const';
 
 /**
  * Reading and composing a cursor ACP model selection.
@@ -18,10 +21,18 @@ import { CURSOR_EFFORT_PARAMETER_ID } from '../cursor-acp.const';
  * directory reads a model id.
  */
 
-/** One `<id>=<value>` parameter of a cursor model selection. */
+/**
+ * One `<id>=<value>` parameter of a cursor model selection.
+ *
+ * `alternateIds` is the agent-agnostic driver's contract ({@link
+ * AcpModelParameter}): the same setting can be spelled differently by different
+ * models of this CLI, so the adapter names every spelling and the driver sends
+ * whichever one the model actually offers.
+ */
 export interface CursorModelParameter {
   id: string;
   value: string;
+  alternateIds?: readonly string[];
 }
 
 /**
@@ -129,10 +140,23 @@ export function cursorModelSelection(
   return {
     model: selection.model,
     parameters: [
+      // EVERY spelling is dropped, not just the one about to be written: a
+      // legacy composed id can carry `reasoning=medium`, and leaving that in
+      // beside a fresh `effort=high` would set the same axis twice — once to
+      // the value the user just picked and once to a months-old one.
       ...selection.parameters.filter(
-        (parameter) => parameter.id !== CURSOR_EFFORT_PARAMETER_ID,
+        (parameter) =>
+          !CURSOR_EFFORT_PARAMETER_IDS.some((id) => id === parameter.id),
       ),
-      { id: CURSOR_EFFORT_PARAMETER_ID, value: wanted },
+      {
+        id: CURSOR_EFFORT_PARAMETER_ID,
+        value: wanted,
+        // …and the driver replaces that default with whichever spelling THIS
+        // model enumerated. Without it a gpt-family turn sent `effort=` and was
+        // answered `-32602 Unknown model config option`, so the picker on those
+        // models never did anything.
+        alternateIds: CURSOR_EFFORT_PARAMETER_IDS,
+      },
     ],
   };
 }

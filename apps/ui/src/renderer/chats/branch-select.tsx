@@ -70,7 +70,7 @@ export function BranchSelect(
       aria-label="Git branch"
       title={
         info.dirty
-          ? 'Uncommitted changes — commit or stash them before switching branch'
+          ? 'Uncommitted changes — the switch will be refused, and offer to pull instead'
           : 'Git branch'
       }
       disabled={switching}

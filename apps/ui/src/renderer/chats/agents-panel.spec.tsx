@@ -172,7 +172,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const rows = [...el.querySelectorAll('ul > li')];
@@ -240,7 +239,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={[parked]}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -258,7 +256,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={onOpenThread}
-        onClose={vi.fn()}
       />,
     );
     // Collapsed: no thread labels yet.
@@ -313,7 +310,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={[cursorCaller]}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     click(el.querySelector('button[aria-label="Cursor caller threads"]'));
@@ -333,7 +329,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const worker = [...el.querySelectorAll('ul > li')].find((row) =>
@@ -361,7 +356,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const toggle = [...el.querySelectorAll('ul > li')]
@@ -397,7 +391,6 @@ describe('AgentsPanel', () => {
           withContext('critical', 185_000), // 92.5% → destructive
         ]}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     // The ring is decorative now — the labelled node is the button around it —
@@ -411,21 +404,23 @@ describe('AgentsPanel', () => {
     expect(ring(93).classList.contains('text-destructive')).toBe(true);
   });
 
-  it('closes via the ✕ and offers the resize handle', () => {
-    const onClose = vi.fn();
+  it('offers the resize handle and NO way to close — the panel is always on screen', () => {
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
-        onClose={onClose}
       />,
     );
     expect(
       el.querySelector('[role="separator"][aria-label="Resize agents panel"]'),
     ).not.toBeNull();
-    click(el.querySelector('button[aria-label="Close agents panel"]'));
-    expect(onClose).toHaveBeenCalledOnce();
+    // Dragging it narrow is how the panel is put away now, so the resize
+    // handle above is the control that has to survive. A close button would
+    // hide a panel nothing could bring back: the header's toggle is gone too.
+    expect(
+      el.querySelector('button[aria-label="Close agents panel"]'),
+    ).toBeNull();
   });
 
   it('shows an empty state when the run has no agents', () => {
@@ -434,7 +429,6 @@ describe('AgentsPanel', () => {
         terminalReasons={TERMINALS}
         agents={[]}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     expect(el.textContent).toContain('No agents in this run');
@@ -479,7 +473,6 @@ describe('AgentsPanel', () => {
         }
         onSignInMcp={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -564,7 +557,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -591,7 +583,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -614,7 +605,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -640,7 +630,6 @@ describe('AgentsPanel — MCP servers', () => {
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onMcpOpenChange={onMcpOpenChange}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -672,7 +661,6 @@ describe('AgentsPanel — MCP servers', () => {
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onMcpOpenChange={onMcpOpenChange}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const trigger = cardFor(
@@ -708,7 +696,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const triggerFor = (name: string): HTMLButtonElement =>
@@ -735,7 +722,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -762,7 +748,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -801,7 +786,6 @@ describe('AgentsPanel — MCP servers', () => {
           ])
         }
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el, 'Reviewer');
@@ -837,7 +821,6 @@ describe('AgentsPanel — MCP servers', () => {
           ])
         }
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -855,7 +838,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map<string, AgentMcpListing>()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -875,7 +857,6 @@ describe('AgentsPanel — MCP servers', () => {
         mcpLoading={false}
         onRefreshMcp={onRefreshMcp}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -893,7 +874,6 @@ describe('AgentsPanel — MCP servers', () => {
           mcpLoading
           onRefreshMcp={onRefreshMcp}
           onOpenThread={vi.fn()}
-          onClose={vi.fn()}
         />,
       );
     });
@@ -918,7 +898,6 @@ describe('AgentsPanel — MCP servers', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), claudeListing]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -934,7 +913,6 @@ describe('AgentsPanel — MCP servers', () => {
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     expect(el.textContent).not.toContain('MCP');
@@ -994,7 +972,6 @@ describe('AgentsPanel — per-node MCP scope', () => {
           ])
         }
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     // Read one at a time — a press on the second trigger closes the first.
@@ -1015,7 +992,6 @@ describe('AgentsPanel — per-node MCP scope', () => {
         agents={[{ ...agents[0]!, id: 'a', configDir: '/profiles/review' }]}
         mcpByScope={new Map([[scope('claude'), oneServer('only-plugin-less')]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1062,7 +1038,6 @@ describe('AgentsPanel — MCP toggle', () => {
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         onSetMcpEnabled={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1092,7 +1067,6 @@ describe('AgentsPanel — MCP toggle', () => {
         }
         onSetMcpEnabled={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1122,7 +1096,6 @@ describe('AgentsPanel — MCP toggle', () => {
         }
         onSetMcpEnabled={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1144,7 +1117,6 @@ describe('AgentsPanel — MCP toggle', () => {
         }
         onSetMcpEnabled={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1169,7 +1141,6 @@ describe('AgentsPanel — MCP toggle', () => {
         }
         onSetMcpEnabled={onSetMcpEnabled}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1190,7 +1161,6 @@ describe('AgentsPanel — MCP toggle', () => {
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         onSetMcpEnabled={onSetMcpEnabled}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1210,7 +1180,6 @@ describe('AgentsPanel — MCP toggle', () => {
         agents={agents}
         mcpByScope={new Map([[scope('claude'), listingOf({ name: 'sentry' })]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1228,7 +1197,6 @@ describe('AgentsPanel — MCP toggle', () => {
         onDismissMcpToggleError={vi.fn()}
         onSetMcpEnabled={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1247,7 +1215,6 @@ describe('AgentsPanel — MCP toggle', () => {
         mcpLoading
         onSetMcpEnabled={vi.fn()}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     openMcpList(el);
@@ -1274,7 +1241,6 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
         agents={[caller(agent)]}
         terminalReasons={terminals}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     click(el.querySelector('button[aria-label="Caller threads"]'));
@@ -1318,7 +1284,6 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
         agents={[caller('cursor-agent')]}
         terminalReasons={new Map([['cursor-agent', CURSOR_NO_RESUME]])}
         onOpenThread={onOpenThread}
-        onClose={vi.fn()}
       />,
     );
     click(el.querySelector('button[aria-label="Caller threads"]'));
@@ -1374,7 +1339,6 @@ describe('AgentsPanel — sub-agent threads', () => {
         terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
         onOpenSubagent={onOpenSubagent}
-        onClose={() => undefined}
       />,
     );
     // The card lists threads only once expanded.
@@ -1434,7 +1398,6 @@ describe('AgentsPanel — sub-agent threads', () => {
         agents={[{ ...delegator, threads: [{ ...mainThread }] }]}
         terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
-        onClose={() => undefined}
       />,
     );
 
@@ -1486,7 +1449,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
           onOpenSubagent={() => undefined}
-          onClose={() => undefined}
         />,
       );
       click(el.querySelector('button[aria-label="Orchestrator threads"]'));
@@ -1535,7 +1497,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           ]}
           terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
-          onClose={() => undefined}
         />,
       );
       expect(
@@ -1580,7 +1541,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
           onOpenSubagent={() => undefined}
-          onClose={() => undefined}
         />,
       );
       click(el.querySelector('button[aria-label="Orchestrator threads"]'));
@@ -1600,7 +1560,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           agents={[{ ...busy, threads: [{ ...mainThread }, { ...subagent }] }]}
           terminalReasons={TERMINALS}
           onOpenThread={() => undefined}
-          onClose={() => undefined}
         />,
       );
       click(el.querySelector('button[aria-label="Orchestrator threads"]'));
@@ -1639,7 +1598,6 @@ describe('AgentsPanel — the thread expander', () => {
         mcpByScope={new Map()}
         terminalReasons={TERMINALS}
         onOpenThread={() => undefined}
-        onClose={() => undefined}
       />,
     );
 
@@ -1705,7 +1663,6 @@ describe('AgentsPanel task lists', () => {
         agents={agents}
         tasksByAgent={new Map([['orchestrator', tasks]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const rows = [...el.querySelectorAll('ul > li')];
@@ -1738,7 +1695,6 @@ describe('AgentsPanel task lists', () => {
         agents={[idle]}
         tasksByAgent={new Map([['orchestrator', tasks]])}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
     const section = el.querySelector('[data-slot="agent-task-list"]')!;

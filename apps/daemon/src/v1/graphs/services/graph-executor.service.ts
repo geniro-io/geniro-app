@@ -228,9 +228,20 @@ function withResolvedNodeSettings(
       // Asked of the ADAPTER, never of a list here: the levels are the CLI's
       // own, and `listEfforts` is already the one answer the composer's picker
       // and this run agree on.
+      //
+      // Only for a CLI whose list is COMPLETE, which is the same rule
+      // `EffortsService.accepts` follows. A CLI whose levels belong to the
+      // MODEL has only a union here, and `gpt-5.2`'s `extra-high` is absent
+      // from it — dropping against that stripped a level a chat accepts, so the
+      // same value ran at the CLI's default on a node while the app reported it
+      // as unsupported. There the turn's own driver checks the value against
+      // the model that runs it and reports what does not apply.
       const adapter = adapterFor(resolved.agent);
       const levels = adapter.listEfforts();
-      if (!levels.some((level) => level.id === resolved.effort)) {
+      if (
+        adapter.getConfig().effortsAreExhaustive &&
+        !levels.some((level) => level.id === resolved.effort)
+      ) {
         dropped.push({
           nodeId: resolved.id,
           name: resolved.name ?? resolved.id,
@@ -1127,6 +1138,20 @@ export class GraphExecutorService {
             return;
           }
           if (event.type === 'context_progress') {
+            // BEFORE the figure it scales — `context` publishes, so a window
+            // remembered after it would not reach the client until the next
+            // reading. See the same pair in `ChatService`.
+            if (
+              event.contextWindowTokens !== undefined &&
+              event.contextWindowTokens !== null
+            ) {
+              this.partials.rememberWindow(
+                runId,
+                node.id,
+                event.contextWindowTokens,
+                event.contextModel ?? null,
+              );
+            }
             // EPHEMERAL, like a text delta: the durable copy is the
             // turn_complete usage. This is what lets a NODE's meter move while
             // its turn runs — the owner key is the node, so a fan-out's agents

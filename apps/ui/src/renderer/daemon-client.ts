@@ -89,9 +89,36 @@ export interface RunStatusEvent {
   holdingFor?: number;
   /**
    * What the run said as it reached this status — the agent's closing words, or
-   * a failure's message. Absent on every announce that is not a settle.
+   * a failure's message.
+   *
+   * Three states like {@link awaiting} and {@link holdingFor}: absent asserts
+   * nothing (an activity announce), `null` says this settle had nothing to say
+   * and CLEARS the last sentence. The distinction is the fix for a notification
+   * that read back the PREVIOUS turn's answer — the client holds the last
+   * summary it was given, and a `/compact` turn, which produces no assistant
+   * message at all, used to arrive with the field simply missing.
    */
-  summary?: string;
+  summary?: string | null;
+  /**
+   * True when the turn that reached this status did nothing but the CLI's own
+   * context compaction. Absent on every other announce.
+   *
+   * The daemon says it because only the daemon can: a background chat's items
+   * are never loaded here, and that is precisely the chat a banner is for.
+   */
+  housekeeping?: boolean;
+  /**
+   * True when this status is being handed BACK rather than newly reached — the
+   * delegate lease expiring over a run that had already settled. Absent on
+   * every other announce.
+   *
+   * Read alongside `housekeeping` and for the same reason: both mark a settle
+   * that is not news. They stay separate fields because they answer different
+   * questions — that one is about what the turn WAS, this is about whether the
+   * status changed at all. A restore also carries no `summary`, so the sentence
+   * from the real settle is left standing rather than blanked.
+   */
+  restored?: boolean;
 }
 
 /**
@@ -103,8 +130,16 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, status, activity, awaiting, holdingFor, summary } =
-    data as Record<string, unknown>;
+  const {
+    runId,
+    status,
+    activity,
+    awaiting,
+    holdingFor,
+    summary,
+    housekeeping,
+    restored,
+  } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
   }
@@ -139,7 +174,18 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     ...(typeof holdingFor === 'number' && Number.isFinite(holdingFor)
       ? { holdingFor: Math.max(0, Math.trunc(holdingFor)) }
       : {}),
-    ...(typeof summary === 'string' && summary !== '' ? { summary } : {}),
+    // Three states, and the empty string is deliberately one of the CLEARING
+    // ones: a settle whose agent said nothing arrives as null, and a daemon
+    // that sent `''` means the same thing. Only a MISSING field leaves the
+    // client's last sentence standing, which is what an activity announce does.
+    ...(summary === undefined
+      ? {}
+      : {
+          summary:
+            typeof summary === 'string' && summary !== '' ? summary : null,
+        }),
+    ...(housekeeping === true ? { housekeeping: true } : {}),
+    ...(restored === true ? { restored: true } : {}),
   };
 }
 

@@ -60,8 +60,33 @@ export const CURSOR_ACP_CLIENT_META: Readonly<Record<string, unknown>> = {
   parameterizedModelPicker: true,
 };
 
-/** The parameter whose values ARE the reasoning-effort vocabulary. */
-export const CURSOR_EFFORT_PARAMETER_ID = 'effort';
+/**
+ * The parameter whose values ARE the reasoning-effort vocabulary — every
+ * spelling of it, weakest-known first.
+ *
+ * ONE axis, two names, and which one a model uses is the MODEL's business:
+ * probed 2026-08-19 on 2026.08.11-e8db854, `claude-opus-5` and `grok-4.6`
+ * enumerate `thought_level/effort` while `gpt-5.2` enumerates
+ * `thought_level/reasoning` (`low|medium|high|extra-high`). Sending the wrong
+ * one is `-32602 Unknown model config option`, which is why the OpenAI-family
+ * models had no working effort control at all until this became a list.
+ *
+ * `cursorModelEffort` has read both spellings out of a legacy composed id since
+ * that id existed; this is the same fact on the WRITE side, which is where it
+ * was missing. Named rather than inline because three readers now spell it —
+ * the listing, the selection builder and the driver's alias resolution.
+ */
+export const CURSOR_EFFORT_PARAMETER_IDS = ['effort', 'reasoning'] as const;
+
+/**
+ * The spelling geniro SENDS when it has nothing better to go on.
+ *
+ * The first of {@link CURSOR_EFFORT_PARAMETER_IDS}, because it is the one every
+ * model but the OpenAI family uses. It is only ever the fallback: where the
+ * session reply describes the turn's model, the driver picks whichever spelling
+ * that model actually offers.
+ */
+export const CURSOR_EFFORT_PARAMETER_ID = CURSOR_EFFORT_PARAMETER_IDS[0];
 
 // ── The per-turn config directory ─────────────────────────────────────────
 //

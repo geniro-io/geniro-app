@@ -99,7 +99,9 @@ export function Stats({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <div className="flex flex-col gap-5 p-6">
-        <header className="flex flex-wrap items-center justify-between gap-3">
+        {/* `app-drag`: with no OS title bar, this is the top of the window
+            while Stats is showing — the period control opts out. */}
+        <header className="app-drag flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">Stats</h2>
             <p className="text-sm text-muted-foreground">
@@ -116,6 +118,7 @@ export function Stats({
             </p>
           </div>
           <SegmentedControl
+            className="app-no-drag"
             ariaLabel="Period"
             options={STATS_PERIODS}
             value={period}
@@ -351,17 +354,22 @@ function SegmentedControl<T extends string>({
   options,
   value,
   onSelect,
+  className,
 }: {
   ariaLabel: string;
   options: readonly { id: T; label: string }[];
   value: T;
   onSelect: (id: T) => void;
+  className?: string;
 }): React.JSX.Element {
   return (
     <div
       role="group"
       aria-label={ariaLabel}
-      className="flex items-center gap-1 rounded-md border border-border bg-muted p-1">
+      className={cn(
+        'flex items-center gap-1 rounded-md border border-border bg-muted p-1',
+        className,
+      )}>
       {options.map((option) => (
         <button
           key={option.id}

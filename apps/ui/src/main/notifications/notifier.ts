@@ -17,9 +17,10 @@ import { Notification } from 'electron';
  *   `terminal-notifier.app`, so the banner is attributed to THAT helper. The
  *   per-app switch in System Settings then does not name Geniro at all.
  * - **Signing.** `node-notifier` ships a Mach-O helper binary inside
- *   `node_modules`. This app is ad-hoc signed with no Developer ID and no
- *   notarization (see `scripts/build-mac.mjs`), and a nested unsigned executable
- *   is exactly what Gatekeeper stops. The built-in has no extra binary to sign.
+ *   `node_modules`. This app is signed with a self-signed certificate, with no
+ *   Developer ID and no notarization (see `scripts/build-mac.mjs`), and a
+ *   nested unsigned executable is exactly what Gatekeeper stops. The built-in
+ *   has no extra binary to sign.
  * - **The click.** A banner you cannot act on only tells you to go looking. The
  *   `click` event here is in-process, so it can raise the actual
  *   `BrowserWindow`; a helper binary's click cannot reach into this process at

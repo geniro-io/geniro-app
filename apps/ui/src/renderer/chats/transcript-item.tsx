@@ -14,10 +14,9 @@ import { liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
-import { wasSentMidTurn } from './message-payload';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
-import { isCliAuthored, isInfoNotice } from './system-payload';
+import { isCliAuthored, isInfoNotice, isWarningNotice } from './system-payload';
 import { ToolBodyView } from './tool-body-view';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
@@ -112,21 +111,6 @@ export const TranscriptItem = memo(function TranscriptItem({
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
           {text ? <MarkdownContent content={text} /> : null}
-          {/* Only for a message written into a turn already in flight, and only
-              then: it explains a wait the ordinary message does not have. See
-              `wasSentMidTurn` — the CLI reads it at its next tool boundary, so
-              behind a long tool call the agent visibly does nothing and the
-              live row goes on naming the tool that was running before the user
-              sent this. Both readings are right; without this line the
-              conclusion drawn from them is that the send never took. */}
-          {wasSentMidTurn(item.payload) ? (
-            <p
-              data-role="mid-turn-note"
-              className="m-0 text-[11px] text-muted-foreground">
-              Sent into the turn already running — the agent picks this up when
-              its current step finishes.
-            </p>
-          ) : null}
         </MessageBubble>
       );
     }
@@ -330,6 +314,20 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (isInfoNotice(item.payload)) {
         return <MessageBubble variant="note">{message}</MessageBubble>;
       }
+      // A DEGRADE: a setting the user chose that the agent could not apply. It
+      // has to be seen — the turn is not doing what they asked — and it must not
+      // be red, because nothing failed and the turn carried on. Captioned for
+      // what it is rather than as `system`, which named the WRITER and left the
+      // reader to infer the severity from the colour.
+      if (isWarningNotice(item.payload)) {
+        return (
+          <DisclosureRow
+            tone="warning"
+            caption="not applied"
+            message={message}
+          />
+        );
+      }
       // The DAEMON's own system items are failure advisories (a degraded caller,
       // a persistence problem) — surface them like errors: red, expandable.
       return <DisclosureRow caption="system" message={message} />;
@@ -339,9 +337,10 @@ export const TranscriptItem = memo(function TranscriptItem({
       const answer = payloadString(item.payload, 'answer');
       const requestId = payloadString(item.payload, 'id');
       if (requestId !== null && cardBacked.has(requestId)) {
-        // The card that asked is on screen and renders its own settled line
-        // (both its branches do, and it shows the free-text answer too), so
-        // this row would only repeat it.
+        // The card that asked is on screen and renders its own settled line —
+        // including the answer, which is what this suppression assumed all
+        // along and what the card only started doing once the answer was
+        // threaded to it. So this row would only repeat it.
         return null;
       }
       return (
@@ -531,17 +530,42 @@ export const CardBackedRequestsContext = createContext<ReadonlySet<string>>(
   new Set<string>(),
 );
 
+/**
+ * One settled approval, as the transcript recorded it.
+ *
+ * The ANSWER rides along with the allow/deny because the card that asked the
+ * question is the natural place to read it back, and it had nowhere to read it
+ * from: a card whose question was answered said `✓ answered` and nothing else,
+ * so the user's own words vanished the moment they were sent — "hehe i should
+ * also see my answer". The daemon has always written them here (`answer` on the
+ * `approval_verdict` payload, recorded only when it was actually folded into
+ * the tool input), so this is a value that already existed and was being
+ * dropped one map entry short of the screen.
+ */
+export interface RecordedVerdict {
+  allow: boolean;
+  /**
+   * What the user answered, or null. Null covers both a DECLINED card and a
+   * plain tool approval, neither of which carries words — never an answer the
+   * daemon withheld, since it only records one it actually delivered.
+   */
+  answer: string | null;
+}
+
 /** All persisted verdicts of a transcript, keyed by approval request id. */
 export function collectVerdicts(
   items: readonly ChatItem[],
-): Map<string, boolean> {
-  const verdicts = new Map<string, boolean>();
+): Map<string, RecordedVerdict> {
+  const verdicts = new Map<string, RecordedVerdict>();
   for (const item of items) {
     if (item.kind === 'approval_verdict') {
       const id = payloadString(item.payload, 'id');
       if (id) {
         const allow = (item.payload as { allow?: unknown }).allow;
-        verdicts.set(id, allow === true);
+        verdicts.set(id, {
+          allow: allow === true,
+          answer: payloadString(item.payload, 'answer'),
+        });
       }
     }
   }

@@ -139,7 +139,11 @@ import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import { TargetSelect } from './target-select';
-import { type AgentTaskRow, taskListsByAgent } from './task-payload';
+import {
+  type AgentTaskRow,
+  taskListsByAgent,
+  taskProgress,
+} from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
@@ -170,7 +174,7 @@ import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
-import { useGitInfo } from './use-git-info';
+import { type GitNotice, useGitInfo } from './use-git-info';
 import { useUnseenRuns } from './use-unseen-runs';
 
 /**
@@ -441,17 +445,6 @@ export function Chats({
   // the current run without re-subscribing.
   const activeRunIdRef = useRef<string | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  /**
-   * How many artifacts this run had ALREADY published when it was opened.
-   *
-   * Seeded from the replay in `activateRun` (see the effect that reads it), so
-   * "a page was just published" means a rise above what the thread arrived
-   * with, rather than the arrival itself.
-   */
-  const artifactBaseline = useRef<{ runId: string | null; count: number }>({
-    runId: null,
-    count: 0,
-  });
   // Set when a run is opened, cleared by the first render that has its items.
   // Opening a run must land on the NEWEST message, and the at-bottom gate below
   // cannot decide that: activateRun empties the transcript first, which clamps
@@ -539,8 +532,26 @@ export function Chats({
    * that has to tell the user what happened without opening the chat.
    */
   const [settleSummaries, setSettleSummaries] = useState<
-    ReadonlyMap<string, string>
+    ReadonlyMap<string, string | null>
   >(new Map());
+  /**
+   * The runs whose LAST settle is not worth interrupting the user for.
+   *
+   * Two daemon flags feed it and they are different statements: `housekeeping`
+   * says the turn produced nothing but the CLI's own compaction, `restored`
+   * says the status is being handed BACK — a delegate lease expiring over a run
+   * that had already settled, which crosses non-terminal→terminal a second time
+   * for a turn that ended minutes ago. Both would otherwise earn a banner and a
+   * sidebar mark for an ending the user has already seen.
+   *
+   * A set beside the summaries and updated from the same announce, because it
+   * describes the same moment: whether that ending was worth interrupting the
+   * user for. Both notification surfaces read it, so the banner and the sidebar
+   * mark cannot disagree about one turn.
+   */
+  const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   // Messages written while the agent was still working — sent automatically,
   // one per settled turn, in order (Claude Code / Cursor-style queueing).
   // Keyed PER RUN and kept for the whole session: switching transcripts or
@@ -1536,13 +1547,6 @@ export function Chats({
           return;
         }
         history.forEach((item) => addItem(item, false));
-        // The pages this thread arrived with — see `artifactBaseline`. Taken
-        // from the replayed rows themselves rather than from the memo, which
-        // has not been recomputed yet at this point in the activation.
-        artifactBaseline.current = {
-          runId,
-          count: artifactsFrom(history).length,
-        };
         // Reconnecting/switching to an in-flight run must show the working state
         // (Stop), not an enabled Send that a second message would race into a
         // RUN_BUSY. Derive it from the run's status + whether the replayed
@@ -1708,9 +1712,27 @@ export function Chats({
       // Recorded BEFORE the row update below, so the notification rules — which
       // run off that row changing — already have the sentence when they fire.
       if (event.summary !== undefined) {
-        setSettleSummaries((prev) =>
-          new Map(prev).set(event.runId, event.summary as string),
-        );
+        const said = event.summary;
+        setSettleSummaries((prev) => new Map(prev).set(event.runId, said));
+      }
+      // Recorded on the same terms and for the same reason: only a SETTLE says
+      // anything about this, and every settle says it — so an absent field is
+      // an activity announce and must leave the reading alone, while a settle
+      // that did real work clears the flag its predecessor may have set.
+      if (event.status !== null && isSettledRunStatus(event.status)) {
+        const quiet = event.housekeeping === true || event.restored === true;
+        setQuietSettles((prev) => {
+          if (prev.has(event.runId) === quiet) {
+            return prev;
+          }
+          const next = new Set(prev);
+          if (quiet) {
+            next.add(event.runId);
+          } else {
+            next.delete(event.runId);
+          }
+          return next;
+        });
       }
       if (status !== null || parked !== undefined) {
         setRuns((prev) =>
@@ -3038,11 +3060,16 @@ export function Chats({
   const approvalCardFor = useCallback(
     (item: ChatItem): React.JSX.Element => {
       const requestId = payloadString(item.payload, 'id');
+      const settled = requestId ? (verdicts.get(requestId) ?? null) : null;
       return (
         <ApprovalCard
           toolName={payloadString(item.payload, 'toolName') ?? 'tool'}
           input={(item.payload as { input?: unknown } | null)?.input ?? null}
-          verdict={requestId ? (verdicts.get(requestId) ?? null) : null}
+          verdict={settled?.allow ?? null}
+          // The user's own words, read back from the SAME item that settled the
+          // card — so a card can never show an answer the transcript does not
+          // hold, and a replayed transcript reads exactly like the live one.
+          answer={settled?.answer ?? null}
           expired={
             requestId !== null &&
             (unanswerableIds.has(requestId) ||
@@ -3152,9 +3179,28 @@ export function Chats({
     agentsApi,
     modelKind,
   );
+  /**
+   * The MODEL the effort listing is about, scoped exactly like `modelKind`:
+   * whichever composer is on screen owns the answer, since only one is.
+   *
+   * It exists because the levels belong to the model and not to the CLI — a
+   * cursor chat on `grok-4.6` has no `max`, one on `claude-opus-5` does — so a
+   * listing asked without it offers levels the chosen model refuses. Null is a
+   * real value here (no model picked, or a workflow target) and the daemon
+   * answers it with the CLI-wide union.
+   */
+  const effortModel = useMemo((): string | null => {
+    if (activeRunId !== null) {
+      return activeRun && activeRun.workflowId === null
+        ? activeRun.model
+        : null;
+    }
+    return workflowSlug ? null : (models[agentKind] ?? null);
+  }, [activeRunId, activeRun, workflowSlug, models, agentKind]);
   // Same scoping as the models above — whichever CLI the visible composer is
-  // about, or none at all for a workflow target.
-  const agentEfforts = useAgentEfforts(agentsApi, modelKind);
+  // about, or none at all for a workflow target — narrowed to that composer's
+  // own model, which is what makes the chip offer only what will apply.
+  const agentEfforts = useAgentEfforts(agentsApi, modelKind, effortModel);
   // ONE git read: the landing composer's, following the folder picked for the
   // NEXT run — the only place a branch is chosen. The transcript composer used
   // to run a second read for a read-only branch chip beside its own cwd; that
@@ -3276,8 +3322,35 @@ export function Chats({
   // strip is rendered from exactly this value, so a lone attachment failure
   // cannot be computed into the text of a strip whose visibility never
   // considered it (it was, and stayed invisible).
-  const composerError =
-    error ?? attachments.error ?? git.error ?? runConfigBranchNotice;
+  /**
+   * The strip under the composer: what it says, and how loudly.
+   *
+   * Layered exactly as before — screen error, then the shared attachment
+   * reader, then this composer's own git read, then a run configuration's
+   * refused checkout — but carrying a TONE, because the third of the four is
+   * not always a failure: a branch switch refused over uncommitted work is the
+   * guard doing its job, and it comes with an offer to pull the branch up to
+   * date without losing that work.
+   *
+   * The run-configuration notice keeps the plain error tone it was written
+   * with. It is the same REFUSAL, but it arrives as a bare sentence with no
+   * `dirty` flag beside it, and inferring the warning tone — and with it a Pull
+   * control — from a message this file did not produce would be guessing at
+   * which of the two it is.
+   */
+  const composerNotice: GitNotice | null =
+    error !== null
+      ? { message: error, tone: 'error', offerPull: false }
+      : attachments.error !== null
+        ? { message: attachments.error, tone: 'error', offerPull: false }
+        : (git.notice ??
+          (runConfigBranchNotice === null
+            ? null
+            : {
+                message: runConfigBranchNotice,
+                tone: 'error',
+                offerPull: false,
+              }));
   const transcriptError = error ?? attachments.error;
   /**
    * Close the strip. Every source is cleared, not just the one on top: they are
@@ -3673,11 +3746,6 @@ export function Chats({
   // them), never on "how many agents happened to speak so far" — that would
   // make the frame pop in mid-run as a second node starts.
   const soloAgent = activeRun !== null && activeRun.workflowId === null;
-  const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
-  const toggleAgentsPanel = useCallback(
-    () => setAgentsPanelOpen((open) => !open),
-    [],
-  );
   /**
    * The open chat's sub-agents, listed as threads of the agent that launched
    * them, newest last.
@@ -3833,9 +3901,15 @@ export function Chats({
    * (`agents[].threads`, `tasksByAgent`), never re-derived, so the badge and
    * the list it points at cannot disagree.
    *
-   * Only the LIVE half is counted: a finished delegate and a completed task are
-   * history, and a counter that included them would climb all turn and never
-   * come down, which is a total rather than a "current".
+   * The DELEGATE count is the live half only: a finished delegate is history,
+   * and a counter that included it would climb all turn and never come down.
+   *
+   * The TASK figure is a pair — done out of total — for the opposite reason. A
+   * lone "still to go" is what got reported: `6` says nothing about whether
+   * that is six of seven or six of sixty, and it can only shrink, so it reads
+   * as a countdown out of a number the header never states. `done/total` is
+   * also how the transcript cards, the panel and the sub-agent headers all say
+   * it, so this is the header joining that sentence rather than inventing one.
    */
   const sidePanelLive = useMemo(() => {
     let subagents = 0;
@@ -3846,18 +3920,14 @@ export function Chats({
         }
       }
     }
-    let tasks = 0;
+    let done = 0;
+    let total = 0;
     for (const rows of tasksByAgent.values()) {
-      for (const task of rows) {
-        // `null` is a status the CLI named and the daemon did not recognise —
-        // counted as outstanding, since the one thing it certainly is not is
-        // finished.
-        if (task.status !== 'completed') {
-          tasks += 1;
-        }
-      }
+      const progress = taskProgress(rows);
+      done += progress.done;
+      total += progress.total;
     }
-    return { subagents, tasks };
+    return { subagents, tasks: { done, total } };
   }, [agents, tasksByAgent]);
 
   /**
@@ -3977,34 +4047,17 @@ export function Chats({
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(() => artifactsFrom(items), [items]);
   /**
-   * A NEW artifact opens the panel; a chat that already had one does not.
+   * The agents panel stands beside every open chat — there is nothing to open
+   * and nothing to close, so this is just "is a chat open".
    *
-   * The ask was for it to behave the way the CLI's own host does, which
-   * surfaces a preview the moment a page is published. What that must not turn
-   * into is a panel that springs open every time an old thread is re-opened —
-   * a replay carries every page the thread ever published and would otherwise
-   * read exactly like one arriving now. So the baseline is taken from the
-   * REPLAY, in `activateRun`, and only a rise above it counts.
+   * It used to be a toggle, off by default, with a header button and a close
+   * control of its own; a published artifact even sprang it open, on a
+   * baseline taken from the replay so a re-opened thread would not. All of
+   * that was machinery for deciding when to show a panel that turned out to be
+   * wanted always. The one control that survives is the RESIZE handle, whose
+   * width is remembered — narrow is how someone puts it away now.
    */
-  useEffect(() => {
-    const seen = artifactBaseline.current;
-    // Deliberately does NOT seed itself. This effect also runs mid-replay, when
-    // the transcript is still empty, so a self-seeded baseline of 0 would read
-    // the replayed rows landing a moment later as a fresh publish — the exact
-    // behaviour the baseline exists to prevent.
-    if (seen.runId !== activeRunId) {
-      return;
-    }
-    if (artifacts.length > seen.count) {
-      artifactBaseline.current = {
-        runId: activeRunId,
-        count: artifacts.length,
-      };
-      setAgentsPanelOpen(true);
-    }
-  }, [activeRunId, artifacts.length]);
-
-  const showAgentsPanel = activeRunId !== null && agentsPanelOpen;
+  const showAgentsPanel = activeRunId !== null;
   /**
    * The agents panel's MCP rows. The folder is the RUN's, never the composer's
    * `folder` — the panel describes the run being viewed, and those diverge the
@@ -4177,6 +4230,7 @@ export function Chats({
     labelOf: notificationLabel,
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
+    quiet: quietSettles,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
@@ -4186,6 +4240,7 @@ export function Chats({
   const { unseen, markSeen } = useUnseenRuns({
     runs,
     statusOf: sidebarRunStatus,
+    quiet: quietSettles,
     activeRunId,
   });
   // Opening the thread IS the acknowledgement. Keyed on the open chat rather
@@ -4250,11 +4305,18 @@ export function Chats({
                     : 'grid-cols-[260px_minmax(0,1fr)]',
                 )}>
                 <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
-                  <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
+                  {/* The window's own title bar continues across this column —
+                      the OS strip is hidden (see `main/index.ts`), so every top
+                      row of the shell has to be draggable or the window can
+                      only be moved by the 220px of rail beside it. `h-11`
+                      rather than the padding it had, so the three top rows
+                      share one baseline now that they are the top of the
+                      window rather than the top of a page under a title bar. */}
+                  <div className="app-drag flex h-11 items-center justify-between pr-2 pl-3">
                     <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                       Chats
                     </span>
-                    <span className="flex items-center gap-0.5">
+                    <span className="app-no-drag flex items-center gap-0.5">
                       <Button
                         type="button"
                         variant="ghost"
@@ -4672,11 +4734,16 @@ export function Chats({
                             {!workflowSlug ? (
                               <>
                                 <EffortSelect
-                                  efforts={agentEfforts}
+                                  efforts={agentEfforts.efforts}
                                   value={efforts[agentKind] ?? null}
-                                  unavailableReason={effortReasons.get(
-                                    agentKind,
-                                  )}
+                                  // The listing's own reason wins where it has
+                                  // one — it can name THIS model, which the
+                                  // per-CLI capability sentence never could.
+                                  unavailableReason={
+                                    agentEfforts.unavailableReason ??
+                                    effortReasons.get(agentKind)
+                                  }
+                                  levelsAreModelSpecific={effortModel !== null}
                                   onChange={(effort) =>
                                     changeEffort(agentKind, effort)
                                   }
@@ -4698,10 +4765,34 @@ export function Chats({
                         </p>
                       ) : null}
                       {/* A refused branch switch reports here — the guard says WHY
-                ("uncommitted changes…"), which is the whole point of it. */}
-                      {composerError ? (
+                ("uncommitted changes…"), which is the whole point of it, and
+                offers the one thing the app can do about it. */}
+                      {composerNotice ? (
                         <ErrorBanner
-                          message={composerError}
+                          message={composerNotice.message}
+                          tone={composerNotice.tone}
+                          action={
+                            composerNotice.offerPull ? (
+                              // A clickable STRING, not a bordered button. The
+                              // strip is one sentence the app is saying; a
+                              // button beside it reads as a second control
+                              // competing with the composer's own, where what
+                              // this is is the rest of the sentence — "the
+                              // branch stays put · pull latest". `link` is the
+                              // app's one such look, re-toned to the strip it
+                              // sits in so it cannot read as unrelated caramel.
+                              <Button
+                                type="button"
+                                variant="link"
+                                size="sm"
+                                className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
+                                disabled={git.pulling}
+                                title="Stash your changes, fast-forward this branch, then put the changes back"
+                                onClick={() => void git.pull()}>
+                                {git.pulling ? 'Pulling…' : 'Pull latest'}
+                              </Button>
+                            ) : null
+                          }
                           onDismiss={dismissError}
                         />
                       ) : null}
@@ -4735,10 +4826,8 @@ export function Chats({
                             ? null
                             : turnScan.open
                         }
-                        sidePanelOpen={agentsPanelOpen}
-                        onToggleSidePanel={toggleAgentsPanel}
                         runningSubagents={sidePanelLive.subagents}
-                        openTasks={sidePanelLive.tasks}
+                        tasks={sidePanelLive.tasks}
                       />
                     ) : null}
 
@@ -5152,12 +5241,14 @@ export function Chats({
                                   }
                                 />
                                 <EffortSelect
-                                  efforts={agentEfforts}
+                                  efforts={agentEfforts.efforts}
                                   value={activeRun.effort}
                                   nextTurnOnly={streaming}
-                                  unavailableReason={effortReasons.get(
-                                    activeRun.agentKind,
-                                  )}
+                                  unavailableReason={
+                                    agentEfforts.unavailableReason ??
+                                    effortReasons.get(activeRun.agentKind)
+                                  }
+                                  levelsAreModelSpecific={effortModel !== null}
                                   onChange={(effort) =>
                                     void changeRunSettings({ effort })
                                   }
@@ -5315,7 +5406,6 @@ export function Chats({
                       void openThreadTerminal(agent, thread)
                     }
                     onOpenSubagent={setDetailSubagentId}
-                    onClose={() => setAgentsPanelOpen(false)}
                   />
                 ) : null}
 

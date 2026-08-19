@@ -47,9 +47,18 @@ mac:
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # No `identity` here on purpose: scripts/build-mac.mjs injects the ad-hoc
-  # identity ('-'). This is an unsigned, ad-hoc build — no Apple Developer ID,
-  # no notarization.
+  # No `identity` here on purpose: scripts/build-mac.mjs injects it — the
+  # self-signed release certificate when GENIRO_SIGN_IDENTITY names one, else
+  # ad-hoc ('-'). A value pinned here would shadow that branch inside
+  # electron-builder's own resolution (.claude/rules/packaging-config.md), and
+  # the branch decides whether users keep their macOS permissions across a
+  # release: a grant is recorded against the app's designated requirement, and
+  # an ad-hoc signature's requirement is the hash of its own bytes.
+  #
+  # Notarization is off on BOTH arms, which is why it can live here: the
+  # release certificate is self-signed, not an Apple Developer ID, so there is
+  # nothing to submit and Gatekeeper still has no opinion it will act on — the
+  # Homebrew cask and install.sh go on stripping quarantine.
   notarize: false
   # Don't walk the daemon's ~200MB node_modules signing every binary-looking
   # file (codesign chokes on gyp leftovers and misdetected assets). The shell

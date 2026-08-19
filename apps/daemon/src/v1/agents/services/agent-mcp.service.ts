@@ -44,6 +44,30 @@ const DEFAULT_MCP_TTL_MS = 5 * 60_000;
 const FIRST_PAINT_BUDGET_MS = 400;
 
 /**
+ * The deadline a listing gets when a REQUEST is waiting on it — the toggle
+ * route, which awaits the dial because the listing that results IS its answer.
+ *
+ * An adapter's own listing deadline is sized for the read nobody is holding a
+ * socket open for: the panel's is answered inside {@link FIRST_PAINT_BUDGET_MS}
+ * with `pending`, so a dial there may run as long as a cold dial genuinely
+ * takes (claude's is two minutes). Awaiting that inside a request would put the
+ * renderer's own 60s `MCP_ROUTE_TIMEOUT_MS` in front of it, and the user would
+ * read a bare transport failure instead of the specific reason the daemon was
+ * about to produce.
+ *
+ * So the cap is stated HERE rather than lowered in the adapter: how long an
+ * HTTP round trip may take is a fact about this service's routes, and how long
+ * a cold dial of the user's servers takes is a fact about the CLI. Collapsing
+ * the two is what made a panel read inherit a budget that only the toggle
+ * needed.
+ *
+ * In practice this deadline is almost never reached: a toggle can only be
+ * clicked on a row the panel has already listed, so the cache is warm and the
+ * blocking read returns from it without dialling anything.
+ */
+export const BLOCKING_LIST_TIMEOUT_MS = 45_000;
+
+/**
  * Shown when the adapter itself misbehaved rather than the CLI refusing.
  *
  * The thrown error's own message is appended by {@link listingFailure}: this
@@ -429,6 +453,10 @@ export class AgentMcpService {
         adapter.listMcpServers(
           { cwd: projectDir, configDir: profile },
           {
+            // Only a caller holding a request open gets a shortened deadline —
+            // see {@link BLOCKING_LIST_TIMEOUT_MS}. The panel's read is answered
+            // long before the dial finishes, so it keeps the adapter's own.
+            ...(blocking ? { timeoutMs: BLOCKING_LIST_TIMEOUT_MS } : {}),
             onSpawn: (child, spawnInfo) =>
               this.processes.register(
                 `mcp:list:${randomUUID()}`,

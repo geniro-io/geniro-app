@@ -135,4 +135,68 @@ describe('EffortSelect', () => {
     expect(trigger(el)!.textContent).toContain('legacy-level');
     expect(optionValues(el)).toContain('legacy-level');
   });
+
+  it('keeps a level the MODEL refuses on screen, disabled rather than dropped', () => {
+    // The reported case: an effort chip is remembered per CLI, so a cursor chat
+    // moved onto Grok still carried `max` — which `claude-opus-5` takes and
+    // `grok-4.6` has never had (measured on 2026.08.11-e8db854). Dropping the
+    // row outright also dropped the only place on screen naming the level the
+    // daemon keeps sending every turn, while the chip's fallback to "default
+    // effort" quietly covered for it.
+    const onChange = vi.fn();
+    const el = render(
+      <EffortSelect
+        efforts={[
+          { id: 'low', label: 'low' },
+          { id: 'xhigh', label: 'xhigh' },
+        ]}
+        value="max"
+        levelsAreModelSpecific
+        onChange={onChange}
+      />,
+    );
+    act(() => {
+      trigger(el)!.click();
+    });
+    const options = [
+      ...el.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    const refused = options.find((o) => o.textContent?.includes('max'));
+    expect(refused).toBeDefined();
+    expect(refused!.disabled).toBe(true);
+    expect(refused!.textContent).toContain('unavailable');
+    expect(refused!.getAttribute('aria-selected')).toBe('false');
+
+    // Activating the disabled row must not change the selection.
+    act(() => {
+      refused!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onChange).not.toHaveBeenCalled();
+
+    // …and the chip still reads as the CLI's default, which is what the turn
+    // will actually run at — naming `max` there would claim a level it cannot
+    // reach.
+    expect(trigger(el)!.textContent).toContain('default effort');
+    expect(trigger(el)!.textContent).not.toContain('max');
+  });
+
+  it('names the MODEL when it is the model that has no effort axis', () => {
+    // `auto-smart` and `composer-2.5` enumerate no `effort` option at all, so
+    // the picker has nothing to offer — and must say which model, since a
+    // control that simply disappears is indistinguishable from a broken one.
+    const el = render(
+      <EffortSelect
+        efforts={[]}
+        value={null}
+        levelsAreModelSpecific
+        unavailableReason="auto-smart has no reasoning-effort setting"
+        onChange={() => {}}
+      />,
+    );
+
+    expect(el.textContent).toContain('no effort control');
+    expect(el.querySelector('[title]')?.getAttribute('title')).toContain(
+      'auto-smart',
+    );
+  });
 });

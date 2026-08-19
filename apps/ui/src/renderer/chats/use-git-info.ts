@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { GitInfo } from '../../shared/contracts';
+import type { BannerTone } from '../components/error-banner';
 
 const NOT_A_REPO: GitInfo = {
   isRepo: false,
@@ -9,8 +10,22 @@ const NOT_A_REPO: GitInfo = {
   dirty: false,
 };
 
+/** What the composer's strip should say about git, and how loudly. */
+export interface GitNotice {
+  message: string;
+  tone: BannerTone;
+  /**
+   * Offer the pull. True only for the uncommitted-work refusal: that is the one
+   * state where bringing the branch up to date is both possible and the thing
+   * the user was reaching for. A pull button beside "Not a git repository"
+   * would be a control that cannot work.
+   */
+  offerPull: boolean;
+}
+
 /**
- * Git state of `dir` for the composer's branch chip, plus the guarded switch.
+ * Git state of `dir` for the composer's branch chip, the guarded switch, and
+ * the pull that keeps uncommitted work.
  *
  * The chip is absent for a plain folder, so the hook reports `isRepo: false`
  * for a null dir and while the first read is in flight — a chip that appeared
@@ -22,18 +37,29 @@ const NOT_A_REPO: GitInfo = {
  */
 export function useGitInfo(dir: string | null): {
   info: GitInfo;
-  error: string | null;
+  notice: GitNotice | null;
   switching: boolean;
+  pulling: boolean;
   switchTo: (branch: string) => Promise<void>;
+  pull: () => Promise<void>;
   /** Re-read `dir`, or an explicit folder the caller has just switched to. */
   refresh: (target?: string) => Promise<void>;
   clearError: () => void;
 } {
   const [info, setInfo] = useState<GitInfo>(NOT_A_REPO);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<GitNotice | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  /**
+   * The branch a refused switch was FOR, so a later pull can retry it. A ref
+   * because {@link pull} needs the value set by the switch that preceded it,
+   * and — per the past bug in this file — state just written by one callback
+   * is not visible to another read from closure.
+   */
+  const pendingSwitchTarget = useRef<string | null>(null);
 
   useEffect(() => {
+    pendingSwitchTarget.current = null;
     if (dir === null) {
       setInfo(NOT_A_REPO);
       return;
@@ -57,11 +83,24 @@ export function useGitInfo(dir: string | null): {
         return;
       }
       setSwitching(true);
-      setError(null);
+      setNotice(null);
       try {
         const result = await window.geniro.switchBranch(dir, branch);
-        if (!result.ok) {
-          setError(result.error);
+        if (!result.ok && result.error !== null) {
+          // A refusal over uncommitted work is the guard working, not a
+          // failure — main tells the two apart so this does not have to guess
+          // from the sentence.
+          setNotice({
+            message: result.error,
+            tone: result.dirty ? 'warning' : 'error',
+            offerPull: result.dirty,
+          });
+          // Only a dirty refusal is one `pull` can act on — remember the
+          // branch it was FOR so a later pull retries this exact switch
+          // instead of merely clearing the strip.
+          pendingSwitchTarget.current = result.dirty ? branch : null;
+        } else {
+          pendingSwitchTarget.current = null;
         }
         setInfo(await window.geniro.getGitInfo(dir));
       } finally {
@@ -70,6 +109,52 @@ export function useGitInfo(dir: string | null): {
     },
     [dir],
   );
+
+  const pull = useCallback(async (): Promise<void> => {
+    if (dir === null) {
+      return;
+    }
+    setPulling(true);
+    try {
+      const result = await window.geniro.pullBranch(dir);
+      if (!result.ok) {
+        // A failed pull REPLACES the strip with git's own reason, as an error
+        // — a refused pull is a genuine dead end for this button, and
+        // offering it again would be a control that has just been shown not
+        // to work.
+        setNotice({
+          message: result.error ?? 'git pull failed',
+          tone: 'error',
+          offerPull: false,
+        });
+        setInfo(await window.geniro.getGitInfo(dir));
+        return;
+      }
+      const target = pendingSwitchTarget.current;
+      if (target === null) {
+        setNotice(null);
+      } else {
+        // The pull was offered to unblock a specific switch — re-run that
+        // switch rather than clearing the strip, which would read as the
+        // switch having gone through when the branch never moved.
+        const retry = await window.geniro.switchBranch(dir, target);
+        if (retry.ok) {
+          pendingSwitchTarget.current = null;
+          setNotice(null);
+        } else if (retry.error !== null) {
+          setNotice({
+            message: retry.error,
+            tone: retry.dirty ? 'warning' : 'error',
+            offerPull: retry.dirty,
+          });
+          pendingSwitchTarget.current = retry.dirty ? target : null;
+        }
+      }
+      setInfo(await window.geniro.getGitInfo(dir));
+    } finally {
+      setPulling(false);
+    }
+  }, [dir]);
 
   /**
    * Re-read a folder's git state without switching anything.
@@ -99,10 +184,17 @@ export function useGitInfo(dir: string | null): {
 
   return {
     info,
-    error,
+    notice,
     switching,
+    pulling,
     switchTo,
+    pull,
     refresh,
-    clearError: useCallback(() => setError(null), []),
+    clearError: useCallback(() => {
+      // A dismissed notice must not leave a stale target for a later pull to
+      // retry against — the user dismissed the guard, not just the sentence.
+      pendingSwitchTarget.current = null;
+      setNotice(null);
+    }, []),
   };
 }

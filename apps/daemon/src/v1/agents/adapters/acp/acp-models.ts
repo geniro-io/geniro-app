@@ -48,6 +48,45 @@ function readModelConfigOption(sessionResult: unknown): AcpConfigOption | null {
 }
 
 /**
+ * One `configOptions[]` entry by its own `id`, or null when the reply carries
+ * none — the parameter counterpart of {@link readModelConfigOption}, which
+ * keys on `category` because the model option's category is the PROTOCOL's
+ * vocabulary while every other option's is the agent's.
+ *
+ * A model's parameters are keyed by id for exactly that reason: cursor spells
+ * `effort` and `thinking` under the category `thought_level` and `context` and
+ * `fast` under `model_config`, so a category key would fold two unrelated
+ * settings together while the ids are what the turn actually sends.
+ */
+export function readAcpConfigOption(
+  sessionResult: unknown,
+  configId: string,
+): AcpConfigOption | null {
+  for (const entry of asArray(asRecord(sessionResult)?.configOptions)) {
+    const record = asRecord(entry);
+    if (record === null || asString(record.id) !== configId) {
+      continue;
+    }
+    const options: AcpConfigOption['options'] = [];
+    for (const option of asArray(record.options)) {
+      const optionRecord = asRecord(option);
+      const value = optionRecord ? asString(optionRecord.value) : null;
+      if (value === null || value === '') {
+        continue;
+      }
+      options.push({ value, name: asString(optionRecord?.name) || value });
+    }
+    return {
+      id: configId,
+      category: asString(record.category),
+      currentValue: asString(record.currentValue),
+      options,
+    };
+  }
+  return null;
+}
+
+/**
  * The models a `session/new` reply offers, read defensively out of whichever
  * carrier the agent used.
  *
@@ -238,4 +277,32 @@ export function acpModelProbeSettled(stdout: string): boolean {
 /** The models a completed probe reported; empty when it reported none. */
 export function readAcpModelProbe(stdout: string): AcpModel[] {
   return readAcpModels(probeSessionReply(stdout).result);
+}
+
+/**
+ * One config option's enumerated values, read off a completed probe.
+ *
+ * The same two frames as {@link acpModelProbeFrames} answer this — a
+ * `session/new` reply carries the CURRENT model's options alongside its model
+ * list — so a caller that wants one model's vocabulary opens the handshake on
+ * that model (see `seedCursorProfile`'s `model`) rather than switching
+ * afterwards and paying a second round trip.
+ *
+ * Null means the reply said NOTHING about this option, which is not the same as
+ * a model that has none: a probe that failed, an agent that enumerates no
+ * config options, and a genuinely absent option all have to be told apart by
+ * the caller, and only the last is a reason to hide a control.
+ */
+export function readAcpConfigOptionProbe(
+  stdout: string,
+  configId: string,
+): AcpConfigOption | null {
+  const { settled, result } = probeSessionReply(stdout);
+  return settled ? readAcpConfigOption(result, configId) : null;
+}
+
+/** Whether a completed probe enumerated ANY config options at all. */
+export function acpProbeEnumeratedConfigOptions(stdout: string): boolean {
+  const { settled, result } = probeSessionReply(stdout);
+  return settled && asArray(asRecord(result)?.configOptions).length > 0;
 }

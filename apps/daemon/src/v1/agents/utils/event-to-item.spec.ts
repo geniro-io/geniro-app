@@ -18,7 +18,10 @@ describe('mapEventToItem', () => {
 
   it('drops slash_commands reports — skill-harvest store, never the transcript', () => {
     expect(
-      mapEventToItem({ type: 'slash_commands', commands: ['review'] }),
+      mapEventToItem({
+        type: 'slash_commands',
+        commands: [{ name: 'review', description: null }],
+      }),
     ).toBeNull();
   });
 
@@ -460,7 +463,10 @@ describe('terminalStatus', () => {
         isError: false,
       },
       { type: 'session', sessionId: 's1' },
-      { type: 'slash_commands', commands: ['review'] },
+      {
+        type: 'slash_commands',
+        commands: [{ name: 'review', description: null }],
+      },
       { type: 'approval_request', id: 'req-1', toolName: 'Write', input: null },
     ];
     for (const event of midTurn) {

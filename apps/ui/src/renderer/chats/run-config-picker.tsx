@@ -588,7 +588,11 @@ function RunConfigEditor({
               </SettingRow>
               <SettingRow label="Effort">
                 <EffortSelect
-                  efforts={efforts}
+                  efforts={efforts.efforts}
+                  // The listing carries its own reason for having no levels,
+                  // and it is the better one — it can name THIS model, where
+                  // the per-CLI capability sentence only ever names the CLI.
+                  unavailableReason={efforts.unavailableReason}
                   value={draft.effort}
                   onChange={(effort) => set({ effort })}
                 />

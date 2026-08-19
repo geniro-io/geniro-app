@@ -263,8 +263,6 @@ describe('where the meter lives', () => {
         isWorkflow={false}
         status="running"
         lastActivityAt={new Date().toISOString()}
-        sidePanelOpen={false}
-        onToggleSidePanel={vi.fn()}
       />,
     );
 
@@ -327,7 +325,6 @@ describe('where the meter lives', () => {
           },
         ]}
         onOpenThread={vi.fn()}
-        onClose={vi.fn()}
       />,
     );
 
@@ -930,6 +927,45 @@ describe('the expanded readout the meter opens onto', () => {
     expect(text).toContain('Current week');
     expect(text).toContain('30% · resets in 5d 3h');
     expect(container.querySelectorAll('[data-plan-window]')).toHaveLength(2);
+  });
+
+  it('puts the plan limits ABOVE the per-server drill-down', async () => {
+    // "the weekly-limits feature — I open it on claude and see nothing": the
+    // section was last in a 26rem scroll box, under one row per instruction
+    // file and one per MCP SERVER. With a dozen servers that is a screen and a
+    // half below the fold, and the popover's own bottom edge reads as the end
+    // of the content.
+    renderWithLoader(() =>
+      Promise.resolve({
+        ...METRICS,
+        plan: {
+          plan: 'max',
+          windows: [
+            {
+              key: 'weekly_all',
+              label: 'Current week',
+              percent: 60,
+              resetsAt: new Date(
+                Date.now() + 4 * 24 * 60 * 60_000,
+              ).toISOString(),
+            },
+          ],
+        },
+        planReason: null,
+      }),
+    );
+    openMeter();
+    await act(async () => {});
+
+    const headings = [...container.querySelectorAll('span')]
+      .map((el) => el.textContent ?? '')
+      .filter((text) =>
+        ['Plan limits', 'MCP servers', 'Instructions'].includes(text),
+      );
+    expect(headings[0]).toBe('Plan limits');
+    // …and the drill-down is still there, below it — moved, not dropped.
+    expect(headings).toContain('MCP servers');
+    expect(headings).toContain('Instructions');
   });
 
   it('says WHY there are no plan limits instead of leaving the section out', async () => {

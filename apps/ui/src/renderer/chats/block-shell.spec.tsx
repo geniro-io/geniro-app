@@ -71,6 +71,14 @@ describe('BlockShell', () => {
     expect(container.textContent).toContain('code-reviewer');
     expect(container.textContent).toContain('done');
     expect(container.textContent).not.toContain('inner thread');
+    // And `done` reads as the CHECK, not as a pill: a settled block is the
+    // common case, so a green chip on every one of them was the loudest thing
+    // in a run of asides. The word survives for a screen reader only, which is
+    // why the assertion above cannot tell the two apart and this one can.
+    expect(container.querySelector('[data-status="completed"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]'),
+    ).toBeNull();
 
     act(() =>
       button?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
@@ -135,9 +143,66 @@ describe('BlockShell', () => {
     act(() => root.render(shell('running')));
     expect(container.querySelector('svg.animate-spin')).not.toBeNull();
     expect(container.textContent).toContain('running');
+    // One mark, not two: a spinner BESIDE a `running` pill said it twice.
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]'),
+    ).toBeNull();
 
     act(() => root.render(shell('done')));
     expect(container.querySelector('svg.animate-spin')).toBeNull();
+  });
+
+  it('keeps the WORD for the two statuses a glyph cannot carry', () => {
+    // The pill did not go away, it narrowed to where it earns its ink: a
+    // failed or abandoned block is what a reader scans a long transcript for,
+    // and a red or grey glyph among a column of green checks is not enough to
+    // stop on.
+    for (const status of ['error', 'stopped'] as const) {
+      act(() =>
+        root.render(
+          <BlockShell
+            eyebrow="Sub-agent"
+            eyebrowIcon={<span />}
+            header={<span>code-reviewer</span>}
+            status={status}
+            collapsible
+            toggleLabel="Show the sub-agent's conversation">
+            <p>inner thread</p>
+          </BlockShell>,
+        ),
+      );
+      const pill = container.querySelector('[data-slot="block-status-badge"]');
+      expect(pill?.textContent).toBe(status);
+    }
+  });
+
+  it('states the KIND of aside on the header, never as a line above the card', () => {
+    // The eyebrow line is what made a delegate read as its own message in the
+    // flow: an icon and a word sitting outside the card, so two stacked
+    // delegates were four things on screen. It is a glyph on the header now,
+    // with the word left for a screen reader — so the label is still in the
+    // page and must be found INSIDE the card, never before it.
+    act(() =>
+      root.render(
+        <BlockShell
+          eyebrow="Sub-agent"
+          eyebrowIcon={<span data-testid="kind-glyph" />}
+          header={<span>code-reviewer</span>}
+          status="done"
+          collapsible
+          toggleLabel="Show the sub-agent's conversation">
+          <p>inner thread</p>
+        </BlockShell>,
+      ),
+    );
+
+    const shell = container.querySelector('[data-role="block-shell"]');
+    const card = shell?.querySelector('div.overflow-hidden');
+    expect(card?.textContent).toContain('Sub-agent');
+    expect(card?.querySelector('[data-testid="kind-glyph"]')).not.toBeNull();
+    // Nothing at all between the shell and its card.
+    expect(shell?.children.length).toBe(1);
+    expect(shell?.firstElementChild).toBe(card);
   });
 });
 

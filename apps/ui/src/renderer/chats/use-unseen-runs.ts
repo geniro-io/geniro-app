@@ -34,11 +34,20 @@ import type { RunStatusKind } from './run-status';
 export function useUnseenRuns<TRun extends { id: string }>({
   runs,
   statusOf,
+  quiet,
   activeRunId,
 }: {
   runs: readonly TRun[];
   /** The badge reading for a run — the sidebar's own, never the daemon row. */
   statusOf: (run: TRun) => RunStatusKind;
+  /**
+   * Runs whose latest settle is not news (a compaction-only turn, or a
+   * delegate lease handing an already-settled status back) — passed for the
+   * same reason the
+   * banner passes it, and it is the same set: a mark the banner would not have
+   * fired for is the two surfaces disagreeing about one run.
+   */
+  quiet?: ReadonlySet<string>;
   /** The chat on screen, which is never marked. */
   activeRunId: string | null;
 }): {
@@ -57,7 +66,7 @@ export function useUnseenRuns<TRun extends { id: string }>({
 
   useEffect(() => {
     const current = new Map(runs.map((run) => [run.id, statusOf(run)]));
-    const triggers = diffRunNotifications(seenRef.current, current);
+    const triggers = diffRunNotifications(seenRef.current, current, quiet);
     // Recorded BEFORE the state write, so a transition cannot be counted twice.
     seenRef.current = current;
     setUnseen((prev) => {
@@ -82,7 +91,7 @@ export function useUnseenRuns<TRun extends { id: string }>({
         ? prev
         : next;
     });
-  }, [runs, statusOf]);
+  }, [runs, statusOf, quiet]);
 
   const markSeen = useCallback((runId: string): void => {
     setUnseen((prev) => {

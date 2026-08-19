@@ -1,15 +1,19 @@
 import {
+  ArrowDownToLine,
   ChartColumn,
   type LucideIcon,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  RotateCw,
   Settings,
   Terminal,
+  TriangleAlert,
   Workflow,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
+import type { FooterUpdate } from '../updates/update-status';
 import { Logo } from './logo';
 import { StatusDot } from './status-dot';
 import { cn } from './ui/utils';
@@ -71,6 +75,45 @@ function NavButton({
 }
 
 /**
+ * The rail's own width toggle.
+ *
+ * Extracted because it is rendered from two places — inside the title bar when
+ * the rail is open, and on a row of its own when it is collapsed and the
+ * traffic lights have taken the title bar for themselves — and a second copy is
+ * how the two would come to disagree about the label a screen reader hears.
+ */
+function CollapseButton({
+  collapsed,
+  onToggle,
+  className,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
+      title={collapsed ? 'Expand menu' : 'Collapse menu'}
+      onClick={onToggle}
+      // A press inside a drag region belongs to the WINDOW — the click never
+      // reaches React — so the one control living in the title bar has to opt
+      // out of it. Harmless on the collapsed row, which is not a drag region.
+      className={cn(
+        'app-no-drag flex size-7 items-center justify-center rounded-md text-sidebar-foreground/70 outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
+        className,
+      )}>
+      {collapsed ? (
+        <PanelLeftOpen aria-hidden="true" className="size-4" />
+      ) : (
+        <PanelLeftClose aria-hidden="true" className="size-4" />
+      )}
+    </button>
+  );
+}
+
+/**
  * The app's persistent left navigation. The single home for switching between
  * the top-level surfaces (Chats, Graphs, Stats, Settings) plus the Geniro mark and the
  * live daemon-connection indicator. Collapses to an icon-only rail — REMEMBERED
@@ -81,8 +124,9 @@ export function NavRail({
   view,
   onNavigate,
   connected,
-  updateVersion,
+  update,
   onInstallUpdate,
+  onRelaunchUpdate,
   daemonVersion,
   debugOpen,
   onToggleDebug,
@@ -91,16 +135,20 @@ export function NavRail({
   onNavigate: (view: AppView) => void;
   connected: boolean;
   /**
-   * The version waiting to be installed, or null when there is none to offer.
+   * What this row offers for an update, already resolved by the caller.
    *
-   * Resolved by the caller from main's one `UpdateState` rather than read here:
-   * this row renders the offer, it does not decide there is one — the same
-   * split the banner and Settings already follow, so three surfaces cannot
-   * disagree about whether an update exists.
+   * A projection of main's one `UpdateState` (`footerUpdate`), not the state
+   * itself: this row RENDERS the offer, it does not decide there is one — the
+   * same split Settings follows, so the two surfaces cannot disagree about
+   * whether an update exists. It is a value rather than a version string
+   * because this row is now the app's ONLY update channel, so it has to carry
+   * a download in flight and a failed install as well as an offer.
    */
-  updateVersion: string | null;
-  /** Apply it. Absent when the app cannot replace its own install. */
+  update: FooterUpdate;
+  /** Start the download for an `install`, or try again after an `error`. */
   onInstallUpdate?: () => void;
+  /** Restart into a bundle that has finished installing (`restart`). */
+  onRelaunchUpdate?: () => void;
   daemonVersion: string | null;
   /** Whether the debug drawer is showing — the trigger's pressed state. */
   debugOpen: boolean;
@@ -159,36 +207,51 @@ export function NavRail({
    * own, and there is no update to press while the daemon is unreachable.
    */
   const footerLabel =
-    updateVersion && connected && daemonVersion
+    update.kind !== 'none' && connected && daemonVersion
       ? `v${daemonVersion}`
       : statusLabel;
 
   return (
     <nav
       className={cn(
-        'flex shrink-0 flex-col gap-1 border-r border-sidebar-border bg-sidebar p-3',
+        'flex shrink-0 flex-col gap-1 border-r border-sidebar-border bg-sidebar px-3 pb-3',
         hydrated && 'transition-[width]',
-        collapsed ? 'w-14' : 'w-[220px]',
+        // 64px rather than 56: this rail's top row is now the window's title
+        // bar, and the traffic lights it has to hold are 52px wide beside a
+        // 10px inset. A narrower rail would put the system's own buttons over
+        // the border and into the column beside it.
+        collapsed ? 'w-16' : 'w-[220px]',
       )}>
+      {/* THE TITLE BAR. `pt-0` on the nav above is what lets this row start at
+          the very top of the window, where the OS strip used to be, and `h-11`
+          is what centres the traffic lights on it — `trafficLightPosition`
+          in `main/index.ts` is the other half of that arithmetic and moves
+          with it. The left inset is the lights' own footprint (10 + 52),
+          minus the rail's padding. */}
       <div
+        data-slot="titlebar"
         className={cn(
-          'mb-3 flex items-center pt-1',
-          collapsed ? 'justify-center' : 'justify-between px-2',
+          'app-drag flex h-11 shrink-0 items-center',
+          collapsed ? null : 'mb-2 gap-2 pl-[50px]',
         )}>
-        {collapsed ? null : <Logo size="nav" />}
-        <button
-          type="button"
-          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
-          title={collapsed ? 'Expand menu' : 'Collapse menu'}
-          onClick={toggleCollapsed}
-          className="flex size-7 items-center justify-center rounded-md text-sidebar-foreground/70 outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50">
-          {collapsed ? (
-            <PanelLeftOpen aria-hidden="true" className="size-4" />
-          ) : (
-            <PanelLeftClose aria-hidden="true" className="size-4" />
-          )}
-        </button>
+        {collapsed ? null : (
+          <>
+            <Logo size="nav" />
+            <CollapseButton
+              collapsed={collapsed}
+              onToggle={toggleCollapsed}
+              className="ml-auto"
+            />
+          </>
+        )}
       </div>
+      {/* Collapsed, the lights fill the title row on their own, so the toggle
+          takes a row of its own rather than sitting underneath them. */}
+      {collapsed ? (
+        <div className="mb-2 flex justify-center">
+          <CollapseButton collapsed={collapsed} onToggle={toggleCollapsed} />
+        </div>
+      ) : null}
 
       {PRIMARY_ITEMS.map((item) => (
         <NavButton
@@ -226,26 +289,84 @@ export function NavRail({
               label no longer has the row to itself, and "connected · v0.1.0"
               broke onto a second line, making the footer two rows tall. */}
           {collapsed ? null : <span className="truncate">{footerLabel}</span>}
-          {/* The update offer, HERE because this is the row that already states
-              which version is running — the user asked to be told about a new
-              one where the current one is written, and to act on it without
-              going anywhere. The banner over the views still exists and is not
-              replaced: it is what interrupts, this is what waits.
+          {/* The update offer, and the app's ONLY one — the strip that used to
+              sit over the views is gone. Two controls for one action in one
+              window is what got reported, and of the two this is the one that
+              belongs: it is the row already stating which version is running,
+              so a newer one is read where the current one is written.
 
-              Rendered only when there is something to DO. An update the app
-              cannot install itself (a read-only volume, another account's
-              install) offers no button here — Settings carries the `brew`
-              sentence for that case, and a button that cannot work is worse
-              than none in a row this small. */}
-          {!collapsed && updateVersion && onInstallUpdate ? (
+              Deliberately NOT a filled button. A primary pill in a 220px status
+              row is the loudest thing in the shell, for an offer that is not
+              urgent and has no deadline — so it is a text affordance at the
+              row's own size, carrying a glyph and a version and nothing else.
+              The sentence lives in `title` and in Settings; this is a hint, not
+              a paragraph.
+
+              Shown COLLAPSED as the glyph alone, which the strip's removal made
+              necessary rather than optional: a user who works with the rail
+              collapsed would otherwise have no channel left that mentions an
+              update at all. */}
+          {update.kind === 'none' ? null : update.kind === 'readout' ? (
+            // Deliberately NOT a button. This offer is real but THIS install
+            // cannot apply it (a Homebrew install, a translocated copy), and
+            // the rail's own rule is "no dead affordance" — a control that
+            // cannot work is worse than none. `title` carries the command
+            // that does.
+            <span
+              data-slot="update-readout"
+              aria-label={update.title}
+              title={update.title}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground',
+                collapsed ? 'mt-1 justify-center p-1' : 'ml-auto px-1 py-0.5',
+              )}>
+              <ArrowDownToLine aria-hidden="true" className="size-3 shrink-0" />
+              {collapsed ? null : <span>{update.label}</span>}
+            </span>
+          ) : (
             <button
               type="button"
-              title={`Update to Geniro ${updateVersion}`}
-              onClick={onInstallUpdate}
-              className="ml-auto shrink-0 rounded-md bg-sidebar-primary px-2 py-0.5 text-[11px] font-medium text-sidebar-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-sidebar-ring/50">
-              Update
+              data-slot="update-control"
+              // A real label whatever the width — collapsed there is no text
+              // beside it, and `title` alone is invisible to assistive tech.
+              aria-label={update.title}
+              title={update.title}
+              // `progress` is a state, not a control: the download is already
+              // running and there is nothing a press could add.
+              disabled={update.kind === 'progress'}
+              onClick={
+                update.kind === 'restart' ? onRelaunchUpdate : onInstallUpdate
+              }
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
+                collapsed ? 'mt-1 justify-center p-1' : 'ml-auto px-1 py-0.5',
+                update.kind === 'progress'
+                  ? 'text-muted-foreground'
+                  : 'hover:bg-sidebar-accent',
+                update.kind === 'error'
+                  ? 'text-destructive'
+                  : update.kind === 'progress'
+                    ? ''
+                    : 'text-sidebar-primary-strong',
+              )}>
+              {update.kind === 'restart' ? (
+                <RotateCw aria-hidden="true" className="size-3 shrink-0" />
+              ) : update.kind === 'error' ? (
+                <TriangleAlert aria-hidden="true" className="size-3 shrink-0" />
+              ) : (
+                <ArrowDownToLine
+                  aria-hidden="true"
+                  className={cn(
+                    'size-3 shrink-0',
+                    // Only while something is actually moving. A standing offer
+                    // that pulses is the pill's loudness back in another form.
+                    update.kind === 'progress' && 'animate-pulse',
+                  )}
+                />
+              )}
+              {collapsed ? null : <span>{update.label}</span>}
             </button>
-          ) : null}
+          )}
           {/* The debug drawer's trigger, deliberately HERE. This row is
               already where the eye goes when something is wrong — it is the
               only part of the shell that reports health — so the control for
@@ -261,7 +382,7 @@ export function NavRail({
               // `ml-auto` only when nothing else has claimed the gap: with an
               // update button present, two auto margins split the space and
               // push the status text off-centre.
-              collapsed ? 'mt-1' : updateVersion ? 'ml-1' : 'ml-auto',
+              collapsed ? 'mt-1' : update.kind !== 'none' ? 'ml-1' : 'ml-auto',
               debugOpen
                 ? 'text-sidebar-primary-strong'
                 : 'text-sidebar-foreground/70',

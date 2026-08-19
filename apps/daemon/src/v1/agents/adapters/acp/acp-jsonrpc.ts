@@ -19,6 +19,21 @@ export type IncomingMessage =
   | { kind: 'notification'; method: string; params: unknown }
   | { kind: 'unknown' };
 
+/**
+ * The category and its detail as one sentence, without repeating either.
+ *
+ * A detail that is empty, or that already contains the category (or the reverse
+ * — some agents put the whole sentence in both fields), collapses to the single
+ * string rather than to `Invalid params: Invalid params`.
+ */
+function joinErrorDetail(message: string, detail: string | null): string {
+  const extra = detail?.trim();
+  if (!extra || message.includes(extra) || extra.includes(message)) {
+    return extra && extra.includes(message) ? extra : message;
+  }
+  return `${message}: ${extra}`;
+}
+
 function asJsonRpcId(value: unknown): JsonRpcId | null {
   if (typeof value === 'string') {
     return value;
@@ -58,9 +73,18 @@ export function classifyMessage(obj: unknown): IncomingMessage {
     return {
       kind: 'error',
       id,
-      message:
+      message: joinErrorDetail(
         message ??
-        `json-rpc error ${typeof code === 'number' ? code : 'without a message'}`,
+          `json-rpc error ${typeof code === 'number' ? code : 'without a message'}`,
+        // JSON-RPC's own `message` is the CATEGORY — the spec reserves the
+        // -32602 range and agents spell it exactly "Invalid params" — while
+        // `data.message` is the only field that says WHICH parameter and why.
+        // Reading the category alone left every refusal in the transcript as
+        // the bare words `Invalid params`, which names nothing the user could
+        // act on; the reply that produced this change also carried
+        // `Invalid value for effort: max`, which names the whole problem.
+        asString(asRecord(error.data)?.message),
+      ),
     };
   }
   // A result of `null` is a legitimate success reply (ACP notifications-as-acks

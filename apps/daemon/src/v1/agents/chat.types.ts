@@ -671,13 +671,45 @@ export type AgentMcpListingWire = z.infer<typeof AgentMcpListingWireSchema>;
  * the renderer a list it must never carry. An EMPTY array is the meaningful
  * answer for a CLI with no effort control; the composer omits the chip.
  */
-// No `.meta({ id })` on this root: it backs an ARRAY response DTO (see
-// AgentModelWireSchema above for the dangling-$ref this avoids).
-export const AgentEffortWireSchema = z.object({
-  id: z.string().describe('Passed verbatim to the CLI as `--effort <id>`'),
-  label: z.string(),
-});
+export const AgentEffortWireSchema = z
+  .object({
+    id: z.string().describe('Passed verbatim to the CLI as `--effort <id>`'),
+    label: z.string(),
+  })
+  .meta({ id: 'AgentEffort' });
 export type AgentEffortWire = z.infer<typeof AgentEffortWireSchema>;
+
+/**
+ * The effort levels available for ONE model, and why there are none.
+ *
+ * An object rather than the bare array this used to be, because the levels are
+ * a property of the MODEL and not only of the CLI — measured on cursor-agent
+ * 2026.08.11-e8db854: `claude-opus-5` offers `low|medium|high|xhigh|max`,
+ * `grok-4.6` the same minus `max`, and `auto-smart` / `composer-2.5` no effort
+ * axis at all. An array alone could say "none" but never WHY, and a picker that
+ * silently vanishes for some models is the complaint this whole control already
+ * has a scar from ("I cannot change the effort of a Cursor model").
+ *
+ * `unavailableReason` therefore has two producers and they mean different
+ * things: the CLI has no effort control at all (`AdapterConfig`), or this
+ * particular model does not. Both are sentences the chip shows on hover; the
+ * consumer does not care which.
+ */
+export const AgentEffortListingWireSchema = z.object({
+  efforts: z.array(AgentEffortWireSchema),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe('Why there are no levels; null when there are.'),
+});
+// No `.meta({ id })` on this one: it is a RESPONSE DTO ROOT, and nestjs-zod
+// would then register the component under the id while the route still points
+// at the DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
+// The component name a client sees is the DTO class name, which is what every
+// sibling listing here emits.
+export type AgentEffortListingWire = z.infer<
+  typeof AgentEffortListingWireSchema
+>;
 
 /**
  * Payload of an `unanswerable` item: one approval request whose turn settled
@@ -768,8 +800,7 @@ export interface RunStatusEvent {
   activity: string | null;
   /**
    * What the run has to SAY about a status it just reached — the agent's
-   * closing words, or a failure's own message. Absent on every announce that
-   * is not a settle.
+   * closing words, or a failure's own message.
    *
    * It exists for the client that is NOT looking at this chat: a system
    * notification has to be able to say what happened, and the only other source
@@ -777,11 +808,63 @@ export interface RunStatusEvent {
    * a background thread it still holds the USER's message from before the turn.
    * A banner reading back what you typed is worse than no banner.
    *
+   * THREE states, like {@link awaiting} and {@link holdingFor} and for the same
+   * reason: `undefined` (absent on the wire) asserts nothing, so an activity
+   * announce leaves the client's reading alone, while `null` says this settle
+   * had nothing to say and CLEARS it. Conflating the two is what made a
+   * wordless turn announce the PREVIOUS one's closing words — the client keeps
+   * the last sentence it was given, so a `/compact` turn, which produces no
+   * assistant message at all, notified with the answer from before the
+   * compaction. Every terminal write therefore carries the field; every
+   * non-terminal one omits it (`writeRunStatus` is the one place that decides).
+   *
    * Untrimmed and unbounded here on purpose: what fits in a banner is the
    * presenting side's decision, and truncating twice would leave the transcript
    * and the notification disagreeing about the same sentence.
    */
-  summary?: string;
+  summary?: string | null;
+  /**
+   * True when the turn that reached this status produced NOTHING but the CLI's
+   * own context compaction — absent on every other announce, settle or not.
+   *
+   * Housekeeping is the word the compaction event already uses for itself, and
+   * it is the whole point: `/compact` is an ordinary turn on the wire (the
+   * user's command, the CLI's summary row, a terminal item), so it settled the
+   * run like any other and earned a banner and a sidebar mark. Reported as
+   * "когда я делаю компакт, мне отправляется нотификация … не нужно
+   * нотификации, когда компакт сработает".
+   *
+   * Said by the DAEMON rather than derived by the client, because the client
+   * that has to act on it is the one NOT looking: a background chat's items are
+   * never loaded, so the renderer's own structural reader (`compactionOnlyTurnEnds`,
+   * which hides the redundant `✓ done` in the transcript) can only answer for
+   * the chat on screen — the one case where no banner fires anyway.
+   *
+   * Structural, never a match on the text `/compact`: a user may type that
+   * string as prose, and an AUTOMATIC compaction lands in the middle of a turn
+   * doing real work, which must still announce itself.
+   */
+  housekeeping?: boolean;
+  /**
+   * True when this status is being HANDED BACK rather than newly reached —
+   * absent on every other announce.
+   *
+   * The one producer is the delegate lease expiring: it wrote a temporary
+   * `running` over a run that had already settled, so handing the badge back is
+   * a second non-terminal→terminal crossing for a turn that ended minutes ago.
+   * Without this the client reads it as a fresh ending and fires another
+   * banner and another sidebar mark — the same unwanted-notification complaint
+   * {@link RunStatusEvent.housekeeping} exists for, arriving by a different
+   * route. Separate from that flag because the two say different things: one is
+   * about what the TURN was, this is about whether the status is news at all.
+   *
+   * A restore also carries no {@link RunStatusEvent.summary}. Every other
+   * terminal write states the field, null included, so a wordless turn cannot
+   * inherit the previous one's closing words; a restore is not a turn ending
+   * and has nothing to say, so omitting it leaves the sentence the real settle
+   * already gave the client standing instead of blanking it.
+   */
+  restored?: boolean;
 }
 
 /**

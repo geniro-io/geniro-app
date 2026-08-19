@@ -36,8 +36,10 @@ export const createChatSchema = z.object({
   approval: ChatApprovalModeSchema.optional(),
   /**
    * Reasoning effort in the CLI's own vocabulary; omitted = its default. A
-   * plain string here and checked against the adapter's `listEfforts()` in
-   * the service — an enum would pin one CLI's levels into the shared schema.
+   * plain string here and checked by `EffortsService.accepts` in the service —
+   * against the adapter's `listEfforts()` for a CLI whose list is complete, and
+   * against the NAMED MODEL's own listing otherwise. An enum would pin one
+   * CLI's levels into the shared schema.
    */
   effort: z.string().min(1).optional(),
   /**

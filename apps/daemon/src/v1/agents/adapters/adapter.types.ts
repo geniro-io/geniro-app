@@ -480,11 +480,25 @@ type AgentEventBody =
        * usage (probe-verified on 2.1.220), so the meter can move DURING a turn
        * instead of jumping once at the end, which is what made it read stale.
        * EPHEMERAL, exactly like {@link AgentEvent} `text_delta`: never
-       * persisted, never replayed. The window it is measured against does NOT
-       * ride here — the CLI reports that only on the `result` line.
+       * persisted, never replayed.
        */
       type: 'context_progress';
       contextTokens: number;
+      /**
+       * The window those tokens are measured against, and which model it
+       * belongs to — when THIS reading knows them.
+       *
+       * Absent for a CLI whose two halves arrive on different lines: claude
+       * reports the used side on every `assistant` line and the window only on
+       * `result`, which is why the window used to ride nowhere but
+       * `turn_complete`. Present for one answering off its OWN accounting,
+       * where used and window are a single reading — and splitting them there
+       * would leave the meter a numerator with no denominator, which is
+       * precisely what a cursor chat showed: a full breakdown in the panel
+       * behind a ring that had never been given a window to be a fraction of.
+       */
+      contextWindowTokens?: number | null;
+      contextModel?: string | null;
     }
   | { type: 'reasoning'; text: string }
   | {
@@ -566,8 +580,9 @@ type AgentEventBody =
        */
       origin?: 'cli';
       /**
-       * How loud the daemon's own notice should be. Absent means `warning`,
-       * which is the historical case and what every degrade means.
+       * How loud the daemon's own notice should be. Absent means the failure
+       * chrome, which is the historical case for every producer that names no
+       * severity.
        *
        * `info` exists for the daemon notices that are not advisories about
        * something going wrong — the one that says a request the CLI raised
@@ -577,11 +592,19 @@ type AgentEventBody =
        * red, capitalised SYSTEM, two lines of explanation, directly above the
        * card it is pointing at. Nothing was wrong, so nothing should look it.
        *
+       * `warning` is the middle the same report asked for from the other side:
+       * a setting the user CHOSE did not apply, so it cannot be quiet — but the
+       * turn ran, so red is a lie about what happened ("a strange error … and
+       * then it carried on working"). It is the level for a DEGRADE the user
+       * can act on: a model that has no `max` effort, a mode the agent does not
+       * offer. Keeping it distinct from the absent case is the point — a
+       * producer that has not thought about volume still gets the loud one.
+       *
        * Meaningless beside `origin: 'cli'` and ignored there — relayed agent
        * text is never an advisory at any volume, and letting it choose its own
        * severity is exactly the impersonation `origin` exists to prevent.
        */
-      severity?: 'info';
+      severity?: 'info' | 'warning';
     }
   | {
       /**
@@ -774,11 +797,12 @@ type AgentEventBody =
        * The CLI reported the session's invokable slash commands (claude's
        * `system/init` `slash_commands`: built-ins + plugin skills + user and
        * project skills/commands, shadowing already resolved — verified live
-       * on 2.1.211). Captured into the skill-harvest store keyed by the
-       * turn's cwd — never a transcript item.
+       * on 2.1.211; cursor's ACP `available_commands_update`, which carries a
+       * description per entry). Captured into the skill-harvest store keyed by
+       * the turn's cwd — never a transcript item.
        */
       type: 'slash_commands';
-      commands: string[];
+      commands: AgentReportedCommand[];
     }
   | {
       /**
@@ -949,6 +973,40 @@ export interface AgentEffort {
 }
 
 /**
+ * The effort levels available for ONE model, and the reason when there are none.
+ *
+ * Per model rather than per CLI, because that is what the CLIs turned out to
+ * be — measured on cursor-agent 2026.08.11-e8db854, `claude-opus-5` takes
+ * `max` and `grok-4.6` does not, while `auto-smart` and `composer-2.5` have no
+ * effort axis whatever. A CLI-wide list therefore OFFERS values a given model
+ * refuses, which is exactly what got reported: a chat on Grok, its effort chip
+ * remembering `max` from an Opus run, opening every turn with a declined
+ * setting.
+ *
+ * `unavailableReason` is a SENTENCE and must be non-null whenever `efforts` is
+ * empty — the same contract `AdapterConfig.effortsUnavailableReason` carries,
+ * for the same reason: a picker that simply disappears is indistinguishable
+ * from one that is broken.
+ */
+export interface AgentEffortListing {
+  efforts: AgentEffort[];
+  unavailableReason: string | null;
+  /**
+   * True when this is the NAMED MODEL's own answer; false when it is the
+   * CLI-wide superset standing in for one.
+   *
+   * A picker treats the two alike — rows are rows, and the union is a decent
+   * stand-in. A REFUSAL cannot: the union omits levels a given model really
+   * offers (`gpt-5.2`'s `extra-high` is absent from cursor's), so refusing on
+   * it rejects a level the picker had just shown. The distinction is only
+   * visible here, because every fallback in this contract RESOLVES with the
+   * superset rather than throwing — a caller watching for a rejection sees a
+   * successful listing and cannot tell the two apart.
+   */
+  exact: boolean;
+}
+
+/**
  * One skill / slash command a CLI can be invoked with (`/name …`).
  *
  * `kind` separates a skill directory from a plain command file; `source` says
@@ -960,6 +1018,28 @@ export interface AgentSkillEntry {
   description: string | null;
   kind: 'skill' | 'command';
   source: 'project' | 'user' | 'cli';
+}
+
+/**
+ * One slash command a CLI reports it can run in a session — the normalized
+ * shape behind the `slash_commands` event and the skill harvest.
+ *
+ * A pair rather than a bare name, because a CLI that has no on-disk convention
+ * geniro can scan may still SAY what each command does, and that sentence is
+ * the whole value of an autocomplete row: cursor-agent's ACP
+ * `available_commands_update` carries `{name, description}` for every entry it
+ * reports (27 of them here on 2026.08.11-e8db854), and reading only the name
+ * left every cursor row in the composer's `/` popup a bare word — reported as
+ * having no hints for that CLI's skills at all.
+ *
+ * `description` is null for a CLI that names its commands and nothing more —
+ * claude's `system/init` `slash_commands` is an array of plain strings — and
+ * for that CLI the sentence comes from the disk scan instead, which is why the
+ * two sources are merged rather than one chosen.
+ */
+export interface AgentReportedCommand {
+  name: string;
+  description: string | null;
 }
 
 /**
@@ -2068,6 +2148,27 @@ export interface AdapterConfig {
    * the answer that helps is where the value actually lives.
    */
   readonly effortsUnavailableReason: string | null;
+  /**
+   * Whether {@link efforts} is the WHOLE vocabulary, or only the part of it a
+   * static list can hold.
+   *
+   * It decides one thing: whether the daemon refuses an unknown level UP FRONT,
+   * at run creation, or lets the turn report what the agent said about it.
+   *
+   * True for a CLI whose levels belong to the BINARY — claude's `--effort` takes
+   * the same words whichever model runs, so a word outside the list is one the
+   * CLI will silently ignore, and refusing it is the only way the user learns.
+   *
+   * False for a CLI whose levels belong to the MODEL, where the list is a UNION
+   * of the ones seen and cannot be complete: cursor's `gpt-5.2` offers
+   * `extra-high`, which no other model has, so an exhaustive check refused a
+   * level the CLI genuinely accepts and the run could not be created at all.
+   * Such a CLI is not left unguarded — its driver checks the value against the
+   * model's own options and says on the transcript when one does not apply,
+   * which is both more accurate and available per turn rather than per app
+   * release.
+   */
+  readonly effortsAreExhaustive: boolean;
 
   // ── Models ──────────────────────────────────────────────────────────────
   /**

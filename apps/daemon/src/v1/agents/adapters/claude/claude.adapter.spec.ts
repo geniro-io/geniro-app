@@ -229,8 +229,17 @@ describe('ClaudeAdapter', () => {
     // 22 tool schemas in every prompt, and useless without the Chrome
     // extension — so this one is a setting, arriving as a GENIRO_-prefixed var
     // on the DAEMON's env and leaving as the CLI's own name.
+    //
+    // BOTH names have to be cleared, not just the setting. The adapter builds
+    // the child env over `process.env`, so an ambient `CLAUDE_CODE_ENABLE_CFC`
+    // reaches the child on its own and the "off" assertion below sees a `1`
+    // nothing in this test asked for. That is not hypothetical: it is set
+    // inside every Claude Code session, so this spec passed on CI and failed
+    // for anyone — or any agent — running the suite from one.
     const previous = process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
+    const previousInherited = process.env[CLAUDE_BROWSER_TOOLS_ENV];
     delete process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
+    delete process.env[CLAUDE_BROWSER_TOOLS_ENV];
     try {
       const off = fakeSpawn();
       new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
@@ -256,6 +265,11 @@ describe('ClaudeAdapter', () => {
         delete process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV];
       } else {
         process.env[CLAUDE_BROWSER_TOOLS_SETTING_ENV] = previous;
+      }
+      if (previousInherited === undefined) {
+        delete process.env[CLAUDE_BROWSER_TOOLS_ENV];
+      } else {
+        process.env[CLAUDE_BROWSER_TOOLS_ENV] = previousInherited;
       }
     }
   });
@@ -1592,9 +1606,9 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     child.stdout.emitData(initLine(['clear', 'compact', 'geniro:review']));
 
     await expect(reported).resolves.toEqual([
-      'clear',
-      'compact',
-      'geniro:review',
+      { name: 'clear', description: null },
+      { name: 'compact', description: null },
+      { name: 'geniro:review', description: null },
     ]);
   });
 
@@ -1634,7 +1648,10 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
       initLine(['clear', '__remote-workflow', '_hidden', 'compact']),
     );
 
-    await expect(reported).resolves.toEqual(['clear', 'compact']);
+    await expect(reported).resolves.toEqual([
+      { name: 'clear', description: null },
+      { name: 'compact', description: null },
+    ]);
   });
 
   it('caps the reported list at 500, however much the CLI claims', async () => {

@@ -66,21 +66,40 @@ export interface AgentCount {
 /**
  * 
  * @export
- * @interface AgentEffortDto
+ * @interface AgentEffort
  */
-export interface AgentEffortDto {
+export interface AgentEffort {
     /**
      * Passed verbatim to the CLI as `--effort <id>`
      * @type {string}
-     * @memberof AgentEffortDto
+     * @memberof AgentEffort
      */
     id: string;
     /**
      * 
      * @type {string}
-     * @memberof AgentEffortDto
+     * @memberof AgentEffort
      */
     label: string;
+}
+/**
+ * 
+ * @export
+ * @interface AgentEffortListingDto
+ */
+export interface AgentEffortListingDto {
+    /**
+     * 
+     * @type {Array<AgentEffort>}
+     * @memberof AgentEffortListingDto
+     */
+    efforts: Array<AgentEffort>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentEffortListingDto
+     */
+    unavailableReason: string | null;
 }
 /**
  * 

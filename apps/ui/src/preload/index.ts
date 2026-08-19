@@ -85,6 +85,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
       GeniroApi['switchBranch']
     >,
+  pullBranch: (dir) =>
+    ipcRenderer.invoke(IPC.pullBranch, dir) as ReturnType<
+      GeniroApi['pullBranch']
+    >,
   revealPath: (path) =>
     ipcRenderer.invoke(IPC.revealPath, path) as ReturnType<
       GeniroApi['revealPath']

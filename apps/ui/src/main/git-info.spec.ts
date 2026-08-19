@@ -5,7 +5,12 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { readGitInfo, switchBranch } from './git-info';
+import {
+  pullBranch,
+  pullStashIsOurs,
+  readGitInfo,
+  switchBranch,
+} from './git-info';
 
 /**
  * Driven against REAL repositories, not a mocked `execFile`. The behaviour
@@ -35,6 +40,19 @@ let dir = '';
 
 const run = (args: string[], cwd = dir): string =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+/**
+ * Like {@link run}, but for a git command that is EXPECTED to exit non-zero —
+ * a conflicted `merge` exits 1 by design, and only the resulting repo state
+ * matters to the tests that use this.
+ */
+const runIgnoringFailure = (args: string[], cwd = dir): void => {
+  try {
+    execFileSync('git', args, { cwd, encoding: 'utf8' });
+  } catch {
+    // Intentional: the caller wants the state a failing command leaves behind.
+  }
+};
 
 /** A repo on `main` with one commit. */
 function initRepo(): void {
@@ -111,6 +129,7 @@ describe('switchBranch', () => {
       ok: true,
       branch: 'feat/chips',
       error: null,
+      dirty: false,
     });
     expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('feat/chips');
   });
@@ -144,6 +163,9 @@ describe('switchBranch', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Uncommitted changes');
+    // The refusal names itself as the DIRTY one, which is what earns it a
+    // warning tone and the Pull offer rather than a red error strip.
+    expect(result.dirty).toBe(true);
     expect(result.branch).toBe('main');
     // The guard's whole purpose: the tree is untouched.
     expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
@@ -159,6 +181,7 @@ describe('switchBranch', () => {
       ok: true,
       branch: 'main',
       error: null,
+      dirty: false,
     });
   });
 
@@ -177,6 +200,215 @@ describe('switchBranch', () => {
       ok: false,
       branch: null,
       error: 'Not a git repository',
+      dirty: false,
     });
+  });
+});
+
+describe('pullBranch', () => {
+  /**
+   * A real upstream: an `origin` repo with a second commit in it, and `dir`
+   * cloned off it and one commit behind. Real repositories throughout, for the
+   * reason at the top of this file — what is under test is git's own behaviour
+   * when a fast-forward meets a dirty tree, and a mocked `execFile` would only
+   * replay this file's guess about it.
+   */
+  let origin = '';
+
+  function initClone(): void {
+    origin = mkdtempSync(join(tmpdir(), 'geniro-git-origin-'));
+    run(['init', '-b', 'main', '-q', origin], tmpdir());
+    run(['config', 'user.email', 'test@example.com'], origin);
+    run(['config', 'user.name', 'Test'], origin);
+    writeFileSync(join(origin, 'README.md'), 'hello\n');
+    run(['add', '.'], origin);
+    run(['commit', '-q', '-m', 'init'], origin);
+    // Clone into the ALREADY-CREATED temp dir, which git only allows when it is
+    // empty — it is, `beforeEach` just made it.
+    run(['clone', '-q', origin, dir], tmpdir());
+    run(['config', 'user.email', 'test@example.com']);
+    run(['config', 'user.name', 'Test']);
+  }
+
+  /** One more commit on the upstream, so the clone is a fast-forward behind. */
+  function advanceOrigin(): void {
+    writeFileSync(join(origin, 'UPSTREAM.md'), 'from the remote\n');
+    run(['add', '.'], origin);
+    run(['commit', '-q', '-m', 'upstream moved'], origin);
+  }
+
+  afterEach(() => {
+    if (origin !== '') {
+      rmSync(origin, { recursive: true, force: true });
+      origin = '';
+    }
+  });
+
+  it('fast-forwards a clean clone', async () => {
+    initClone();
+    advanceOrigin();
+
+    expect(await pullBranch(dir)).toEqual({
+      ok: true,
+      branch: 'main',
+      error: null,
+      stashLeft: null,
+    });
+    expect(run(['log', '-1', '--format=%s'])).toBe('upstream moved');
+  });
+
+  it('keeps uncommitted work across the pull — the whole point of the button', async () => {
+    // The reported ask, in one case: the branch moves AND the edits are still
+    // there afterwards. A pull that quietly stashed them and left them stashed
+    // would look exactly like the work had been destroyed.
+    initClone();
+    advanceOrigin();
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+    writeFileSync(join(dir, 'NEW.md'), 'not even added yet\n');
+
+    const result = await pullBranch(dir);
+
+    expect(result).toEqual({
+      ok: true,
+      branch: 'main',
+      error: null,
+      stashLeft: null,
+    });
+    expect(run(['log', '-1', '--format=%s'])).toBe('upstream moved');
+    const status = run(['status', '--porcelain']);
+    expect(status).toContain('README.md');
+    // `--include-untracked`, so a file the user had not added yet comes back
+    // too. Without it the pull silently swallows brand-new files.
+    expect(status).toContain('NEW.md');
+    expect(run(['stash', 'list'])).toBe('');
+  });
+
+  it('puts the work back even when the pull itself is refused', async () => {
+    // The one outcome this must never produce is hidden work: stash, fail,
+    // walk away. Diverging the clone makes `--ff-only` refuse for real.
+    initClone();
+    advanceOrigin();
+    writeFileSync(join(dir, 'LOCAL.md'), 'a local commit\n');
+    run(['add', '.']);
+    run(['commit', '-q', '-m', 'diverge']);
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+
+    const result = await pullBranch(dir);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.stashLeft).toBeNull();
+    expect(run(['status', '--porcelain'])).toContain('README.md');
+    expect(run(['stash', 'list'])).toBe('');
+  });
+
+  it('refuses a folder that is not a repository', async () => {
+    expect(await pullBranch(dir)).toEqual({
+      ok: false,
+      branch: null,
+      error: 'Not a git repository',
+      stashLeft: null,
+    });
+  });
+
+  it('refuses a detached HEAD rather than guessing which ref to pull', async () => {
+    initClone();
+    run(['checkout', '-q', '--detach', 'HEAD']);
+
+    const result = await pullBranch(dir);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Detached HEAD');
+  });
+
+  it('aborts rather than pulling when the stash push itself fails', async () => {
+    // `git stash push` refuses outright on unmerged paths ("needs merge"),
+    // which is a real, reproducible way to make the push itself fail without
+    // mocking or racing a timeout. A merge conflict is unrelated to the
+    // remote — it only needs to leave the tree dirty via unmerged entries.
+    initClone();
+    run(['checkout', '-q', '-b', 'feature']);
+    writeFileSync(join(dir, 'README.md'), 'feature change\n');
+    run(['commit', '-q', '-am', 'feature change']);
+    run(['checkout', '-q', 'main']);
+    writeFileSync(join(dir, 'README.md'), 'main change\n');
+    run(['commit', '-q', '-am', 'main change']);
+    runIgnoringFailure(['merge', 'feature', '-q']);
+    expect(run(['status', '--porcelain'])).toContain('UU README.md');
+
+    const result = await pullBranch(dir);
+
+    expect(result.ok).toBe(false);
+    expect(result.stashLeft).toBeNull();
+    // The stash push's OWN reason, not `git pull`'s — which would read
+    // "Pulling is not possible…" instead, and only appears if the code went
+    // on to run `pull` after a stash push it never checked the result of.
+    expect(result.error).toContain('could not write index');
+    // The tree is exactly as it was left by the conflict — nothing was moved
+    // aside, and no fast-forward was attempted against it.
+    expect(run(['status', '--porcelain'])).toContain('UU README.md');
+    expect(run(['stash', 'list'])).toBe('');
+  });
+
+  it('pops only its own entry, leaving an earlier unrelated stash in place', async () => {
+    // The pull's own entry is what
+    // gets identified and popped, and an entry it did not push (however it
+    // got there — a concurrent writer being the case that motivates the
+    // check) is never touched.
+    initClone();
+    advanceOrigin();
+    writeFileSync(join(dir, 'OTHER.md'), 'somebody else’s work\n');
+    run(['add', '.']);
+    run(['stash', 'push', '--message', 'not this pull']);
+    expect(run(['stash', 'list'])).toContain('not this pull');
+
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+
+    const result = await pullBranch(dir);
+
+    expect(result).toEqual({
+      ok: true,
+      branch: 'main',
+      error: null,
+      stashLeft: null,
+    });
+    // This pull's own change came back…
+    expect(run(['status', '--porcelain'])).toContain('README.md');
+    // …and the unrelated entry beneath it was left alone, never popped into
+    // the tree.
+    const stashList = run(['stash', 'list']);
+    expect(stashList).toContain('not this pull');
+    expect(run(['status', '--porcelain'])).not.toContain('OTHER.md');
+  });
+});
+
+describe('pullStashIsOurs', () => {
+  // The two mistakes this guards, each of which pops work the pull never moved.
+  it('refuses a LEFTOVER entry the push did not create', () => {
+    // `git stash push` on a tree that is not really dirty exits 0 and creates
+    // nothing — reachable because a FAILED `git status` is reported as dirty. If
+    // an earlier run's pop conflicted, its entry is still the tip and still
+    // carries the message, so the subject alone says "mine".
+    expect(pullStashIsOurs('abc123', 'abc123', 'On main: geniro: pull')).toBe(
+      false,
+    );
+  });
+
+  it('refuses a tip somebody ELSE pushed', () => {
+    // A concurrent `git stash` in the user's own terminal moves the ref, so the
+    // ref alone says "mine" too.
+    expect(pullStashIsOurs('abc123', 'def456', 'On main: WIP')).toBe(false);
+  });
+
+  it('accepts only a moved ref carrying this pull’s own message', () => {
+    expect(pullStashIsOurs('abc123', 'def456', 'On main: geniro: pull')).toBe(
+      true,
+    );
+    // First stash in the repo: nothing before, something after.
+    expect(pullStashIsOurs(null, 'def456', 'On main: geniro: pull')).toBe(true);
+  });
+
+  it('refuses when there is no stash at all', () => {
+    expect(pullStashIsOurs(null, null, null)).toBe(false);
   });
 });

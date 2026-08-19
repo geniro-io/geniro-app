@@ -295,27 +295,38 @@ export const SubagentBlock = memo(function SubagentBlock({
         toggleLabel={`Show ${title}'s conversation`}
         header={
           <>
-            <InitialsAvatar name={title} colorKey={block.id} />
+            {/* `sm` — a 20px disc rather than 32px. At the old size the avatar
+                set the height of the whole header, so a closed delegate was a
+                44px band for one line of text. It is still the thing that tells
+                two parallel delegates apart at a glance, which is why it is
+                shrunk rather than dropped. */}
+            <InitialsAvatar name={title} colorKey={block.id} size="sm" />
             <BlockTitle>{title}</BlockTitle>
-            {block.kind && block.label ? (
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {block.kind}
-              </span>
-            ) : null}
-            {toolCount > 0 ? (
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {toolCount} tool{toolCount === 1 ? '' : 's'}
-              </span>
-            ) : null}
-            {/* On the header rather than only inside, because the block is
-                CLOSED by default: "how far is this delegate through its own
-                plan" is the one thing worth knowing without opening it. */}
-            {tasks !== null ? (
-              <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-                <ListChecks aria-hidden="true" className="size-3" />
-                <TaskCount done={tasks.done} total={tasks.total} />
-              </span>
-            ) : null}
+            {/* The three facts about the delegate as ONE run of text with
+                middots, not three spans the header's `gap-2` pushes apart. They
+                answer one question — what this delegate is and how much it did —
+                and spaced out they read as three unrelated chips. */}
+            <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+              {block.kind && block.label ? <span>{block.kind}</span> : null}
+              {block.kind && block.label && toolCount > 0 ? (
+                <span>·</span>
+              ) : null}
+              {toolCount > 0 ? (
+                <span>
+                  {toolCount} tool{toolCount === 1 ? '' : 's'}
+                </span>
+              ) : null}
+              {/* On the header rather than only inside, because the block is
+                  CLOSED by default: "how far is this delegate through its own
+                  plan" is the one thing worth knowing without opening it. */}
+              {tasks !== null ? (
+                <>
+                  {block.kind || toolCount > 0 ? <span>·</span> : null}
+                  <ListChecks aria-hidden="true" className="size-3" />
+                  <TaskCount done={tasks.done} total={tasks.total} />
+                </>
+              ) : null}
+            </span>
           </>
         }
         // A real <button>, and it sits BESIDE the disclosure rather than
@@ -330,9 +341,9 @@ export const SubagentBlock = memo(function SubagentBlock({
               size="icon"
               className="size-6 shrink-0 text-muted-foreground"
               aria-label={`Open ${title} in a panel`}
-              title="Open this sub-agent's timeline and conversation"
+              title="Open this sub-agent's conversation"
               onClick={() => openDetail(block)}>
-              <Maximize2 className="size-3.5 shrink-0" />
+              <Maximize2 className="size-3 shrink-0" />
             </Button>
           ) : null
         }>

@@ -6,15 +6,25 @@
  * keeping the network shape here means the service can be driven in a spec
  * with a hand-written release and no fetch at all.
  *
- * The app is ad-hoc signed (no Apple Developer ID, no notarization), so
- * Squirrel.Mac — and therefore electron-updater over it — is not available: it
- * validates a downloaded bundle against the running app's designated
- * requirement, and an ad-hoc identity's requirement is a `cdhash` no later
- * build can ever match. What replaces it is the install script's own sequence,
- * moved into the app: resolve the release, download the zip, verify it against
- * the published checksum, swap the bundle. The checksum is not belt-and-braces
- * there — with no code signature it is the ONLY thing standing between a
- * tampered download and an executing app.
+ * The app is signed with Geniro's own self-signed certificate and is NOT
+ * notarized (no Apple Developer ID), so Gatekeeper has no verdict it will act
+ * on: the cask and install script strip quarantine, and nothing between the
+ * release that was built and the code about to execute as the user is checked
+ * by the system. What replaces it is the install script's own sequence, moved
+ * into the app: resolve the release, download the zip, verify it against the
+ * published checksum, swap the bundle. The checksum is not belt-and-braces
+ * there — it is the ONLY thing standing between a tampered download and an
+ * executing app.
+ *
+ * electron-updater stays out for the same reason it always did, minus one
+ * argument that has since expired. Its macOS path is Squirrel.Mac, which
+ * validates a downloaded bundle against the RUNNING app's designated
+ * requirement; that used to be an ad-hoc `cdhash` no later build could ever
+ * match, and since the release certificate landed (`scripts/build-mac.mjs`) it
+ * is a stable expression naming that certificate — so the blocker is now a
+ * choice rather than an impossibility. What is left is that this path already
+ * exists, verifies its own downloads, and handles the cases Squirrel does not
+ * know about here (a translocated or read-only install → `brew upgrade`).
  */
 const RELEASES_API =
   'https://api.github.com/repos/geniro-io/geniro-app/releases/latest';

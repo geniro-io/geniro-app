@@ -10,7 +10,10 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { AgentCommandOptions } from '../adapters/adapter.types';
+import type {
+  AgentCommandOptions,
+  AgentReportedCommand,
+} from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -49,6 +52,12 @@ function writeCommand(
   writeFileSync(path, content);
 }
 
+/** A reported command with no sentence — claude's whole report shape. */
+const named = (name: string): AgentReportedCommand => ({
+  name,
+  description: null,
+});
+
 /**
  * The real adapters — so the composition under test runs against the real disk
  * scan — with only the CLI-asking method scripted, since that spawns a turn.
@@ -56,13 +65,13 @@ function writeCommand(
 class ScriptedClaude extends ClaudeAdapter {
   asked = 0;
 
-  constructor(private readonly reported: string[]) {
+  constructor(private readonly reported: AgentReportedCommand[]) {
     super();
   }
 
   override listReportedCommands(
     _options: AgentCommandOptions = {},
-  ): Promise<string[]> {
+  ): Promise<AgentReportedCommand[]> {
     this.asked += 1;
     return Promise.resolve(this.reported);
   }
@@ -71,14 +80,14 @@ class ScriptedClaude extends ClaudeAdapter {
 class ScriptedCursor extends CursorAcpAdapter {
   asked = 0;
 
-  override listReportedCommands(): Promise<string[]> {
+  override listReportedCommands(): Promise<AgentReportedCommand[]> {
     this.asked += 1;
     return Promise.resolve([]);
   }
 }
 
 function build(
-  catalog: string[] = [],
+  catalog: AgentReportedCommand[] = [],
   options: { now?: () => number; catalogTtlMs?: number } = {},
 ): {
   service: SkillsService;
@@ -163,9 +172,9 @@ describe('SkillsService', () => {
     // The harvest is keyed by the CANONICAL cwd — exactly what the executor
     // records (its cwd went through resolveValidCwd).
     harvest.record('claude', realpathSync(cwd), [
-      'compact',
-      'deploy',
-      'review',
+      named('compact'),
+      named('deploy'),
+      named('review'),
     ]);
 
     const skills = await service.list('claude', cwd);
@@ -187,7 +196,11 @@ describe('SkillsService', () => {
     // The gap this closes: the harvest only exists once a turn has run in a
     // folder, and built-ins live in the binary, not on disk — so a fresh
     // folder used to autocomplete to NOTHING.
-    const { service, cwd } = build(['clear', 'compact', 'geniro:review']);
+    const { service, cwd } = build([
+      named('clear'),
+      named('compact'),
+      named('geniro:review'),
+    ]);
 
     const skills = await service.list('claude', cwd);
     expect(skills).toEqual([
@@ -203,7 +216,7 @@ describe('SkillsService', () => {
   });
 
   it('lets a scanned skill keep its metadata over a reported name', async () => {
-    const { service, cwd } = build(['deploy', 'clear']);
+    const { service, cwd } = build([named('deploy'), named('clear')]);
     writeSkill(cwd, 'deploy', 'name: deploy\ndescription: Ship it');
 
     const skills = await service.list('claude', cwd);
@@ -218,10 +231,52 @@ describe('SkillsService', () => {
     ]);
   });
 
+  it('shows the DESCRIPTION a CLI reported for a command it alone knows', async () => {
+    // cursor-agent has no scannable convention behind its built-ins, and its
+    // ACP report is the only place their sentences exist. Reading just the
+    // name left every row in the popup a bare word — the reported defect.
+    const { service, cwd, harvest } = build();
+    harvest.record('cursor-agent', realpathSync(cwd), [
+      { name: 'shell', description: 'Runs the rest as a shell command' },
+    ]);
+
+    const skills = await service.list('cursor-agent', cwd);
+    expect(skills).toEqual([
+      {
+        name: 'shell',
+        description: 'Runs the rest as a shell command',
+        kind: 'command',
+        source: 'cli',
+      },
+    ]);
+  });
+
+  it('fills a SCANNED entry’s missing description from the CLI’s report', async () => {
+    // First occurrence still wins the entry — the row keeps `command`/`project`
+    // — but a file with no frontmatter description scans to a bare name, and
+    // preferring that silence would throw away the only sentence anyone has.
+    const { service, cwd, harvest } = build();
+    // Frontmatter naming no description and no body to fall back on.
+    writeCommand(cwd, '.cursor', 'fix.md', '---\nallowed-tools: Bash\n---\n');
+    harvest.record('cursor-agent', realpathSync(cwd), [
+      { name: 'fix', description: 'Repair the failing build' },
+    ]);
+
+    const skills = await service.list('cursor-agent', cwd);
+    expect(skills).toEqual([
+      {
+        name: 'fix',
+        description: 'Repair the failing build',
+        kind: 'command',
+        source: 'project',
+      },
+    ]);
+  });
+
   it('asks each CLI only about itself', async () => {
-    const { service, cwd, harvest, claude, cursor } = build(['clear']);
+    const { service, cwd, harvest, claude, cursor } = build([named('clear')]);
     writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
-    harvest.record('claude', realpathSync(cwd), ['compact']);
+    harvest.record('claude', realpathSync(cwd), [named('compact')]);
 
     // The claude harvest and the claude catalog are claude's alone: neither
     // may leak into what a cursor chat is told it can run.
@@ -234,7 +289,7 @@ describe('SkillsService', () => {
   it('asks the CLI once and reuses the answer across folders', async () => {
     // Asking costs a (cancelled) turn — the composer reads this list on every
     // folder change.
-    const { service, cwd, claude } = build(['clear']);
+    const { service, cwd, claude } = build([named('clear')]);
     const other = tempDir('skills-other-');
 
     await service.list('claude', cwd);
@@ -245,7 +300,7 @@ describe('SkillsService', () => {
 
   it('re-asks once the cached answer goes stale', async () => {
     let clock = 1_000;
-    const { service, cwd, claude } = build(['clear'], {
+    const { service, cwd, claude } = build([named('clear')], {
       now: () => clock,
       catalogTtlMs: 500,
     });
@@ -258,7 +313,7 @@ describe('SkillsService', () => {
   });
 
   it('coalesces concurrent reads into ONE ask', async () => {
-    const { service, cwd, claude } = build(['clear']);
+    const { service, cwd, claude } = build([named('clear')]);
 
     await Promise.all([
       service.list('claude', cwd),

@@ -166,6 +166,7 @@ function startDaemon() {
 function stubScript(handle) {
   const h = JSON.stringify(handle);
   const cwd = JSON.stringify(RUN_CWD);
+  const gitStub = JSON.stringify(process.env.GENIRO_RUN_GIT === 'dirty');
   const claude = JSON.stringify(findCli('claude') || '/usr/bin/claude');
   const cursorPath = findCli('cursor-agent');
   const cursor = JSON.stringify(cursorPath);
@@ -176,6 +177,24 @@ function stubScript(handle) {
   const recentConfigDirs = process.env.GENIRO_RUN_CONFIG_DIR
     ? `[${configDir}]`
     : '[]';
+  // The update surface is unreachable here otherwise: main is what decides
+  // there is a release, and this harness has no main. `GENIRO_FAKE_UPDATE`
+  // makes the stub report one so the nav rail's update control can actually be
+  // driven and screenshotted — set it to a version (`1.47.0`), optionally with
+  // a phase after a colon (`1.47.0:downloading:0.62`).
+  const [fakeVersion, fakePhase = 'available', fakeProgress = null] = (
+    process.env.GENIRO_FAKE_UPDATE ?? ''
+  ).split(':');
+  const updateState = JSON.stringify({
+    phase: fakeVersion ? fakePhase : 'idle',
+    version: fakeVersion || null,
+    progress: fakeProgress === null ? null : Number(fakeProgress),
+    message: null,
+    currentVersion: '0.0.0-run-desktop',
+    // True only for a faked offer — a real unpackaged launch can install
+    // nothing, and saying otherwise would hide the control under test.
+    canInstall: Boolean(fakeVersion),
+  });
   return `window.geniro = {
     getStatus: async () => ({ onboardingComplete: true, daemon: { connected: true, handle: ${h} } }),
     getDaemonHandle: async () => (${h}),
@@ -189,11 +208,49 @@ function stubScript(handle) {
     // invocation here. Without the stub the button throws instead of no-opping,
     // which reads as a broken control rather than a stubbed one.
     openInTerminal: async () => ({ ok: true }),
-    pickWorkflowImport: async () => null, pickWorkflowExport: async () => null, checkForUpdates: async () => ({ status: 'dev', version: null, message: null }),
+    pickWorkflowImport: async () => null, pickWorkflowExport: async () => null,
+    // App self-update. There is no main process here, so nothing can actually
+    // update — but the shell SUBSCRIBES on mount (\`use-update-state.ts\`), so a
+    // missing \`onUpdateState\` throws the whole app to its error boundary
+    // before any view renders. The state is the honest one for this harness:
+    // an unpackaged launch that cannot replace itself.
+    getUpdateState: async () => (${updateState}),
+    checkForUpdates: async () => (${JSON.stringify({
+      phase: 'up-to-date',
+      version: null,
+      progress: null,
+      message: null,
+      currentVersion: '0.0.0-run-desktop',
+      canInstall: false,
+    })}),
+    installUpdate: async () => (${JSON.stringify({
+      phase: 'error',
+      version: null,
+      progress: null,
+      message: 'the run-desktop harness has no main process to install from',
+      currentVersion: '0.0.0-run-desktop',
+      canInstall: false,
+    })}),
+    relaunchForUpdate: async () => {},
+    onUpdateState: () => () => {},
     // The composer's branch chip calls these on mount; without them the whole
     // app shell throws to its error boundary before any view renders.
-    getGitInfo: async () => ({ isRepo: false, branch: null, branches: [], dirty: false }),
-    switchBranch: async () => ({ ok: false, branch: null, reason: 'not a repo in the run-desktop stub' }),
+    //
+    // GENIRO_RUN_GIT=dirty swaps the not-a-repo default for a repo with two
+    // branches and an unclean tree — the one state the composer's git strip has
+    // anything to say in. What it drives is the RENDERER's half (warning tone,
+    // the Pull offer, what a refused pull does to the strip); the git mechanics
+    // behind those calls are real-repository territory and are tested there, in
+    // apps/ui/src/main/git-info.spec.ts.
+    getGitInfo: async () => (${gitStub}
+      ? { isRepo: true, branch: 'main', branches: ['main', 'dev'], dirty: true }
+      : { isRepo: false, branch: null, branches: [], dirty: false }),
+    switchBranch: async () => (${gitStub}
+      ? { ok: false, branch: 'main', error: 'Uncommitted changes in this folder — the branch stays put', dirty: true }
+      : { ok: false, branch: null, error: 'not a repo in the run-desktop stub', dirty: false }),
+    pullBranch: async () => (${gitStub}
+      ? { ok: true, branch: 'main', error: null, stashLeft: null }
+      : { ok: false, branch: null, error: 'not a repo in the run-desktop stub', stashLeft: null }),
     // System notifications. There is no main process here, so a real macOS
     // banner is impossible — the calls are RECORDED instead, which is what
     // makes the half this harness CAN answer ("which thread earns one, and
@@ -285,6 +342,19 @@ const COMMANDS = {
   async approve() { log('approve →', await clickByText('Approve')); },
   async deny() { log('deny →', await clickByText('Deny')); },
   async ss(name) { const f = path.join(SHOT_DIR, (name || `ss-${Date.now()}`) + '.png'); await page.screenshot({ path: f }); log('screenshot:', f); },
+  // One ELEMENT, not the window: `ss-el <name> <css-sel>`. A full-window shot of
+  // a 220px rail or a status row is mostly empty page, and the detail the change
+  // is about ends up a few pixels tall — which is exactly the case where a
+  // screenshot is being used to judge a visual decision.
+  async 'ss-el'(rest) {
+    const i = rest.indexOf(' ');
+    if (i === -1) return log('usage: ss-el <name> <css-sel>');
+    const f = path.join(SHOT_DIR, rest.slice(0, i) + '.png');
+    const el = page.locator(rest.slice(i + 1)).first();
+    if (await el.count() === 0) return log('ss-el: NOT_FOUND', rest.slice(i + 1));
+    await el.screenshot({ path: f });
+    log('screenshot:', f);
+  },
   // Run an expression in the page (Playwright page.evaluate — page context, not Node).
   async js(expr) { try { log(JSON.stringify(await page.evaluate(expr))); } catch (e) { log('ERROR', e.message); } },
   async text(sel) { log(await page.evaluate((s) => (s ? document.querySelector(s) : document.body)?.innerText ?? '(null)', sel || null)); },

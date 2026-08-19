@@ -35,6 +35,7 @@ import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { AgentVersionService } from './agent-version.service';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
@@ -408,6 +409,15 @@ function fakeAdapter(kind: AgentKind): {
           ? Promise.resolve(kind === 'claude')
           : streamGate.then(() => kind === 'claude'),
       listEfforts: () => real.listEfforts(),
+      // The real one opens a handshake, which is the spawn this double exists
+      // to avoid — so it answers as the base does when it cannot ask: the
+      // CLI-wide union, marked INEXACT so it can never ground a refusal. A test
+      // that needs one model's own list stubs this.
+      listModelEfforts: async () => ({
+        efforts: [...real.getConfig().efforts],
+        unavailableReason: real.getConfig().effortsUnavailableReason,
+        exact: false,
+      }),
     } as unknown as ClaudeAdapter,
     start,
     emit: (event) => onEvent?.(event),
@@ -510,7 +520,11 @@ function setup(
     claude.adapter,
     cursor.adapter as unknown as CursorAcpAdapter,
   );
-  const efforts = new EffortsService(adapters);
+  const efforts = new EffortsService(
+    adapters,
+    new ProcessRegistry(),
+    new AgentVersionService(),
+  );
   // The REAL teardown over the same fakes: `delete` is a thin caller of it, so
   // a mock here would leave every assertion below pinning the mock.
   // A real one: it holds nothing but in-memory buffers, so a double would
@@ -597,6 +611,7 @@ function setup(
     approvals,
     claude,
     cursor,
+    efforts,
     claudeProbe,
     skillHarvest,
     mcpHarvest,
@@ -914,23 +929,26 @@ describe('ChatService', () => {
     await drain();
   });
 
-  it('marks a mid-turn message as one, and leaves an ordinary message unmarked', async () => {
-    // The renderer captions it, because the two sends look identical in the
-    // transcript and only this one has a wait built into it: the CLI reads it
-    // at its next tool boundary, so behind a long tool call the agent does
-    // nothing and the live row keeps naming the tool that was already running.
-    // Reported as "я его мгновенно отправляю … и он ничего не делает".
+  it('stamps a mid-turn message with nothing that says it was one', async () => {
+    // A `midTurn: true` flag used to ride on this payload so the renderer could
+    // caption the row; the caption was reported as noise under every such
+    // message and removed, and the flag went with it rather than staying as a
+    // key nothing reads.
+    //
+    // Asserted on the mid-turn message specifically — the ONE the flag was ever
+    // set on — so re-introducing it here fails rather than passing on the
+    // ordinary message that never carried it.
     const { service, claude } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
 
     const first = await service.sendMessage(run.id, 'first');
     const followUp = await service.sendMessage(run.id, 'and also this');
 
-    expect(followUp.payload).toMatchObject({ midTurn: true });
-    // The other half, and the one that makes the caption mean anything: a
-    // message that OPENED its turn is read at once and has nothing to explain,
-    // so a blanket stamp would caption every message in the app.
+    expect(followUp.payload).not.toHaveProperty('midTurn');
     expect(first.payload).not.toHaveProperty('midTurn');
+    // The message itself still arrives whole — this removed a caption, not a
+    // send.
+    expect(followUp.payload).toMatchObject({ text: 'and also this' });
 
     claude.finish();
     await drain();
@@ -1041,7 +1059,13 @@ describe('ChatService', () => {
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
 
     await service.sendMessage(run.id, 'go');
-    claude.emit({ type: 'slash_commands', commands: ['deploy', 'compact'] });
+    claude.emit({
+      type: 'slash_commands',
+      commands: [
+        { name: 'deploy', description: null },
+        { name: 'compact', description: null },
+      ],
+    });
     claude.emit({
       type: 'turn_complete',
       usage: null,
@@ -1056,7 +1080,10 @@ describe('ChatService', () => {
     expect(skillHarvest.record).toHaveBeenCalledWith(
       'claude',
       realpathSync(dir),
-      ['deploy', 'compact'],
+      [
+        { name: 'deploy', description: null },
+        { name: 'compact', description: null },
+      ],
     );
     // The report never becomes a transcript row — no persisted payload
     // carries the harvested names.
@@ -1911,19 +1938,22 @@ describe('ChatService — approval modes (parity M1)', () => {
       "claude does not accept the reasoning effort 'ultrathink'",
     );
 
-    // cursor-agent DOES list levels now (its ACP `effort` config option), but
-    // not claude's `ultracode` — so the refusal is about the asked-of CLI's own
-    // vocabulary rather than about cursor having none.
+    // cursor-agent is NOT refused up front, and that asymmetry is the rule
+    // rather than an oversight: its levels belong to the MODEL, so the config
+    // list is a union that cannot be complete — `gpt-5.2` offers `extra-high`,
+    // which no other model has. Checking it exhaustively refused that level and
+    // the chat could not be created at all, on a value the picker had just
+    // shown. What guards this CLI instead is its turn driver, which checks the
+    // value against the model that will run it.
     const cursorRun = await service.createChat({
       agentKind: 'cursor-agent',
       cwd: dir,
     });
-    await expect(
-      service.updateSettings(cursorRun.id, { effort: 'ultracode' }),
-    ).rejects.toThrow(
-      "cursor-agent does not accept the reasoning effort 'ultracode'",
-    );
-    // …and a level it DOES list goes through, which is the whole feature.
+    expect(
+      (await service.updateSettings(cursorRun.id, { effort: 'extra-high' }))
+        .effort,
+    ).toBe('extra-high');
+    // …and a level in its own union goes through too, which is the whole feature.
     expect(
       (await service.updateSettings(cursorRun.id, { effort: 'xhigh' })).effort,
     ).toBe('xhigh');
@@ -2012,6 +2042,34 @@ describe('ChatService — approval modes (parity M1)', () => {
       contextTokens: 26_000,
       contextWindowTokens: 1_000_000,
     });
+    claude.finish();
+    await drain();
+  });
+
+  it('scales the meter from a reading that carries its OWN window', async () => {
+    // The reported defect: a cursor chat's readout showed `101.1k of 200k ·
+    // 51%` while the ring beside it sat empty. Its figures come from that CLI's
+    // own store rather than from the wire, so used and window arrive TOGETHER —
+    // and a window that only ever rode `turn_complete` left the ring a
+    // numerator with no denominator until the turn was over.
+    const { service, claude, deltas } = setup();
+    const chat = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(chat.id, 'go');
+    claude.emit({
+      type: 'context_progress',
+      contextTokens: 101_100,
+      contextWindowTokens: 200_000,
+      contextModel: 'cursor-grok-4.6',
+    });
+    await drain();
+
+    // Both halves on the SAME delta — not one now and the other after the turn.
+    expect(deltas.at(-1)).toMatchObject({
+      runId: chat.id,
+      contextTokens: 101_100,
+      contextWindowTokens: 200_000,
+    });
+
     claude.finish();
     await drain();
   });
@@ -3189,6 +3247,511 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(itemDao.items.at(-1)?.kind).toBe('subagent_info');
   });
 
+  it('puts the badge back to running while a DELEGATE goes on producing rows', async () => {
+    // "выполняются какие-то внутренние процессы, но он показывается как
+    // Completed" — a delegate whose launching `Task` call already returned has
+    // nothing holding the turn open for it, so the result line settles the run
+    // while its steps keep arriving. Reproduced against the real renderer: two
+    // sub-agent blocks climbing to 7 tool calls under a `✓ completed` header.
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    statuses.length = 0;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'toolu_task_1',
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    expect(statuses.at(-1)?.activity).toContain('still working');
+  });
+
+  it('renews a delegate lease without writing the status again', async () => {
+    // A working delegate emits rows continuously, and re-arming an expiry must
+    // not cost a write per row — the same short-circuit the thinking path has.
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    statuses.length = 0;
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    for (let step = 0; step < 6; step += 1) {
+      emit?.({
+        type: 'tool_call',
+        id: `call-${step}`,
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_task_1',
+      });
+    }
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    expect(statuses.filter((entry) => entry.status === 'running')).toHaveLength(
+      1,
+    );
+  });
+
+  it('keeps the badge while a delegate RENEWS its lease past the first window', async () => {
+    // `DELEGATE_ROW_LEASE_MS`'s whole contract is that the claim expires unless
+    // the delegate renews it by producing another row. Without the renewal the
+    // first row's timer fires on schedule however long the delegate works, so
+    // the badge drops back to `completed` under sub-agent blocks still filling
+    // — the defect the lease exists to remove.
+    //
+    // The neighbouring "renews … without writing the status again" test cannot
+    // see this: with the renewal deleted, a second row falls through to the
+    // `run.status === 'running'` guard and the single write it counts is
+    // preserved by that guard instead.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { service, claude, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+
+      const emit = claude.sessions[0]?.onBetweenTurnEvent;
+      const delegateRow = (id: string): void => {
+        emit?.({
+          type: 'tool_call',
+          id,
+          name: 'Read',
+          input: {},
+          parentToolUseId: 'toolu_task_1',
+        });
+      };
+
+      delegateRow('call-1');
+      await drain();
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+
+      // Four minutes in — still inside the window — a second row re-arms it.
+      await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+      await drain();
+      delegateRow('call-2');
+      await drain();
+
+      // Eight minutes after the FIRST row: past its own expiry, and four
+      // minutes into the renewed one.
+      await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+      await drain();
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+
+      // Nothing renews it now, so the renewed window is the one that expires.
+      await vi.advanceTimersByTimeAsync(60 * 1000 + 1);
+      await drain();
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not start a SECOND lease acquisition while one is in flight', async () => {
+    // The off-turn dispatcher is fire-and-forget, so rows parsed from one
+    // stdout chunk run concurrently. Both used to find the map empty, both read
+    // the run, and both armed a timer — the second `set` orphaning the first,
+    // leaving an expiry nothing can refresh or clear that hands the badge back
+    // five minutes after the FIRST row however many rows arrived since.
+    //
+    // What is asserted is the single-flight itself, on the real DAO: while one
+    // acquisition is parked in the read, a second row must not open its own.
+    // The badge cannot show this — a row landing after an orphan fires takes a
+    // fresh lease and puts `running` straight back, so every later reading is
+    // the recovery rather than the drop.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const realGetById = runDao.getById.bind(runDao);
+    const parked: (() => void)[] = [];
+    let holding = true;
+    runDao.getById = async (id: string) => {
+      const row = await realGetById(id);
+      if (!holding) {
+        return row;
+      }
+      await new Promise<void>((resolve) => parked.push(resolve));
+      return row;
+    };
+
+    const delegateRow = (id: string): void => {
+      claude.sessions[0]?.onBetweenTurnEvent?.({
+        type: 'tool_call',
+        id,
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_task_1',
+      });
+    };
+
+    delegateRow('call-a');
+    await drain();
+    delegateRow('call-b');
+    await drain();
+
+    // One acquisition in flight, not two.
+    expect(parked).toHaveLength(1);
+
+    holding = false;
+    for (const release of parked) {
+      release();
+    }
+    await drain();
+    expect((await realGetById(run.id))?.status).toBe('running');
+  });
+
+  it('refuses an effort the NAMED MODEL does not list, at chat creation', async () => {
+    // The user-visible half of the model-aware check. Passing no model here
+    // makes `accepts` lenient by design, so a creation path that dropped
+    // `input.model` would let the level straight through — the value would be
+    // stored on the run and re-warned about by the driver every turn instead.
+    const { service, cursor, efforts } = setup();
+    vi.spyOn(
+      cursor.adapter as unknown as CursorAcpAdapter,
+      'listModelEfforts',
+    ).mockResolvedValue({
+      efforts: [
+        { id: 'low', label: 'Low' },
+        { id: 'high', label: 'High' },
+      ],
+      unavailableReason: null,
+      exact: true,
+    });
+    // What the picker's own fetch does; the refusal consults only a listing
+    // already held, so that it never spawns on the creation path.
+    await efforts.list('cursor-agent', 'grok-4.6');
+
+    await expect(
+      service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: process.cwd(),
+        model: 'grok-4.6',
+        effort: 'ultracode',
+      }),
+    ).rejects.toThrow(/does not accept the reasoning effort/i);
+
+    // …and a level that model DOES list is created without complaint.
+    const created = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: process.cwd(),
+      model: 'grok-4.6',
+      effort: 'high',
+    });
+    expect(created.effort).toBe('high');
+  });
+
+  it('checks a settings patch against the model the patch LEAVES the run on', async () => {
+    // Checking the OLD model would refuse a level only the incoming one offers,
+    // which is the whole reason the patch's own model wins here.
+    const { service, cursor, efforts } = setup();
+    vi.spyOn(
+      cursor.adapter as unknown as CursorAcpAdapter,
+      'listModelEfforts',
+    ).mockImplementation(async (model) => ({
+      efforts:
+        model === 'gpt-5.2'
+          ? [{ id: 'extra-high', label: 'Extra high' }]
+          : [{ id: 'low', label: 'Low' }],
+      unavailableReason: null,
+      exact: true,
+    }));
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: process.cwd(),
+      model: 'grok-4.6',
+    });
+    // Both models' listings held, so the patch is judged against the one it
+    // leaves the run on rather than falling through to leniency.
+    await efforts.list('cursor-agent', 'grok-4.6');
+    await efforts.list('cursor-agent', 'gpt-5.2');
+
+    const patched = await service.updateSettings(run.id, {
+      model: 'gpt-5.2',
+      effort: 'extra-high',
+    });
+
+    expect(patched.effort).toBe('extra-high');
+  });
+
+  it('does not start a SECOND off-turn restate while one is in flight', async () => {
+    // The twin of the lease claim, and the same single-flight: a main-thread
+    // delta burst arrives fire-and-forget, so without the claim two deltas both
+    // read the run before either records the flip.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const realGetById = runDao.getById.bind(runDao);
+    const parked: (() => void)[] = [];
+    let holding = true;
+    runDao.getById = async (id: string) => {
+      const row = await realGetById(id);
+      if (!holding) {
+        return row;
+      }
+      await new Promise<void>((resolve) => parked.push(resolve));
+      return row;
+    };
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({ type: 'text_delta', text: 'a' });
+    await drain();
+    claude.sessions[0]?.onBetweenTurnEvent?.({ type: 'text_delta', text: 'b' });
+    await drain();
+
+    expect(parked).toHaveLength(1);
+
+    holding = false;
+    for (const release of parked) {
+      release();
+    }
+    await drain();
+    expect((await realGetById(run.id))?.status).toBe('running');
+  });
+
+  it('releases the lease claim when the run read THROWS', async () => {
+    // The claim is taken before the read and the caller swallows a rejection
+    // (`handleBetweenTurnEvent` logs and carries on), so without a `finally`
+    // one failed read strands it — every later delegate row then returns at the
+    // claim guard, no lease is ever taken again, and the badge sits on
+    // `completed` while sub-agents keep producing rows.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const realGetById = runDao.getById.bind(runDao);
+    let failNext = true;
+    runDao.getById = async (id: string) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('database went away');
+      }
+      return realGetById(id);
+    };
+
+    const delegateRow = (id: string): void => {
+      claude.sessions[0]?.onBetweenTurnEvent?.({
+        type: 'tool_call',
+        id,
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_task_1',
+      });
+    };
+
+    delegateRow('call-a');
+    await drain();
+    // The read failed, so no lease — but the run must not be left unleasable.
+    expect((await realGetById(run.id))?.status).toBe('completed');
+
+    delegateRow('call-b');
+    await drain();
+    expect((await realGetById(run.id))?.status).toBe('running');
+  });
+
+  it('leaves a CANCELLED run cancelled while its delegate rows arrive', async () => {
+    // Stop is final on this path too — the rows are still written, because the
+    // work happened, but the badge the user asked for stands.
+    const { service, claude, runDao, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'toolu_task_1',
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+    expect(itemDao.items).toHaveLength(before + 1);
+  });
+
+  it('hands the badge back once a leased delegate goes quiet', async () => {
+    // The off-switch a delegate cannot provide itself. Without it this is the
+    // latch the row path refuses to build: `still working` on screen with
+    // nothing left able to take it down.
+    // ONLY the timer the lease uses. `drain()` waits on `setImmediate`, which a
+    // blanket `useFakeTimers()` also replaces — every await in this file would
+    // then hang rather than the expiry being controllable.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { service, claude, runDao, statuses } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+
+      claude.sessions[0]?.onBetweenTurnEvent?.({
+        type: 'tool_call',
+        id: 'call-9',
+        name: 'Read',
+        input: {},
+        parentToolUseId: 'toolu_task_1',
+      });
+      await drain();
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+      statuses.length = 0;
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+      await drain();
+
+      // Back to the status the lease took it from, not to some third word.
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+
+      // And announced as a RESTORE. Without the flag the client reads this as a
+      // fresh non-terminal→terminal crossing and fires a second `turn ended`
+      // banner for a turn that ended minutes ago; without the summary being
+      // WITHHELD, the null besides blanks the sentence the real settle gave it.
+      const announce = statuses.at(-1);
+      expect(announce?.status).toBe('completed');
+      expect(announce?.restored).toBe(true);
+      expect(announce && 'summary' in announce).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles a delegate-leased run on the continuation’s own result', async () => {
+    // The lease is an off-turn `running` like any other, so the continuation
+    // the delegate provoked settles it through the ordinary path — the expiry
+    // is only the backstop for a delegate that never provokes one.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'toolu_task_1',
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+
+    emit?.({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
   it('settles the run again on the continuation’s own result', async () => {
     // The other half: without this the run would be left `running` forever by
     // the row above, which is the same lie pointing the other way.
@@ -3295,7 +3858,10 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
 
     const emit = claude.sessions[0]?.onBetweenTurnEvent;
-    emit?.({ type: 'slash_commands', commands: ['/review'] });
+    emit?.({
+      type: 'slash_commands',
+      commands: [{ name: '/review', description: null }],
+    });
     emit?.({
       type: 'mcp_servers',
       servers: [
@@ -3311,7 +3877,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
 
     expect(skillHarvest.record).toHaveBeenCalledWith('claude', process.cwd(), [
-      '/review',
+      { name: '/review', description: null },
     ]);
     expect(mcpHarvest.record).toHaveBeenCalledWith(
       'claude',
@@ -3353,6 +3919,133 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
 
     expect(deltas.at(-1)?.text).toContain('still going…');
     expect(itemDao.items).toHaveLength(before);
+  });
+
+  it('puts the badge back to running while the CLI is only THINKING off-turn', async () => {
+    // "It show as completed, but its actually thinking" — a live `Thinking…`
+    // row under a `✓ done` footer, with the sidebar still saying `completed`.
+    // A think produces NO row, so the row-driven restate could never see it,
+    // and on a long one there is nothing else to see for minutes.
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    statuses.length = 0;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'thinking_progress',
+      tokens: 500,
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    expect(statuses.at(-1)?.activity).toContain('still working');
+  });
+
+  it('announces the flip ONCE across a burst of off-turn deltas', async () => {
+    // A delta arrives many times a second and the phrase never changes, so the
+    // flip is the whole announcement. Without the short-circuit each one reads
+    // the run back out of the database — which is what the read count below
+    // pins, and the only half a test can see: the single BROADCAST survives the
+    // short-circuit's removal either way, because the `run.status === 'running'`
+    // guard downstream stops the second write on its own.
+    const { service, claude, runDao, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    statuses.length = 0;
+
+    const realGetById = runDao.getById.bind(runDao);
+    let reads = 0;
+    runDao.getById = async (id: string) => {
+      reads += 1;
+      return realGetById(id);
+    };
+
+    for (const text of ['one ', 'two ', 'three ']) {
+      claude.sessions[0]?.onBetweenTurnEvent?.({ type: 'text_delta', text });
+      await drain();
+    }
+
+    expect(reads).toBe(1);
+    expect((await realGetById(run.id))?.status).toBe('running');
+    expect(statuses).toHaveLength(1);
+  });
+
+  it('ignores a DELEGATE’s off-turn thinking — that is not the run working', async () => {
+    // The same rule the off-turn ROW path follows: a delegate winding up opens
+    // no turn of its own, so nothing would ever take the spinner back down.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'thinking_progress',
+      tokens: 500,
+      parentToolUseId: 'toolu_a',
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('leaves a CANCELLED run cancelled when the CLI thinks on regardless', async () => {
+    // Stop is final. A straggling think flipping the badge back would tell the
+    // user their Stop did not take.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'thinking_progress',
+      tokens: 500,
+    });
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('cancelled');
   });
 
   it('leaves a settled run alone — cancel is not a way to reopen it', async () => {
@@ -3411,6 +4104,11 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
+      // A settle the agent said nothing on carries an explicit null, never a
+      // missing field: the client holds the last sentence it was given, so an
+      // absent one leaves the PREVIOUS turn's closing words standing and this
+      // wordless turn announces them as its own.
+      summary: null,
     });
   });
 
@@ -3440,6 +4138,100 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(statuses.at(-1)).toMatchObject({
       runId: run.id,
       status: 'completed',
+      summary: 'Fixed the parser — 3 tests green.',
+    });
+  });
+
+  it('marks a turn that did nothing but COMPACT as housekeeping', async () => {
+    // `/compact` is an ordinary turn on the wire — the user's command, the
+    // CLI's summary row, a terminal item — so it settled the run like any
+    // other and earned a system banner plus a sidebar mark for a piece of
+    // context management the user had just asked for and could see. Reported
+    // as "не нужно нотификации, когда компакт сработает".
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, '/compact');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'manual',
+      preTokens: 539_800,
+      postTokens: 16_500,
+    });
+    claude.emit({
+      type: 'notice',
+      message: 'This session is being continued…',
+      origin: 'cli',
+    });
+    // A row of the USER's own is not work — it is the instruction that asked
+    // for the compaction. Counted, it would take the exemption straight back
+    // off the very turn this exists for.
+    claude.emit({ type: 'user_message', text: '/compact' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: 'completed',
+      activity: null,
+      awaiting: null,
+      summary: null,
+      housekeeping: true,
+    });
+  });
+
+  it('does NOT mark a turn that compacted and then did real work', async () => {
+    // An AUTOMATIC compaction lands in the middle of a turn that is working,
+    // and that turn's ending is the one the user is waiting to hear about. The
+    // exemption is decided from what the turn PRODUCED, so a single assistant
+    // message is enough to take it away — which is what stops this from being
+    // "any turn containing a compaction is silent".
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 539_800,
+      postTokens: 16_500,
+    });
+    claude.emit({
+      type: 'notice',
+      message: 'This session is being continued…',
+      origin: 'cli',
+    });
+    claude.emit({ type: 'text', text: 'Fixed the parser — 3 tests green.' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: 'completed',
+      activity: null,
+      awaiting: null,
       summary: 'Fixed the parser — 3 tests green.',
     });
   });
@@ -3481,6 +4273,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'cancelled',
       activity: null,
       awaiting: null,
+      summary: null,
     });
   });
 
@@ -4174,7 +4967,22 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     const before = itemDao.items.length;
     statuses.length = 0;
 
-    claude.sessions[0]?.onBetweenTurnEvent?.({
+    // The delegate REPORTED — that announcement is what closed its block and
+    // made it read `done`, and it is what tells these rows apart from the ones
+    // an un-bracketed delegate goes on producing while it works.
+    const emit = claude.sessions[0]?.onBetweenTurnEvent;
+    emit?.({
+      type: 'subagent_info',
+      id: 'toolu_task_1',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: false,
+    });
+    emit?.({
       type: 'text',
       text: 'delegate: both approaches hold up',
       parentToolUseId: 'toolu_task_1',

@@ -11,14 +11,22 @@ import { cn } from '../components/ui/utils';
  * line of the message, expanded it shows the full text verbatim (monospace,
  * wrap-preserved).
  *
- * ONE component with two tones rather than two components, because the shape is
- * the same wherever a row carries more text than the transcript should spend on
- * it — and the two uses are one behavioural change away from drifting apart
+ * ONE component with three tones rather than three components, because the shape
+ * is the same wherever a row carries more text than the transcript should spend
+ * on it — and the uses are one behavioural change away from drifting apart
  * (the disclosure wiring, the preview, the expanded body):
  *
  * - `destructive` — something went wrong (`error` items, the daemon's own
  *   `system` advisories). A full-width red panel that claims attention, and the
  *   row may offer the one known cure.
+ * - `warning` — something the user CHOSE did not apply, and the turn ran anyway:
+ *   a model with no `max` effort, a session mode the agent does not offer. It
+ *   needs to be seen (the run is not doing what they asked) and it must not read
+ *   as a failure, which is the whole report — a declined effort setting shown in
+ *   the red panel above got sent in as "a strange error … and then it carried on
+ *   working". Same panel shape as `destructive`, in the palette's amber, which
+ *   the call rows already use for "this is a different KIND of thing" rather
+ *   than for "this is broken".
  * - `muted` — long text the CLI wrote that geniro is only relaying, the
  *   compaction summary being the case it exists for. It renders as the
  *   transcript's SYSTEM line and nothing more: the same centred, small, quiet
@@ -34,6 +42,8 @@ const rowVariants = cva('flex min-w-0 flex-col [&_svg]:shrink-0', {
     tone: {
       destructive:
         'w-full rounded-xl border border-destructive/30 bg-destructive/10 text-sm text-destructive',
+      warning:
+        'w-full rounded-xl border border-warning/30 bg-warning/10 text-sm text-warning',
       // The `note` variant's own classes, deliberately restated rather than
       // composed: `MessageBubble` cannot host this row (a note is a plain
       // container, and the disclosure needs the button/body split), so the ONE
@@ -60,7 +70,7 @@ export function DisclosureRow({
   /** Row caption, e.g. "flaky · error" or "conversation compacted". */
   caption: string;
   message: string;
-  /** Which of the two tones above. Defaults to the failure one. */
+  /** Which of the three tones above. Defaults to the failure one. */
   tone?: DisclosureTone;
   /**
    * A short fact about the message, shown INSTEAD of its first line when the row
@@ -113,8 +123,11 @@ export function DisclosureRow({
     <div
       // The failure tone keeps `error`, which is what the transcript's own specs
       // query for it; the quiet tone is a `system` row and says so, so a test can
-      // tell a relayed summary from an advisory without reading its classes.
-      data-role={quiet ? 'system' : 'error'}
+      // tell a relayed summary from an advisory without reading its classes. A
+      // `warning` gets its own value for the same reason — a degrade that stayed
+      // `error` here would be indistinguishable to a test from the failure this
+      // tone exists to stop it looking like.
+      data-role={quiet ? 'system' : tone === 'warning' ? 'warning' : 'error'}
       className={cn(rowVariants({ tone }))}>
       <button
         type="button"
@@ -198,25 +211,45 @@ export function DisclosureRow({
         </dl>
       ) : null}
       {open ? (
-        <pre
+        // The copy control rides ALONGSIDE the message rather than under it.
+        // Given a row of its own it reserved a full band of empty panel below
+        // the last line — a lone icon floating in blank fill, which is the
+        // reported "strange padding": on a three-line failure the card's bottom
+        // third said nothing at all. It stays a SIBLING of the toggle button
+        // (a button inside a button is invalid, and the click would fold the
+        // row away on its way out) — it has simply stopped needing its own row
+        // to be a sibling.
+        <div
           className={cn(
-            'm-0 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs',
-            // Expanded, the quiet row has to become readable — centred prose one
-            // line wide would be unreadable — so the body takes a surface of its
-            // own while the collapsed row keeps none.
-            quiet
-              ? 'mt-1 max-h-[50vh] overflow-y-auto rounded-lg bg-muted/40 px-3 py-2'
-              : 'px-3 pb-2.5',
+            'flex min-w-0 items-start gap-2',
+            quiet ? null : 'px-3 pb-2.5',
           )}>
-          {message}
-        </pre>
-      ) : null}
-      {open && copyText !== undefined ? (
-        // Sibling of the toggle for the same reason the sign-in control is: a
-        // button inside a button is invalid, and the click would fold the row
-        // away on its way out.
-        <div className="flex justify-end px-3 pb-2">
-          <CopyButton text={copyText} label="Copy the error report" />
+          <pre
+            className={cn(
+              // `break-words`, not `break-all`: this body carries prose as
+              // often as it carries a path, and `break-all` splits at whatever
+              // character the line ran out on — the abort sentence wrapped as
+              // "interrupted rat / her than refused". `break-words` still
+              // breaks a token too long to fit (an id, a URL), which is the
+              // only thing `break-all` was here for. The FACTS table keeps it:
+              // every value there is an id.
+              'm-0 min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs',
+              // Expanded, the quiet row has to become readable — centred prose
+              // one line wide would be unreadable — so the body takes a surface
+              // of its own while the collapsed row keeps none.
+              quiet
+                ? 'mt-1 max-h-[50vh] overflow-y-auto rounded-lg bg-muted/40 px-3 py-2'
+                : null,
+            )}>
+            {message}
+          </pre>
+          {copyText !== undefined ? (
+            <CopyButton
+              text={copyText}
+              label="Copy the error report"
+              className="shrink-0"
+            />
+          ) : null}
         </div>
       ) : null}
       {onSignIn ? (

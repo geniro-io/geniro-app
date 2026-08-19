@@ -341,6 +341,45 @@ describe('ApprovalCard', () => {
     expect(expired.textContent).toContain('expired');
   });
 
+  it('question card: a settled card reads the answer back', () => {
+    // The report: "hehe i should also see my answer". A card that had been
+    // answered said `✓ answered` and nothing more, so the user's own words —
+    // the only half of the exchange they wrote — were the one thing the
+    // transcript did not keep, while every sentence the agent produced stayed
+    // on screen forever.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={QUESTION_INPUT}
+        verdict={true}
+        answer="Blue — the lighter one from the mock"
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(el.textContent).toContain('✓ answered');
+    expect(el.textContent).toContain('Blue — the lighter one from the mock');
+  });
+
+  it('question card: a DECLINED card puts no words in the user’s mouth', () => {
+    // The daemon only records an answer it actually folded into the tool input,
+    // so a decline carries none — but the card must not show one even if a
+    // payload somehow pairs the two, because `✗ declined` above a sentence
+    // reads as "they said this and it was refused".
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={QUESTION_INPUT}
+        verdict={false}
+        answer="Blue — the lighter one from the mock"
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(el.textContent).toContain('✗ declined');
+    expect(el.textContent).not.toContain('the lighter one from the mock');
+  });
+
   it('renders a cursor/ask_question as a question card, out of ITS OWN shape', () => {
     // The two CLIs' question payloads share only the word `questions`:
     // cursor's entries carry `id`/`prompt`/`options[].id`, claude's carry

@@ -10,8 +10,9 @@
 #
 # Downloads the latest macOS release .zip and installs Geniro.app into
 # /Applications. curl does NOT set the com.apple.quarantine attribute, so the
-# ad-hoc-signed app launches without a Gatekeeper prompt (no Apple Developer ID
-# needed). Re-run this script to update. Override the version with
+# app launches without a Gatekeeper prompt — it is signed, but not notarized,
+# so no Apple Developer ID is needed. Re-run this script to update. Override
+# the version with
 # GENIRO_VERSION=v1.2.3, or the install dir with GENIRO_DEST=/path.
 set -euo pipefail
 
@@ -58,7 +59,7 @@ asset="${url##*/}"
 echo "Downloading $url"
 curl -fSL "$url" -o "$tmp/$asset"
 
-# The app is ad-hoc signed (no notarization), so Gatekeeper verifies nothing —
+# The app is not notarized, so Gatekeeper verifies nothing —
 # the published checksum is the only integrity check between the release and
 # an executing app. Verify BEFORE unpacking/stripping quarantine; a release
 # without the asset (pre-checksum versions) degrades to TLS-only with a
@@ -87,7 +88,7 @@ fi
 mkdir -p "$DEST"
 mv "$tmp/extracted/$APP_NAME" "$DEST/"
 
-# Belt-and-suspenders: strip quarantine if anything set it (ad-hoc apps have no
+# Belt-and-suspenders: strip quarantine if anything set it (there is no
 # notarization ticket, so a quarantined copy would be blocked by Gatekeeper).
 xattr -dr com.apple.quarantine "$DEST/$APP_NAME" 2>/dev/null || true
 

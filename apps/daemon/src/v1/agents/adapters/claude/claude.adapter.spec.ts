@@ -584,6 +584,57 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(captured.args![idx + 1]).toBe(GENIRO_UI_PREAMBLE);
   });
 
+  it('withholds the preamble from geniro’s OWN probe, leaving its argv bare', () => {
+    // An `internalProbe` turn is parsed, never rendered — the capability reads
+    // behind `listReportedCommands` and the permission-mode probe — so there is
+    // no transcript for the preamble to describe. Two costs if it rides along:
+    // ~1.1KB of argv on every cold probe, and, on the mode probe specifically,
+    // a flag under test that is not the flag under test — a probe asking
+    // whether `--permission-mode X` is accepted must not be able to fail for
+    // an unrelated argument.
+    //
+    // The control below is what makes this a pin rather than a claim: the two
+    // turns differ ONLY in the flag, so an implementation that stopped reading
+    // it fails here instead of quietly re-adding the block.
+    const probe = fakeSpawn();
+    new ClaudeAdapter({ spawn: probe.spawn, waitForMcpServers: false }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'auto', internalProbe: true },
+      () => {},
+    );
+    const user = fakeSpawn();
+    new ClaudeAdapter({ spawn: user.spawn, waitForMcpServers: false }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'auto' },
+      () => {},
+    );
+
+    expect(probe.captured.args).not.toContain('--append-system-prompt');
+    expect(user.captured.args).toContain('--append-system-prompt');
+  });
+
+  it('still withholds it from a probe that carries the user’s instructions', () => {
+    // The composition is `includePreamble && internalProbe !== true`, so a
+    // probe reaching `composeSystemPrompt` with a non-empty neighbour is the
+    // one input that distinguishes "the preamble is withheld" from "the whole
+    // block happens to be empty". Without it, an implementation that dropped
+    // the probe arm and relied on probes carrying nothing else would pass the
+    // test above — and then ship the user's standing prose into every
+    // capability read.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        internalProbe: true,
+        customInstructions: 'Always answer in British English.',
+      },
+      () => {},
+    );
+
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe('Always answer in British English.');
+    expect(captured.args![idx + 1]).not.toContain(GENIRO_UI_PREAMBLE);
+  });
+
   it('gives an auto turn the stdio dialogue when it must be able to ask the user', () => {
     // --dangerously-skip-permissions STRIPS AskUserQuestion (probe-verified),
     // so an auto turn that wants the question channel spawns on the dialogue
@@ -629,9 +680,12 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
   });
 
   it('leaves a legacy turn (no approval mode) byte-identical when asking is allowed', () => {
-    // A geniro-internal probe turn carries no mode: it must keep the CLI's own
-    // defaults and no permission flags, even though every chat now asks for
-    // the question channel.
+    // A turn carrying no mode must keep the CLI's own defaults and no
+    // permission flags, even though every chat now asks for the question
+    // channel. NOT a probe, whatever the unset-mode population used to be
+    // called: a legacy chat row names no mode either, and it is a user's turn
+    // — which is why `internalProbe` exists as its own field rather than being
+    // read off this one.
     const plain = fakeSpawn();
     new ClaudeAdapter({ spawn: plain.spawn }).start(
       { prompt: 'p', cwd: '/proj' },
@@ -647,6 +701,38 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(asking.captured.args).toEqual(plain.captured.args);
     expect(asking.captured.args).not.toContain('--permission-mode');
     expect(endSpy).toHaveBeenCalled();
+  });
+
+  it('sends a probe’s prompt straight out instead of holding it for MCP', () => {
+    // The gate exists because a first prompt written before the CLI's servers
+    // finish dialling loses their tools for the whole conversation. A probe
+    // has no such stake: it reads one `system/init` line and is cancelled, so
+    // it never reaches a tool and there is nothing for a tool surface to be
+    // missing from — while the wait itself costs up to the full deadline on
+    // every cold capability read.
+    //
+    // Observed through WHEN the prompt lands, which is what the gate actually
+    // changes: held, the user message goes out on a later tick, so by the time
+    // `start()` returns the held turn's stdin carries only the gate's own
+    // `mcp_status` poll. Matched on the user-message envelope rather than on
+    // the prompt text, because that poll is stdin traffic too and a loose
+    // substring finds itself in it. The mode probe names a mode and isolates
+    // nothing, so the two pre-existing exemptions both miss it — this passes
+    // ONLY on the `internalProbe` arm, and the control is the same turn
+    // without it.
+    const probe = fakeSpawn();
+    new ClaudeAdapter({ spawn: probe.spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'plan', internalProbe: true },
+      () => {},
+    );
+    const user = fakeSpawn();
+    new ClaudeAdapter({ spawn: user.spawn }).start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'plan' },
+      () => {},
+    );
+
+    expect(probe.child.stdin.written).toContain('"type":"user"');
+    expect(user.child.stdin.written).not.toContain('"type":"user"');
   });
 
   it('reports the tool it asks the user with, so no service spells the name', () => {

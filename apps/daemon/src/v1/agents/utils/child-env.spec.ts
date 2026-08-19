@@ -12,6 +12,7 @@ const TOUCHED = [
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_CUSTOM_HEADERS',
+  'CLAUDE_CODE_ENABLE_CFC',
   'CHILD_ENV_SPEC_PLAIN',
 ] as const;
 
@@ -50,6 +51,27 @@ describe('buildChildEnv', () => {
     process.env.CLAUDE_CONFIG_DIR = '/Users/someone/.claude-other-profile';
 
     expect(buildChildEnv().CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
+  it('strips inherited browser tools, so the SETTING decides and not the shell', () => {
+    // The one stripped name that guards a preference rather than an identity.
+    // `ClaudeAdapter.buildEnv` sets it only when the user switched the browser
+    // tools on; inherited, it turns 22 tool schemas back on in every prompt of
+    // every turn with the switch off and nothing on screen saying so. Claude
+    // Code's own terminal exports `=1`, so a daemon launched from one had it.
+    process.env.CLAUDE_CODE_ENABLE_CFC = '1';
+
+    expect(buildChildEnv().CLAUDE_CODE_ENABLE_CFC).toBeUndefined();
+  });
+
+  it('lets the adapter hand the browser tools over on top of the strip', () => {
+    // The strip must not make the feature unreachable: the ONE path allowed to
+    // turn it on passes it as `extra`, which wins.
+    process.env.CLAUDE_CODE_ENABLE_CFC = '1';
+
+    expect(
+      buildChildEnv({ CLAUDE_CODE_ENABLE_CFC: '1' }).CLAUDE_CODE_ENABLE_CFC,
+    ).toBe('1');
   });
 
   it('still lets the run’s OWN config directory through as extra', () => {

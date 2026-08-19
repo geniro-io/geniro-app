@@ -7,6 +7,8 @@ import {
   type CliKind,
   hasControlCharacters,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
+  MAX_RUN_CONFIG_NAME,
+  MAX_RUN_CONFIGS,
 } from '../shared/contracts';
 
 /**
@@ -21,13 +23,70 @@ import {
  * bundle pulls in nothing but `electron`.
  */
 
-/** A non-empty, absolute filesystem path. */
+/**
+ * A non-empty, absolute filesystem path. Bounded HERE rather than per-field, so
+ * no persisted path can slip through unbounded; 1024 is generous against any
+ * real `PATH_MAX`.
+ */
 const absolutePath = z
   .string()
   .min(1)
+  .max(1024)
   .refine((p) => isAbsolute(p), 'must be an absolute path');
 
 const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
+
+/**
+ * A git branch name. `git switch` takes this as an argv entry (no shell), so
+ * the real risk is not injection but ARGUMENT injection: a name beginning with
+ * `-` would be parsed as a flag. Git's own ref format forbids most of what is
+ * rejected here anyway — this is the boundary that makes it true regardless of
+ * what the renderer sends.
+ *
+ * Declared ABOVE `settingsPatchSchema`, which embeds it: `z.strictObject`
+ * evaluates its shape immediately, so a reference to a `const` declared further
+ * down is a temporal-dead-zone error at module load, not a type error.
+ */
+export const branchNameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((b) => !b.startsWith('-'), 'must not start with a dash')
+  // The characters git itself forbids in a refname. A dash is NOT among them —
+  // `feat/some-branch` is the common case; only a LEADING dash is the hazard.
+  // eslint-disable-next-line no-control-regex -- control characters are precisely what a refname may not contain
+  .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
+  .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
+
+/** The composer target: a CLI kind, or `wf:<slug>` for a library workflow. */
+const chatTarget = z.union([
+  cliKind,
+  z
+    .string()
+    .max(128)
+    .regex(/^wf:.+/),
+]);
+
+/**
+ * One saved new-chat setup (`RunConfig` in shared/contracts.ts).
+ *
+ * Every field is bounded rather than merely typed: these are persisted, and two
+ * reach privileged sinks — `cwd` is handed to the daemon and to `git`, and
+ * `branch` becomes an argv entry of `git switch`, so it reuses that channel's
+ * own refname schema rather than a looser copy. The daemon-vocabulary fields
+ * stay OPAQUE, like their single-value counterparts above.
+ */
+const runConfigSchema = z.strictObject({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(MAX_RUN_CONFIG_NAME),
+  cwd: absolutePath,
+  branch: branchNameSchema.nullable(),
+  target: chatTarget,
+  model: z.string().min(1).max(64).nullable(),
+  effort: z.string().min(1).max(64).nullable(),
+  approval: z.string().min(1).max(32).nullable(),
+  configDir: absolutePath.nullable(),
+});
 
 /**
  * A `Partial<Settings>` patch. `strictObject` rejects unknown keys, so the
@@ -41,11 +100,11 @@ export const settingsPatchSchema = z.strictObject({
   // directory", which is a real choice and must be writable back.
   configDir: absolutePath.nullable().optional(),
   recentConfigDirs: z.array(absolutePath).max(10).optional(),
-  // A CLI kind or a `wf:<slug>` workflow reference (the composer target).
-  lastChatTarget: z
-    .union([cliKind, z.string().regex(/^wf:.+/)])
-    .nullable()
-    .optional(),
+  // The user's saved new-chat setups. Hand-managed rather than auto-evicted, so
+  // the cap is a guard against a renderer bug growing settings.json without
+  // limit, set well above any plausible number of real configurations.
+  runConfigs: z.array(runConfigSchema).max(MAX_RUN_CONFIGS).optional(),
+  lastChatTarget: chatTarget.nullable().optional(),
   // The daemon's ChatApprovalMode, kept OPAQUE here: its vocabulary belongs to
   // the daemon, and the main process holds no daemon shapes. Bounded so a
   // renderer bug can't grow settings.json without limit; the renderer checks
@@ -99,24 +158,6 @@ export const gitDirSchema = absolutePath;
  * and one that pretended to would give a false sense of where the gate is.
  */
 export const revealPathSchema = absolutePath;
-
-/**
- * A git branch name. `git switch` takes this as an argv entry (no shell), so
- * the real risk is not injection but ARGUMENT injection: a name beginning with
- * `-` would be parsed as a flag. Git's own ref format forbids most of what is
- * rejected here anyway — this is the boundary that makes it true regardless of
- * what the renderer sends.
- */
-export const branchNameSchema = z
-  .string()
-  .min(1)
-  .max(255)
-  .refine((b) => !b.startsWith('-'), 'must not start with a dash')
-  // The characters git itself forbids in a refname. A dash is NOT among them —
-  // `feat/some-branch` is the common case; only a LEADING dash is the hazard.
-  // eslint-disable-next-line no-control-regex -- control characters are precisely what a refname may not contain
-  .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
-  .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
 
 /**
  * One system notification the renderer asks main to post.

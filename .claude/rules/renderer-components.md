@@ -24,6 +24,14 @@ paths:
      headers/icons/checkmarks/search, and is invisible to the DOM, so it can be
      neither screenshotted nor asserted on. Pass `groups`, never `<option>`
      children; a test opens `[data-menu-trigger]` and reads `[role="option"]`.
+   - **A container that CLIPS declares it, rather than each picker inside it
+     coping.** `menu`/`popover` place panels absolutely, which any scrolling
+     ancestor cuts — and `overflow-x: visible` cannot be restored on a box that
+     scrolls vertically, since CSS forces both axes non-visible together. A
+     scrolling container provides `MenuAnchorContext` as `viewport` (see
+     `dialog`, whose body scrolls) and every menu inside measures its trigger
+     and goes `fixed`. `Popover` takes the same decision per call site, as
+     `anchor="viewport"`.
 3. **App-level shared component** in `components/`, composed from primitives.
    Browse the directory (`apps/ui/src/renderer/components/`) for the current
    set. Rules worth stating rather than just browsing:

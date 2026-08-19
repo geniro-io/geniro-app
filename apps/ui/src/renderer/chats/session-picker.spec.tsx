@@ -149,8 +149,16 @@ describe('SessionPicker', () => {
       trigger.click();
     });
     const panel = container.querySelector('[role="listbox"]') as HTMLElement;
-    expect(panel.className).toContain('top-full');
-    expect(panel.className).not.toContain('bottom-full');
+    // Asked in whichever way this menu is placed, since that is a separate
+    // decision from the side: a viewport-anchored panel carries a measured
+    // `top`, an ancestor-anchored one the `top-full` offset. Either way the
+    // downward side is what must be set and the upward one empty.
+    const downward =
+      panel.style.top !== '' || panel.className.includes('top-full');
+    const upward =
+      panel.style.bottom !== '' || panel.className.includes('bottom-full');
+    expect(downward).toBe(true);
+    expect(upward).toBe(false);
   });
 
   it("shows the CLI's own reason instead of an empty list that explains nothing", () => {

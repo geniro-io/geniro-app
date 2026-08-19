@@ -56,6 +56,20 @@ const flatten = (groups: MenuGroup[]): MenuItem[] =>
 /** Breathing room kept between a shortened panel and the window edge. */
 const VIEWPORT_MARGIN = 8;
 
+/** Gap between a viewport-anchored panel and the trigger it hangs off. */
+const TRIGGER_GAP = 6;
+
+/**
+ * What menus in this subtree are positioned against — see {@link Menu}'s
+ * `anchor`. A container that CLIPS (`Dialog`, whose body scrolls) provides
+ * `viewport`, so every picker inside it escapes without each one being passed a
+ * prop through the chip that renders it. Defaults to `ancestor`, which is what
+ * a menu in open layout wants.
+ */
+export const MenuAnchorContext = React.createContext<'ancestor' | 'viewport'>(
+  'ancestor',
+);
+
 /**
  * The shortest a panel is shortened to, however little room there is.
  *
@@ -71,9 +85,9 @@ const MIN_MENU_HEIGHT = 120;
  * value, a search field, or an action row. It is also the reason a dropdown can
  * be screenshotted and asserted on at all; the OS menu lives outside the DOM.
  *
- * Positioning is `absolute` against the trigger's wrapper rather than a portal:
- * every menu in this app hangs off a composer chip or an inspector field, both
- * inside normal scroll containers, so there is no clipping to escape.
+ * Positioning is `absolute` against the trigger's wrapper by default; a menu
+ * inside a container that CLIPS takes `anchor="viewport"` to escape it, the
+ * same mechanism and for the same reason as `Popover`'s.
  */
 export function Menu({
   open,
@@ -83,6 +97,8 @@ export function Menu({
   emptyLabel = 'No matches',
   align = 'start',
   side = 'top',
+  anchor,
+  triggerRef,
   onSelect,
   onClose,
   labelledBy,
@@ -97,6 +113,24 @@ export function Menu({
   emptyLabel?: string;
   align?: 'start' | 'end';
   side?: 'top' | 'bottom';
+  /**
+   * What the panel is positioned against. Omitted, it takes
+   * {@link MenuAnchorContext} — so a clipping container decides for every menu
+   * inside it and callers pass nothing.
+   *
+   * `viewport` measures the trigger and places the panel `fixed`, the ONLY way
+   * out of a clipping ancestor: `overflow-x: visible` cannot be restored on a
+   * box that scrolls vertically, since CSS forces both axes non-visible
+   * together. Measured in the run-configuration editor, whose branch picker
+   * opens upward inside `Dialog`'s `overflow-y-auto` body — the panel's top
+   * rows were cut at the body's edge ("the branch list popover is cut").
+   *
+   * Requires a `triggerRef`; without one there is nothing to measure and the
+   * panel falls back to `ancestor`.
+   */
+  anchor?: 'ancestor' | 'viewport';
+  /** The control the panel hangs off — required by `anchor="viewport"`. */
+  triggerRef?: React.RefObject<HTMLElement | null>;
   onSelect: (value: string) => void;
   onClose: () => void;
   labelledBy?: string;
@@ -140,6 +174,51 @@ export function Menu({
    * about, so the common case keeps its natural size.
    */
   const [maxHeight, setMaxHeight] = React.useState<number | null>(null);
+  /**
+   * The `fixed` box for `anchor="viewport"`, measured off the trigger — null in
+   * ancestor mode, where the placement is a class rather than a measurement.
+   */
+  const [box, setBox] = React.useState<React.CSSProperties | null>(null);
+
+  const contextAnchor = React.useContext(MenuAnchorContext);
+  // A viewport anchor with nothing to measure cannot be honoured, so it degrades
+  // to the ancestor placement rather than rendering at the window's origin.
+  const floating =
+    (anchor ?? contextAnchor) === 'viewport' && triggerRef !== undefined;
+
+  // Measured on open, and re-measured while open on scroll or resize: a fixed
+  // panel does not travel with its trigger, so without this it sits where the
+  // trigger USED to be. `capture`, because the scroll happens on an inner
+  // container and scroll events do not bubble.
+  React.useLayoutEffect(() => {
+    if (!open || !floating) {
+      setBox(null);
+      return;
+    }
+    const measure = (): void => {
+      const trigger = triggerRef?.current;
+      if (!trigger) {
+        return;
+      }
+      const rect = trigger.getBoundingClientRect();
+      setBox({
+        position: 'fixed',
+        ...(side === 'top'
+          ? { bottom: window.innerHeight - rect.top + TRIGGER_GAP }
+          : { top: rect.bottom + TRIGGER_GAP }),
+        ...(align === 'end'
+          ? { right: window.innerWidth - rect.right }
+          : { left: rect.left }),
+      });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    document.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      document.removeEventListener('scroll', measure, true);
+    };
+  }, [open, floating, side, align, triggerRef]);
 
   React.useLayoutEffect(() => {
     if (!open) {
@@ -153,7 +232,26 @@ export function Menu({
     }
     const rect = panel.getBoundingClientRect();
     if (rect.right > window.innerWidth) {
-      setFlipped(true);
+      // A floating panel is placed by an inline offset, so it is corrected by
+      // one — pulled back by exactly its overflow. The class-based flip below
+      // only reaches the ancestor mode, where `right-0` is a real placement.
+      if (floating) {
+        setBox((current) =>
+          current === null || current.left === undefined
+            ? current
+            : {
+                ...current,
+                left: Math.max(
+                  VIEWPORT_MARGIN,
+                  rect.left -
+                    (rect.right - window.innerWidth) -
+                    VIEWPORT_MARGIN,
+                ),
+              },
+        );
+      } else {
+        setFlipped(true);
+      }
     }
     // The panel grows AWAY from the trigger — upward from a fixed bottom edge
     // for `side='top'`, downward for `bottom` — so the edge it can run past is
@@ -170,7 +268,7 @@ export function Menu({
         Math.max(MIN_MENU_HEIGHT, rect.height - overflow - VIEWPORT_MARGIN),
       );
     }
-  }, [open, side]);
+  }, [open, side, floating]);
 
   // A fresh open is a fresh search — a stale filter would hide the very rows
   // the user just reopened the menu to see. Focus moves into the menu either
@@ -228,9 +326,12 @@ export function Menu({
       const panel = panelRef.current;
       const target = event.target as Node | null;
       if (panel && target && !panel.contains(target)) {
-        const trigger = panel.parentElement?.querySelector(
-          '[data-menu-trigger]',
-        );
+        // The caller's own ref when it gave one — a floating panel may not sit
+        // beside its trigger in the DOM, and `parentElement` is a guess that
+        // finds the first chip of whatever wrapper it lands in.
+        const trigger =
+          triggerRef?.current ??
+          panel.parentElement?.querySelector('[data-menu-trigger]');
         if (!trigger?.contains(target)) {
           onClose();
         }
@@ -238,7 +339,7 @@ export function Menu({
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open, onClose]);
+  }, [open, onClose, triggerRef]);
 
   if (!open) {
     return null;
@@ -285,9 +386,12 @@ export function Menu({
       aria-labelledby={labelledBy}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      // The measured cap, when there was not room for the panel's full height.
-      // Inline because it is a MEASUREMENT — see `maxHeight`.
-      style={maxHeight === null ? undefined : { maxHeight }}
+      // Both are MEASUREMENTS, so both are inline: the height cap when the
+      // panel did not fit, and the floating box when it is escaping a clip.
+      style={{
+        ...box,
+        ...(maxHeight === null ? undefined : { maxHeight }),
+      }}
       className={cn(
         // The shared floating surface, plus this panel's own sizing. No
         // vertical padding: a row's highlight runs to the panel edge, where
@@ -299,8 +403,11 @@ export function Menu({
         // plain block the capped panel would simply clip its own rows, hiding
         // them with no way to scroll to them.
         'flex min-w-56 max-w-96 flex-col overflow-hidden',
-        side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
-        align === 'start' && !flipped ? 'left-0' : 'right-0',
+        // The placement utilities are `absolute` offsets and belong to the
+        // ancestor mode alone; the floating box above carries its own.
+        box === null &&
+          (side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'),
+        box === null && (align === 'start' && !flipped ? 'left-0' : 'right-0'),
         className,
       )}>
       {searchPlaceholder !== undefined ? (

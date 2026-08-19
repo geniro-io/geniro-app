@@ -37,6 +37,50 @@ export interface DaemonStatus {
 // Settings (non-secret app config — persisted as JSON in userData)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Bounds on the saved run configurations. Here rather than beside the IPC
+ * schema because three places must agree and only two are in main: that schema,
+ * the settings READ path (which salvages entry-by-entry and so never evaluates
+ * the array bound), and the renderer's editor, which refuses a save before the
+ * IPC throws and discards the whole patch.
+ */
+export const MAX_RUN_CONFIGS = 50;
+export const MAX_RUN_CONFIG_NAME = 80;
+
+/**
+ * A saved new-chat setup the user named — a bundle of COMPOSER state and
+ * nothing more. Choosing one seeds the normal new-chat screen; it creates no
+ * run and reaches the daemon only later, through the ordinary create call.
+ *
+ * The daemon-vocabulary fields (`target`, `model`, `effort`, `approval`) are
+ * OPAQUE strings, as the single-value settings beside them are: this file holds
+ * no daemon shapes, and the renderer checks each against the generated enum
+ * before it reaches a run. `null` means "the CLI's own default" everywhere.
+ */
+export interface RunConfig {
+  id: string;
+  name: string;
+  /** Absolute working directory the chat starts in. */
+  cwd: string;
+  /**
+   * Branch the folder should be on, or null to take whatever is checked out.
+   *
+   * NOT a chat field — no branch reaches the daemon. Applying one is a guarded
+   * `git switch` on `cwd` before the chat is created, which refuses over a dirty
+   * tree; that refusal is surfaced and the rest of the configuration still
+   * applies.
+   */
+  branch: string | null;
+  /** The composer target — a CLI kind or `wf:<slug>`, exactly as `lastChatTarget`. */
+  target: string;
+  model: string | null;
+  effort: string | null;
+  /** The daemon's `ChatApprovalMode`. */
+  approval: string | null;
+  /** Plugin/profile directory, or null for the CLI's own account. */
+  configDir: string | null;
+}
+
 /** Persisted, non-secret application settings. Secrets never live here. */
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
@@ -54,6 +98,12 @@ export interface Settings {
   configDir: string | null;
   /** Recently used plugin directories, most recent first (picker rows). */
   recentConfigDirs: string[];
+  /**
+   * The user's saved new-chat setups (see {@link RunConfig}). A managed LIST,
+   * unlike `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts
+   * an entry, and the order is the user's, so it is never re-sorted on read.
+   */
+  runConfigs: RunConfig[];
   /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
   lastChatTarget: string | null;
   /**
@@ -209,6 +259,7 @@ export const DEFAULT_SETTINGS: Settings = {
   recentFolders: [],
   configDir: null,
   recentConfigDirs: [],
+  runConfigs: [],
   lastChatTarget: null,
   lastApprovalMode: null,
   lastModels: {},

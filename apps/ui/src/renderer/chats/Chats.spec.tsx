@@ -804,19 +804,21 @@ describe('Chats transcript auto-scroll', () => {
       await act(async () => {
         textarea.dispatchEvent(event);
       });
-      // The staging reads the file as base64, so the strip appears LATER —
-      // wait for it rather than for one macrotask tick. A single `setTimeout(0)`
-      // is enough only while the machine is idle; under `pnpm full-check`,
-      // which runs six workspaces at once, the read had not finished and this
-      // spec failed with an empty strip. Poll the real observable instead.
-      await act(async () => {
-        for (let i = 0; i < 50; i += 1) {
-          if (container.querySelector('button[aria-label^="Remove "]')) {
-            return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 5));
+      // The staging reads the file through a FileReader, which completes on an
+      // EVENT rather than after a known number of ticks — so wait for the row
+      // it produces. A single `setTimeout(0)` was enough only on an idle
+      // machine: under `pnpm full-check`, which runs six workspaces at once,
+      // the read had not finished and the strip was still empty. Exhaustion
+      // THROWS, like the two other paste helpers here — a silent give-up
+      // resurfaces as a confusing empty-strip assertion further down.
+      for (let attempt = 0; stagedImages().length === 0; attempt++) {
+        if (attempt >= 100) {
+          throw new Error(`the pasted image ${name} never staged`);
         }
-      });
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        });
+      }
     };
     const stagedImages = (): string[] =>
       [...container.querySelectorAll('button[aria-label^="Remove "]')].map(
@@ -8065,5 +8067,413 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
     const container = await mount(client);
 
     expect(container.querySelector('[data-slot="unseen-dot"]')).toBeNull();
+  });
+});
+
+describe('Chats — starting from a saved configuration', () => {
+  const savedConfig = {
+    id: 'rc-1',
+    name: 'Geniro app',
+    cwd: '/saved/proj',
+    branch: 'feat/x',
+    target: 'cursor-agent',
+    model: 'auto-smart',
+    effort: 'low',
+    approval: 'acceptEdits',
+    configDir: null,
+  };
+
+  /** Settings carrying one saved configuration, otherwise the usual fixture. */
+  function withSavedConfig(over: Record<string, unknown> = {}): void {
+    window.geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      runConfigs: [savedConfig],
+      ...over,
+    });
+  }
+
+  /**
+   * The one button with this accessible name, or a failure naming what WAS
+   * found.
+   *
+   * Throwing rather than optional-chaining is the point: a silent `?.click()`
+   * let a missing control read as "the guard held", so two tests below passed
+   * with the entire apply path stubbed out.
+   */
+  function pickerButton(
+    container: HTMLElement,
+    name: string,
+  ): HTMLButtonElement {
+    const buttons = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ];
+    const found = buttons.find((b) => b.getAttribute('aria-label') === name);
+    if (!found) {
+      throw new Error(
+        `no button "${name}" \u2014 found: ${buttons
+          .map((b) => b.getAttribute('aria-label') ?? b.textContent?.trim())
+          .join(' | ')}`,
+      );
+    }
+    return found;
+  }
+
+  /**
+   * Reveal the `+`'s menu. Hover, not click \u2014 a click is the plain new thread,
+   * so a test that clicked here would never see a configuration at all.
+   */
+  async function openNewChatMenu(container: HTMLElement): Promise<void> {
+    const plus = pickerButton(container, 'New chat');
+    await act(async () => {
+      // React synthesizes onMouseEnter from a bubbling `mouseover`; there is no
+      // separate `mouseenter` listener for a dispatched event to reach.
+      plus.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+  }
+
+  /** The one menu row whose text is `label`, or a failure naming what was found. */
+  function menuRow(container: HTMLElement, label: string): HTMLElement {
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ];
+    const found = rows.find((row) => row.textContent?.includes(label));
+    if (!found) {
+      throw new Error(
+        `no menu row "${label}" \u2014 found: ${rows
+          .map((row) => row.textContent?.trim())
+          .join(' | ')}`,
+      );
+    }
+    return found;
+  }
+
+  /** Hover the `+` and pick the configuration named `name` from its menu. */
+  async function applyConfig(
+    container: HTMLElement,
+    name: string,
+  ): Promise<void> {
+    await openNewChatMenu(container);
+    const row = menuRow(container, name);
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  /** Hover the `+` and open the managing dialog from its menu. */
+  async function openConfigManager(container: HTMLElement): Promise<void> {
+    await openNewChatMenu(container);
+    const row = menuRow(container, 'Manage configurations');
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  it('seeds every composer choice from the configuration, keyed to ITS agent', async () => {
+    // The per-CLI maps are the trap: writing the model under the composer's
+    // current agent instead of the configuration's would hand cursor a claude
+    // alias on the next run — the bug the graph builder already hit.
+    withSavedConfig();
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ lastChatTarget: 'cursor-agent' }),
+    );
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ lastModels: { 'cursor-agent': 'auto-smart' } }),
+    );
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ lastEfforts: { 'cursor-agent': 'low' } }),
+    );
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ projectFolder: '/saved/proj' }),
+    );
+  });
+
+  it('switches the folder to the configuration’s branch', async () => {
+    withSavedConfig();
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'feat/x'],
+      dirty: false,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(window.geniro.switchBranch).toHaveBeenCalledWith(
+      '/saved/proj',
+      'feat/x',
+    );
+  });
+
+  it('reads the branch of the folder the configuration points at, not the one left behind', async () => {
+    // `useGitInfo(folder)`'s refresh closes over `dir` from the render that
+    // created it, and the apply changes the folder through React state that
+    // callback cannot see — so reading the closure refetches the PREVIOUS
+    // folder, and (running after a real `git switch`) lands after the hook's
+    // own read for the new one, painting the old repo's branch over it.
+    //
+    // Two things make this test able to fail at all: the mock is
+    // DIRECTORY-SENSITIVE (every other spec here ignores its argument), and the
+    // configuration's folder starts on a DIFFERENT branch than it names —
+    // otherwise the apply early-returns on `info.branch === applied.branch` and
+    // never reaches the refresh.
+    withSavedConfig();
+    window.geniro.getGitInfo = vi.fn(async (dir: string) =>
+      dir === '/saved/proj'
+        ? {
+            isRepo: true,
+            branch: 'main',
+            branches: ['main', 'feat/x'],
+            dirty: false,
+          }
+        : {
+            isRepo: true,
+            branch: 'left-behind',
+            branches: ['left-behind'],
+            dirty: false,
+          },
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(window.geniro.switchBranch).toHaveBeenCalledWith(
+      '/saved/proj',
+      'feat/x',
+    );
+    const asked = (
+      window.geniro.getGitInfo as ReturnType<typeof vi.fn>
+    ).mock.calls.map((c) => c[0]);
+    // The read AFTER the switch decides what the chip keeps, so it must be
+    // about the configuration's folder — never the one the composer left.
+    expect(asked[asked.length - 1]).toBe('/saved/proj');
+    expect(container.textContent).not.toContain('left-behind');
+  });
+
+  it('a refused branch switch is reported but does not undo the rest', async () => {
+    // The guard refuses over a dirty tree. Everything else about the
+    // configuration has already applied, so the run must still be startable —
+    // this fails if the apply path aborts or rolls back on the refusal.
+    withSavedConfig();
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'feat/x'],
+      dirty: true,
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: null,
+      error: 'Uncommitted changes — commit or stash them first',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(container.textContent).toContain('could not switch to feat/x');
+    expect(container.textContent).toContain('Uncommitted changes');
+    // The FINAL rendered state, not the settings call the apply made on its way
+    // past — that call happens BEFORE the switch is attempted, so asserting it
+    // cannot see a rollback performed afterwards. The composer's own folder chip
+    // is what the user is left looking at.
+    expect(
+      container
+        .querySelector('[aria-label="Folder for new chats"]')
+        ?.getAttribute('title'),
+    ).toBe('/saved/proj');
+    expect(
+      container.querySelector('[aria-label="Agent or workflow for new runs"]')
+        ?.textContent,
+    ).toContain('cursor-agent');
+  });
+
+  it('does not touch the checkout when the folder is already on that branch', async () => {
+    withSavedConfig();
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'feat/x',
+      branches: ['main', 'feat/x'],
+      dirty: false,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    // Paired with a POSITIVE observable: on its own, `not.toHaveBeenCalled()`
+    // is satisfied just as well by the apply never running at all.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ projectFolder: '/saved/proj' }),
+    );
+    expect(window.geniro.switchBranch).not.toHaveBeenCalled();
+  });
+
+  it('a configuration naming no branch never runs a switch', async () => {
+    withSavedConfig({ runConfigs: [{ ...savedConfig, branch: null }] });
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main'],
+      dirty: false,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    // Paired with a POSITIVE observable: on its own, `not.toHaveBeenCalled()`
+    // is satisfied just as well by the apply never running at all.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ projectFolder: '/saved/proj' }),
+    );
+    expect(window.geniro.switchBranch).not.toHaveBeenCalled();
+  });
+
+  it('a workflow configuration does not erase the remembered claude model or effort', async () => {
+    // The trap: `applyRunConfig` reports `agentKind: 'claude'` for a workflow
+    // (a workflow has no CLI of its own) with model/effort null — and the
+    // composer's model/effort setters PERSIST, deleting the key on null. So
+    // writing those blanks through them destroys preferences the configuration
+    // says nothing about and whose chips are hidden for a workflow.
+    withSavedConfig({
+      runConfigs: [
+        { ...savedConfig, target: 'wf:ship-it', model: null, effort: null },
+      ],
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(window.geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lastModels: expect.anything() }),
+    );
+    expect(window.geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lastEfforts: expect.anything() }),
+    );
+    expect(window.geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ configDir: null }),
+    );
+    // …while the parts a workflow DOES name still applied.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ lastChatTarget: 'wf:ship-it' }),
+    );
+  });
+
+  it('dismissing the strip clears a branch-refusal notice', async () => {
+    // The strip is one surface over four sources; a source left set re-renders
+    // it the moment anything else does, reading as a banner that will not close.
+    withSavedConfig();
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'feat/x'],
+      dirty: true,
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: null,
+      error: 'Uncommitted changes — commit or stash them first',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await applyConfig(container, 'Geniro app');
+    expect(container.textContent).toContain('could not switch to feat/x');
+
+    const dismiss = [...container.querySelectorAll('button')].find((b) =>
+      (b.getAttribute('aria-label') ?? '').toLowerCase().includes('dismiss'),
+    );
+    await act(async () => {
+      dismiss?.click();
+    });
+
+    expect(container.textContent).not.toContain('could not switch to feat/x');
+  });
+
+  it('a rejected save rolls the list back instead of showing an entry that is not on disk', async () => {
+    // Main VALIDATES the patch and throws, rejecting the WHOLE write. Leaving
+    // the optimistic entry on screen both lies about what is saved and makes
+    // every later save fail on the same entry, since the full array is re-sent.
+    withSavedConfig();
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    // Reject only the runConfigs write, so the rest of the fixture still works.
+    window.geniro.updateSettings = vi.fn(
+      async (patch: { runConfigs?: unknown }) => {
+        if (patch.runConfigs !== undefined) {
+          throw new Error('runConfigs: too_big');
+        }
+        return {} as never;
+      },
+    );
+
+    await openConfigManager(container);
+    await act(async () => {
+      pickerButton(container, 'Delete Geniro app').click();
+    });
+    await act(async () => {
+      pickerButton(container, 'Confirm delete Geniro app').click();
+    });
+
+    // The delete was refused, so the configuration must still be listed.
+    expect(() =>
+      pickerButton(container, 'Start a chat set up as \u201cGeniro app\u201d'),
+    ).not.toThrow();
+    expect(container.textContent).toContain('the list is unchanged');
+  });
+
+  it('applying from an OPEN thread returns to the new-chat screen', async () => {
+    // The picker is reachable from the sidebar with a thread open — where the
+    // composer this apply seeds is off screen, and the error strip the branch
+    // refusal reports through is not rendered at all. Every other test in this
+    // block applies with no thread open, where `newChat()` cannot be observed.
+    withSavedConfig();
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // Precondition: the transcript is open, so the new-chat composer is absent.
+    expect(
+      container.querySelector('[aria-label="Folder for new chats"]'),
+    ).toBeNull();
+
+    await applyConfig(container, 'Geniro app');
+
+    // The folder chip renders ONLY on the new-chat view.
+    expect(
+      container.querySelector('[aria-label="Folder for new chats"]'),
+    ).not.toBeNull();
+  });
+
+  it('refuses a configuration whose agent this build cannot run', async () => {
+    // settings.json is user-editable and an older/newer build can write it.
+    // Applying it anyway would set the composer to a target with no CLI behind
+    // it, and the failure would only surface as a create-chat error later.
+    withSavedConfig({
+      runConfigs: [{ ...savedConfig, target: 'agent-from-the-future' }],
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(container.textContent).toContain('cannot run');
+    expect(window.geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lastChatTarget: 'agent-from-the-future' }),
+    );
   });
 });

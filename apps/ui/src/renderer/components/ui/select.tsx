@@ -107,6 +107,10 @@ export function Select({
   const [open, setOpen] = React.useState(false);
   const ghost = variant === 'ghost';
   const label = labelOf(groups, value);
+  // Handed to the menu so it can measure this trigger when it has to escape a
+  // clipping container (`MenuAnchorContext`) — every Select gets that for free
+  // rather than each caller wiring a ref through the chip that renders it.
+  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
 
   return (
     <span
@@ -117,6 +121,7 @@ export function Select({
         flexible && 'min-w-0 shrink',
       )}>
       <button
+        ref={triggerRef}
         type="button"
         id={id}
         data-menu-trigger
@@ -159,6 +164,7 @@ export function Select({
         searchPlaceholder={searchPlaceholder}
         side={side}
         align={align}
+        triggerRef={triggerRef}
         labelledBy={id}
         onSelect={onValueChange}
         onClose={() => setOpen(false)}

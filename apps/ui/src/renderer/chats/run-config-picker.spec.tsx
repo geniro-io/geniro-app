@@ -320,6 +320,50 @@ describe('RunConfigPicker — editor', () => {
   });
 });
 
+describe('RunConfigPicker — which surface an open lands on', () => {
+  it('openTo="new" goes straight to a fresh editor', () => {
+    // The `+` menu's "New configuration…" names what it opens. Landing on the
+    // list would make the user press New a second time to reach it.
+    const { rerender } = render({ open: false });
+    rerender({ open: true, openTo: 'new' });
+
+    expect(
+      container.querySelector('input[aria-label="Configuration name"]'),
+    ).not.toBeNull();
+    expect(() => button('Create')).not.toThrow();
+  });
+
+  it('the editor it opens is seeded from the composer, not left blank', () => {
+    const { rerender } = render({ open: false });
+    rerender({
+      open: true,
+      openTo: 'new',
+      captureCurrent: (name: string) => ({
+        name,
+        cwd: '/Users/dev/seeded',
+        branch: null,
+        target: 'claude' as const,
+        model: null,
+        effort: null,
+        approval: null,
+        configDir: null,
+      }),
+    });
+
+    expect(container.textContent).toContain('seeded');
+  });
+
+  it('openTo="list" lands on the list, editing nothing', () => {
+    const { rerender } = render({ open: false });
+    rerender({ open: true, openTo: 'list' });
+
+    expect(
+      container.querySelector('input[aria-label="Configuration name"]'),
+    ).toBeNull();
+    expect(() => button('Start a chat set up as “Geniro app”')).not.toThrow();
+  });
+});
+
 describe('RunConfigPicker — state that must not survive a reopen', () => {
   it('an armed delete is disarmed by closing and reopening', () => {
     // An armed delete left over from the last open is one press away from

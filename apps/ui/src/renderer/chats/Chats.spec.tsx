@@ -804,10 +804,19 @@ describe('Chats transcript auto-scroll', () => {
       await act(async () => {
         textarea.dispatchEvent(event);
       });
-      // The staging reads the file as base64, so the strip appears a tick later.
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
+      // The staging reads the file through a FileReader, which completes on an
+      // EVENT rather than after a known number of ticks — so wait for the row
+      // it produces. A single `setTimeout(0)` here was a real flake: under load
+      // the read landed after that tick and the strip was still empty, failing
+      // `['Remove first-shot.png']` with `[]` (seen once in ~7 full runs).
+      for (let attempt = 0; stagedImages().length === 0; attempt++) {
+        if (attempt >= 100) {
+          throw new Error(`the pasted image ${name} never staged`);
+        }
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
     };
     const stagedImages = (): string[] =>
       [...container.querySelectorAll('button[aria-label^="Remove "]')].map(
@@ -7998,21 +8007,53 @@ describe('Chats — starting from a saved configuration', () => {
     return found;
   }
 
-  /** Open the configurations dialog and press the row for `name`. */
+  /**
+   * Reveal the `+`'s menu. Hover, not click \u2014 a click is the plain new thread,
+   * so a test that clicked here would never see a configuration at all.
+   */
+  async function openNewChatMenu(container: HTMLElement): Promise<void> {
+    const plus = pickerButton(container, 'New chat');
+    await act(async () => {
+      // React synthesizes onMouseEnter from a bubbling `mouseover`; there is no
+      // separate `mouseenter` listener for a dispatched event to reach.
+      plus.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+  }
+
+  /** The one menu row whose text is `label`, or a failure naming what was found. */
+  function menuRow(container: HTMLElement, label: string): HTMLElement {
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ];
+    const found = rows.find((row) => row.textContent?.includes(label));
+    if (!found) {
+      throw new Error(
+        `no menu row "${label}" \u2014 found: ${rows
+          .map((row) => row.textContent?.trim())
+          .join(' | ')}`,
+      );
+    }
+    return found;
+  }
+
+  /** Hover the `+` and pick the configuration named `name` from its menu. */
   async function applyConfig(
     container: HTMLElement,
     name: string,
   ): Promise<void> {
-    const open = pickerButton(container, 'Start from a configuration');
+    await openNewChatMenu(container);
+    const row = menuRow(container, name);
     await act(async () => {
-      open.click();
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const row = pickerButton(
-      container,
-      `Start a chat set up as \u201c${name}\u201d`,
-    );
+  }
+
+  /** Hover the `+` and open the managing dialog from its menu. */
+  async function openConfigManager(container: HTMLElement): Promise<void> {
+    await openNewChatMenu(container);
+    const row = menuRow(container, 'Manage configurations');
     await act(async () => {
-      row.click();
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
   }
 
@@ -8264,10 +8305,7 @@ describe('Chats — starting from a saved configuration', () => {
       },
     );
 
-    const open = pickerButton(container, 'Start from a configuration');
-    await act(async () => {
-      open.click();
-    });
+    await openConfigManager(container);
     await act(async () => {
       pickerButton(container, 'Delete Geniro app').click();
     });

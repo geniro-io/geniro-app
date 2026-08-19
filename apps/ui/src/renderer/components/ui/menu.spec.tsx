@@ -423,3 +423,82 @@ describe('Menu — fitting the window', () => {
     expect(panel(el).style.maxHeight).toBe('');
   });
 });
+
+describe('Menu — escaping a clipping container', () => {
+  const panel = (el: HTMLElement): HTMLElement =>
+    el.querySelector<HTMLElement>('[role="listbox"]')!;
+
+  /** A trigger whose measured box is not the origin, so placement is readable. */
+  function triggerAt(rect: Partial<DOMRect>): {
+    ref: React.RefObject<HTMLElement | null>;
+    el: HTMLButtonElement;
+  } {
+    const el = document.createElement('button');
+    el.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 0, left: 0, right: 0, ...rect }) as DOMRect;
+    return { ref: { current: el }, el };
+  }
+
+  it('positions from the VIEWPORT when asked, not from its ancestor', () => {
+    // The whole point of the mode: an absolute panel is cut by any ancestor
+    // that scrolls, and `overflow-x: visible` cannot be restored on a box that
+    // scrolls vertically. Only a fixed panel leaves the clip.
+    const { ref } = triggerAt({ top: 300, bottom: 340, left: 120, right: 260 });
+    const el = render(
+      <Menu
+        open
+        anchor="viewport"
+        triggerRef={ref}
+        side="bottom"
+        groups={BRANCHES}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(panel(el).style.position).toBe('fixed');
+    // Below the trigger's bottom edge, measured — not `top-full`, which is an
+    // offset inside the clipping ancestor.
+    expect(panel(el).style.top).toBe('346px');
+    expect(panel(el).style.left).toBe('120px');
+    expect(panel(el).className).not.toContain('top-full');
+  });
+
+  it('opens UPWARD from the trigger when the side says so', () => {
+    const { ref } = triggerAt({ top: 300, bottom: 340, left: 120, right: 260 });
+    const el = render(
+      <Menu
+        open
+        anchor="viewport"
+        triggerRef={ref}
+        side="top"
+        groups={BRANCHES}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    // Pinned to the window's bottom minus the trigger's top — the panel grows
+    // up from there, which is what a branch chip low in a dialog needs.
+    expect(panel(el).style.bottom).toBe(`${window.innerHeight - 300 + 6}px`);
+    expect(panel(el).style.top).toBe('');
+  });
+
+  it('falls back to the ancestor placement when it has nothing to measure', () => {
+    // A viewport anchor with no trigger ref cannot be honoured; rendering at
+    // the window's origin would be worse than the placement it replaced.
+    const el = render(
+      <Menu
+        open
+        anchor="viewport"
+        side="bottom"
+        groups={BRANCHES}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(panel(el).style.position).toBe('');
+    expect(panel(el).className).toContain('top-full');
+  });
+});

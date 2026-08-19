@@ -1,11 +1,9 @@
 import {
   ArrowUp,
-  Bookmark as BookmarkIcon,
   Clock,
   FolderOpen,
   FolderPlus,
   History,
-  Plus,
   Square,
   Trash2,
   Zap,
@@ -102,6 +100,7 @@ import { MarkdownImageLoaderContext } from './markdown-image';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
+import { NewChatButton } from './new-chat-button';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -390,6 +389,10 @@ export function Chats({
   // the dialog only chooses which one.
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
   const [runConfigPickerOpen, setRunConfigPickerOpen] = useState(false);
+  /** Which surface the picker opens on — the `+` menu offers both entry points. */
+  const [runConfigPickerMode, setRunConfigPickerMode] = useState<
+    'list' | 'new'
+  >('list');
   /**
    * Why a configuration's branch could not be checked out, if it could not —
    * surfaced rather than swallowed, and non-blocking: the switch is refused
@@ -4240,29 +4243,25 @@ export function Chats({
                         }}>
                         <History className="shrink-0" />
                       </Button>
-                      {/* Beside the +, for the same reason "Continue a session"
-                          is: starting from a saved setup has a question
-                          attached (which one?), and the + must stay one click. */}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7"
-                        aria-label="Start from a configuration"
-                        title="Start from a saved configuration"
-                        onClick={() => setRunConfigPickerOpen(true)}>
-                        <BookmarkIcon className="shrink-0" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7"
-                        aria-label="New chat"
-                        title="New chat"
-                        onClick={newChat}>
-                        <Plus className="shrink-0" />
-                      </Button>
+                      {/* The saved setups hang off the + itself: they are ways
+                          of starting a new chat, so the control that starts one
+                          is where the user is already aiming. A click still
+                          means the plain new thread. */}
+                      <NewChatButton
+                        configs={runConfigs}
+                        onNewChat={newChat}
+                        onApply={(config) =>
+                          void applyRunConfigToComposer(config)
+                        }
+                        onCreate={() => {
+                          setRunConfigPickerMode('new');
+                          setRunConfigPickerOpen(true);
+                        }}
+                        onManage={() => {
+                          setRunConfigPickerMode('list');
+                          setRunConfigPickerOpen(true);
+                        }}
+                      />
                     </span>
                   </div>
                   <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
@@ -5364,6 +5363,7 @@ export function Chats({
                 />
                 <RunConfigPicker
                   open={runConfigPickerOpen}
+                  openTo={runConfigPickerMode}
                   configs={runConfigs}
                   agentsApi={agentsApi}
                   workflows={workflows}

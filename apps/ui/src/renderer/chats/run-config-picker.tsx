@@ -43,8 +43,21 @@ import { useGitInfo } from './use-git-info';
  * the composer's — answering the second with the first is the session picker's
  * old bug, which sent a claude profile to cursor.
  */
+/** A draft for a composer with no folder yet — the folder chip asks for one. */
+const EMPTY_DRAFT: RunConfigDraft = {
+  name: '',
+  cwd: '',
+  branch: null,
+  target: 'claude',
+  model: null,
+  effort: null,
+  approval: null,
+  configDir: null,
+};
+
 export function RunConfigPicker({
   open,
+  openTo = 'list',
   configs,
   agentsApi,
   workflows,
@@ -61,6 +74,13 @@ export function RunConfigPicker({
   onClose,
 }: {
   open: boolean;
+  /**
+   * Which surface an open lands on. `new` goes straight to a fresh editor, for
+   * the `+` menu's "New configuration…" row — routing that through the list
+   * would make the user press New a second time to reach the thing they asked
+   * for by name.
+   */
+  openTo?: 'list' | 'new';
   configs: readonly RunConfig[];
   agentsApi: DaemonApis['agents'] | null;
   workflows: readonly TargetWorkflow[];
@@ -97,37 +117,36 @@ export function RunConfigPicker({
   );
   const [error, setError] = React.useState<string | null>(null);
 
-  // Every open starts on the list with nothing half-confirmed: an editor or an
-  // armed delete left over from last time is a state the user did not choose
-  // and, in the delete's case, one press away from destroying a setup.
+  // Read through a ref by the open-reset effect below. `captureCurrent` is
+  // rebuilt whenever any composer choice moves, and an effect that depended on
+  // it would re-run mid-edit — resetting the editor and discarding the draft
+  // the user was filling in.
+  const captureRef = React.useRef(captureCurrent);
+  captureRef.current = captureCurrent;
+
+  // Seeded from the composer so "new configuration" is a naming step rather
+  // than six pickers.
+  const freshDraft = React.useCallback(
+    (): RunConfigDraft => captureRef.current('') ?? EMPTY_DRAFT,
+    [],
+  );
+
+  // Every open starts on the surface the caller asked for, with nothing
+  // half-confirmed: an editor or an armed delete left over from last time is a
+  // state the user did not choose and, in the delete's case, one press away
+  // from destroying a setup.
   React.useEffect(() => {
     if (open) {
-      setEditing(null);
+      setEditing(openTo === 'new' ? { id: null, draft: freshDraft() } : null);
       setConfirmingDelete(null);
       setError(null);
     }
-  }, [open]);
+  }, [open, openTo, freshDraft]);
 
   const startNew = React.useCallback((): void => {
     setError(null);
-    // Seeded from the composer so "new configuration" is a naming step rather
-    // than six pickers. A composer with no folder yet cannot be captured, so
-    // the draft falls back to empty and the folder chip asks for one.
-    const captured = captureCurrent('');
-    setEditing({
-      id: null,
-      draft: captured ?? {
-        name: '',
-        cwd: '',
-        branch: null,
-        target: 'claude',
-        model: null,
-        effort: null,
-        approval: null,
-        configDir: null,
-      },
-    });
-  }, [captureCurrent]);
+    setEditing({ id: null, draft: freshDraft() });
+  }, [freshDraft]);
 
   const commit = React.useCallback((): void => {
     if (!editing) {
@@ -369,6 +388,39 @@ function RunConfigRow({
 }
 
 /**
+ * One labelled setting: the name on the left, the control on the right.
+ *
+ * The editor's controls were a wrapping chip ROW, which is right for the
+ * composer — chips there sit under a message box and read as a sentence about
+ * the next turn — and wrong here: seven of them wrapped onto a second line
+ * whose contents moved as the target changed, so the same setting sat in a
+ * different place each time you opened the dialog. A fixed label column gives
+ * every setting one address, and nothing can wrap because the control's cell
+ * truncates instead (`minmax(0,1fr)` over `min-w-0`).
+ */
+function SettingRow({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 px-3 py-2">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <div className="flex min-w-0 flex-col items-start gap-0.5">
+        {children}
+        {hint === undefined ? null : (
+          <span className="text-xs text-muted-foreground">{hint}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The editor, built from the composer's own chips.
  *
  * Its model and effort lists are fetched for the DRAFT's agent and only while
@@ -457,77 +509,95 @@ function RunConfigEditor({
 
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium">Opens with</span>
-        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border p-2">
-          <TargetSelect
-            value={draft.target}
-            workflows={workflows}
-            cliDetections={cliDetections}
-            aria-label="Agent or workflow this configuration starts"
-            onChange={(target) =>
-              // Switching to a workflow drops the CLI-only choices rather than
-              // keeping them invisibly: their chips disappear, and a value the
-              // user can neither see nor edit would still be saved.
-              workflowSlugOf(target) !== null
-                ? set({
-                    target,
-                    model: null,
-                    effort: null,
-                    approval: null,
-                    configDir: null,
-                  })
-                : set({ target })
-            }
-          />
-          <FolderSelect
-            folder={draft.cwd === '' ? null : draft.cwd}
-            recentFolders={recentFolders}
-            onChoose={(cwd) => onChange({ ...draft, cwd, branch: null })}
-            onBrowse={browseFolder}
-          />
-          <BranchValueSelect
-            info={git.info}
-            value={draft.branch}
-            onChange={(branch) => set({ branch })}
-          />
+        <div className="flex flex-col divide-y divide-border rounded-md border border-border">
+          <SettingRow label="Agent">
+            <TargetSelect
+              value={draft.target}
+              workflows={workflows}
+              cliDetections={cliDetections}
+              aria-label="Agent or workflow this configuration starts"
+              onChange={(target) =>
+                // Switching to a workflow drops the CLI-only choices rather than
+                // keeping them invisibly: their rows disappear, and a value the
+                // user can neither see nor edit would still be saved.
+                workflowSlugOf(target) !== null
+                  ? set({
+                      target,
+                      model: null,
+                      effort: null,
+                      approval: null,
+                      configDir: null,
+                    })
+                  : set({ target })
+              }
+            />
+          </SettingRow>
+          <SettingRow label="Folder">
+            <FolderSelect
+              folder={draft.cwd === '' ? null : draft.cwd}
+              recentFolders={recentFolders}
+              onChoose={(cwd) => onChange({ ...draft, cwd, branch: null })}
+              onBrowse={browseFolder}
+            />
+          </SettingRow>
+          {git.info.isRepo ? (
+            <SettingRow
+              label="Branch"
+              hint="Switched before the chat starts; refused over a dirty tree, and the rest still applies.">
+              <BranchValueSelect
+                info={git.info}
+                value={draft.branch}
+                onChange={(branch) => set({ branch })}
+              />
+            </SettingRow>
+          ) : null}
           {workflow ? null : (
             <>
-              <ConfigDirSelect
-                configDir={draft.configDir}
-                recentConfigDirs={recentConfigDirs}
-                unavailableReason={configDirReasonFor(kind)}
-                onChange={(configDir) => set({ configDir })}
-                onBrowse={browseConfigDir}
-              />
-              <ApprovalModeSelect
-                supportedModes={approvalModes}
-                value={
-                  isChatApprovalMode(draft.approval) &&
-                  approvalModes?.includes(draft.approval)
-                    ? draft.approval
-                    : null
-                }
-                planSupported={planSupported}
-                onChange={(approval) => set({ approval })}
-              />
-              <ModelSelect
-                agentKind={kind}
-                models={models}
-                loading={modelsLoading}
-                value={draft.model}
-                onChange={(model) => set({ model })}
-              />
-              <EffortSelect
-                efforts={efforts}
-                value={draft.effort}
-                onChange={(effort) => set({ effort })}
-              />
+              {configDirReasonFor(kind) === null ? (
+                <SettingRow label="Profile">
+                  <ConfigDirSelect
+                    configDir={draft.configDir}
+                    recentConfigDirs={recentConfigDirs}
+                    unavailableReason={configDirReasonFor(kind)}
+                    onChange={(configDir) => set({ configDir })}
+                    onBrowse={browseConfigDir}
+                  />
+                </SettingRow>
+              ) : null}
+              <SettingRow label="Approvals">
+                <ApprovalModeSelect
+                  supportedModes={approvalModes}
+                  value={
+                    isChatApprovalMode(draft.approval) &&
+                    approvalModes?.includes(draft.approval)
+                      ? draft.approval
+                      : null
+                  }
+                  planSupported={planSupported}
+                  onChange={(approval) => set({ approval })}
+                />
+              </SettingRow>
+              <SettingRow label="Model">
+                <ModelSelect
+                  agentKind={kind}
+                  models={models}
+                  loading={modelsLoading}
+                  value={draft.model}
+                  onChange={(model) => set({ model })}
+                />
+              </SettingRow>
+              <SettingRow label="Effort">
+                <EffortSelect
+                  efforts={efforts}
+                  value={draft.effort}
+                  onChange={(effort) => set({ effort })}
+                />
+              </SettingRow>
             </>
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          {git.info.isRepo
-            ? 'Using this configuration switches the folder to that branch first. If the tree has uncommitted changes the switch is refused and everything else still applies.'
-            : 'A chip left on its default means “let the CLI decide”.'}
+          A row left on its default means “let the CLI decide”.
         </p>
       </div>
 

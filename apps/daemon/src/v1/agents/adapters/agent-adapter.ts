@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveAgentBinary } from '../utils/agent-binary';
+import { composeTurnInstructions } from '../utils/agent-instructions';
 import { buildChildEnv } from '../utils/child-env';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
@@ -921,8 +922,17 @@ export abstract class AgentAdapter {
       // contribute to the answer — but without this the CLI still starts every
       // server the folder defines, and cancelling the probe then reaps a group
       // holding the user's own. Nothing to launch is nothing to kill.
+      // `internalProbe` for a third reason of the same kind: the reply is
+      // parsed into a command list and never rendered, so the host preamble
+      // describing the transcript would be both untrue here and argv paid on
+      // every capability read.
       const handle = this.start(
-        { prompt: probe.probePrompt, cwd, isolateMcpServers: true },
+        {
+          prompt: probe.probePrompt,
+          cwd,
+          isolateMcpServers: true,
+          internalProbe: true,
+        },
         (event) => {
           if (event.type === 'slash_commands' && captured.length === 0) {
             captured = event.commands
@@ -1332,9 +1342,10 @@ export abstract class AgentAdapter {
   protected abstract mapMessage(obj: unknown): AgentEvent[];
 
   /**
-   * The full instruction text for one turn: the node's role, then the caller's
-   * "May call" block — but the latter ONLY when this turn actually registered
-   * the call tools.
+   * The full instruction text for one turn: geniro's own preamble about the
+   * surface the reply is rendered on, the user's global custom instructions,
+   * the node's role, then the caller's "May call" block — the last ONLY when
+   * this turn actually registered the call tools.
    *
    * This lives on the base because getting it wrong is silent: an agent told
    * to route work through `call_agent` with no such tool registered never runs
@@ -1343,14 +1354,38 @@ export abstract class AgentAdapter {
    * join. Adapters compose the result differently — claude appends it via
    * `--append-system-prompt`, ACP prepends it to the prompt text — but the
    * rule about WHEN the block is included is the same for every CLI.
+   *
+   * That is also why the preamble is added HERE rather than at either call
+   * site: this is the one seam both shipped transports already pass through,
+   * so a fact about the host reaches every CLI without a per-CLI branch —
+   * which `.claude/rules/agent-adapters.md` forbids anyway. The ordering and
+   * the reason for it live with the text, in `utils/agent-instructions.ts`.
+   *
+   * The result is non-empty for every USER-FACING turn, a plain chat included,
+   * because the preamble always leads — so an adapter that skips delivery on a
+   * blank composition always delivers for those. An `internalProbe` turn is
+   * the one case that composes to `''`, which is what keeps the daemon's own
+   * capability reads off `--append-system-prompt` entirely.
    */
   protected composeSystemPrompt(
     input: AgentTurnInput,
     granted: boolean,
+    /**
+     * Whether the host preamble still needs saying on THIS delivery. Default
+     * true; a transport that carries the block inside the conversation itself
+     * passes false once the agent has already been told (ACP's resumed
+     * session), so a long thread stops accumulating copies of it. An
+     * `internalProbe` turn withholds it regardless — there is no transcript to
+     * describe either way.
+     */
+    includePreamble = true,
   ): string {
-    return [input.systemPrompt, granted ? input.callSurfacePrompt : null]
-      .filter((part): part is string => Boolean(part))
-      .join('\n\n');
+    return composeTurnInstructions({
+      includePreamble: includePreamble && input.internalProbe !== true,
+      customInstructions: input.customInstructions,
+      systemPrompt: input.systemPrompt,
+      callSurfacePrompt: granted ? input.callSurfacePrompt : null,
+    });
   }
 
   /**
@@ -1553,7 +1588,20 @@ export abstract class AgentAdapter {
       input.model ?? null,
       input.effort ?? null,
       input.systemPrompt ?? null,
+      // Baked into the same composed block as `systemPrompt`, so it is argv
+      // for claude and prompt text for ACP either way — a process spawned
+      // under one user's instruction set cannot serve a turn that carries
+      // another. Omitting it would let two runs with different instructions
+      // share one CLI process, and the second would silently run on the
+      // first's.
+      input.customInstructions ?? null,
       input.callSurfacePrompt ?? null,
+      // Decides whether the host preamble is composed, so it is argv too. No
+      // internal probe uses a kept session today (they all call `start()`),
+      // which is exactly why it belongs here now rather than after the first
+      // one does — a probe served by a user turn's process would otherwise
+      // silently inherit the preamble this flag exists to withhold.
+      input.internalProbe === true,
       input.configDir ?? null,
       input.streamPartials === true,
       input.allowUserQuestions === true,

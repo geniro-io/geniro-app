@@ -4,6 +4,7 @@ import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
 import { CapabilitiesService } from './capabilities.service';
 
 const CLAUDE_MODES = {
@@ -39,6 +40,24 @@ describe('CapabilitiesService', () => {
       claudeModes: CLAUDE_MODES,
     });
     expect(claudeWire).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves the host preamble verbatim', () => {
+    // The Settings screen previews this as "what is already being said on your
+    // behalf", so it has to be the real text.
+    //
+    // Deliberately NOT titled "not a copy": `toBe` on strings is value
+    // equality, so inlining a duplicate literal in the service would still
+    // pass. What this does catch is the field going missing, empty, or wrong.
+    // The independent excerpt below is the half that survives a copy — it is
+    // hand-written here rather than derived from the constant, so a preamble
+    // rewritten to drop its correction fails even if both sides agree.
+    const { service: subject } = service();
+
+    expect(subject.capabilitiesWire().hostPreamble).toBe(GENIRO_UI_PREAMBLE);
+    expect(subject.capabilitiesWire().hostPreamble).toContain(
+      'they are not printed to a terminal',
+    );
   });
 
   it('answers for EVERY registered CLI, not a hand-written list', () => {

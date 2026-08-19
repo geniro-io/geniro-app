@@ -10,7 +10,11 @@ import type {
   Settings as SettingsShape,
   UpdateState,
 } from '../../shared/contracts';
-import { DAEMON_INSPECT_PORT, DEFAULT_SETTINGS } from '../../shared/contracts';
+import {
+  DAEMON_INSPECT_PORT,
+  DEFAULT_SETTINGS,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
+} from '../../shared/contracts';
 import { Settings } from './Settings';
 
 (
@@ -60,12 +64,16 @@ const cliAuthApi = vi.hoisted(() => ({
 const capabilitiesApi = vi.hoisted(() => ({
   getCapabilities: vi.fn(() => Promise.reject(new Error('not in this spec'))),
 }));
+const chatsApi = vi.hoisted(() => ({
+  forgetCustomInstructions: vi.fn(() => Promise.resolve({ cleared: 0 })),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
     handoff: handoffApi,
     cliAuth: cliAuthApi,
     capabilities: capabilitiesApi,
+    chats: chatsApi,
   })),
 }));
 
@@ -447,6 +455,247 @@ describe('Settings updates section', () => {
     expect(geniro.updateSettings).toHaveBeenCalledWith({
       cliPaths: { claude: '/opt/new-claude' },
     });
+  });
+});
+
+describe('Settings — custom instructions', () => {
+  beforeEach(() => {
+    // Back to the file-wide default (a rejecting read). Without this the one
+    // case below that resolves capabilities leaks its answer into the case
+    // that asserts on NOT having one, and the two pass or fail by order.
+    capabilitiesApi.getCapabilities
+      .mockReset()
+      .mockRejectedValue(new Error('not in this spec'));
+    // Reset too, or the purge cases leak their call counts into the one that
+    // asserts the purge is NOT reached by clearing the box.
+    chatsApi.forgetCustomInstructions
+      .mockReset()
+      .mockResolvedValue({ cleared: 0 });
+  });
+
+  /** Type into the instructions box the way a user does. */
+  async function typeInstructions(text: string): Promise<void> {
+    const box = container.querySelector<HTMLTextAreaElement>(
+      '#settings-custom-instructions',
+    )!;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setValue?.call(box, text);
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it('seeds the box from persisted settings', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      customInstructions: 'Always answer in British English.',
+    });
+    await mount();
+
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        '#settings-custom-instructions',
+      )?.value,
+    ).toBe('Always answer in British English.');
+  });
+
+  it('survives a settings payload with no customInstructions key at all', async () => {
+    // Found by driving the real renderer bundle, not by this file: every other
+    // case here spreads DEFAULT_SETTINGS, so the key is always present and the
+    // crash was invisible. Against a payload without it, `.length` on the very
+    // next render threw and took the WHOLE Settings screen down — an error
+    // boundary reading "Cannot read properties of undefined", not an empty box.
+    const { customInstructions: _omitted, ...withoutKey } = settings;
+    geniro.getSettings.mockResolvedValue(withoutKey);
+    await mount();
+
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        '#settings-custom-instructions',
+      )?.value,
+    ).toBe('');
+    // The section rendered rather than the error boundary.
+    expect(container.textContent).toContain('Custom instructions');
+  });
+
+  it('flushes a pending edit when Settings unmounts', async () => {
+    // Same contract the CLI-path field has: navigating away mid-sentence must
+    // not discard what was typed inside the debounce window.
+    await mount();
+    await typeInstructions('Prefer small diffs.');
+
+    expect(geniro.updateSettings).not.toHaveBeenCalled();
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      customInstructions: 'Prefer small diffs.',
+    });
+  });
+
+  it('does not overwrite what the user typed when the settings read lands late', async () => {
+    // The async-read race the other fields guard against, and the one that
+    // costs the most here: a slow read would silently replace a paragraph
+    // mid-sentence rather than flipping a switch back.
+    let resolveSettings!: (value: SettingsShape) => void;
+    geniro.getSettings.mockReturnValueOnce(
+      new Promise<SettingsShape>((resolve) => {
+        resolveSettings = resolve;
+      }),
+    );
+    await mount();
+    await typeInstructions('MINE');
+
+    await act(async () => {
+      resolveSettings({ ...settings, customInstructions: 'STORED' });
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        '#settings-custom-instructions',
+      )?.value,
+    ).toBe('MINE');
+  });
+
+  it('does not attempt a write the settings schema would reject, and says so', async () => {
+    // `settingsPatchSchema` carries the same ceiling, so an over-limit write
+    // throws in the main process and saves nothing. Firing it anyway put a raw
+    // zod string in the error slot while the caption still implied the text was
+    // stored — so the value silently did not exist on disk. Nothing is written,
+    // and the user is told in words.
+    await mount();
+    await typeInstructions('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS + 1));
+
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('does not flush an unsavable value that followed a legal one', async () => {
+    // The sequence the first over-limit case could not reach: a LEGAL edit arms
+    // the debounce, an over-limit edit then clears it — and if the timer ref is
+    // merely cleared rather than nulled, the unmount flush still sees a handle
+    // and writes the over-limit text. Nothing must be written at all here,
+    // because the legal value was superseded and the current one is unsavable.
+    await mount();
+    await typeInstructions('legal so far');
+    await typeInstructions('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS + 1));
+
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('refuses to save text carrying invisible control characters', async () => {
+    // A soft line break pasted from a word processor (U+000B) is the realistic
+    // case. Storing it would make every later chat create 400 at the daemon,
+    // with the error surfacing in the composer rather than here.
+    await mount();
+    await typeInstructions(`be terse${String.fromCharCode(0x0b)}always`);
+
+    // While still mounted — the message is what tells the user why nothing was
+    // stored, and it has to be on screen at the moment they are typing.
+    expect(container.textContent).toContain('control characters');
+
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('keeps saving normally right up to the limit', async () => {
+    // The control: the guard must refuse only what the schema refuses. Without
+    // it, an off-by-one would silently stop persisting a legal value.
+    await mount();
+    await typeInstructions('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS));
+
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      customInstructions: 'x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS),
+    });
+  });
+
+  /** The purge control under the instructions box. */
+  function forgetButton(): HTMLButtonElement | undefined {
+    return [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.includes('Remove from existing chats'),
+    );
+  }
+
+  it('purges the snapshot from existing runs on an explicit press, and says what it reached', async () => {
+    // The escape hatch the snapshot design otherwise lacks. A PRESS, not a
+    // side effect of clearing the box: it discards the per-run guarantee, so
+    // an edit the user is halfway through must not trigger it.
+    chatsApi.forgetCustomInstructions.mockResolvedValue({ cleared: 3 });
+    await mount();
+
+    await act(async () => {
+      forgetButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(chatsApi.forgetCustomInstructions).toHaveBeenCalled();
+    expect(container.textContent).toContain('Removed from 3 existing runs');
+  });
+
+  it('distinguishes "nothing to forget" from a press that did nothing', async () => {
+    // Without the count the two are identical on screen, and a user pressing a
+    // button that appears inert cannot tell which happened.
+    chatsApi.forgetCustomInstructions.mockResolvedValue({ cleared: 0 });
+    await mount();
+
+    await act(async () => {
+      forgetButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('No existing chat was carrying');
+  });
+
+  it('does not purge merely because the box was cleared', async () => {
+    // The whole reason this is a button: clearing the box changes the NEXT
+    // chat, and must never reach back into conversations already started.
+    await mount();
+    await typeInstructions('');
+
+    expect(chatsApi.forgetCustomInstructions).not.toHaveBeenCalled();
+  });
+
+  it('previews the daemon’s own preamble rather than a copy of it', async () => {
+    // The preview must show what the CLIs actually receive. Sourced from
+    // GET /v1/capabilities so it cannot drift; rendering a renderer-side copy
+    // is the failure this asserts against.
+    // `claudeModes` must be present: the shared fetcher reads it to decide
+    // whether to re-poll, and a mock without it throws INSIDE the hook's
+    // promise chain, where the catch turns it into "no answer" — which looks
+    // exactly like the preamble legitimately not having arrived.
+    capabilitiesApi.getCapabilities.mockResolvedValue({
+      hostPreamble: 'PREAMBLE FROM THE DAEMON',
+      claudeModes: { acceptEdits: 'pass', plan: 'pass' },
+      configDirs: [],
+    } as unknown as Awaited<
+      ReturnType<typeof capabilitiesApi.getCapabilities>
+    >);
+    await mount();
+
+    expect(
+      container.querySelector('[data-slot="host-preamble"]')?.textContent,
+    ).toContain('PREAMBLE FROM THE DAEMON');
+  });
+
+  it('shows no preamble block at all while the daemon has not answered', async () => {
+    // The honest rendering before the read lands: nothing. An empty box
+    // captioned "geniro already tells every agent this" would state that the
+    // app sends nothing, which is the opposite of true.
+    await mount();
+
+    expect(container.querySelector('[data-slot="host-preamble"]')).toBeNull();
   });
 });
 

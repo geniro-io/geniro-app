@@ -6,6 +6,7 @@ import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
   ChatMetricsWireSchema,
+  CustomInstructionsSchema,
   ItemWireSchema,
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -51,6 +52,20 @@ export const createChatSchema = z.object({
    * `AdapterConfig.configDir.unavailableReason`.
    */
   configDir: z.string().min(1).optional(),
+  /**
+   * The user's global custom instructions, snapshotted onto this run at
+   * creation — free prose the composer reads out of the app's own settings,
+   * not something typed per chat.
+   *
+   * Sent by the client rather than read daemon-side because settings live in
+   * the ELECTRON process (`settings.json`), which the daemon does not open;
+   * the same route `configDir` already travels. Bounded here INDEPENDENTLY of
+   * the renderer's own bound: this is a separate process validating untrusted
+   * input, and the value ends up in a child's argv, so the daemon may not rely
+   * on a client having checked it. The ceiling is far under the OS argv limit
+   * and far over any plausible prose.
+   */
+  customInstructions: CustomInstructionsSchema.optional(),
   /**
    * A conversation this CLI already holds (`GET /v1/agents/sessions`), taken
    * over by the new thread instead of a fresh session being started.
@@ -174,6 +189,22 @@ export class CancelledDto extends createZodDto(
     cancelled: z
       .boolean()
       .describe('True when a live turn was signalled to stop'),
+  }),
+) {}
+
+/**
+ * How many runs had their snapshotted custom instructions forgotten.
+ *
+ * A COUNT rather than a bare ack because the action is silent otherwise: the
+ * user is told what their press actually reached, which is also the only way
+ * "nothing to forget" is distinguishable from "it did not work".
+ */
+export class ForgottenInstructionsDto extends createZodDto(
+  z.object({
+    cleared: z
+      .number()
+      .int()
+      .describe('Runs whose snapshotted custom instructions were cleared'),
   }),
 ) {}
 

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
     recentFolders: [],
     configDir: null,
     recentConfigDirs: [],
+    runConfigs: [],
     lastChatTarget: null,
     lastApprovalMode: null,
     lastModels: {},

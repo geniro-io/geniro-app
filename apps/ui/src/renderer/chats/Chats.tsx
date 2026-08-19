@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  Bookmark as BookmarkIcon,
   Clock,
   FolderOpen,
   FolderPlus,
@@ -7,7 +8,6 @@ import {
   Plus,
   Square,
   Trash2,
-  Workflow as WorkflowIcon,
   Zap,
 } from 'lucide-react';
 import {
@@ -23,8 +23,8 @@ import type {
   CliDetection,
   CliKind,
   DaemonHandle,
+  RunConfig,
 } from '../../shared/contracts';
-import { CLI_KINDS } from '../../shared/contracts';
 import type {
   AgentSession,
   AgentSessionListingDto,
@@ -104,6 +104,17 @@ import { MessageBubble } from './message-bubble';
 import { ModelSelect } from './model-select';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
+import type { RunConfigDraft } from './run-config';
+import {
+  applyRunConfig,
+  captureRunConfig,
+  isChatApprovalMode,
+  newRunConfigId,
+  replaceRunConfig,
+  targetAgentKind,
+  workflowSlugOf,
+} from './run-config';
+import { RunConfigPicker } from './run-config-picker';
 import {
   GROUP_RAIL_CLASS,
   previewSectionRuns,
@@ -128,6 +139,7 @@ import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
+import { TargetSelect } from './target-select';
 import { type AgentTaskRow, taskListsByAgent } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -224,11 +236,6 @@ function queueMayDrainAfterReplay(
     lastItem.nodeId === null;
   return endedOnTerminal || run.status !== 'running';
 }
-
-/** Is this stored/foreign string one of the daemon's approval modes? */
-const isChatApprovalMode = (value: unknown): value is ChatApprovalMode =>
-  typeof value === 'string' &&
-  (Object.values(ChatApprovalMode) as string[]).includes(value);
 
 /**
  * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
@@ -344,8 +351,11 @@ export function Chats({
   const [resumingSessionId, setResumingSessionId] = useState<string | null>(
     null,
   );
-  const workflowSlug = target.startsWith('wf:') ? target.slice(3) : null;
-  const agentKind = (workflowSlug ? 'claude' : target) as CliKind;
+  // Both from `run-config.ts`, which this file already imports: its docstring
+  // states these two must agree with what a saved configuration keys its model
+  // under, and an invariant held by two copies is one edit from being false.
+  const workflowSlug = workflowSlugOf(target);
+  const agentKind = targetAgentKind(target);
   // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
   const [approvalMode, setApprovalMode] = useState<ChatApprovalMode>('ask');
   /**
@@ -375,6 +385,22 @@ export function Chats({
   // the run records its own at creation and can never change it afterwards.
   const [configDir, setConfigDir] = useState<string | null>(null);
   const [recentConfigDirs, setRecentConfigDirs] = useState<string[]>([]);
+  // The user's saved new-chat setups, and whether their picker is open. Held
+  // here rather than in the picker because the composer is what a pick SEEDS —
+  // the dialog only chooses which one.
+  const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
+  const [runConfigPickerOpen, setRunConfigPickerOpen] = useState(false);
+  /**
+   * Why a configuration's branch could not be checked out, if it could not.
+   *
+   * Surfaced rather than swallowed, and non-blocking by design: the switch is
+   * refused over a dirty tree, and a configuration that could not move the
+   * checkout is still a correct answer about the folder, agent and model it
+   * also named. Cleared when the next one is applied.
+   */
+  const [runConfigBranchNotice, setRunConfigBranchNotice] = useState<
+    string | null
+  >(null);
   const [streaming, setStreaming] = useState(false);
   // Live mirror, so a callback that must not be rebuilt on every delta can
   // still ask whether a turn was in flight BEFORE it started one of its own —
@@ -1544,6 +1570,7 @@ export function Chats({
       setRecentFolders(s.recentFolders ?? []);
       setConfigDir(s.configDir ?? null);
       setRecentConfigDirs(s.recentConfigDirs ?? []);
+      setRunConfigs(s.runConfigs ?? []);
       if (s.lastChatTarget) {
         setTarget(s.lastChatTarget);
       }
@@ -1932,6 +1959,61 @@ export function Chats({
       });
     },
     [recentConfigDirs],
+  );
+
+  /** Persist the whole configuration list — the one write path for all three edits. */
+  /**
+   * Persist the whole configuration list — the one write path for all three
+   * edits, and the one place a rejected write is undone.
+   *
+   * The optimistic set is ROLLED BACK on rejection rather than merely reported.
+   * Main validates this patch and throws on a violation, rejecting the whole
+   * write, so a list left showing the refused entry both lies about what is
+   * saved and makes every LATER save fail on the same entry — the whole array
+   * is re-sent each time. The editor refuses the two cases it can see coming;
+   * this is what handles the ones it cannot.
+   */
+  const persistRunConfigs = useCallback(
+    (next: RunConfig[], previous: RunConfig[]): void => {
+      setRunConfigs(next);
+      void window.geniro
+        .updateSettings({ runConfigs: next })
+        .catch((err: unknown) => {
+          setRunConfigs(previous);
+          setError(
+            `Could not save that configuration — the list is unchanged and your other settings are untouched. ${String(err)}`,
+          );
+        });
+    },
+    [],
+  );
+
+  /**
+   * Create or replace one configuration.
+   *
+   * A new entry is APPENDED rather than unshifted: the order is the user's own
+   * arrangement, and floating the newest to the top would make it an MRU they
+   * did not ask for.
+   */
+  const saveRunConfig = useCallback(
+    (draft: RunConfigDraft, id: string | null): void => {
+      persistRunConfigs(
+        id === null
+          ? [...runConfigs, { ...draft, id: newRunConfigId() }]
+          : replaceRunConfig(runConfigs, { ...draft, id }),
+        runConfigs,
+      );
+    },
+    [runConfigs, persistRunConfigs],
+  );
+
+  const deleteRunConfig = useCallback(
+    (id: string): void =>
+      persistRunConfigs(
+        runConfigs.filter((c) => c.id !== id),
+        runConfigs,
+      ),
+    [runConfigs, persistRunConfigs],
   );
 
   // The native dialog is the same directory picker the folder chip opens —
@@ -3042,12 +3124,133 @@ export function Chats({
   // chip is gone, and keeping the read alive would mean an IPC call per run
   // whose only surviving effect was an error strip about a control nobody sees.
   const git = useGitInfo(folder);
+
+  /** The composer's current setup, or null when it has no folder to save yet. */
+  const captureCurrentRunConfig = useCallback(
+    (name: string): RunConfigDraft | null =>
+      folder === null
+        ? null
+        : captureRunConfig({
+            name,
+            target,
+            cwd: folder,
+            // The branch the folder is actually on — a configuration saved from
+            // the composer means "the setup I am looking at", and that includes
+            // where the checkout stands.
+            branch: git.info.isRepo ? git.info.branch : null,
+            configDir,
+            models,
+            efforts,
+            approval: approvalMode,
+          }),
+    [folder, target, git.info, configDir, models, efforts, approvalMode],
+  );
+
+  /**
+   * Seed the composer from a saved configuration, then try to put the folder on
+   * its branch.
+   *
+   * The settings writes mirror what each chip would have persisted had the user
+   * set it by hand, so the choices survive the next launch exactly as the
+   * composer's own do — a configuration applied and then not used should still
+   * leave the composer where the user last put it.
+   *
+   * The branch switch is LAST and non-blocking: `switchBranch` is refused over
+   * a dirty tree, and nothing else about the configuration depends on it.
+   */
+  const applyRunConfigToComposer = useCallback(
+    async (config: RunConfig): Promise<void> => {
+      const applied = applyRunConfig(config);
+      if (applied === null) {
+        setError(
+          `“${config.name}” starts ${config.target}, which this version cannot run. Edit the configuration to pick another agent.`,
+        );
+        return;
+      }
+      setRunConfigPickerOpen(false);
+      setRunConfigBranchNotice(null);
+      setError(null);
+      // The strip reads `error ?? attachments.error ?? git.error ?? notice`, so
+      // a leftover message from an earlier manual branch switch would OUTRANK
+      // this apply's own refusal and silently stand in for it.
+      git.clearError();
+      // Land on the new-chat screen, which is what the feature promises ("the
+      // standard screen to start a new chat, just with predefined
+      // configuration"). It is also the only view that renders the seeded chips
+      // AND the strip the branch notice below reports through — the picker is
+      // reachable from the sidebar with a thread open, and applying from there
+      // would otherwise seed a composer off screen and swallow the refusal.
+      newChat();
+
+      changeTarget(applied.target);
+      chooseFolder(applied.cwd);
+      // A workflow says NOTHING about any CLI's model, effort or profile — its
+      // nodes each name their own in the YAML. These setters PERSIST, and
+      // `null` through them deletes the remembered entry, so writing the blanks
+      // `applyRunConfig` reports for a workflow would erase the user's own
+      // claude choices (`agentKind` is `claude` there only because a workflow
+      // has no CLI of its own to name).
+      if (!applied.isWorkflow) {
+        chooseConfigDir(applied.configDir);
+        if (applied.approval !== null) {
+          changeApprovalMode(applied.approval);
+        }
+        changeModel(applied.agentKind, applied.model);
+        changeEffort(applied.agentKind, applied.effort);
+      }
+
+      if (applied.branch === null) {
+        return;
+      }
+      const info = await window.geniro.getGitInfo(applied.cwd);
+      if (!info.isRepo) {
+        setRunConfigBranchNotice(
+          `“${config.name}” names the branch ${applied.branch}, but that folder is not a git repository.`,
+        );
+        return;
+      }
+      if (info.branch === applied.branch) {
+        return;
+      }
+      const result = await window.geniro.switchBranch(
+        applied.cwd,
+        applied.branch,
+      );
+      if (!result.ok) {
+        // Everything else about the configuration is already applied — this
+        // says which single part of it did not land, and why.
+        setRunConfigBranchNotice(
+          `Still on ${info.branch ?? 'a detached HEAD'} — could not switch to ${applied.branch}: ${result.error}`,
+        );
+      }
+      // Re-read either way, and NAME the folder: the chip must show the branch
+      // the folder is ACTUALLY on. The hook's own read fires only when the
+      // folder CHANGES — so a configuration naming the folder already selected
+      // refetches nothing — and it reads at commit, i.e. BEFORE the switch
+      // completes. Passing `applied.cwd` is also what stops this re-reading the
+      // PREVIOUS folder: `chooseFolder` above set React state the hook cannot
+      // see from inside this callback.
+      await git.refresh(applied.cwd);
+    },
+    [
+      newChat,
+      changeTarget,
+      chooseFolder,
+      chooseConfigDir,
+      changeApprovalMode,
+      changeModel,
+      changeEffort,
+      git,
+    ],
+  );
+
   // What each composer's error strip shows. The screen-level `error` wins, then
   // the shared attachment reader, then that composer's own git read — and the
   // strip is rendered from exactly this value, so a lone attachment failure
   // cannot be computed into the text of a strip whose visibility never
   // considered it (it was, and stayed invisible).
-  const composerError = error ?? attachments.error ?? git.error;
+  const composerError =
+    error ?? attachments.error ?? git.error ?? runConfigBranchNotice;
   const transcriptError = error ?? attachments.error;
   /**
    * Close the strip. Every source is cleared, not just the one on top: they are
@@ -3058,6 +3261,10 @@ export function Chats({
     setError(null);
     attachments.clearError();
     git.clearError();
+    // The strip is ONE surface over EVERY source, so dismissing it must clear
+    // each of them — a source left set re-renders the strip the moment anything
+    // else does, and reads as a banner that will not close.
+    setRunConfigBranchNotice(null);
   };
   const skillQuery = slashQuery(input);
   const skillMatches = useMemo(
@@ -4053,6 +4260,22 @@ export function Chats({
                         }}>
                         <History className="shrink-0" />
                       </Button>
+                      {/*
+                        Also beside the +, for the same reason "Continue a
+                        session" is: starting from a saved setup has a question
+                        attached to it (which one?), and the + must stay a
+                        one-click new thread.
+                      */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        aria-label="Start from a configuration"
+                        title="Start from a saved configuration"
+                        onClick={() => setRunConfigPickerOpen(true)}>
+                        <BookmarkIcon className="shrink-0" />
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -4290,55 +4513,11 @@ export function Chats({
                           />
                         ) : null}
                         <ComposerTopRow>
-                          <Select
-                            variant="ghost"
+                          <TargetSelect
                             value={target}
-                            aria-label="Agent or workflow for new runs"
-                            searchPlaceholder="Search agents, workflows…"
-                            groups={[
-                              {
-                                label: 'Agents',
-                                // An agent the machine cannot run is SHOWN and
-                                // refused, not hidden: a row that quietly vanishes
-                                // leaves the user hunting for it, while a disabled
-                                // one with its reason beside it explains itself.
-                                // The current target is never refused — a run
-                                // already on it would otherwise have a picker that
-                                // cannot display its own value.
-                                items: CLI_KINDS.map((kind) => {
-                                  const detected = cliDetections?.find(
-                                    (d) => d.kind === kind,
-                                  );
-                                  const missing =
-                                    detected !== undefined &&
-                                    !detected.found &&
-                                    kind !== target;
-                                  return {
-                                    value: kind,
-                                    label: kind,
-                                    ...(missing
-                                      ? {
-                                          disabled: true,
-                                          hint: 'not installed',
-                                        }
-                                      : {}),
-                                  };
-                                }),
-                              },
-                              ...(workflows.length > 0
-                                ? [
-                                    {
-                                      label: 'Workflows',
-                                      items: workflows.map((wf) => ({
-                                        value: `wf:${wf.slug}`,
-                                        label: wf.name,
-                                        icon: <WorkflowIcon />,
-                                      })),
-                                    },
-                                  ]
-                                : []),
-                            ]}
-                            onValueChange={changeTarget}
+                            workflows={workflows}
+                            cliDetections={cliDetections}
+                            onChange={changeTarget}
                           />
                           <FolderSelect
                             folder={folder}
@@ -5205,6 +5384,27 @@ export function Chats({
                   busyId={resumingSessionId}
                   onClose={() => setSessionPickerOpen(false)}
                   onResume={(session) => void resumeSession(session)}
+                />
+                <RunConfigPicker
+                  open={runConfigPickerOpen}
+                  configs={runConfigs}
+                  agentsApi={agentsApi}
+                  workflows={workflows}
+                  cliDetections={cliDetections}
+                  recentFolders={recentFolders}
+                  recentConfigDirs={recentConfigDirs}
+                  // Asked about the CONFIGURATION's agent, not the composer's —
+                  // the same reason the session picker reads its own.
+                  approvalModesFor={(kind) =>
+                    capabilities ? (approvalModesByAgent.get(kind) ?? []) : null
+                  }
+                  configDirReasonFor={configDirReasonFor}
+                  planSupported={capabilities?.claudeModes.plan === 'pass'}
+                  captureCurrent={captureCurrentRunConfig}
+                  onApply={(config) => void applyRunConfigToComposer(config)}
+                  onSave={saveRunConfig}
+                  onDelete={deleteRunConfig}
+                  onClose={() => setRunConfigPickerOpen(false)}
                 />
               </div>
             </MarkdownImageLoaderContext.Provider>

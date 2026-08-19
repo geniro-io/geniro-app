@@ -158,6 +158,11 @@ export function RunConfigPicker({
       );
       return;
     }
+    // Clear the refusal this save just resolved. The message renders above the
+    // LIST as well as the editor, so a stale one sits over the row that proves
+    // it wrong — the user is told to name a configuration that is on screen
+    // carrying its name.
+    setError(null);
     onSave({ ...editing.draft, name }, editing.id);
     setEditing(null);
   }, [editing, configs.length, onSave]);
@@ -191,7 +196,10 @@ export function RunConfigPicker({
           configDirReasonFor={configDirReasonFor}
           planSupported={planSupported}
           onChange={(draft) => setEditing({ id: editing.id, draft })}
-          onCancel={() => setEditing(null)}
+          onCancel={() => {
+            setError(null);
+            setEditing(null);
+          }}
           onCommit={commit}
         />
       ) : (

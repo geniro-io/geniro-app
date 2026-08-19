@@ -182,6 +182,61 @@ describe('RunConfigPicker — editor', () => {
     expect(container.textContent).toContain('Give the configuration a name');
   });
 
+  it('clears the refusal once the save it refused succeeds', () => {
+    // The message renders above the LIST, not only the editor, so a stale one
+    // sits over the very row that disproves it — telling the user to name a
+    // configuration whose name is on screen beside it.
+    const { onSave } = openEditor();
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Configuration name"]',
+    );
+    const type = (value: string): void => {
+      act(() => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        )?.set?.call(input, value);
+        input?.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+
+    type('   ');
+    click(button('Save'));
+    expect(container.textContent).toContain('Give the configuration a name');
+
+    type('Named at last');
+    click(button('Save'));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain(
+      'Give the configuration a name',
+    );
+  });
+
+  it('clears the refusal when the editor is cancelled', () => {
+    // Same surface, other exit: abandoning the edit leaves the complaint about
+    // it standing over the list.
+    openEditor();
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Configuration name"]',
+    );
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set?.call(input, '   ');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    click(button('Save'));
+    expect(container.textContent).toContain('Give the configuration a name');
+
+    click(button('Cancel'));
+
+    expect(container.textContent).not.toContain(
+      'Give the configuration a name',
+    );
+  });
+
   it('saves the edited draft back against the same id', () => {
     const { onSave } = openEditor();
 

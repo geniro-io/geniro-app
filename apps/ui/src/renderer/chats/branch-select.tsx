@@ -91,15 +91,11 @@ export function BranchSelect(
  * A branch chip that RECORDS a name instead of checking it out — what a saved
  * run configuration stores.
  *
- * Kept in this file beside {@link BranchSelect} rather than folded into it: the
- * two answer different questions and would need a mode flag to share one body.
- * This one's value is the stored choice (which may name a branch the folder is
- * not on, and which may be null), while `BranchSelect`'s is the live checkout;
- * this one offers a "whatever is checked out" row, which the live control must
- * never have. They live in one file so the pair is discoverable together and a
- * reader deciding between them sees both — NOT because co-location shares
- * anything: the icon, width and not-a-repo guard are duplicated literals and are
- * free to drift.
+ * Beside {@link BranchSelect} rather than folded into it: the two answer
+ * different questions and would need a mode flag to share one body. This one's
+ * value is the stored choice (which may name a branch the folder is not on, and
+ * may be null) and it offers a "whatever is checked out" row, which the live
+ * control must never have.
  */
 export function BranchValueSelect({
   info,
@@ -123,9 +119,8 @@ export function BranchValueSelect({
     <Select
       variant="ghost"
       // The SENTINEL, not `null`: `Select` matches a row by `item.value ===
-      // value`, so a null here matches no row — the "whatever is checked out"
-      // row would carry no checkmark and the trigger would fall back to its
-      // placeholder, both reading as "nothing chosen" for a real choice.
+      // value`, so a null matches no row and a real choice would read as
+      // "nothing chosen" — no checkmark, and the trigger on its placeholder.
       value={value ?? ANY_BRANCH}
       placeholder="branch in use"
       searchPlaceholder="Search branches…"
@@ -136,10 +131,6 @@ export function BranchValueSelect({
       leadingIcon={<GitBranch />}
       groups={[
         {
-          // The "no opinion" row, as a sentinel rather than a null the picker
-          // cannot emit — the same mechanism `DirectorySelect` uses for its
-          // "Default profile" row. A branch name is a git refname, which can
-          // never be the empty string, so nothing real collides with it.
           items: [
             { value: ANY_BRANCH, label: 'Whatever is checked out' },
             ...info.branches.map((b) => ({ value: b, label: b })),

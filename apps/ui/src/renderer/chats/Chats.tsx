@@ -351,9 +351,9 @@ export function Chats({
   const [resumingSessionId, setResumingSessionId] = useState<string | null>(
     null,
   );
-  // Both from `run-config.ts`, which this file already imports: its docstring
-  // states these two must agree with what a saved configuration keys its model
-  // under, and an invariant held by two copies is one edit from being false.
+  // Both from `run-config.ts`: these two must agree with what a saved
+  // configuration keys its model under, and an invariant held by two copies is
+  // one edit from being false.
   const workflowSlug = workflowSlugOf(target);
   const agentKind = targetAgentKind(target);
   // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
@@ -391,12 +391,10 @@ export function Chats({
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
   const [runConfigPickerOpen, setRunConfigPickerOpen] = useState(false);
   /**
-   * Why a configuration's branch could not be checked out, if it could not.
-   *
-   * Surfaced rather than swallowed, and non-blocking by design: the switch is
-   * refused over a dirty tree, and a configuration that could not move the
-   * checkout is still a correct answer about the folder, agent and model it
-   * also named. Cleared when the next one is applied.
+   * Why a configuration's branch could not be checked out, if it could not —
+   * surfaced rather than swallowed, and non-blocking: the switch is refused
+   * over a dirty tree, and a configuration that could not move the checkout is
+   * still a correct answer about everything else it named.
    */
   const [runConfigBranchNotice, setRunConfigBranchNotice] = useState<
     string | null
@@ -1961,17 +1959,15 @@ export function Chats({
     [recentConfigDirs],
   );
 
-  /** Persist the whole configuration list — the one write path for all three edits. */
   /**
    * Persist the whole configuration list — the one write path for all three
    * edits, and the one place a rejected write is undone.
    *
-   * The optimistic set is ROLLED BACK on rejection rather than merely reported.
-   * Main validates this patch and throws on a violation, rejecting the whole
+   * The optimistic set is ROLLED BACK on rejection rather than merely reported:
+   * main validates this patch and throws on a violation, rejecting the whole
    * write, so a list left showing the refused entry both lies about what is
-   * saved and makes every LATER save fail on the same entry — the whole array
-   * is re-sent each time. The editor refuses the two cases it can see coming;
-   * this is what handles the ones it cannot.
+   * saved and makes every LATER save fail on the same entry, since the whole
+   * array is re-sent each time.
    */
   const persistRunConfigs = useCallback(
     (next: RunConfig[], previous: RunConfig[]): void => {
@@ -1989,11 +1985,8 @@ export function Chats({
   );
 
   /**
-   * Create or replace one configuration.
-   *
-   * A new entry is APPENDED rather than unshifted: the order is the user's own
-   * arrangement, and floating the newest to the top would make it an MRU they
-   * did not ask for.
+   * Create or replace one configuration. A new entry is APPENDED, never
+   * unshifted: the order is the user's own arrangement, not an MRU.
    */
   const saveRunConfig = useCallback(
     (draft: RunConfigDraft, id: string | null): void => {
@@ -3134,9 +3127,8 @@ export function Chats({
             name,
             target,
             cwd: folder,
-            // The branch the folder is actually on — a configuration saved from
-            // the composer means "the setup I am looking at", and that includes
-            // where the checkout stands.
+            // The branch the folder is actually on: a configuration saved from
+            // the composer means "the setup I am looking at", checkout included.
             branch: git.info.isRepo ? git.info.branch : null,
             configDir,
             models,
@@ -3151,12 +3143,9 @@ export function Chats({
    * its branch.
    *
    * The settings writes mirror what each chip would have persisted had the user
-   * set it by hand, so the choices survive the next launch exactly as the
-   * composer's own do — a configuration applied and then not used should still
-   * leave the composer where the user last put it.
-   *
-   * The branch switch is LAST and non-blocking: `switchBranch` is refused over
-   * a dirty tree, and nothing else about the configuration depends on it.
+   * set it by hand, so the choices survive the next launch as the composer's
+   * own do. The branch switch is LAST and non-blocking: `switchBranch` is
+   * refused over a dirty tree, and nothing else here depends on it.
    */
   const applyRunConfigToComposer = useCallback(
     async (config: RunConfig): Promise<void> => {
@@ -3174,22 +3163,19 @@ export function Chats({
       // a leftover message from an earlier manual branch switch would OUTRANK
       // this apply's own refusal and silently stand in for it.
       git.clearError();
-      // Land on the new-chat screen, which is what the feature promises ("the
-      // standard screen to start a new chat, just with predefined
-      // configuration"). It is also the only view that renders the seeded chips
-      // AND the strip the branch notice below reports through — the picker is
-      // reachable from the sidebar with a thread open, and applying from there
-      // would otherwise seed a composer off screen and swallow the refusal.
+      // Land on the new-chat screen: it is what the feature promises, and the
+      // only view that renders both the seeded chips AND the strip the branch
+      // notice below reports through. The picker is reachable from the sidebar
+      // with a thread open, where applying would otherwise seed a composer off
+      // screen and swallow the refusal.
       newChat();
 
       changeTarget(applied.target);
       chooseFolder(applied.cwd);
       // A workflow says NOTHING about any CLI's model, effort or profile — its
-      // nodes each name their own in the YAML. These setters PERSIST, and
-      // `null` through them deletes the remembered entry, so writing the blanks
-      // `applyRunConfig` reports for a workflow would erase the user's own
-      // claude choices (`agentKind` is `claude` there only because a workflow
-      // has no CLI of its own to name).
+      // nodes each name their own. These setters PERSIST and `null` through
+      // them DELETES the remembered entry, so writing the blanks a workflow
+      // reports would erase the user's own claude choices.
       if (!applied.isWorkflow) {
         chooseConfigDir(applied.configDir);
         if (applied.approval !== null) {
@@ -3217,19 +3203,16 @@ export function Chats({
         applied.branch,
       );
       if (!result.ok) {
-        // Everything else about the configuration is already applied — this
-        // says which single part of it did not land, and why.
         setRunConfigBranchNotice(
           `Still on ${info.branch ?? 'a detached HEAD'} — could not switch to ${applied.branch}: ${result.error}`,
         );
       }
       // Re-read either way, and NAME the folder: the chip must show the branch
       // the folder is ACTUALLY on. The hook's own read fires only when the
-      // folder CHANGES — so a configuration naming the folder already selected
-      // refetches nothing — and it reads at commit, i.e. BEFORE the switch
-      // completes. Passing `applied.cwd` is also what stops this re-reading the
-      // PREVIOUS folder: `chooseFolder` above set React state the hook cannot
-      // see from inside this callback.
+      // folder CHANGES, so a configuration naming the folder already selected
+      // refetches nothing. Passing `applied.cwd` is also what stops this
+      // re-reading the PREVIOUS folder — `chooseFolder` above set React state
+      // this callback cannot see.
       await git.refresh(applied.cwd);
     },
     [
@@ -3261,9 +3244,6 @@ export function Chats({
     setError(null);
     attachments.clearError();
     git.clearError();
-    // The strip is ONE surface over EVERY source, so dismissing it must clear
-    // each of them — a source left set re-renders the strip the moment anything
-    // else does, and reads as a banner that will not close.
     setRunConfigBranchNotice(null);
   };
   const skillQuery = slashQuery(input);
@@ -4260,12 +4240,9 @@ export function Chats({
                         }}>
                         <History className="shrink-0" />
                       </Button>
-                      {/*
-                        Also beside the +, for the same reason "Continue a
-                        session" is: starting from a saved setup has a question
-                        attached to it (which one?), and the + must stay a
-                        one-click new thread.
-                      */}
+                      {/* Beside the +, for the same reason "Continue a session"
+                          is: starting from a saved setup has a question
+                          attached (which one?), and the + must stay one click. */}
                       <Button
                         type="button"
                         variant="ghost"
@@ -5393,8 +5370,7 @@ export function Chats({
                   cliDetections={cliDetections}
                   recentFolders={recentFolders}
                   recentConfigDirs={recentConfigDirs}
-                  // Asked about the CONFIGURATION's agent, not the composer's —
-                  // the same reason the session picker reads its own.
+                  // Asked about the CONFIGURATION's agent, not the composer's.
                   approvalModesFor={(kind) =>
                     capabilities ? (approvalModesByAgent.get(kind) ?? []) : null
                   }

@@ -77,8 +77,7 @@ export function useGitInfo(dir: string | null): {
    * The effect above only fires when `dir` CHANGES, so a branch moved by some
    * other path — applying a saved run configuration, which switches through the
    * IPC directly — leaves this hook painting the branch the folder was on
-   * before. When the configuration names the folder already selected, `dir`
-   * does not change at all and nothing would refetch.
+   * before.
    *
    * **The directory is a PARAMETER, not read from the closure.** A caller that
    * has just changed the folder is the main reason to call this, and React
@@ -89,12 +88,6 @@ export function useGitInfo(dir: string | null): {
    */
   const refresh = useCallback(
     async (target?: string): Promise<void> => {
-      // An explicit target is the caller ASSERTING which folder is now current
-      // — it is passed precisely because the state change that would tell this
-      // hook has not committed yet, so it is applied unconditionally. The
-      // effect above re-reads the same folder when that state does land; this
-      // one runs later (it waits on a real `git switch`) and is the one whose
-      // answer is post-switch.
       const at = target ?? dir;
       if (at === null) {
         return;

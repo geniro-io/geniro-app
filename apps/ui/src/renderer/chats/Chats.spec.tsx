@@ -8066,12 +8066,11 @@ describe('Chats — starting from a saved configuration', () => {
     // folder, and (running after a real `git switch`) lands after the hook's
     // own read for the new one, painting the old repo's branch over it.
     //
-    // Two things make this test able to fail at all, both learned the hard way:
-    // the mock is DIRECTORY-SENSITIVE (every other spec here uses a bare
-    // `mockResolvedValue` that ignores its argument), and the configuration's
-    // folder starts on a DIFFERENT branch than the configuration names —
+    // Two things make this test able to fail at all: the mock is
+    // DIRECTORY-SENSITIVE (every other spec here ignores its argument), and the
+    // configuration's folder starts on a DIFFERENT branch than it names —
     // otherwise the apply early-returns on `info.branch === applied.branch` and
-    // never reaches the refresh at all.
+    // never reaches the refresh.
     withSavedConfig();
     window.geniro.getGitInfo = vi.fn(async (dir: string) =>
       dir === '/saved/proj'
@@ -8284,12 +8283,10 @@ describe('Chats — starting from a saved configuration', () => {
   });
 
   it('applying from an OPEN thread returns to the new-chat screen', async () => {
-    // One of the three documented invariants. The picker sits in the sidebar
-    // and is reachable with a thread open — where the composer this apply seeds
-    // is off screen, and the error strip the branch refusal reports through is
-    // not rendered at all (it lives only in the `activeRunId === null` branch).
-    // Every other test in this block applies with no thread open, where
-    // `newChat()` is a no-op and cannot be observed.
+    // The picker is reachable from the sidebar with a thread open — where the
+    // composer this apply seeds is off screen, and the error strip the branch
+    // refusal reports through is not rendered at all. Every other test in this
+    // block applies with no thread open, where `newChat()` cannot be observed.
     withSavedConfig();
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
     const { client } = makeClient();

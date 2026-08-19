@@ -267,9 +267,8 @@ describe('RunConfigPicker — editor', () => {
 
 describe('RunConfigPicker — state that must not survive a reopen', () => {
   it('an armed delete is disarmed by closing and reopening', () => {
-    // The code's own comment calls a leftover armed delete "one press away from
-    // destroying a setup" — that is what the open-reset effect prevents, and
-    // nothing failed if it were deleted.
+    // An armed delete left over from the last open is one press away from
+    // destroying a setup the user did not aim at.
     const { rerender } = render();
     click(button('Delete Geniro app'));
     expect(() => button('Confirm delete Geniro app')).not.toThrow();

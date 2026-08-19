@@ -22,13 +22,9 @@ import {
  */
 
 /**
- * A non-empty, absolute filesystem path.
- *
- * Bounded HERE rather than at each field: every persisted path in this file
- * flows through this one schema, and adding the cap per-field is what let a
- * `runConfigs` entry carry an unbounded `cwd` fifty times over after the same
- * bound had already been argued for on its sibling. 1024 is generous against
- * any real `PATH_MAX`.
+ * A non-empty, absolute filesystem path. Bounded HERE rather than per-field, so
+ * no persisted path can slip through unbounded; 1024 is generous against any
+ * real `PATH_MAX`.
  */
 const absolutePath = z
   .string()
@@ -45,10 +41,9 @@ const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
  * rejected here anyway — this is the boundary that makes it true regardless of
  * what the renderer sends.
  *
- * Declared ABOVE `settingsPatchSchema` because that schema now embeds it (a
- * saved run configuration carries a branch). `z.strictObject` evaluates its
- * shape immediately, so a reference from there to a `const` declared further
- * down would be a temporal-dead-zone error at module load, not a type error.
+ * Declared ABOVE `settingsPatchSchema`, which embeds it: `z.strictObject`
+ * evaluates its shape immediately, so a reference to a `const` declared further
+ * down is a temporal-dead-zone error at module load, not a type error.
  */
 export const branchNameSchema = z
   .string()
@@ -61,14 +56,7 @@ export const branchNameSchema = z
   .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
   .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
 
-/**
- * The composer target: a CLI kind, or `wf:<slug>` for a library workflow.
- *
- * The `wf:` arm is length-capped like every other free-form field here — a slug
- * is short, and without a bound a run configuration could carry an arbitrarily
- * large string, fifty times over, into a file the main process re-reads and
- * re-writes on every launch.
- */
+/** The composer target: a CLI kind, or `wf:<slug>` for a library workflow. */
 const chatTarget = z.union([
   cliKind,
   z
@@ -80,18 +68,11 @@ const chatTarget = z.union([
 /**
  * One saved new-chat setup (`RunConfig` in shared/contracts.ts).
  *
- * Every field is bounded rather than merely typed. These are the user's own
- * strings arriving over IPC, they are persisted, and two of them reach
- * privileged sinks — `cwd` is handed to the daemon as a run's working directory
- * and to `git`, and `branch` becomes an argv entry of `git switch`, which is
- * why it reuses the same refname schema that channel is guarded by rather than
- * a looser copy.
- *
- * The daemon-vocabulary fields stay OPAQUE and bounded here for the same reason
- * their single-value counterparts above do: naming the levels would put a copy
- * of the daemon's and the CLIs' vocabularies in the main process, free to
- * disagree with the one the executor enforces. The renderer re-checks them
- * against the generated enums before they reach a run.
+ * Every field is bounded rather than merely typed: these are persisted, and two
+ * reach privileged sinks — `cwd` is handed to the daemon and to `git`, and
+ * `branch` becomes an argv entry of `git switch`, so it reuses that channel's
+ * own refname schema rather than a looser copy. The daemon-vocabulary fields
+ * stay OPAQUE, like their single-value counterparts above.
  */
 const runConfigSchema = z.strictObject({
   id: z.string().min(1).max(64),
@@ -117,14 +98,10 @@ export const settingsPatchSchema = z.strictObject({
   // directory", which is a real choice and must be writable back.
   configDir: absolutePath.nullable().optional(),
   recentConfigDirs: z.array(absolutePath).max(10).optional(),
-  // The user's saved new-chat setups. Capped like the recents beside it — this
-  // one is hand-managed rather than auto-evicted, so the bound is a guard
-  // against a renderer bug growing settings.json without limit, set well above
-  // any plausible number of real configurations.
+  // The user's saved new-chat setups. Hand-managed rather than auto-evicted, so
+  // the cap is a guard against a renderer bug growing settings.json without
+  // limit, set well above any plausible number of real configurations.
   runConfigs: z.array(runConfigSchema).max(MAX_RUN_CONFIGS).optional(),
-  // The composer's own target — the SAME vocabulary a saved run configuration
-  // holds, so it reuses that schema rather than re-declaring it: two copies in
-  // one file is how only one of them ended up carrying the length bound.
   lastChatTarget: chatTarget.nullable().optional(),
   // The daemon's ChatApprovalMode, kept OPAQUE here: its vocabulary belongs to
   // the daemon, and the main process holds no daemon shapes. Bounded so a

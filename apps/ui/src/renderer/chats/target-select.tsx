@@ -12,12 +12,8 @@ export interface TargetWorkflow {
 
 /**
  * What a run is pointed at — one of the CLIs on this machine, or a library
- * workflow to run as a team.
- *
- * Shared rather than inline because the choice is made in two places now: the
- * composer, and the editor behind a saved run configuration. The rows are the
- * part worth getting right once — in particular that an agent the machine
- * cannot run is SHOWN and refused rather than hidden.
+ * workflow to run as a team. Shared by the composer and the editor behind a
+ * saved run configuration.
  */
 export function TargetSelect({
   value,

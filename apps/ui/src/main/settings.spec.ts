@@ -108,11 +108,10 @@ describe('readSettings', () => {
   });
 
   it('one unparseable run configuration costs only that entry — the others survive in order', () => {
-    // A configuration is HAND-MADE and unrecoverable: nothing recreates it the
-    // way CLI detection refills a binary path. Rejecting the array wholesale
-    // (zod's default on one bad element) would wipe every saved setup because
-    // one entry was written by a newer build or hand-edited, and the next
-    // updateSettings() write would make that permanent.
+    // A configuration is HAND-MADE and unrecoverable. Rejecting the array
+    // wholesale (zod's default on one bad element) would wipe every saved setup
+    // over one entry written by a newer build, and the next updateSettings()
+    // write would make that permanent.
     writeRaw({
       runConfigs: [
         {
@@ -170,10 +169,9 @@ describe('readSettings', () => {
   });
 
   it('a list longer than the cap is truncated on read, not loaded whole', () => {
-    // The cap lives on the ARRAY schema, and the per-entry salvage is exactly
-    // what skips it. Without re-applying it here an over-long hand-edited file
-    // loads in full and then makes every later write fail its own schema —
-    // locking the user out of saving anything.
+    // The cap lives on the ARRAY schema, which the per-entry salvage skips.
+    // Unre-applied, an over-long hand-edited file loads in full and then makes
+    // every later write fail its own schema — locking the user out of saving.
     writeRaw({
       runConfigs: Array.from({ length: MAX_RUN_CONFIGS + 5 }, (_, i) => ({
         id: `rc-${i}`,
@@ -198,12 +196,10 @@ describe('readSettings', () => {
   });
 
   it('a duplicated id costs the later entry — ids are unique after a read', () => {
-    // `id` carries no uniqueness constraint and settings.json is hand-editable
-    // (the whole per-key salvage exists because this file is expected to be
-    // edited and to outlive the build reading it). Downstream, edit and delete
-    // both key on id and both map/filter the WHOLE list — so a duplicate makes
-    // renaming one configuration silently rewrite another, and deleting one
-    // remove two. Enforcing it here keeps that invariant in one place rather
+    // `id` carries no uniqueness constraint and settings.json is hand-editable.
+    // Downstream, edit and delete both key on id across the WHOLE list — so a
+    // duplicate makes renaming one configuration silently rewrite another, and
+    // deleting one remove two. Enforcing it here keeps that in one place rather
     // than making every consumer defensive.
     writeRaw({
       runConfigs: [

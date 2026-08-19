@@ -9,7 +9,6 @@ import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
-import { cn } from '../components/ui/utils';
 import type { DaemonApis } from '../daemon-api';
 import { ApprovalModeSelect } from './approval-mode-select';
 import { BranchValueSelect } from './branch-select';
@@ -35,19 +34,14 @@ import { useGitInfo } from './use-git-info';
  * set.
  *
  * Managing happens HERE rather than in Settings because this is where they are
- * used — a configuration is edited in the moment you notice it is wrong, which
- * is when you are about to start a chat with it. It also keeps one surface over
- * the data instead of two free to disagree.
+ * used — a configuration is edited in the moment you notice it is wrong. It
+ * also keeps one surface over the data instead of two free to disagree.
  *
  * The editor COMPOSES the composer's own chips rather than re-implementing
  * pickers, so a configuration can only ever hold values the composer itself
- * could produce — and every chip's rules (an off-list model added back, a CLI
- * with no effort control, a config directory the CLI cannot take) apply here
- * unchanged.
- *
- * Its vocabulary is asked about the CONFIGURATION's agent, never the
- * composer's. Answering the second with the first is the bug the session picker
- * already carries a comment about: it sent a claude profile to cursor.
+ * could produce. Its vocabulary is asked about the CONFIGURATION's agent, never
+ * the composer's — answering the second with the first is the session picker's
+ * old bug, which sent a claude profile to cursor.
  */
 export function RunConfigPicker({
   open,
@@ -117,9 +111,8 @@ export function RunConfigPicker({
   const startNew = React.useCallback((): void => {
     setError(null);
     // Seeded from the composer so "new configuration" is a naming step rather
-    // than six pickers — the setup on screen is what the user means most of the
-    // time. A composer with no folder yet cannot be captured, so the draft
-    // falls back to empty and the folder chip asks for one.
+    // than six pickers. A composer with no folder yet cannot be captured, so
+    // the draft falls back to empty and the folder chip asks for one.
     const captured = captureCurrent('');
     setEditing({
       id: null,
@@ -152,9 +145,7 @@ export function RunConfigPicker({
     // Refuse here what the IPC schema would refuse anyway. That boundary
     // rejects the WHOLE settings patch by throwing, so without these two guards
     // an over-long name or a 51st entry closes the editor, shows the row from
-    // React state, and writes nothing — the loss only visible after a relaunch,
-    // and every later save failing too while the offending entry stays in the
-    // list.
+    // React state, and writes nothing.
     if (name.length > MAX_RUN_CONFIG_NAME) {
       setError(
         `That name is ${name.length} characters — keep it to ${MAX_RUN_CONFIG_NAME}.`,
@@ -182,9 +173,8 @@ export function RunConfigPicker({
             : 'Edit configuration'
           : 'Start from a configuration'
       }
-      // Wide enough for a row to state its folder path — the same reason the
-      // session picker is: a leaf name alone does not identify a project among
-      // the several checkouts a machine holds.
+      // Wide enough for a row to state its folder path — a leaf name alone does
+      // not identify a project among the several checkouts a machine holds.
       className="w-[min(48rem,calc(100vw-3rem))] max-w-none">
       {error ? <ErrorText>{error}</ErrorText> : null}
       {editing ? (
@@ -286,8 +276,7 @@ function RunConfigRow({
         type="button"
         onClick={() => onApply(config)}
         // Named explicitly: the row's own text is a folder path and a model
-        // alias read out as one run-on string, which is not what the control
-        // does.
+        // alias read out as one run-on string.
         aria-label={`Start a chat set up as “${config.name}”`}
         title={`Start a chat set up as “${config.name}”`}
         className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left outline-none focus-visible:bg-sidebar-accent">
@@ -319,12 +308,10 @@ function RunConfigRow({
         </span>
       </button>
       {confirmingDelete ? (
-        // Two presses rather than a nested dialog: a second Dialog inside this
-        // one would fight it for the focus trap. A configuration is hand-made
-        // and nothing recreates it, so the confirm earns its place — and it
-        // comes with its own way OUT, because the confirm button replaces the
-        // delete button under the pointer and a double-click would otherwise
-        // land straight on it.
+        // Two presses rather than a nested dialog, which would fight this one
+        // for the focus trap. Cancel is not decoration: the confirm button
+        // replaces the delete button under the pointer, so a double-click would
+        // otherwise land straight on it.
         <>
           <Button
             type="button"
@@ -413,8 +400,7 @@ function RunConfigEditor({
 }): React.JSX.Element {
   const workflow = workflowSlugOf(draft.target) !== null;
   const kind = targetAgentKind(draft.target);
-  // Null while closed, so neither list is fetched for a dialog nobody opened —
-  // the same gating `use-agent-mcp` applies to its health-checking read.
+  // Null while closed, so neither list is fetched for a dialog nobody opened.
   const vocabularyKind = open && !workflow ? kind : null;
   const { models, loading: modelsLoading } = useAgentModels(
     agentsApi,
@@ -456,8 +442,6 @@ function RunConfigEditor({
           value={draft.name}
           placeholder="Geniro app · main"
           aria-label="Configuration name"
-          // The same bound the IPC schema enforces — stopping the typing is
-          // kinder than accepting it and refusing the save.
           maxLength={MAX_RUN_CONFIG_NAME}
           onChange={(event) => set({ name: event.target.value })}
         />
@@ -472,9 +456,9 @@ function RunConfigEditor({
             cliDetections={cliDetections}
             aria-label="Agent or workflow this configuration starts"
             onChange={(target) =>
-              // Switching to a workflow drops the three CLI-only choices rather
-              // than keeping them invisibly: their chips disappear, and a value
-              // the user can neither see nor edit would still be saved.
+              // Switching to a workflow drops the CLI-only choices rather than
+              // keeping them invisibly: their chips disappear, and a value the
+              // user can neither see nor edit would still be saved.
               workflowSlugOf(target) !== null
                 ? set({
                     target,
@@ -539,10 +523,7 @@ function RunConfigEditor({
         </p>
       </div>
 
-      <div
-        className={cn(
-          'flex items-center justify-end gap-2 border-t border-border pt-3',
-        )}>
+      <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>

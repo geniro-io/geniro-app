@@ -7,11 +7,14 @@ import {
   type CliDetection,
   type CliKind,
   DAEMON_INSPECT_PORT,
+  hasControlCharacters,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   resolveDaemonInspect,
   type Settings as SettingsShape,
 } from '../../shared/contracts';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
+import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
@@ -19,10 +22,27 @@ import { ProgressBar } from '../components/ui/progress-bar';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { createDaemonApis } from '../daemon-api';
-import { useConfigDirCapability } from '../graphs/use-config-dir-capability';
+import { configDirCapabilityFrom } from '../graphs/use-config-dir-capability';
 import { updateStatusLine } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
+import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
+import { useDebouncedPersist } from './use-debounced-persist';
+
+/**
+ * Whether this instructions value can actually be written to settings.json.
+ *
+ * `settingsPatchSchema` refuses an over-long value AND one carrying control
+ * characters, so attempting either write saves nothing and puts a raw zod
+ * string in the error slot. Asked before the debounce is armed, so the two
+ * rules cannot drift from what the section's message tells the user.
+ */
+function savableInstructions(value: string): boolean {
+  return (
+    value.length <= MAX_CUSTOM_INSTRUCTIONS_CHARS &&
+    !hasControlCharacters(value)
+  );
+}
 
 function normalizedCliPaths(
   paths: Partial<Record<CliKind, string>>,
@@ -63,6 +83,10 @@ export function Settings({
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [claudeBrowserTools, setClaudeBrowserTools] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState('');
+  const [forgetting, setForgetting] = useState(false);
+  /** What the last purge reached, in words — `null` until one has run. */
+  const [forgetResult, setForgetResult] = useState<string | null>(null);
   /** Where the on-demand banner got to: idle → testing → what happened. */
   const [notificationTest, setNotificationTest] = useState<
     'idle' | 'testing' | 'shown' | 'unknown'
@@ -94,12 +118,27 @@ export function Settings({
     checkForUpdates: 0,
     notificationsEnabled: 0,
     daemonInspect: 0,
+    customInstructions: 0,
     other: 0,
   });
 
   // What the daemon was actually spawned with — the switch must report the
   // port's real state, not the stored `null`.
   const inspectEnabled = resolveDaemonInspect(storedInspect, isPackaged);
+  // ONE capabilities read for this whole screen. Two slices are wanted — the
+  // host preamble for the instructions preview, and the per-CLI
+  // config-directory reasons further down — and `useCapabilities` holds its
+  // state per CALL, so asking it twice mounts two fetchers and two retry loops
+  // against one endpoint. The config-dir slice goes through the pure selector
+  // below rather than through its own hook.
+  const capabilities = useCapabilities(apis?.capabilities ?? null);
+  // Served by the daemon rather than restated here, so the preview cannot go
+  // on describing a preamble the CLIs stopped receiving. Absent until the read
+  // lands (and when no daemon is connected) — the honest rendering then is to
+  // show nothing, not an empty box captioned as the app's instructions.
+  const hostPreamble = capabilities?.hostPreamble;
+  const overLimit = customInstructions.length > MAX_CUSTOM_INSTRUCTIONS_CHARS;
+  const hasControlChars = hasControlCharacters(customInstructions);
 
   // Latest binary paths for the debounced persist timer (it fires after the
   // state that triggered it has committed).
@@ -122,6 +161,8 @@ export function Settings({
             console.error('failed to flush CLI path settings on unmount', err);
           });
       }
+      // The instructions field owns its own flush — see `useDebouncedPersist`,
+      // which is where the nulled-handle rule that makes it safe now lives.
       if (flashTimer.current) {
         clearTimeout(flashTimer.current);
       }
@@ -142,6 +183,18 @@ export function Settings({
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
+      }
+      // Guarded like the others: this read is async, and clobbering the box
+      // would discard whatever the user typed while it was in flight.
+      if (!instructions.dirtyRef.current) {
+        // `?? ''` because this value crosses the IPC boundary and is read for
+        // its `.length` on the very next render: an absent key makes the whole
+        // Settings screen throw `Cannot read properties of undefined`, not
+        // merely render an empty box. `readSettings` merges DEFAULT_SETTINGS
+        // so production always carries it — a harness stub or an older main
+        // process need not, and losing the screen is far too much to pay for
+        // a missing optional field. Same default `Chats.tsx` applies.
+        setCustomInstructions(s.customInstructions ?? '');
       }
     });
     void window.geniro.getStatus().then((s) => setIsPackaged(s.isPackaged));
@@ -188,7 +241,9 @@ export function Settings({
               ? 'notificationsEnabled'
               : patch.daemonInspect !== undefined
                 ? 'daemonInspect'
-                : 'other';
+                : patch.customInstructions !== undefined
+                  ? 'customInstructions'
+                  : 'other';
       const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
@@ -218,6 +273,58 @@ export function Settings({
       });
     }, 600);
   }, [persist]);
+
+  /**
+   * Debounced auto-save of the custom instructions.
+   *
+   * An unsavable value — over the ceiling, or carrying control characters — is
+   * held on screen and never written: `settingsPatchSchema` refuses both, so
+   * attempting the write costs a raw zod string in the error slot and saves
+   * nothing. The section's own message is what tells the user in words; see
+   * {@link overLimit} / {@link hasControlChars} at their render site.
+   */
+  const instructions = useDebouncedPersist(
+    (value: string) => persist({ customInstructions: value }),
+    savableInstructions,
+  );
+  const onCustomInstructionsChange = useCallback(
+    (next: string): void => {
+      setCustomInstructions(next);
+      instructions.schedule(next);
+    },
+    [instructions],
+  );
+
+  /**
+   * Drop the instructions every EXISTING chat and workflow run snapshotted.
+   *
+   * The escape hatch the snapshot design otherwise lacks: clearing the box
+   * above changes only the next run, so text a user regrets keeps being sent
+   * by every chat opened before the edit. Deliberately a press rather than
+   * something clearing the box does on its own — it discards a real guarantee
+   * (a chat keeps what it started with), and an edit the user is halfway
+   * through must not silently destroy it.
+   */
+  const forgetExistingInstructions = useCallback(async (): Promise<void> => {
+    if (!apis) {
+      return;
+    }
+    setForgetting(true);
+    setForgetResult(null);
+    setError(null);
+    try {
+      const { cleared } = await apis.chats.forgetCustomInstructions();
+      setForgetResult(
+        cleared === 0
+          ? 'No existing chat was carrying custom instructions.'
+          : `Removed from ${cleared} existing ${cleared === 1 ? 'run' : 'runs'}.`,
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setForgetting(false);
+    }
+  }, [apis]);
 
   const toggle = useCallback((kind: CliKind): void => {
     setOpen((prev) => ({ ...prev, [kind]: !prev[kind] }));
@@ -289,8 +396,11 @@ export function Settings({
    */
   const login = useCliLogin(apis, () => void refreshClis());
 
-  const configDirCapability = useConfigDirCapability(
-    apis?.capabilities ?? null,
+  // The pure selector over the single read above — NOT `useConfigDirCapability`,
+  // which would fetch the same endpoint a second time from this one screen.
+  const configDirCapability = configDirCapabilityFrom(
+    capabilities,
+    apis !== null,
   );
   const profileScopedKinds = useMemo(
     () =>
@@ -560,6 +670,70 @@ export function Settings({
           Nothing is posted for the chat you are already looking at, or for a
           turn you stopped yourself.
         </p>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Custom instructions</h2>
+        <ExpandableTextarea
+          id="settings-custom-instructions"
+          title="Custom instructions"
+          value={customInstructions}
+          onChange={onCustomInstructionsChange}
+          rows={6}
+          placeholder="e.g. Always answer in British English. Prefer small, reviewable diffs."
+        />
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">
+            Handed to every agent, on every provider, at the start of each new
+            chat or workflow run.
+          </p>
+          {overLimit ? (
+            <ErrorText>
+              {customInstructions.length.toLocaleString()} /{' '}
+              {MAX_CUSTOM_INSTRUCTIONS_CHARS.toLocaleString()} characters — not
+              saved until you trim it.
+            </ErrorText>
+          ) : hasControlChars ? (
+            <ErrorText>
+              Contains invisible control characters — not saved. Pasting from a
+              word processor can add them; retype it or paste as plain text.
+            </ErrorText>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-muted-foreground">
+            A chat keeps the instructions it started with, so edits here apply
+            to the next chat you open rather than to one already running.
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto shrink-0"
+            disabled={forgetting || apis === null}
+            onClick={() => void forgetExistingInstructions()}>
+            {forgetting ? 'Removing…' : 'Remove from existing chats'}
+          </Button>
+        </div>
+        {forgetResult ? (
+          <p className="text-xs text-muted-foreground">{forgetResult}</p>
+        ) : null}
+        {hostPreamble ? (
+          <details data-slot="host-preamble">
+            <summary className="cursor-pointer text-xs text-muted-foreground">
+              Geniro already tells every agent this first
+            </summary>
+            <p className="mt-2 text-xs text-muted-foreground">
+              The CLIs are built for a terminal and say so in their own system
+              prompt, so geniro corrects that before your instructions. You
+              cannot edit it — it describes how this app actually renders a
+              reply.
+            </p>
+            <pre className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap text-muted-foreground">
+              {hostPreamble}
+            </pre>
+          </details>
+        ) : null}
       </section>
 
       <section className="flex flex-col gap-3">

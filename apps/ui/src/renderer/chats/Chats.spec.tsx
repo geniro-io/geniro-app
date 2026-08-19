@@ -806,15 +806,17 @@ describe('Chats transcript auto-scroll', () => {
       });
       // The staging reads the file through a FileReader, which completes on an
       // EVENT rather than after a known number of ticks — so wait for the row
-      // it produces. A single `setTimeout(0)` here was a real flake: under load
-      // the read landed after that tick and the strip was still empty, failing
-      // `['Remove first-shot.png']` with `[]` (seen once in ~7 full runs).
+      // it produces. A single `setTimeout(0)` was enough only on an idle
+      // machine: under `pnpm full-check`, which runs six workspaces at once,
+      // the read had not finished and the strip was still empty. Exhaustion
+      // THROWS, like the two other paste helpers here — a silent give-up
+      // resurfaces as a confusing empty-strip assertion further down.
       for (let attempt = 0; stagedImages().length === 0; attempt++) {
         if (attempt >= 100) {
           throw new Error(`the pasted image ${name} never staged`);
         }
         await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 5));
         });
       }
     };
@@ -2427,6 +2429,68 @@ describe('Chats workflow runs', () => {
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 
+  it('carries the custom instructions onto a workflow run too, not just a chat', async () => {
+    // The renderer half of the workflow path. The daemon half is pinned in
+    // graph-executor.service.spec.ts at `startRunBySlug`; without this case a
+    // dropped spread here would leave every workflow node without the user's
+    // instructions while the daemon-side test stayed green.
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.startWorkflowRun.mockResolvedValue({ ...wfRun, id: 'w3' });
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      customInstructions: 'Always answer in British English.',
+    });
+
+    const plus = container.querySelector('[aria-label="New chat"]')!;
+    await act(async () => {
+      plus.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(textarea, 'build it');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const startButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Start run"]',
+    )!;
+    await act(async () => {
+      startButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(workflowApi.startWorkflowRun).toHaveBeenCalledWith({
+      slug: 'review-team',
+      runWorkflowDto: {
+        cwd: '/proj',
+        prompt: 'build it',
+        customInstructions: 'Always answer in British English.',
+      },
+    });
+  });
+
   it('a failed run start restores the typed task into the composer (no data loss)', async () => {
     workflowApi.listWorkflows.mockResolvedValue([
       {
@@ -2959,6 +3023,58 @@ describe('Chats composer memory & suggestions', () => {
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastModels: { claude: 'opus' },
     });
+  });
+
+  it('snapshots the custom instructions onto a new chat, read at send time', async () => {
+    // Read at send time rather than at mount: Chats stays mounted across nav
+    // switches, so a value cached on mount would start the chat on text the
+    // user had already replaced in Settings. The mock is changed AFTER mount
+    // for exactly that reason — a cached read would send the mount-time value
+    // and this assertion would fail.
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      customInstructions: 'Always answer in British English.',
+    });
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({
+        customInstructions: 'Always answer in British English.',
+      }),
+    });
+  });
+
+  it('omits the instructions entirely when the user has written none', async () => {
+    // Blank must not travel as '' — the daemon normalizes it to null either
+    // way, and omitting keeps an untouched box and a cleared one identical on
+    // the wire. The default mock in beforeEach carries no such key at all,
+    // which is also the pre-upgrade settings.json this must survive.
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await sendTask(container);
+
+    // The KEY's absence, not `not.objectContaining({ … expect.anything() })` —
+    // that matcher treats `null` as absent, so a regression to
+    // `{ customInstructions: null }` would pass here while the daemon's
+    // `z.string().optional()` 400s the create.
+    expect(
+      Object.keys(api.createChat.mock.calls[0]![0].createChatDto),
+    ).not.toContain('customInstructions');
   });
 
   /** The composer's config-directory chip (absent unless the CLI supports one). */

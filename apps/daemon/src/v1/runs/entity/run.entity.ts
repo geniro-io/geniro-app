@@ -75,6 +75,26 @@ export class Run extends TimestampsEntity {
   configDir: string | null = null;
 
   /**
+   * The user's global custom instructions AS THEY STOOD when this run was
+   * created; null when they had typed none, and for every row predating the
+   * setting.
+   *
+   * A SNAPSHOT rather than a live read of `settings.json`, and the difference
+   * is visible to the user: editing the box changes the next chat, never the
+   * one already open. That is the deliberate half — `AgentAdapter.sessionKey`
+   * hashes this value, so a live read would invalidate the kept CLI process
+   * mid-conversation and respawn it, taking the user's MCP servers (and
+   * whatever one of them owns, up to a browser they are logged into) down
+   * between two messages.
+   *
+   * Part of the run's IDENTITY like `configDir` above, so the settings PATCH
+   * does not carry it either. TEXT so the `safe: true` schema sync adds it
+   * additively, no migration.
+   */
+  @Property({ type: 'text', nullable: true })
+  customInstructions: string | null = null;
+
+  /**
    * The sidebar group this run is filed under ({@link RunGroup.id}), or null
    * for one sitting loose at the bottom of the list.
    *

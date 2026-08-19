@@ -268,6 +268,32 @@ function runAwaiting(run: ChatRun): RunAwaiting | null {
   return run.awaiting;
 }
 
+/**
+ * The user's global custom instructions, as a spreadable create-payload
+ * fragment — `{ customInstructions }` when they have written some, `{}` when
+ * they have not.
+ *
+ * Read from settings at the moment a run is created rather than cached in
+ * component state, because the value is SNAPSHOTTED onto that run: a cached
+ * copy would start a chat on text the Settings screen had already replaced,
+ * and this screen stays mounted across nav switches, so the stale window is
+ * the whole session rather than a moment.
+ *
+ * Blank collapses to `{}` so an untouched box and a cleared one reach the
+ * daemon identically — it normalizes to null either way, and omitting keeps
+ * the two indistinguishable on the wire as well.
+ */
+async function currentCustomInstructions(): Promise<{
+  customInstructions?: string;
+}> {
+  // Defensive default, not a contract gap: `readSettings` merges over
+  // DEFAULT_SETTINGS on every branch, so production always carries the key.
+  // What does not is a test stub of `getSettings`, and a chat must not fail to
+  // open over a missing field either way.
+  const { customInstructions = '' } = await window.geniro.getSettings();
+  return customInstructions.trim() ? { customInstructions } : {};
+}
+
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
 /** Draft key for the landing composer, which has no run id of its own. */
 const NEW_CHAT_DRAFT = '__new__';
@@ -2028,6 +2054,12 @@ export function Chats({
         createChatDto: {
           agentKind,
           cwd,
+          // Read at the MOMENT of creation rather than from mount-time state:
+          // the value is snapshotted onto the run, and the user may have
+          // edited it in Settings since this screen mounted. Caching it would
+          // start the chat on instructions the settings screen no longer
+          // shows. Omitted when empty so the daemon stores null.
+          ...(await currentCustomInstructions()),
           // Omitted entirely when the composer is on the CLI default — the
           // daemon only passes `--model` when a run names one.
           ...(models[agentKind] ? { model: models[agentKind] } : {}),
@@ -2233,6 +2265,9 @@ export function Chats({
             agentKind: sessionAgent,
             cwd: session.cwd,
             resumeSessionId: session.id,
+            // An imported conversation is a new run like any other, so it gets
+            // the same snapshot — read now, for the same freshness reason.
+            ...(await currentCustomInstructions()),
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
@@ -2435,7 +2470,13 @@ export function Chats({
         setInput('');
         const run = await workflowApi.startWorkflowRun({
           slug: workflowSlug,
-          runWorkflowDto: { cwd, prompt: text },
+          // A workflow run snapshots the instructions exactly as a chat does;
+          // every agent node then composes them behind its own role.
+          runWorkflowDto: {
+            cwd,
+            prompt: text,
+            ...(await currentCustomInstructions()),
+          },
         });
         setRuns((prev) => [run, ...prev]);
         await activateRun(run.id);

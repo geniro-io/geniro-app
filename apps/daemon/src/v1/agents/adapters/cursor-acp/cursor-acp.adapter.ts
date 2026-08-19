@@ -1369,8 +1369,8 @@ export class CursorAcpAdapter extends AgentAdapter {
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
     return new AcpTurnDriver({
       input,
-      composeSystemPrompt: (granted) =>
-        this.composeSystemPrompt(input, granted),
+      composeSystemPrompt: (granted, includePreamble) =>
+        this.composeSystemPrompt(input, granted, includePreamble),
       clientName: CURSOR_ACP_CLIENT_NAME,
       clientVersion: this.clientVersion,
       // What unlocks the separate effort control; see CURSOR_ACP_CLIENT_META.

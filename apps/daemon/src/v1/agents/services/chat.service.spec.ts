@@ -105,6 +105,17 @@ class FakeRunDao {
       (run) => run.status === 'running' && run.workflowId === null,
     );
   }
+  /** Mirrors the real `nativeUpdate` — every run holding a value, count back. */
+  async forgetCustomInstructions(): Promise<number> {
+    let cleared = 0;
+    for (const run of this.runs.values()) {
+      if (run.customInstructions !== null) {
+        run.customInstructions = null;
+        cleared += 1;
+      }
+    }
+    return cleared;
+  }
 }
 
 class FakeItemDao {
@@ -1345,6 +1356,91 @@ describe('ChatService', () => {
         configDir: join(dir, 'no-such-plugin-dir'),
       }),
     ).rejects.toThrow(/INVALID_CONFIG_DIR|Config directory/);
+  });
+
+  it('snapshots the custom instructions onto the run and spawns every turn with them', async () => {
+    // The producer half of the feature — the chat path is what puts the user's
+    // instructions on the turn input at all, so without this the adapters have
+    // nothing to compose however correctly they compose it.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'Always answer in British English.',
+    });
+
+    await service.sendMessage(run.id, 'go');
+    expect(claude.start.mock.calls[0]?.[0].customInstructions).toBe(
+      'Always answer in British English.',
+    );
+  });
+
+  it('normalizes blank custom instructions to nothing at all', async () => {
+    // A cleared textarea sends '' rather than omitting the key, and the two
+    // must land as one state — otherwise the adapter composes around an empty
+    // part and the turn carries a stray blank paragraph.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: '   \n  ',
+    });
+
+    await service.sendMessage(run.id, 'go');
+    expect(claude.start.mock.calls[0]?.[0].customInstructions).toBeUndefined();
+  });
+
+  it('reads the instructions off the run row, not off the newest run', async () => {
+    // Narrowed from a "snapshot survives a settings edit" claim this level
+    // cannot make: the daemon never opens settings.json, so no live-read
+    // implementation exists here for such a test to distinguish. What IS
+    // verifiable at this seam is that a turn resolves its instructions from
+    // its OWN run row — a service that read the latest run, or a cached value
+    // shared across runs, fails below. The user-visible half of the snapshot
+    // contract is pinned in the renderer, where the setting is actually read.
+    const { service, claude } = setup();
+    const first = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'ORIGINAL',
+    });
+    // The user edits Settings, then a second chat is opened on the new text.
+    await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'EDITED',
+    });
+
+    // The FIRST chat's next turn still spawns on the text it was created with.
+    await service.sendMessage(first.id, 'go');
+    expect(claude.start.mock.calls[0]?.[0].customInstructions).toBe('ORIGINAL');
+  });
+
+  it('forgets the snapshotted instructions on EVERY run that held one', async () => {
+    // The escape hatch the snapshot design otherwise lacks. Scoped to every
+    // run rather than the unsettled ones on purpose: a settled chat is one
+    // whose last turn ENDED, not one that is closed — it can be continued at
+    // any time, and that turn would re-send the retracted text. A count comes
+    // back so the UI can say what the press reached.
+    const { service, claude } = setup();
+    const first = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'REGRETTED',
+    });
+    await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'REGRETTED',
+    });
+    await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    // Only the two that actually hold a value are counted.
+    expect(await service.forgetCustomInstructions()).toEqual({ cleared: 2 });
+
+    // And the next turn of an EXISTING chat no longer carries it.
+    await service.sendMessage(first.id, 'go');
+    expect(claude.start.mock.calls[0]?.[0].customInstructions).toBeUndefined();
   });
 
   it('createChat refuses a config directory on a CLI that cannot load one', async () => {

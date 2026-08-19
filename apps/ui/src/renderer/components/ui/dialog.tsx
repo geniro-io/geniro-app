@@ -2,6 +2,7 @@ import { X } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from './button';
+import { MenuAnchorContext } from './menu';
 import { cn } from './utils';
 
 /** What the focus trap treats as tabbable inside the dialog card. */
@@ -128,7 +129,15 @@ export function Dialog({
             <X className="size-4" />
           </Button>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
+        {/* The body SCROLLS, so it clips: a picker inside it whose panel opens
+            past an edge is cut, and `overflow-x: visible` cannot be restored on
+            a box that scrolls vertically. Declaring it here is what lets every
+            menu inside escape without the dialog's content knowing. */}
+        <MenuAnchorContext.Provider value="viewport">
+          <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+            {children}
+          </div>
+        </MenuAnchorContext.Provider>
       </div>
     </div>
   );

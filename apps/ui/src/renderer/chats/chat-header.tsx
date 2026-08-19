@@ -2,7 +2,6 @@ import { Bot, IdCard, Workflow as WorkflowIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Chip } from '../components/ui/chip';
-import { cn } from '../components/ui/utils';
 import { folderName as configDirName } from './directory-select';
 import { formatElapsed } from './live-row';
 import { formatRelativeTime } from './relative-time';

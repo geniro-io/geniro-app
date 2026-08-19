@@ -287,11 +287,15 @@ export interface AcpDriverOptions {
    */
   declinedWithoutNotice?: readonly string[];
   /**
-   * The turn's instruction text, given whether the call tools were registered.
-   * Supplied by the adapter so the include-the-callee-block rule stays owned
-   * by `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
+   * The turn's instruction text, given whether the call tools were registered
+   * and whether the host preamble still needs saying. Supplied by the adapter
+   * so the include-the-callee-block rule stays owned by
+   * `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
+   *
+   * The driver decides only the two BOOLEANS — what the text is remains the
+   * adapter's answer.
    */
-  composeSystemPrompt: (granted: boolean) => string;
+  composeSystemPrompt: (granted: boolean, includePreamble: boolean) => string;
   logger?: { warn(message: string): void; debug?(message: string): void };
   /**
    * Extra `clientCapabilities._meta` this client declares — a VENDOR extension
@@ -1342,11 +1346,29 @@ export class AcpTurnDriver implements TurnDriver {
    * ACP carries no system-prompt parameter, so the turn's instructions are
    * prepended to the prompt text. WHICH instructions is the base adapter's
    * rule, not this driver's — see `AgentAdapter.composeSystemPrompt`; this
-   * only supplies whether the call tools ended up registered.
+   * only supplies the two facts the protocol knows: whether the call tools
+   * ended up registered, and whether the host preamble still needs saying.
+   *
+   * **The preamble is withheld on a RESUMED session, and that is a cost fix
+   * with a real number behind it.** Prompt text is part of the conversation
+   * here, not out-of-band like claude's `--append-system-prompt`: one turn is
+   * one process, the next `session/load`s the stored session, so every block
+   * this turn prepends is replayed to every later turn. Re-sending the ~1.1KB
+   * preamble each time put roughly 40 copies (~11k tokens) inside a
+   * 40-message thread's window — the same window the app's own context readout
+   * reports on. A load has already replayed it, so saying it again buys
+   * nothing.
+   *
+   * Only the PREAMBLE is dropped. The call-surface block still rides every
+   * turn, because it is true only while those tools are actually registered
+   * this turn — withholding it on a resume would tell an agent it can still
+   * route work through tools this process never got, which the adapter rules
+   * call out as silent by construction.
    */
   private composePrompt(): string {
     const instructions = this.options.composeSystemPrompt(
       this.grantedMcpServers.length > 0,
+      !this.resumed,
     );
     return [instructions, this.options.input.prompt]
       .filter((part) => part.length > 0)

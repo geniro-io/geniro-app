@@ -9,7 +9,11 @@ import { dirname, join } from 'node:path';
 
 import { app } from 'electron';
 
-import { DEFAULT_SETTINGS, type Settings } from '../shared/contracts';
+import {
+  DEFAULT_SETTINGS,
+  MAX_RUN_CONFIGS,
+  type Settings,
+} from '../shared/contracts';
 import { settingsPatchSchema } from './ipc-schemas';
 
 /**
@@ -54,6 +58,13 @@ export function readSettings(): Settings {
         }
         continue;
       }
+      if (key === 'runConfigs') {
+        const configs = salvageRunConfigs(record[key]);
+        if (configs !== undefined) {
+          salvaged[key] = configs;
+        }
+        continue;
+      }
       const field = settingsPatchSchema.shape[
         key as keyof typeof settingsPatchSchema.shape
       ].safeParse(record[key]);
@@ -88,6 +99,41 @@ function salvageCliPaths(value: unknown): Settings['cliPaths'] | undefined {
     }
   }
   return salvaged;
+}
+
+/**
+ * Same per-entry salvage as {@link salvageCliPaths}, for the saved run
+ * configurations — zod rejects an ARRAY wholesale on one bad element, and the
+ * blast radius here is the user's whole set of saved setups, each hand-made and
+ * unrecoverable. Order is preserved: it is the order the user arranged, not an
+ * MRU this file is free to re-sort.
+ */
+function salvageRunConfigs(value: unknown): Settings['runConfigs'] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entry = settingsPatchSchema.shape.runConfigs.unwrap().element;
+  const salvaged: Settings['runConfigs'] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    const parsed = entry.safeParse(candidate);
+    if (!parsed.success) {
+      continue;
+    }
+    // Ids must be UNIQUE, and this is the only place that can guarantee it: the
+    // schema cannot express it, and every consumer keys on the id across the
+    // whole list, so a duplicate in a hand-edited file makes renaming one
+    // configuration silently rewrite another, and deleting one remove two.
+    if (seen.has(parsed.data.id)) {
+      continue;
+    }
+    seen.add(parsed.data.id);
+    salvaged.push(parsed.data);
+  }
+  // Salvaging entry-by-entry skips the array-level cap, so it is re-applied
+  // here: an over-long hand-edited file would otherwise load in full and then
+  // make every subsequent write fail its own schema.
+  return salvaged.slice(0, MAX_RUN_CONFIGS);
 }
 
 export function writeSettings(next: Settings): Settings {

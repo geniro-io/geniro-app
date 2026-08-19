@@ -1561,13 +1561,54 @@ export interface AgentTurnInput {
    */
   systemPrompt?: string | null;
   /**
+   * The user's own global custom instructions, as snapshotted onto the run.
+   *
+   * Kept SEPARATE from {@link systemPrompt} for the same reason
+   * {@link callSurfacePrompt} is: the two answer different questions and rank
+   * differently. `systemPrompt` is what THIS turn is for — a graph node's role
+   * — while this is a standing preference the user set once for every agent, so
+   * a node's role has to outrank it. Folding them into one field would make
+   * that ordering the caller's problem, and the graph path would have to
+   * hand-join a string it did not author.
+   *
+   * Reaches the CLI through `AgentAdapter.composeSystemPrompt` like every other
+   * part, so it needs no per-CLI delivery of its own — both shipped adapters
+   * already route that one composed block to their own channel.
+   *
+   * Undefined for a run created before the setting existed, and for one whose
+   * user has typed nothing.
+   */
+  customInstructions?: string | null;
+  /**
+   * This turn is geniro's OWN bookkeeping — its output is parsed by the daemon
+   * and never rendered in a transcript anybody reads.
+   *
+   * What it withholds is the host preamble
+   * ({@link GENIRO_UI_PREAMBLE}, added by `AgentAdapter.composeSystemPrompt`):
+   * that text describes the surface a REPLY lands on, and for a probe there is
+   * no such surface, so sending it states something untrue and pays argv for
+   * it on every capability read. Adapter-agnostic like {@link trustWorkspace}
+   * and {@link isolateMcpServers} — the caller states what the turn IS, and
+   * the composition decides what that costs.
+   *
+   * Deliberately NOT folded into `isolateMcpServers`, which every internal
+   * probe happens to set today: that field is about which MCP servers load,
+   * and a later internal turn that legitimately wants the user's servers would
+   * silently regain the preamble if the two were one flag.
+   *
+   * A user-project turn NEVER sets it.
+   */
+  internalProbe?: boolean;
+  /**
    * The caller's "May call" awareness block, naming each callee reachable
    * through `mcpEndpoint`'s tools. Kept SEPARATE from `systemPrompt` because
    * it is only true while the call tools are actually registered: an adapter
    * that ends up withholding the endpoint (an ACP agent that does not
    * advertise HTTP MCP support) must drop this block too, or the agent is
    * instructed to route work through tools it does not have. Join the two
-   * with `AgentAdapter.composeSystemPrompt`, never by hand.
+   * with `AgentAdapter.composeSystemPrompt`, never by hand — it composes four
+   * parts now (the host preamble and {@link customInstructions} ahead of these
+   * two), and their order is the precedence rule.
    */
   callSurfacePrompt?: string | null;
   /**

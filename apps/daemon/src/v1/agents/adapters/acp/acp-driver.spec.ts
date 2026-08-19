@@ -34,8 +34,13 @@ function harness(
     clientName: 'geniro',
     clientVersion: '1.2.3',
     autoDecide: () => null,
-    // Mirrors AgentAdapter.composeSystemPrompt — the driver only decides
-    // whether the call tools were granted, never what the text is.
+    // A STUB, not a mirror of AgentAdapter.composeSystemPrompt: these specs
+    // pin what the DRIVER does with the callback's result — that it prepends
+    // it, and that it passes the right `granted` — never how the text is
+    // composed. The real join (host preamble, custom instructions, role, call
+    // surface) is `composeTurnInstructions`, covered directly by
+    // `utils/agent-instructions.spec.ts` and end-to-end through the real
+    // adapter in `cursor-acp.adapter.spec.ts`.
     composeSystemPrompt: (granted) =>
       [input.systemPrompt, granted ? input.callSurfacePrompt : null]
         .filter((part): part is string => Boolean(part))
@@ -259,6 +264,52 @@ describe('AcpTurnDriver session resume', () => {
       mcpServers: [],
     });
     expect(h.sentMethod('session/new')).toBeUndefined();
+  });
+
+  it('stops re-sending the host preamble once the session has replayed it', () => {
+    // Prompt text IS the conversation on this transport: one turn is one
+    // process, the next `session/load`s the stored session, so every block a
+    // turn prepends is replayed to every turn after it. Re-sending the ~1.1KB
+    // preamble each time put ~40 copies inside a 40-message thread's window.
+    // A load has already replayed it, so the driver asks for it to be dropped.
+    const seen: boolean[] = [];
+    const h = harness({
+      ...resuming,
+      composeSystemPrompt: (granted, includePreamble) => {
+        seen.push(includePreamble);
+        return includePreamble ? 'PREAMBLE\n\nROLE' : 'ROLE';
+      },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+    h.feed({ jsonrpc: '2.0', id: 2, result: {} });
+
+    // The composition ran for a RESUMED session and was told to omit it.
+    expect(seen).toContain(false);
+    const prompt = h.sentMethod('session/prompt')?.params as {
+      prompt: { text: string }[];
+    };
+    expect(prompt.prompt[0]?.text).not.toContain('PREAMBLE');
+    expect(prompt.prompt[0]?.text).toContain('ROLE');
+  });
+
+  it('still sends the preamble on a session that was NOT resumed', () => {
+    // The control: a fresh `session/new` has replayed nothing, so withholding
+    // it there would leave that agent never told where its words land.
+    const seen: boolean[] = [];
+    const h = harness({
+      composeSystemPrompt: (granted, includePreamble) => {
+        seen.push(includePreamble);
+        return includePreamble ? 'PREAMBLE\n\nROLE' : 'ROLE';
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ jsonrpc: '2.0', id: 2, result: { sessionId: 'fresh-1' } });
+
+    expect(seen).not.toContain(false);
+    const prompt = h.sentMethod('session/prompt')?.params as {
+      prompt: { text: string }[];
+    };
+    expect(prompt.prompt[0]?.text).toContain('PREAMBLE');
   });
 
   it('drops the replayed transcript a session/load streams back', () => {

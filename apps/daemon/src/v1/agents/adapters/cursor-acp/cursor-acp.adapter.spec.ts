@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
+import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
@@ -325,7 +326,9 @@ describe('CursorAcpAdapter spawn', () => {
         ?.params,
     ).toEqual({
       sessionId: 'sess-9',
-      prompt: [{ type: 'text', text: 'ship it' }],
+      // ACP carries no system-prompt field, so the host preamble rides the
+      // prompt text itself — ahead of the user's message, on every turn.
+      prompt: [{ type: 'text', text: `${GENIRO_UI_PREAMBLE}\n\nship it` }],
     });
   });
 });
@@ -471,7 +474,36 @@ describe('CursorAcpAdapter turn shaping', () => {
     const prompt = framesOn(child).find(
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
-    expect(prompt.prompt[0]?.text).toBe('You are a reviewer.\n\nship it');
+    // The node role still leads the user's message; the host preamble sits
+    // ahead of both, per composeTurnInstructions' general → specific order.
+    expect(prompt.prompt[0]?.text).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nYou are a reviewer.\n\nship it`,
+    );
+  });
+
+  it('carries the user’s custom instructions into the prompt text', () => {
+    // The sibling of the claude argv case. ACP has no system-prompt field at
+    // all, so the SAME composed block reaches this CLI as leading prompt text
+    // — one seam, both transports, which is what stops the two drifting into
+    // separate delivery rules.
+    const { spawn, child } = fakeSpawn();
+    new CursorAcpAdapter({ spawn }).start(
+      { ...BASE, customInstructions: 'Always answer in British English.' },
+      () => {},
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 2, result: { sessionId: 's' } })}\n`,
+    );
+
+    const prompt = framesOn(child).find(
+      (frame) => frame.method === 'session/prompt',
+    )?.params as { prompt: { text: string }[] };
+    expect(prompt.prompt[0]?.text).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nship it`,
+    );
   });
 
   it('applies a requested model the agent offers, before prompting', () => {
@@ -1228,14 +1260,14 @@ describe('CursorAcpAdapter misuse', () => {
         ?.params,
     ).toEqual({
       sessionId: 'sess-a',
-      prompt: [{ type: 'text', text: 'turn A' }],
+      prompt: [{ type: 'text', text: `${GENIRO_UI_PREAMBLE}\n\nturn A` }],
     });
     expect(
       framesOn(childB).find((frame) => frame.method === 'session/prompt')
         ?.params,
     ).toEqual({
       sessionId: 'sess-b',
-      prompt: [{ type: 'text', text: 'turn B' }],
+      prompt: [{ type: 'text', text: `${GENIRO_UI_PREAMBLE}\n\nturn B` }],
     });
   });
   describe('listModels', () => {

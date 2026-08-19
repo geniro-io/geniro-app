@@ -42,6 +42,8 @@ export function useGitInfo(dir: string | null): {
   pulling: boolean;
   switchTo: (branch: string) => Promise<void>;
   pull: () => Promise<void>;
+  /** Re-read `dir`, or an explicit folder the caller has just switched to. */
+  refresh: (target?: string) => Promise<void>;
   clearError: () => void;
 } {
   const [info, setInfo] = useState<GitInfo>(NOT_A_REPO);
@@ -122,6 +124,32 @@ export function useGitInfo(dir: string | null): {
     }
   }, [dir]);
 
+  /**
+   * Re-read a folder's git state without switching anything.
+   *
+   * The effect above only fires when `dir` CHANGES, so a branch moved by some
+   * other path — applying a saved run configuration, which switches through the
+   * IPC directly — leaves this hook painting the branch the folder was on
+   * before.
+   *
+   * **The directory is a PARAMETER, not read from the closure.** A caller that
+   * has just changed the folder is the main reason to call this, and React
+   * state is not visible to the callback that set it — reading `dir` here would
+   * refetch the folder the app was on BEFORE the apply, and (because this runs
+   * after a `git switch` round trip) land after the effect's read for the new
+   * one, overwriting the correct answer with the previous repository's.
+   */
+  const refresh = useCallback(
+    async (target?: string): Promise<void> => {
+      const at = target ?? dir;
+      if (at === null) {
+        return;
+      }
+      setInfo(await window.geniro.getGitInfo(at));
+    },
+    [dir],
+  );
+
   return {
     info,
     notice,
@@ -129,6 +157,7 @@ export function useGitInfo(dir: string | null): {
     pulling,
     switchTo,
     pull,
+    refresh,
     clearError: useCallback(() => setNotice(null), []),
   };
 }

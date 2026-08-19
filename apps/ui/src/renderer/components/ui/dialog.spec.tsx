@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Dialog } from './dialog';
+import { Select } from './select';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -83,5 +84,35 @@ describe('Dialog focus management', () => {
 
     renderDialog(false);
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+describe('Dialog — pickers inside the scrolling body', () => {
+  it('a picker opened inside it escapes the body it would be clipped by', () => {
+    // The body scrolls (`overflow-y-auto`), so an absolutely-positioned menu is
+    // cut at its edge — and `overflow-x: visible` cannot be restored on a box
+    // that scrolls vertically. Reported as the run-configuration editor's
+    // branch list being cut off. The dialog declares the clip so every picker
+    // inside escapes it without being passed anything.
+    act(() => {
+      root.render(
+        <Dialog open onClose={vi.fn()} title="Edit configuration">
+          <Select
+            groups={[{ items: [{ value: 'main', label: 'main' }] }]}
+            value="main"
+            aria-label="Branch"
+            onValueChange={vi.fn()}
+          />
+        </Dialog>,
+      );
+    });
+    act(() => {
+      document
+        .querySelector<HTMLButtonElement>('[data-menu-trigger]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const panel = document.querySelector<HTMLElement>('[role="listbox"]')!;
+    expect(panel.style.position).toBe('fixed');
   });
 });

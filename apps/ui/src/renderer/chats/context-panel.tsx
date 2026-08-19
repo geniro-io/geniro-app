@@ -108,7 +108,6 @@ function Breakdown({
   // in the bar — one live reading had 274k deferred against a 98k total, which
   // in one bar would report a window nearly four times fuller than it is.
   const loaded = context.categories.filter((row) => !row.deferred);
-  const deferred = context.categories.filter((row) => row.deferred);
   const used =
     context.totalTokens ?? loaded.reduce((sum, row) => sum + row.tokens, 0);
   const window = context.maxTokens;

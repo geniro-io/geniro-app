@@ -37,6 +37,50 @@ export interface DaemonStatus {
 // Settings (non-secret app config — persisted as JSON in userData)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Bounds on the saved run configurations. Here rather than beside the IPC
+ * schema because three places must agree and only two are in main: that schema,
+ * the settings READ path (which salvages entry-by-entry and so never evaluates
+ * the array bound), and the renderer's editor, which refuses a save before the
+ * IPC throws and discards the whole patch.
+ */
+export const MAX_RUN_CONFIGS = 50;
+export const MAX_RUN_CONFIG_NAME = 80;
+
+/**
+ * A saved new-chat setup the user named — a bundle of COMPOSER state and
+ * nothing more. Choosing one seeds the normal new-chat screen; it creates no
+ * run and reaches the daemon only later, through the ordinary create call.
+ *
+ * The daemon-vocabulary fields (`target`, `model`, `effort`, `approval`) are
+ * OPAQUE strings, as the single-value settings beside them are: this file holds
+ * no daemon shapes, and the renderer checks each against the generated enum
+ * before it reaches a run. `null` means "the CLI's own default" everywhere.
+ */
+export interface RunConfig {
+  id: string;
+  name: string;
+  /** Absolute working directory the chat starts in. */
+  cwd: string;
+  /**
+   * Branch the folder should be on, or null to take whatever is checked out.
+   *
+   * NOT a chat field — no branch reaches the daemon. Applying one is a guarded
+   * `git switch` on `cwd` before the chat is created, which refuses over a dirty
+   * tree; that refusal is surfaced and the rest of the configuration still
+   * applies.
+   */
+  branch: string | null;
+  /** The composer target — a CLI kind or `wf:<slug>`, exactly as `lastChatTarget`. */
+  target: string;
+  model: string | null;
+  effort: string | null;
+  /** The daemon's `ChatApprovalMode`. */
+  approval: string | null;
+  /** Plugin/profile directory, or null for the CLI's own account. */
+  configDir: string | null;
+}
+
 /** Persisted, non-secret application settings. Secrets never live here. */
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
@@ -54,6 +98,12 @@ export interface Settings {
   configDir: string | null;
   /** Recently used plugin directories, most recent first (picker rows). */
   recentConfigDirs: string[];
+  /**
+   * The user's saved new-chat setups (see {@link RunConfig}). A managed LIST,
+   * unlike `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts
+   * an entry, and the order is the user's, so it is never re-sorted on read.
+   */
+  runConfigs: RunConfig[];
   /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
   lastChatTarget: string | null;
   /**
@@ -141,6 +191,65 @@ export interface Settings {
    * respawns the daemon, exactly like the CLI paths and the inspector.
    */
   claudeBrowserTools: boolean;
+  /**
+   * Standing instructions handed to EVERY agent, on every provider.
+   *
+   * Free prose, the user's own words. It reaches a CLI through the daemon's
+   * one composition seam (`AgentAdapter.composeSystemPrompt`), so it needs no
+   * per-CLI spelling here — which is also why there is one box rather than one
+   * per agent.
+   *
+   * geniro's OWN preamble is NOT stored here. That text is a daemon constant
+   * prepended ahead of this one and served back for display over
+   * `GET /v1/capabilities`; keeping it out of settings.json is what stops a
+   * user's edit silently deleting the app's correction to the CLI's "you are
+   * writing to a terminal" system prompt.
+   *
+   * SNAPSHOTTED per run at creation, like `configDir` beside it: a run keeps
+   * the text it started with, so editing this changes the next chat rather
+   * than respawning the CLI process of one already open.
+   */
+  customInstructions: string;
+}
+
+/**
+ * Ceiling on {@link Settings.customInstructions}, in characters.
+ *
+ * TWIN PARSER: `MAX_CUSTOM_INSTRUCTIONS_CHARS` in
+ * `apps/daemon/src/v1/agents/chat.types.ts`. The two MUST hold the same number
+ * and neither can import the other — the daemon is a separate process, and the
+ * generated client carries the field's type but not its `maxLength`, so there
+ * is nothing on the wire to derive this from. The daemon's copy is the
+ * ENFORCING one (it validates untrusted input reaching a child's argv); this
+ * copy exists so the user is stopped at the textarea instead of at a chat
+ * create that 400s. Change one, change the other.
+ */
+export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 16_000;
+
+/**
+ * Whether a custom-instructions value carries a control character.
+ *
+ * TWIN PARSER: `hasControlCharacters` in
+ * `apps/daemon/src/v1/agents/chat.types.ts`, which is the ENFORCING side (the
+ * value reaches a child's argv there, where node rejects a NUL synchronously).
+ * This copy exists because STORING a value the daemon will refuse turns one
+ * invisible pasted character into a 400 on every new chat and workflow run,
+ * surfacing in the composer with nothing pointing back at the settings box
+ * holding it. Refusing where the text is typed is what keeps the two honest.
+ * Change one, change the other.
+ *
+ * A code-point scan rather than a regex, for the same two reasons the twin
+ * gives: raw bytes in the source make git treat the file as binary (the
+ * `pre-commit` hook refuses it), and escapes trip eslint's `no-control-regex`.
+ */
+export function hasControlCharacters(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Default settings written on first launch when no settings file exists. */
@@ -150,6 +259,7 @@ export const DEFAULT_SETTINGS: Settings = {
   recentFolders: [],
   configDir: null,
   recentConfigDirs: [],
+  runConfigs: [],
   lastChatTarget: null,
   lastApprovalMode: null,
   lastModels: {},
@@ -160,6 +270,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationsEnabled: true,
   daemonInspect: null,
   claudeBrowserTools: false,
+  customInstructions: '',
 };
 
 /**

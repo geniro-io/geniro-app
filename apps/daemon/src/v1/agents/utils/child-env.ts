@@ -39,12 +39,21 @@
  *   spelled again here because the strip must be the UNION over every CLI,
  *   which no single adapter owns. Keep the two in step — a second CLI gaining a
  *   config directory needs its var added to this set.**
+ * - {@link CLAUDE_BROWSER_TOOLS_ENV} — not a credential but the same shape of
+ *   leak, and the one entry here that protects a SETTING rather than an
+ *   identity: the adapter hands claude that name only when the user switched
+ *   the browser tools on, so an inherited value overrides their choice with
+ *   nothing on screen to say so. Claude Code's own terminal exports it, which
+ *   is where this was found — the daemon's spec for the gate failed on that
+ *   machine and passed everywhere else, exactly as `CLAUDE_CONFIG_DIR`'s did.
  * - {@link CLAUDE_CREDENTIAL_KEYS} — Anthropic credentials inherited when the
  *   app/daemon was launched from a shell that exports them. Stripping them
  *   keeps the cursor→claude and claude→cursor directions symmetric: only the
  *   definitionally-claude spawn paths (the Claude adapter's turns and probes)
  *   re-inject them via {@link claudeCredentialEnv}.
  */
+import { CLAUDE_BROWSER_TOOLS_ENV } from '../adapters/claude/claude.const';
+
 /**
  * Exported so `ClaudeAdapter` can declare it as that CLI's
  * `auth.inheritedEnvKeys` — the same list drives the strip here AND the
@@ -72,6 +81,15 @@ const STRIPPED_KEYS = new Set([
   'CURSOR_API_KEY',
   'CLAUDE_CODE_SESSION_ID',
   'CLAUDE_CONFIG_DIR',
+  // Not a credential — a FEATURE the user switched off, which an inherited
+  // value silently switches back on. `ClaudeAdapter.buildEnv` hands the CLI
+  // this name only when the `claudeBrowserTools` setting is on, and that gate
+  // is the whole contract: unstripped, a daemon launched from a shell
+  // exporting it (Claude Code's own terminal exports `=1`) put 22 browser-tool
+  // schemas into every prompt of every turn with the setting off and nothing
+  // on screen saying so. Imported rather than re-spelled so the strip and the
+  // re-injection cannot name different variables.
+  CLAUDE_BROWSER_TOOLS_ENV,
   ...CLAUDE_CREDENTIAL_KEYS,
 ]);
 

@@ -963,6 +963,119 @@ describe('AgentAdapter reports a session that will serve no further turn', () =>
   });
 });
 
+describe('AgentAdapter sessions separate on the custom instructions', () => {
+  /**
+   * Open a session, run its first turn, and SETTLE that turn.
+   *
+   * Settling is load-bearing rather than tidiness: a session with a turn still
+   * in flight refuses the next one for being busy, which looks identical to
+   * refusing it for a mismatched key — so a "refuses on changed instructions"
+   * assertion written against a live turn passes with `sessionKey` reverted.
+   */
+  async function sessionAfterFirstTurn(
+    customInstructions: string,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      customInstructions,
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses to serve a turn whose custom instructions differ from the spawn’s', async () => {
+    // The instructions are baked into the composed block that becomes argv for
+    // claude and the leading prompt text for ACP — so they belong to the
+    // SPAWN, exactly like the role beside them. Without them in `sessionKey`
+    // the kept process takes the second turn silently, and that turn runs
+    // under the first run's instructions while the settings screen and the run
+    // row both read the new ones.
+    const session = await sessionAfterFirstTurn('BE TERSE');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', customInstructions: 'BE VERBOSE' },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('still reuses the process when the instructions are unchanged', async () => {
+    // The control the refusal above needs to mean anything: without it, an
+    // implementation that refused EVERY second turn would pass that test while
+    // costing every chat its kept process — and its MCP servers — per message.
+    const session = await sessionAfterFirstTurn('BE TERSE');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', customInstructions: 'BE TERSE' },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+});
+
+describe('AgentAdapter separates geniro’s own probes from a user’s turns', () => {
+  /**
+   * Open a session on one `internalProbe` posture and settle its first turn.
+   *
+   * Settled for the same reason the instructions helper above settles: a busy
+   * session refuses the next turn whatever its key says, so an unsettled one
+   * would pass this describe block with `sessionKey` reverted.
+   */
+  async function sessionAfterProbeTurn(
+    internalProbe: boolean,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = { prompt: 'first', cwd: '/proj' };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      { ...input, internalProbe },
+      { runScoped: true },
+    );
+    const turn = session.startTurn({ ...input, internalProbe }, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses to serve a user’s turn on a process spawned for a probe', async () => {
+    // The flag decides whether the host preamble is composed, so it is argv
+    // exactly like the instructions beside it. No internal probe uses a kept
+    // session TODAY — they all call `start()` — which is what makes this a
+    // guard rather than a live path, and why it is pinned now rather than
+    // after the first one does: a user's turn served by a probe's process
+    // would silently run without the preamble the flag exists to withhold,
+    // and nothing in the transcript would show it.
+    const session = await sessionAfterProbeTurn(true);
+
+    expect(
+      session.startTurn({ prompt: 'second', cwd: '/proj' }, () => {}),
+    ).toBeNull();
+  });
+
+  it('still reuses the process for a second turn of the same posture', async () => {
+    // The control. Without it an implementation that refused every second turn
+    // would pass the refusal above while making the flag look load-bearing
+    // when it was not.
+    const session = await sessionAfterProbeTurn(true);
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', internalProbe: true },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+});
+
 describe('AgentAdapter re-modes a session it can, and refuses one it cannot', () => {
   it('refuses a turn whose mode the running process cannot be told about', async () => {
     // Silently accepting would run the turn under the mode the PREVIOUS one

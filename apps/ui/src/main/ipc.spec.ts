@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
     recentFolders: [],
     configDir: null,
     recentConfigDirs: [],
+    runConfigs: [],
     lastChatTarget: null,
     lastApprovalMode: null,
     lastModels: {},
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => {
     notificationsEnabled: true,
     daemonInspect: false,
     claudeBrowserTools: false,
+    customInstructions: '',
   };
   return {
     handlers,

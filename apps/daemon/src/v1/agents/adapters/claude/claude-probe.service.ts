@@ -202,6 +202,12 @@ export class ClaudeProbeService {
           // at all. `listReportedCommands` already isolates for this reason;
           // this call site was simply missed.
           isolateMcpServers: true,
+          // The daemon's own capability read: this turn exists to learn whether
+          // the CLI accepts a `--permission-mode` value, its reply is parsed
+          // rather than rendered, and it is cancelled at the init line. So it
+          // gets no host preamble — there is no transcript to describe, and the
+          // block would otherwise ride argv on every cold probe.
+          internalProbe: true,
         },
         (event) => {
           if (event.type === 'session' && !sawInit) {

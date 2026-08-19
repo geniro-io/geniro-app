@@ -1695,6 +1695,44 @@ describe('GraphExecutorService — agent calls', () => {
     edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
   };
 
+  it('gives every node the run’s custom instructions WITHOUT displacing its role', async () => {
+    // The compose-don't-overwrite contract. `systemPrompt` was the only
+    // instruction channel a node had, so folding the global text into it would
+    // have silently replaced the role each node was authored with — the
+    // failure this peer field exists to make impossible.
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+      customInstructions: 'Always answer in British English.',
+    });
+    await drain();
+
+    const caller = claude.starts[0]!;
+    expect(caller.input.customInstructions).toBe(
+      'Always answer in British English.',
+    );
+    expect(caller.input.systemPrompt).toBe('You orchestrate.');
+  });
+
+  it('leaves the instructions unset on a run started without any', async () => {
+    // The control: a workflow run started before the setting existed, or by a
+    // user who typed nothing, must reach the adapter with nothing to compose —
+    // not an empty string it would join a blank paragraph around.
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.customInstructions).toBeNull();
+  });
+
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({
@@ -2131,6 +2169,30 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
     expect(claude.starts.length).toBeGreaterThan(0);
     expect(runDao.runs.get(run.id)?.workflowId).toBe('lin');
+  });
+
+  it('startRunBySlug carries the custom instructions through to the run row and every node', async () => {
+    // Asserted at THIS seam, not at `startRun`, because `startRunBySlug` is the
+    // only thing the controller calls — and its parameter is a `Pick`, so a
+    // field it forgets to forward is accepted from the wider DTO with no type
+    // error and silently dropped. A `startRun`-level assertion passes while the
+    // real HTTP route writes null, which is exactly what happened here.
+    const { service, claude, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      customInstructions: 'Always answer in British English.',
+    });
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.customInstructions).toBe(
+      'Always answer in British English.',
+    );
+    expect(claude.starts[0]!.input.customInstructions).toBe(
+      'Always answer in British English.',
+    );
   });
 
   it('startRunBySlug propagates a library miss without creating a run', async () => {

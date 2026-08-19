@@ -1,6 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import { CustomInstructionsSchema } from '../../agents/chat.types';
 import {
   NodeStateWireSchema,
   WorkflowSchema,
@@ -46,6 +47,16 @@ export const runWorkflowSchema = z.object({
   cwd: z.string().min(1),
   /** The user's task — seeds every node's prompt. */
   prompt: z.string().min(1),
+  /**
+   * The app's global custom instructions, snapshotted onto the run exactly as
+   * a chat snapshots them (`createChatSchema.customInstructions`).
+   *
+   * Sent by the client for the same reason: the value lives in the Electron
+   * process's `settings.json`, which the daemon never opens. Every agent node
+   * composes it BEHIND its own `role`, so a node authored for one job still
+   * outranks a standing preference.
+   */
+  customInstructions: CustomInstructionsSchema.optional(),
 });
 export class RunWorkflowDto extends createZodDto(runWorkflowSchema) {}
 

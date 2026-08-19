@@ -135,12 +135,17 @@ import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
  * line on stdin (`--input-format stream-json`); `--verbose` is required for
  * stream-json output. Resume passes the prior `session_id` via `--resume`.
  *
- * Graph-node extras: `systemPrompt` rides `--append-system-prompt`;
- * `approvalMode: 'ask'` switches on the stdin control protocol
+ * `--append-system-prompt` carries the whole composed instruction block —
+ * host preamble, the user's custom instructions, a graph node's `systemPrompt`
+ * role, then the call surface — joined by `AgentAdapter.composeSystemPrompt`.
+ * It is present on EVERY user-facing turn, plain chat included, because the
+ * preamble always leads; only an `internalProbe` turn composes to `''` and so
+ * spawns without the flag.
+ *
+ * Other extras: `approvalMode: 'ask'` switches on the stdin control protocol
  * (`--permission-prompt-tool stdio` — the CLI pauses each permission-gated
  * tool call as a `control_request` and resumes on our `control_response`),
  * while `'auto'` bypasses permission checks for unattended team execution.
- * Plain chat (no `approvalMode`) keeps the M2 argv byte-for-byte.
  */
 export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
@@ -1234,19 +1239,32 @@ export class ClaudeAdapter extends AgentAdapter {
   /**
    * Whether THIS turn has anything to wait for.
    *
-   * Two turns are outside the gate, and both are geniro's own rather than a
-   * user's. A turn carrying `isolateMcpServers` runs under
-   * `--strict-mcp-config` with an empty config, so by construction it loads no
-   * server and every poll would return the same empty list until the grace ran
-   * out. And a turn naming NO approval mode is a geniro-internal probe — the
-   * same population {@link CLAUDE_UNSET_MODE_FALLBACK} describes — which reads
-   * one `system/init` line and is cancelled; it never reaches a tool, so a tool
-   * surface is nothing to it.
+   * Three turns are outside the gate. A turn carrying `isolateMcpServers` runs
+   * under `--strict-mcp-config` with an empty config, so by construction it
+   * loads no server and every poll would return the same empty list until the
+   * grace ran out. An `internalProbe` turn reads one `system/init` line and is
+   * cancelled; it never reaches a tool, so a tool surface is nothing to it.
+   * And a turn naming NO approval mode keeps its own exemption — the same
+   * population {@link CLAUDE_UNSET_MODE_FALLBACK} describes, which is a LEGACY
+   * chat row rather than a probe, and whose opening write has always been
+   * synchronous.
+   *
+   * `internalProbe` is listed SEPARATELY rather than replacing the unset-mode
+   * arm, and the distinction is load-bearing: the permission-mode probe names
+   * a mode, so the old condition classified it as a user's turn, while a
+   * legacy chat row names none and is a user's turn. Collapsing the two onto
+   * one field moves every legacy row into the gate — measured, and caught by
+   * `leaves a legacy turn (no approval mode) byte-identical when asking is
+   * allowed`.
    */
   private waitsForMcpServers(input: AgentTurnInput): boolean {
     if (this.claudeOptions.waitForMcpServers === false) {
       return false;
     }
-    return input.isolateMcpServers !== true && input.approvalMode !== undefined;
+    return (
+      input.isolateMcpServers !== true &&
+      input.internalProbe !== true &&
+      input.approvalMode !== undefined
+    );
   }
 }

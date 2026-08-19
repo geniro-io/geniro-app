@@ -97,6 +97,11 @@ export interface StartWorkflowRunInput {
   cwd: string;
   /** The user's task — seeds every node's prompt. */
   prompt: string;
+  /**
+   * The app's global custom instructions, snapshotted onto the run like a
+   * chat's. Every agent node composes it BEHIND its own `role`.
+   */
+  customInstructions?: string;
 }
 
 /**
@@ -133,6 +138,25 @@ function hasProbedApprovalMode(
  * — it is not part of the module's shared vocabulary and nothing on the wire
  * carries it.
  */
+/**
+ * The run-scoped facts every node of one walk shares.
+ *
+ * Bundled rather than appended as positionals, because the three are all
+ * strings-or-null and sit adjacent: `string` is assignable to `string | null`,
+ * so a transposition of `cwd`, `seedPrompt` and `customInstructions` is caught
+ * in only one direction and the compiler would wave the other through. Each
+ * new run-scoped snapshot is the same shape, so the next one goes in here
+ * instead of widening two signatures again.
+ */
+interface RunContext {
+  /** Shared working folder every node runs in, already canonicalized. */
+  cwd: string;
+  /** The user's task — seeds every node's prompt. */
+  seedPrompt: string;
+  /** The run's snapshotted global instructions; every node composes it. */
+  customInstructions: string | null;
+}
+
 interface DroppedNodeSetting {
   nodeId: string;
   /** The node's own name, or its id when unnamed — the same fallback every
@@ -309,7 +333,7 @@ export class GraphExecutorService {
    */
   async startRunBySlug(
     slug: string,
-    input: Pick<StartWorkflowRunInput, 'cwd' | 'prompt'>,
+    input: Pick<StartWorkflowRunInput, 'cwd' | 'prompt' | 'customInstructions'>,
   ): Promise<RunWire> {
     const { workflow } = await this.store.get(slug);
     return this.startRun({
@@ -317,6 +341,7 @@ export class GraphExecutorService {
       workflow,
       cwd: input.cwd,
       prompt: input.prompt,
+      customInstructions: input.customInstructions,
     });
   }
 
@@ -350,6 +375,10 @@ export class GraphExecutorService {
         agentKind: null,
         cwd,
         model: null,
+        // Snapshotted at run start, exactly as a chat does it — blank
+        // normalizes to null so a cleared box and an untouched one are one
+        // state. Every node of this run then composes the same text.
+        customInstructions: input.customInstructions?.trim() || null,
         title: workflow.name,
       },
       em,
@@ -383,7 +412,17 @@ export class GraphExecutorService {
         'daemon shutdown started before the workflow could launch',
       );
     }
-    this.drive(em, run.id, workflow, cwd, input.prompt, dropped);
+    this.drive(
+      em,
+      run.id,
+      workflow,
+      {
+        cwd,
+        seedPrompt: input.prompt,
+        customInstructions: run.customInstructions,
+      },
+      dropped,
+    );
 
     return runToWire(run);
   }
@@ -545,8 +584,7 @@ export class GraphExecutorService {
     em: EntityManager,
     runId: string,
     workflow: Workflow,
-    cwd: string,
-    seedPrompt: string,
+    run: RunContext,
     dropped: DroppedNodeSetting[],
   ): void {
     void (async () => {
@@ -583,15 +621,7 @@ export class GraphExecutorService {
         );
         return;
       }
-      this.driveResolved(
-        em,
-        runId,
-        workflow,
-        cwd,
-        seedPrompt,
-        claudeModes,
-        dropped,
-      );
+      this.driveResolved(em, runId, workflow, run, claudeModes, dropped);
     })();
   }
 
@@ -599,11 +629,11 @@ export class GraphExecutorService {
     em: EntityManager,
     runId: string,
     workflow: Workflow,
-    cwd: string,
-    seedPrompt: string,
+    run: RunContext,
     claudeModes: ClaudeModesCapability,
     dropped: DroppedNodeSetting[],
   ): void {
+    const { cwd, seedPrompt, customInstructions } = run;
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -1036,6 +1066,12 @@ export class GraphExecutorService {
         effort: node.effort ?? null,
         resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: node.role ?? null,
+        // A PEER of the role rather than something joined into it: the two are
+        // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
+        // node's role after this so a node authored for one job still outranks
+        // a standing preference. Joining them here would put that ordering in
+        // the executor and leave the chat path free to disagree about it.
+        customInstructions,
         callSurfacePrompt: callSurfaceFor(node),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain

@@ -453,6 +453,12 @@ export class ChatService {
     effort?: string;
     configDir?: string;
     /**
+     * The app's global custom instructions as they stand right now. Snapshotted
+     * onto the row below, so a later edit reaches the next chat and not this
+     * one — see {@link Run.customInstructions} for why that is deliberate.
+     */
+    customInstructions?: string;
+    /**
      * A conversation this CLI already holds, taken over instead of started —
      * the new thread resumes it, and opens on the transcript it already had.
      */
@@ -497,6 +503,10 @@ export class ChatService {
         model: input.model ?? null,
         effort: input.effort ?? null,
         configDir,
+        // Blank normalizes to null so "typed nothing" and "cleared the box"
+        // are one state in the row, and the turn input below cannot hand an
+        // adapter an empty string to compose around.
+        customInstructions: input.customInstructions?.trim() || null,
         groupId,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
@@ -816,6 +826,25 @@ export class ChatService {
       throw new BadRequestException('CONFIG_DIR_UNSUPPORTED', reason);
     }
     return resolveValidConfigDir(configDir);
+  }
+
+  /**
+   * Forget the custom instructions every existing run snapshotted.
+   *
+   * The escape hatch the snapshot design otherwise lacks: a user who pasted
+   * something they regret into the global box can clear it, but every chat
+   * opened beforehand still carries the old text and would send it again on
+   * its next turn. Nothing else purges that short of deleting the chat.
+   *
+   * Deliberately NOT wired to clearing the settings box — it discards a real
+   * guarantee (a chat keeps what it started with), so it is an explicit action
+   * with its own control, not a side effect of an edit the user might be
+   * halfway through.
+   */
+  async forgetCustomInstructions(): Promise<{ cleared: number }> {
+    const em = this.em.fork();
+    const cleared = await this.runDao.forgetCustomInstructions(em);
+    return { cleared };
   }
 
   async listChats(): Promise<RunWire[]> {
@@ -1562,6 +1591,11 @@ export class ChatService {
       const configDir = settings.configDir
         ? resolveValidConfigDir(settings.configDir)
         : undefined;
+      // Read off the ROW, not off the app's settings: the value was
+      // snapshotted when the chat was created, and re-reading the live setting
+      // here is exactly what would respawn this run's CLI process mid-thread
+      // (`AgentAdapter.sessionKey` hashes it).
+      const customInstructions = settings.customInstructions ?? undefined;
 
       // Store the bytes BEFORE persisting the item: the payload records only
       // the attachment rows, so an item written first would reference files
@@ -1831,6 +1865,7 @@ export class ChatService {
           model,
           effort,
           configDir,
+          customInstructions,
           resumeSessionId,
           approvalMode,
           // A human is watching a chat: let the agent ask, and stream its

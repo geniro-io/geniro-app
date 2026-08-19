@@ -140,7 +140,10 @@ owning module map it — see `handoffTarget` → `HandoffResult`.
 - **`input.callSurfacePrompt` is only true while those tools are actually
   registered.** Build the turn's instruction text with the base's
   `composeSystemPrompt(input, granted)`, passing whether YOUR delivery
-  mechanism succeeded — never join the two prompt fields yourself. An agent told
+  mechanism succeeded — never join the instruction parts yourself. There are
+  four now (the host preamble, `customInstructions`, `systemPrompt`,
+  `callSurfacePrompt`), and their ORDER is precedence, so a hand-join is both a
+  duplicate and a place for the ranking to drift. An agent told
   to route work through `call_agent` with no such tool registered never runs its
   callees and the node still reports success, which is silent by construction.
   This is why the fields are separate: a single pre-composed string could not be

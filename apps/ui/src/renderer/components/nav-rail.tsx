@@ -306,7 +306,24 @@ export function NavRail({
               necessary rather than optional: a user who works with the rail
               collapsed would otherwise have no channel left that mentions an
               update at all. */}
-          {update.kind === 'none' ? null : (
+          {update.kind === 'none' ? null : update.kind === 'readout' ? (
+            // Deliberately NOT a button. This offer is real but THIS install
+            // cannot apply it (a Homebrew install, a translocated copy), and
+            // the rail's own rule is "no dead affordance" — a control that
+            // cannot work is worse than none. `title` carries the command
+            // that does.
+            <span
+              data-slot="update-readout"
+              aria-label={update.title}
+              title={update.title}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground',
+                collapsed ? 'mt-1 justify-center p-1' : 'ml-auto px-1 py-0.5',
+              )}>
+              <ArrowDownToLine aria-hidden="true" className="size-3 shrink-0" />
+              {collapsed ? null : <span>{update.label}</span>}
+            </span>
+          ) : (
             <button
               type="button"
               data-slot="update-control"

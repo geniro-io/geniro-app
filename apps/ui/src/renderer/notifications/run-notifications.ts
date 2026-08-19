@@ -49,22 +49,26 @@ export interface RunNotificationTrigger {
  *    `/compact` is an ordinary turn on the wire, so it settled the run and
  *    earned a banner reporting a piece of context management the user asked
  *    for and can see the result of — reported as "не нужно нотификации, когда
- *    компакт сработает". The daemon says which settles those were
- *    (`RunStatusEvent.housekeeping`); a question is still raised, because a
- *    turn parked on the user is not housekeeping whatever else it did.
+ *    компакт сработает". The daemon says which settles are not news:
+ *    `RunStatusEvent.housekeeping` (the turn was only a compaction) and
+ *    `RunStatusEvent.restored` (a delegate lease handing an already-settled
+ *    status back). A question is still raised either way, because a turn parked
+ *    on the user is news whatever else it did.
  */
 export function diffRunNotifications(
   previous: ReadonlyMap<string, RunStatusKind>,
   current: ReadonlyMap<string, RunStatusKind>,
   /**
-   * Runs whose most recent settle the daemon called housekeeping — rule 4.
+   * Runs whose most recent settle the daemon marked as not news — rule 4.
+   * Either `RunStatusEvent.housekeeping` (the turn was only a compaction) or
+   * `RunStatusEvent.restored` (a lease handing a settled status back).
    *
    * A set of ids rather than a flag on the status map, because it answers a
    * different question: the map says what a run IS, this says what the turn
    * that got it there was. Empty by default, so a caller that has no such
    * reading behaves exactly as before.
    */
-  housekeeping: ReadonlySet<string> = new Set(),
+  quiet: ReadonlySet<string> = new Set(),
 ): RunNotificationTrigger[] {
   const triggers: RunNotificationTrigger[] = [];
   for (const [runId, status] of current) {
@@ -82,7 +86,7 @@ export function diffRunNotifications(
     // second kind of ending nobody asked to hear about.
     if (
       status !== 'cancelled' &&
-      !housekeeping.has(runId) &&
+      !quiet.has(runId) &&
       isSettledRunStatus(status) &&
       !isSettledRunStatus(before)
     ) {

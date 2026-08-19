@@ -602,7 +602,10 @@ export function AgentsPanel({
           `Chats.tsx`. It is still RESIZABLE, which is the control that stays
           worth having: someone who wants it out of the way drags it narrow,
           and that width is remembered per install. */}
-      <div className="flex items-center py-1.5 pr-2 pl-3">
+      {/* `app-drag`: with no OS title bar, this is the top of the window
+          whenever the panel is the rightmost pane — it carries no control at
+          all, so the whole width opts nothing out. */}
+      <div className="app-drag flex items-center py-1.5 pr-2 pl-3">
         <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Agents
         </span>

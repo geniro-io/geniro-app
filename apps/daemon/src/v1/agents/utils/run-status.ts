@@ -19,13 +19,19 @@ import type { AgentEventBus } from '../services/agent-events.bus';
  * in the same sidebar still showed the stale badge. One function is what makes
  * that class of divergence impossible rather than merely unlikely.
  */
-export async function writeRunStatus(
-  deps: { runDao: RunDao; bus: AgentEventBus },
-  em: EntityManager,
-  runId: string,
-  status: RunStatus,
+/**
+ * Everything a status write says BESIDES the status itself.
+ *
+ * One object rather than four trailing parameters, and specifically because two
+ * of them are booleans that sit next to each other: positionally,
+ * `(…, null, null, false, true)` type-checks whichever way round the last two
+ * go, and swapping them announces a compaction as a restore — suppressing the
+ * summary instead of the banner, with nothing to catch it. Named at the call
+ * site, that mistake cannot be written.
+ */
+export interface RunStatusAnnounce {
   /** What the run is doing right now, for a badge nobody is looking at. */
-  activity: string | null = null,
+  activity?: string | null;
   /**
    * What the run has to SAY about this status — the agent's closing words, or
    * the failure's own message.
@@ -40,13 +46,28 @@ export async function writeRunStatus(
    * write. Those two are told apart on the WIRE rather than here — see the
    * `isTerminalRunStatus` gate below.
    */
-  summary: string | null = null,
+  summary?: string | null;
   /**
    * True when this settle's whole turn was the CLI's own context compaction —
    * see {@link RunStatusEvent.housekeeping}. Never set on a non-terminal write:
    * a compaction that a working turn ran mid-flight is not what this names.
    */
-  housekeeping = false,
+  housekeeping?: boolean;
+  /**
+   * True when this write hands a status BACK rather than reaching a new one —
+   * see {@link RunStatusEvent.restored}. Keeps the announce out of the client's
+   * "a turn just ended" reading, and withholds `summary` so the restore does
+   * not blank the sentence the real settle gave it.
+   */
+  restored?: boolean;
+}
+
+export async function writeRunStatus(
+  deps: { runDao: RunDao; bus: AgentEventBus },
+  em: EntityManager,
+  runId: string,
+  status: RunStatus,
+  announce: RunStatusAnnounce = {},
 ): Promise<void> {
   await deps.runDao.updateById(runId, { status }, em);
   // `awaiting: null` on EVERY status write, which is the one place it can be
@@ -65,14 +86,21 @@ export async function writeRunStatus(
   // them apart: the client holds the last sentence it was given, so omitting a
   // settle's null left the previous turn's closing words standing and a
   // wordless turn announced them as its own — see `RunStatusEvent.summary`.
+  const {
+    activity = null,
+    summary = null,
+    housekeeping = false,
+    restored = false,
+  } = announce;
   const settled = isTerminalRunStatus(status);
   deps.bus.publishRunStatus({
     runId,
     status,
     activity,
     awaiting: null,
-    ...(settled ? { summary } : {}),
+    ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),
+    ...(settled && restored ? { restored } : {}),
   });
 }

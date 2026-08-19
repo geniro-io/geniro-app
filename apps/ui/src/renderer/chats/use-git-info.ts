@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { GitInfo } from '../../shared/contracts';
 import type { BannerTone } from '../components/error-banner';
@@ -50,8 +50,16 @@ export function useGitInfo(dir: string | null): {
   const [notice, setNotice] = useState<GitNotice | null>(null);
   const [switching, setSwitching] = useState(false);
   const [pulling, setPulling] = useState(false);
+  /**
+   * The branch a refused switch was FOR, so a later pull can retry it. A ref
+   * because {@link pull} needs the value set by the switch that preceded it,
+   * and — per the past bug in this file — state just written by one callback
+   * is not visible to another read from closure.
+   */
+  const pendingSwitchTarget = useRef<string | null>(null);
 
   useEffect(() => {
+    pendingSwitchTarget.current = null;
     if (dir === null) {
       setInfo(NOT_A_REPO);
       return;
@@ -87,6 +95,12 @@ export function useGitInfo(dir: string | null): {
             tone: result.dirty ? 'warning' : 'error',
             offerPull: result.dirty,
           });
+          // Only a dirty refusal is one `pull` can act on — remember the
+          // branch it was FOR so a later pull retries this exact switch
+          // instead of merely clearing the strip.
+          pendingSwitchTarget.current = result.dirty ? branch : null;
+        } else {
+          pendingSwitchTarget.current = null;
         }
         setInfo(await window.geniro.getGitInfo(dir));
       } finally {
@@ -103,21 +117,39 @@ export function useGitInfo(dir: string | null): {
     setPulling(true);
     try {
       const result = await window.geniro.pullBranch(dir);
-      // A successful pull clears the strip: the branch is up to date and the
-      // uncommitted work is back, so the sentence that sent the user here no
-      // longer describes anything. A failed one REPLACES it with git's own
-      // reason, as an error — a refused pull is a genuine dead end for this
-      // button, and offering it again would be a control that has just been
-      // shown not to work.
-      setNotice(
-        result.ok
-          ? null
-          : {
-              message: result.error ?? 'git pull failed',
-              tone: 'error',
-              offerPull: false,
-            },
-      );
+      if (!result.ok) {
+        // A failed pull REPLACES the strip with git's own reason, as an error
+        // — a refused pull is a genuine dead end for this button, and
+        // offering it again would be a control that has just been shown not
+        // to work.
+        setNotice({
+          message: result.error ?? 'git pull failed',
+          tone: 'error',
+          offerPull: false,
+        });
+        setInfo(await window.geniro.getGitInfo(dir));
+        return;
+      }
+      const target = pendingSwitchTarget.current;
+      if (target === null) {
+        setNotice(null);
+      } else {
+        // The pull was offered to unblock a specific switch — re-run that
+        // switch rather than clearing the strip, which would read as the
+        // switch having gone through when the branch never moved.
+        const retry = await window.geniro.switchBranch(dir, target);
+        if (retry.ok) {
+          pendingSwitchTarget.current = null;
+          setNotice(null);
+        } else if (retry.error !== null) {
+          setNotice({
+            message: retry.error,
+            tone: retry.dirty ? 'warning' : 'error',
+            offerPull: retry.dirty,
+          });
+          pendingSwitchTarget.current = retry.dirty ? target : null;
+        }
+      }
       setInfo(await window.geniro.getGitInfo(dir));
     } finally {
       setPulling(false);
@@ -158,6 +190,11 @@ export function useGitInfo(dir: string | null): {
     switchTo,
     pull,
     refresh,
-    clearError: useCallback(() => setNotice(null), []),
+    clearError: useCallback(() => {
+      // A dismissed notice must not leave a stale target for a later pull to
+      // retry against — the user dismissed the guard, not just the sentence.
+      pendingSwitchTarget.current = null;
+      setNotice(null);
+    }, []),
   };
 }

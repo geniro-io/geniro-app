@@ -139,9 +139,46 @@ export async function switchBranch(
  */
 const PULL_STASH_MESSAGE = 'geniro: pull';
 
-/** The current stash tip, or null when the repo has no stash at all. */
-async function stashTip(dir: string): Promise<string | null> {
+/**
+ * Whether the current stash tip is the one THIS pull just pushed, not a
+ * concurrent write from elsewhere.
+ *
+ * git prefixes every `--message` with `On <branch>: `, so the tip's subject
+ * is never exactly {@link PULL_STASH_MESSAGE} — only ends with it.
+ *
+ * BOTH signals are required, and neither is sufficient alone. The subject alone
+ * matches a LEFTOVER entry from an earlier run whose pop conflicted (the
+ * documented `stashLeft` state) — and `git stash push` on a tree that is not
+ * really dirty exits 0 having created nothing, which is reachable because
+ * `readGitInfo` reports a FAILED `git status` as dirty. The ref alone matches a
+ * concurrent `git stash` from the user's own terminal. Popping on either
+ * mistake applies work this pull never moved.
+ */
+async function stashTipOid(dir: string): Promise<string | null> {
   return git(dir, ['rev-parse', '-q', '--verify', 'refs/stash']);
+}
+
+async function stashTipSubject(dir: string): Promise<string | null> {
+  return git(dir, ['log', '-1', '--format=%s', 'refs/stash']);
+}
+
+/**
+ * The ownership decision itself, separated from the three git reads that feed
+ * it so both halves of the AND can be entered by a test — the reachable
+ * mistakes need a `git status` failure to reproduce end to end, which a
+ * real-repo spec cannot force.
+ */
+export function pullStashIsOurs(
+  before: string | null,
+  after: string | null,
+  subject: string | null,
+): boolean {
+  return (
+    after !== null &&
+    after !== before &&
+    subject !== null &&
+    subject.endsWith(PULL_STASH_MESSAGE)
+  );
 }
 
 /**
@@ -161,10 +198,18 @@ async function stashTip(dir: string): Promise<string | null> {
  * itself conflicts git keeps the entry, and {@link BranchPullResult.stashLeft}
  * says where it is rather than leaving the user to guess.
  *
- * Whether anything was stashed is decided by the stash REF moving, not by
- * reading git's prose: `git stash push` on a clean tree says "No local changes
- * to save" and creates nothing, and matching that sentence would break under
- * any locale or wording change.
+ * **The push runs on the pull's own budget, not the chip-read one**, and its
+ * result is checked rather than discarded: a large tree's stash push can
+ * outrun the chip-read timeout and be cut off mid-operation with the failure
+ * invisible, after which a pull would run against a still-dirty tree with no
+ * protection. A failed push aborts the pull rather than proceeding.
+ *
+ * Whether anything was stashed — and so needs popping back — is decided by the
+ * new stash tip's own message AND its ref moving (see {@link pullStashIsOurs}),
+ * not merely by the
+ * stash ref having moved: the ref moving is also what a concurrent
+ * `git stash` from somewhere else looks like, and popping that entry into the
+ * tree is not this pull's business.
  */
 export async function pullBranch(dir: string): Promise<BranchPullResult> {
   const info = await readGitInfo(dir);
@@ -187,20 +232,31 @@ export async function pullBranch(dir: string): Promise<BranchPullResult> {
     };
   }
   const branch = info.branch;
-  const before = await stashTip(dir);
+  let stashed = false;
+  const stashBefore = info.dirty ? await stashTipOid(dir) : null;
   if (info.dirty) {
     // `--include-untracked`, because a new file the user has not added yet is
     // work in exactly the same sense as an edit to a tracked one, and a pull
     // that fast-forwards a file into that path fails on it.
-    await git(dir, [
+    const push = await runGit(dir, [
       'stash',
       'push',
       '--include-untracked',
       '--message',
       PULL_STASH_MESSAGE,
     ]);
+    if (push !== true) {
+      // The tree is exactly as dirty as it was — nothing was moved aside, so
+      // there is nothing to leave stashed, and a pull now would run against
+      // uncommitted work with no protection.
+      return { ok: false, branch, error: push, stashLeft: null };
+    }
+    stashed = pullStashIsOurs(
+      stashBefore,
+      await stashTipOid(dir),
+      await stashTipSubject(dir),
+    );
   }
-  const stashed = (await stashTip(dir)) !== before;
   const pull = await runGit(dir, ['pull', '--ff-only']);
   const restore = stashed ? await runGit(dir, ['stash', 'pop']) : null;
   const stashLeft = restore !== null && restore !== true ? 'stash@{0}' : null;

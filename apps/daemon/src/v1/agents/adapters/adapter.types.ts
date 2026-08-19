@@ -991,6 +991,19 @@ export interface AgentEffort {
 export interface AgentEffortListing {
   efforts: AgentEffort[];
   unavailableReason: string | null;
+  /**
+   * True when this is the NAMED MODEL's own answer; false when it is the
+   * CLI-wide superset standing in for one.
+   *
+   * A picker treats the two alike — rows are rows, and the union is a decent
+   * stand-in. A REFUSAL cannot: the union omits levels a given model really
+   * offers (`gpt-5.2`'s `extra-high` is absent from cursor's), so refusing on
+   * it rejects a level the picker had just shown. The distinction is only
+   * visible here, because every fallback in this contract RESOLVES with the
+   * superset rather than throwing — a caller watching for a rejection sees a
+   * successful listing and cannot tell the two apart.
+   */
+  exact: boolean;
 }
 
 /**

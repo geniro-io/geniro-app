@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_SETTINGS,
   type Settings,
+  UPDATE_COMMAND,
   type UpdateState,
 } from '../../shared/contracts';
 import { footerUpdate } from '../updates/update-status';
@@ -275,17 +276,25 @@ describe('NavRail', () => {
     expect(updateControl(rail('chats'))).toBeNull();
   });
 
-  it('shows no control for an update this install cannot apply', () => {
-    // A control that cannot work is worse than none in a row this small, and
-    // Settings carries the `brew` sentence for that case.
+  it('offers a non-interactive readout, never a dead button, for an update this install cannot apply', () => {
+    // A control that cannot work is worse than none in a row this small, so
+    // this copy's only remaining channel is a readout naming the command
+    // that DOES work — not silence, and not a press that would fail.
     const el = rail('chats', () => undefined, {
       state: updateState({
         phase: 'available',
         version: '1.47.0',
         canInstall: false,
+        message: `Update with: ${UPDATE_COMMAND}`,
       }),
     });
+    // Not the pressable control — the rail's own rule is "no dead affordance".
     expect(updateControl(el)).toBeNull();
+
+    const readout = el.querySelector('[data-slot="update-readout"]');
+    expect(readout).toBeTruthy();
+    expect(readout?.tagName).not.toBe('BUTTON');
+    expect(readout?.getAttribute('title')).toContain(UPDATE_COMMAND);
   });
 
   it('reports a download in flight, and refuses to be pressed', () => {

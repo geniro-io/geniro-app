@@ -54,7 +54,9 @@ export class Run extends TimestampsEntity {
    * spells it; null = the CLI's own default (no `--effort` flag), which is
    * also every row that predates the chip and every CLI without the control.
    * A plain string, not an enum: the vocabulary is the adapter's, and the
-   * value is validated against `AgentAdapter.listEfforts()` before it lands.
+   * value is validated by `EffortsService.accepts` before it lands — against
+   * `AgentAdapter.listEfforts()` only for a CLI whose list is the whole
+   * vocabulary, since one whose levels belong to the MODEL has a union there.
    * TEXT so the `safe: true` schema sync adds it additively, no migration.
    */
   @Property({ type: 'string', nullable: true })

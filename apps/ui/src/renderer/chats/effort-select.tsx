@@ -35,9 +35,9 @@ const DEFAULT_LABEL = 'default effort';
  * picker.
  *
  * A level the CLI no longer lists but the run still carries is added back as
- * its own row, so the chip names what will actually be passed — EXCEPT when
- * the list is one model's, where the same row would re-offer exactly what this
- * control now exists to stop offering. See {@link levelsAreModelSpecific}.
+ * its own row, so it is named on screen rather than vanishing silently —
+ * SELECTABLE when the CLI's own vocabulary moved, DISABLED when it is the
+ * current model refusing it. See {@link levelsAreModelSpecific}.
  */
 export function EffortSelect({
   efforts,
@@ -65,13 +65,16 @@ export function EffortSelect({
    * Whether {@link efforts} is ONE MODEL's list rather than the CLI's union.
    *
    * It decides what happens to a stored level the list does not contain, and
-   * the two answers are opposites. For a CLI-wide list, a missing level means
-   * the vocabulary moved under a run that still carries the old word, so it is
-   * added back as its own row — the chip must name what will actually be
-   * passed. For a MODEL's list it means this model does not take that level,
-   * which is the case this control was rebuilt for: re-offering it would put
-   * `max` back on a Grok chat, which is the reported defect exactly. So it is
-   * dropped, and the chip falls back to the CLI's default.
+   * the two answers differ. For a CLI-wide list, a missing level means the
+   * vocabulary moved under a run that still carries the old word, so it is
+   * added back as a SELECTABLE row — the chip must name what will actually be
+   * passed. For a MODEL's list it means this model refuses that level, which
+   * is the case this control was rebuilt for: re-offering it as choosable
+   * would put `max` back on a Grok chat, which is the reported defect
+   * exactly. So the row is added back DISABLED instead of dropped — the run
+   * still carries the level (nothing here clears it, and the daemon keeps
+   * sending it every turn), so hiding the row entirely left nothing on screen
+   * naming what the chip's silent "default effort" fallback was covering for.
    */
   levelsAreModelSpecific?: boolean;
   onChange: (effort: string | null) => void;
@@ -96,20 +99,29 @@ export function EffortSelect({
     ) : null;
   }
   const known = efforts.some((effort) => effort.id === value);
+  // See `levelsAreModelSpecific`: the model-refused case still gets its own
+  // row, DISABLED rather than dropped, so the level the chip is silently
+  // falling back from is named on screen instead of vanishing without a
+  // trace.
+  const refused = value !== null && !known && levelsAreModelSpecific;
   const rows = [
     ...efforts.map((effort) => ({ value: effort.id, label: effort.label })),
-    // See `levelsAreModelSpecific`: only a CLI-wide list adds a stray level
-    // back. A model's list dropping one is the model refusing it.
-    ...(value !== null && !known && !levelsAreModelSpecific
-      ? [{ value, label: value }]
+    ...(value !== null && !known
+      ? [
+          {
+            value,
+            label: value,
+            disabled: levelsAreModelSpecific,
+            hint: refused ? 'unavailable' : undefined,
+          },
+        ]
       : []),
   ];
   // What the chip SHOWS when the model does not take the stored level: the
   // CLI's default, which is what the turn will run at. Showing the stored word
   // would say the run is thinking at a level it cannot reach — the same lie in
   // a quieter place than the red row that got reported.
-  const shown =
-    value !== null && !known && levelsAreModelSpecific ? null : value;
+  const shown = refused ? null : value;
   return (
     <Select
       variant={variant}

@@ -966,6 +966,49 @@ describe('GraphExecutorService', () => {
     expect(message).toContain(new ClaudeAdapter().listEfforts()[0]!.id);
   });
 
+  it('leaves a cursor node’s effort alone — its list is only a UNION', async () => {
+    // The twin of the claude case above, and the opposite answer, because the
+    // adapters differ in the one way that matters: cursor's levels belong to
+    // the MODEL, so `listEfforts` here is a union that omits real levels —
+    // `gpt-5.2` offers `extra-high`, which no other model has. Dropping against
+    // it stripped a level a CHAT accepts, so the node ran at the CLI's default
+    // while the app reported the level as unsupported. The turn's own driver
+    // checks the value against the model that runs it and says what does not
+    // apply.
+    const { service, cursor, itemDao } = setup();
+
+    await service.startRun({
+      slug: 'model-level',
+      workflow: triggered({
+        name: 'model-level',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+            name: 'Scout',
+            effort: 'extra-high',
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(cursor.starts[0]!.input.effort).toBe('extra-high');
+    const notice = [...itemDao.items.values()]
+      .flat()
+      .find(
+        (item) =>
+          item.kind === 'system' &&
+          String(JSON.parse(item.payload).message).includes('reasoning effort'),
+      );
+    expect(notice).toBeUndefined();
+  });
+
   it('runs a linear chain, feeding A output into B prompt', async () => {
     const { service, claude, runDao, itemDao, nodeDao } = setup();
     const run = await service.startRun({

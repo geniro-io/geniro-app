@@ -136,13 +136,14 @@ describe('EffortSelect', () => {
     expect(optionValues(el)).toContain('legacy-level');
   });
 
-  it('DROPS a stored level when the list belongs to one model', () => {
+  it('keeps a level the MODEL refuses on screen, disabled rather than dropped', () => {
     // The reported case: an effort chip is remembered per CLI, so a cursor chat
     // moved onto Grok still carried `max` — which `claude-opus-5` takes and
-    // `grok-4.6` has never had (measured on 2026.08.11-e8db854). The add-back
-    // row above is right for a CLI's own vocabulary drifting and exactly wrong
-    // here: it would re-offer the value the model refuses, on the very control
-    // built to stop offering it.
+    // `grok-4.6` has never had (measured on 2026.08.11-e8db854). Dropping the
+    // row outright also dropped the only place on screen naming the level the
+    // daemon keeps sending every turn, while the chip's fallback to "default
+    // effort" quietly covered for it.
+    const onChange = vi.fn();
     const el = render(
       <EffortSelect
         efforts={[
@@ -151,13 +152,30 @@ describe('EffortSelect', () => {
         ]}
         value="max"
         levelsAreModelSpecific
-        onChange={() => {}}
+        onChange={onChange}
       />,
     );
+    act(() => {
+      trigger(el)!.click();
+    });
+    const options = [
+      ...el.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    const refused = options.find((o) => o.textContent?.includes('max'));
+    expect(refused).toBeDefined();
+    expect(refused!.disabled).toBe(true);
+    expect(refused!.textContent).toContain('unavailable');
+    expect(refused!.getAttribute('aria-selected')).toBe('false');
 
-    expect(optionValues(el)).toEqual(['low', 'xhigh', 'default effort']);
-    // …and the chip reads as the CLI's default, which is what the turn will
-    // actually run at — naming `max` would claim a level it cannot reach.
+    // Activating the disabled row must not change the selection.
+    act(() => {
+      refused!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onChange).not.toHaveBeenCalled();
+
+    // …and the chip still reads as the CLI's default, which is what the turn
+    // will actually run at — naming `max` there would claim a level it cannot
+    // reach.
     expect(trigger(el)!.textContent).toContain('default effort');
     expect(trigger(el)!.textContent).not.toContain('max');
   });

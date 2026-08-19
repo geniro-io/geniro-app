@@ -695,15 +695,18 @@ export type AgentEffortWire = z.infer<typeof AgentEffortWireSchema>;
  * particular model does not. Both are sentences the chip shows on hover; the
  * consumer does not care which.
  */
-export const AgentEffortListingWireSchema = z
-  .object({
-    efforts: z.array(AgentEffortWireSchema),
-    unavailableReason: z
-      .string()
-      .nullable()
-      .describe('Why there are no levels; null when there are.'),
-  })
-  .meta({ id: 'AgentEffortListing' });
+export const AgentEffortListingWireSchema = z.object({
+  efforts: z.array(AgentEffortWireSchema),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe('Why there are no levels; null when there are.'),
+});
+// No `.meta({ id })` on this one: it is a RESPONSE DTO ROOT, and nestjs-zod
+// would then register the component under the id while the route still points
+// at the DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
+// The component name a client sees is the DTO class name, which is what every
+// sibling listing here emits.
 export type AgentEffortListingWire = z.infer<
   typeof AgentEffortListingWireSchema
 >;
@@ -842,6 +845,26 @@ export interface RunStatusEvent {
    * doing real work, which must still announce itself.
    */
   housekeeping?: boolean;
+  /**
+   * True when this status is being HANDED BACK rather than newly reached —
+   * absent on every other announce.
+   *
+   * The one producer is the delegate lease expiring: it wrote a temporary
+   * `running` over a run that had already settled, so handing the badge back is
+   * a second non-terminal→terminal crossing for a turn that ended minutes ago.
+   * Without this the client reads it as a fresh ending and fires another
+   * banner and another sidebar mark — the same unwanted-notification complaint
+   * {@link RunStatusEvent.housekeeping} exists for, arriving by a different
+   * route. Separate from that flag because the two say different things: one is
+   * about what the TURN was, this is about whether the status is news at all.
+   *
+   * A restore also carries no {@link RunStatusEvent.summary}. Every other
+   * terminal write states the field, null included, so a wordless turn cannot
+   * inherit the previous one's closing words; a restore is not a turn ending
+   * and has nothing to say, so omitting it leaves the sentence the real settle
+   * already gave the client standing instead of blanking it.
+   */
+  restored?: boolean;
 }
 
 /**

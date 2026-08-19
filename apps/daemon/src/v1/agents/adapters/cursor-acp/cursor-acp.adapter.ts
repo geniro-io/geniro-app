@@ -895,6 +895,10 @@ export class CursorAcpAdapter extends AgentAdapter {
     const superset: AgentEffortListing = {
       efforts: [...config.efforts],
       unavailableReason: config.effortsUnavailableReason,
+      // Every `return superset` below is a stand-in for an answer this CLI
+      // could not give — no model named, the handshake failed or timed out, or
+      // the reply enumerated nothing. None of them may ground a refusal.
+      exact: false,
     };
     // No model chosen yet — the picker still needs rows, and the union is the
     // honest answer to "what does this CLI offer at all".
@@ -972,6 +976,7 @@ export class CursorAcpAdapter extends AgentAdapter {
             label: name,
           })),
           unavailableReason: null,
+          exact: true,
         };
       }
     }
@@ -981,6 +986,9 @@ export class CursorAcpAdapter extends AgentAdapter {
     return {
       efforts: [],
       unavailableReason: `${model} has no reasoning-effort setting — pick a model that does, or run it at its own default.`,
+      // The agent enumerated its options and this model's axis was not among
+      // them, which is an answer about the model rather than a failure to ask.
+      exact: true,
     };
   }
 

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentKind } from '../../runs/runs.types';
+import type { AgentEffortListing } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentEffortListingWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
@@ -21,7 +22,7 @@ export interface EffortsServiceOptions {
 interface CacheEntry {
   version: string | null;
   fetchedAt: number;
-  listing: AgentEffortListingWire;
+  listing: AgentEffortListing;
 }
 
 /**
@@ -59,10 +60,7 @@ export class EffortsService {
    * inspector mounting their effort chip at once would otherwise launch two of
    * them for one answer.
    */
-  private readonly inFlight = new Map<
-    string,
-    Promise<AgentEffortListingWire>
-  >();
+  private readonly inFlight = new Map<string, Promise<AgentEffortListing>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -79,7 +77,7 @@ export class EffortsService {
   async list(
     kind: AgentKind,
     model: string | null = null,
-  ): Promise<AgentEffortListingWire> {
+  ): Promise<AgentEffortListing> {
     const version = await this.versions.resolve(kind, {
       onSpawn: (child, spawnInfo) =>
         this.processes.register(
@@ -113,33 +111,82 @@ export class EffortsService {
   /**
    * Whether a run may be created carrying this effort.
    *
-   * Synchronous on purpose: this is the daemon's refusal at run CREATION, and
-   * gating it on a multi-second per-model handshake would make starting a chat
-   * wait on a question the picker asks.
-   *
    * What it checks against is the ADAPTER's own answer about its list
-   * (`effortsAreExhaustive`), never the list alone — and that distinction is a
-   * defect this shipped. A CLI whose levels belong to the BINARY has a complete
-   * list, so a word outside it is one the CLI would ignore in silence and
-   * refusing is the only way the user hears about it. A CLI whose levels belong
-   * to the MODEL has only a union, and checking it exhaustively refused
-   * `extra-high` — a real level `gpt-5.2` offers and the picker had just shown,
-   * so the chat could not be started at all. There, the turn's own driver
-   * checks the value against the model that will run it and reports what does
-   * not apply, which is both more accurate and current.
+   * (`effortsAreExhaustive`), never the list alone. A CLI whose levels belong
+   * to the BINARY has a complete list, so a word outside it is one the CLI
+   * would ignore in silence and refusing is the only way the user hears about
+   * it. A CLI whose levels belong to the MODEL has only a union, and checking
+   * THAT exhaustively refused `extra-high` — a real level `gpt-5.2` offers and
+   * the picker had just shown — so the chat could not be started at all.
+   *
+   * For that second kind the MODEL's own listing is what can answer exactly —
+   * but only a listing this service ALREADY HOLDS. Synchronous on purpose, and
+   * that is the whole design: asking here would put a multi-second CLI
+   * handshake inside `POST /v1/chats`, so a run started from a saved
+   * configuration would wait on a question the picker asks. The picker is
+   * normally what warmed the entry, since choosing the model is what fetches
+   * its levels; a cold cache simply answers leniently and the turn's own driver
+   * reports what does not apply.
+   *
+   * A refusal is grounded ONLY on `AgentEffortListing.exact` — the listing's own
+   * statement that it came from the named model rather than standing in for it.
+   * Watching for a failure instead cannot work: every fallback in the adapter
+   * contract RESOLVES with the CLI-wide superset (a probe that times out, and
+   * equally a reply that enumerated nothing), so a caller sees a perfectly
+   * successful listing either way. Refusing on one rejects `extra-high` — a
+   * real `gpt-5.2` level the picker had just offered — whenever the CLI merely
+   * could not be asked, which is the defect this leniency exists to prevent.
+   *
+   * With no model named there is nothing better to consult, so the answer
+   * stands lenient there too.
    *
    * A CLI with NO effort control refuses every level either way: its list is
    * empty and exhaustive.
    */
-  accepts(kind: AgentKind, effort: string): boolean {
+  accepts(
+    kind: AgentKind,
+    effort: string,
+    model: string | null = null,
+  ): boolean {
     const adapter = this.adapterFor(kind);
     const levels = adapter.listEfforts();
-    if (!adapter.getConfig().effortsAreExhaustive) {
-      // Still refused when the CLI has no effort control at all — an empty list
-      // is not an incomplete one, it is the absence of the axis.
-      return levels.length > 0;
+    if (adapter.getConfig().effortsAreExhaustive) {
+      return levels.some((e) => e.id === effort);
     }
-    return levels.some((e) => e.id === effort);
+    // An empty list is not an incomplete one, it is the absence of the axis.
+    if (levels.length === 0) {
+      return false;
+    }
+    if (model === null) {
+      return true;
+    }
+    const known = this.freshCachedListing(kind, model);
+    // Nothing held, a listing standing in for the model's own answer, or a
+    // model with no effort axis at all — none is evidence that the level is
+    // wrong, only that nothing here can say so.
+    if (known === null || !known.exact || known.efforts.length === 0) {
+      return true;
+    }
+    return known.efforts.some((e) => e.id === effort);
+  }
+
+  /**
+   * A cached listing still inside its TTL, or null.
+   *
+   * The `--version` key {@link list} also checks is deliberately not consulted:
+   * resolving it spawns, and this is the synchronous path. A CLI upgraded
+   * within the TTL is the one case that can answer from a previous binary's
+   * vocabulary — bounded, and in the lenient direction far more often than not.
+   */
+  private freshCachedListing(
+    kind: AgentKind,
+    model: string,
+  ): AgentEffortListing | null {
+    const entry = this.cache.get(this.keyFor(kind, model));
+    if (!entry || this.now() - entry.fetchedAt >= this.ttlMs) {
+      return null;
+    }
+    return entry.listing;
   }
 
   /** `(agent, model)` — a null model is its own key, not a missing one. */
@@ -153,9 +200,9 @@ export class EffortsService {
     key: string,
     version: string | null,
     cached: CacheEntry | undefined,
-  ): Promise<AgentEffortListingWire> {
+  ): Promise<AgentEffortListing> {
     const adapter: AgentAdapter = this.adapters.for(kind);
-    let listing: AgentEffortListingWire;
+    let listing: AgentEffortListing;
     try {
       listing = await adapter.listModelEfforts(model, {
         onSpawn: (child, spawnInfo) =>
@@ -174,6 +221,9 @@ export class EffortsService {
         cached?.listing ?? {
           efforts: [...adapter.listEfforts()],
           unavailableReason: adapter.getConfig().effortsUnavailableReason,
+          // The union standing in for an answer nobody could get — a picker
+          // takes it, a refusal must not.
+          exact: false,
         }
       );
     }

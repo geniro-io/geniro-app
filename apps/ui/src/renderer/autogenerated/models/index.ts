@@ -85,19 +85,19 @@ export interface AgentEffort {
 /**
  * 
  * @export
- * @interface AgentEffortListing
+ * @interface AgentEffortListingDto
  */
-export interface AgentEffortListing {
+export interface AgentEffortListingDto {
     /**
      * 
      * @type {Array<AgentEffort>}
-     * @memberof AgentEffortListing
+     * @memberof AgentEffortListingDto
      */
     efforts: Array<AgentEffort>;
     /**
      * 
      * @type {string}
-     * @memberof AgentEffortListing
+     * @memberof AgentEffortListingDto
      */
     unavailableReason: string | null;
 }

@@ -85,6 +85,7 @@ describe('EffortsService', () => {
               ]
             : [{ id: 'max', label: 'Max' }],
         unavailableReason: null,
+        exact: true,
       }),
     );
 
@@ -103,9 +104,11 @@ describe('EffortsService', () => {
     // must not launch two of them — and a second glance at the same model must
     // not launch any.
     const { efforts, cursor } = service();
-    const ask = vi
-      .spyOn(cursor, 'listModelEfforts')
-      .mockResolvedValue({ efforts: [], unavailableReason: 'none here' });
+    const ask = vi.spyOn(cursor, 'listModelEfforts').mockResolvedValue({
+      efforts: [],
+      unavailableReason: 'none here',
+      exact: true,
+    });
 
     const [first, second] = await Promise.all([
       efforts.list('cursor-agent', 'grok-4.6'),
@@ -130,6 +133,7 @@ describe('EffortsService', () => {
       .mockResolvedValueOnce({
         efforts: [{ id: 'xhigh', label: 'Extra High' }],
         unavailableReason: null,
+        exact: true,
       })
       .mockRejectedValueOnce(new Error('handshake died'));
 
@@ -149,7 +153,7 @@ describe('EffortsService', () => {
     ).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
 
-  it('refuses a level a CLI with an EXHAUSTIVE list does not have', () => {
+  it('refuses a level a CLI with an EXHAUSTIVE list does not have', async () => {
     const { efforts } = service();
     expect(efforts.accepts('claude', 'ultracode')).toBe(true);
     // Probe-verified as REJECTED by the CLI — the service must not pass it on.
@@ -158,24 +162,121 @@ describe('EffortsService', () => {
     expect(efforts.accepts('claude', 'ultrathink')).toBe(false);
   });
 
-  it('lets a CLI whose list is only a UNION through, whatever the word', () => {
-    // The defect this rule exists for. cursor's levels belong to the MODEL, so
-    // `AdapterConfig.efforts` can only ever be a union of the ones seen — and
-    // `gpt-5.2` offers `extra-high` on its own `reasoning` axis, which no other
-    // model has. Checked exhaustively, the daemon refused that level at run
-    // creation with `cursor-agent does not accept the reasoning effort
-    // 'extra-high'`, so a chat on a level the picker had just offered could not
-    // be started at all.
+  it('lets a UNION-list CLI through whatever the word when NO model is named', async () => {
+    // The defect this leniency exists for. cursor's levels belong to the MODEL,
+    // so `AdapterConfig.efforts` can only ever be a union of the ones seen —
+    // and `gpt-5.2` offers `extra-high` on its own `reasoning` axis, which no
+    // other model has. Checked against the union, the daemon refused that level
+    // at run creation, so a chat on a level the picker had just offered could
+    // not be started at all. With no model named there is nothing better to ask.
     const { efforts } = service();
 
     expect(efforts.accepts('cursor-agent', 'extra-high')).toBe(true);
     expect(efforts.accepts('cursor-agent', 'xhigh')).toBe(true);
-    // …and that is not a hole: the value goes to the driver, which checks it
-    // against the model that will run the turn and says so when it does not
-    // apply. Revert `effortsAreExhaustive` and the first assertion fails.
   });
 
-  it('still refuses every level for a CLI with no effort control', () => {
+  it('refuses a level the NAMED MODEL does not list', async () => {
+    // What the union check had to give up, bought back by asking the model that
+    // will actually run the turn: a level no model lists is a mistake only this
+    // refusal can surface, since the value would otherwise be stored on the run
+    // and re-warned about by the driver on every turn.
+    const { efforts, cursor } = service();
+    vi.spyOn(cursor, 'listModelEfforts').mockResolvedValue({
+      efforts: [
+        { id: 'low', label: 'Low' },
+        { id: 'medium', label: 'Medium' },
+        { id: 'high', label: 'High' },
+      ],
+      unavailableReason: null,
+      exact: true,
+    });
+    // The picker's own fetch is what holds the listing. Without one there is
+    // nothing to refuse against, which the cold-cache test below pins.
+    await efforts.list('cursor-agent', 'grok-4.6');
+
+    expect(efforts.accepts('cursor-agent', 'ultracode', 'grok-4.6')).toBe(
+      false,
+    );
+    expect(efforts.accepts('cursor-agent', 'high', 'grok-4.6')).toBe(true);
+  });
+
+  it('never refuses from a COLD cache — it must not spawn to decide', async () => {
+    // The refusal is synchronous by design: asking here would put a
+    // multi-second CLI handshake inside `POST /v1/chats`, so a run started from
+    // a saved configuration would wait on a question the picker asks. With
+    // nothing held the answer is lenient and the driver reports per turn.
+    const { efforts, cursor } = service();
+    const ask = vi.spyOn(cursor, 'listModelEfforts');
+
+    expect(efforts.accepts('cursor-agent', 'ultracode', 'grok-4.6')).toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('accepts a level the MODEL lists but the union does not', async () => {
+    // The other direction of the same fix: asking the model is what makes
+    // `extra-high` legal, and it is absent from `AdapterConfig.efforts`.
+    const { efforts, cursor } = service();
+    vi.spyOn(cursor, 'listModelEfforts').mockResolvedValue({
+      efforts: [{ id: 'extra-high', label: 'Extra high' }],
+      unavailableReason: null,
+      exact: true,
+    });
+
+    await efforts.list('cursor-agent', 'gpt-5.2');
+
+    expect(efforts.accepts('cursor-agent', 'extra-high', 'gpt-5.2')).toBe(true);
+  });
+
+  it('does not refuse on a listing that STOOD IN for the model', async () => {
+    // A refusal may not be built on a guess, and the guess does not arrive as a
+    // failure: every fallback in the adapter contract RESOLVES with the CLI-wide
+    // superset — a probe that timed out, and equally a reply that enumerated
+    // nothing — so the shape below is what a caller actually sees. Refusing on
+    // it rejects `extra-high`, a real `gpt-5.2` level the picker had just
+    // offered, whenever the CLI merely could not be asked.
+    //
+    // Mocking a REJECTION here instead would pin nothing: `listModelEfforts` is
+    // documented MUST NOT throw and neither shipped adapter does, so the
+    // leniency would go unverified while the real path refused.
+    const { efforts, cursor } = service();
+    vi.spyOn(cursor, 'listModelEfforts').mockResolvedValue({
+      efforts: [
+        { id: 'low', label: 'Low' },
+        { id: 'medium', label: 'Medium' },
+        { id: 'high', label: 'High' },
+        { id: 'xhigh', label: 'Extra High' },
+        { id: 'max', label: 'Max' },
+      ],
+      unavailableReason: null,
+      exact: false,
+    });
+
+    await efforts.list('cursor-agent', 'gpt-5.2');
+
+    expect(efforts.accepts('cursor-agent', 'extra-high', 'gpt-5.2')).toBe(true);
+    // …and a level that is not in ANY list is still let through, because an
+    // inexact listing is not evidence about the level either way.
+    expect(efforts.accepts('cursor-agent', 'ultracode', 'gpt-5.2')).toBe(true);
+  });
+
+  it('does not refuse when the MODEL has no effort axis at all', async () => {
+    // `auto-smart` enumerates no effort option. That is an answer about the
+    // model, not about the level, so the stored value is left alone and the
+    // driver reports it per turn — refusing here would block a chat over a
+    // setting the model simply ignores.
+    const { efforts, cursor } = service();
+    vi.spyOn(cursor, 'listModelEfforts').mockResolvedValue({
+      efforts: [],
+      unavailableReason: 'auto-smart has no reasoning-effort setting',
+      exact: true,
+    });
+
+    await efforts.list('cursor-agent', 'auto-smart');
+
+    expect(efforts.accepts('cursor-agent', 'xhigh', 'auto-smart')).toBe(true);
+  });
+
+  it('still refuses every level for a CLI with no effort control', async () => {
     // An empty list is not an incomplete one — it is the absence of the axis,
     // and the leniency above must not turn that into "anything goes".
     const { efforts, cursor } = service();

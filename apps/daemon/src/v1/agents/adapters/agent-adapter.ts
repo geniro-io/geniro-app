@@ -870,6 +870,10 @@ export abstract class AgentAdapter {
     return {
       efforts: [...config.efforts],
       unavailableReason: config.effortsUnavailableReason,
+      // Config, not a model's own answer. For a CLI whose list IS the whole
+      // vocabulary this changes nothing — that list is exact by construction and
+      // its caller checks `effortsAreExhaustive` instead.
+      exact: false,
     };
   }
 

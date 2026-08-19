@@ -770,7 +770,9 @@ export function Graphs({
   if (!started) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+        {/* `app-drag`: with no OS title bar, this is the top of the window
+            while the library grid is showing — its two buttons opt out. */}
+        <header className="app-drag flex items-center gap-2 border-b border-border px-4 py-3">
           <div className="flex flex-col">
             <h2 className="font-medium">Workflows</h2>
             <p className="text-xs text-muted-foreground">
@@ -782,11 +784,14 @@ export function Graphs({
             <Button
               type="button"
               variant="outline"
-              className="gap-2"
+              className="app-no-drag gap-2"
               onClick={() => void importWorkflow()}>
               <Upload className="shrink-0" /> Import YAML…
             </Button>
-            <Button type="button" className="gap-2" onClick={newWorkflow}>
+            <Button
+              type="button"
+              className="app-no-drag gap-2"
+              onClick={newWorkflow}>
               <Plus className="shrink-0" /> New workflow
             </Button>
           </div>
@@ -869,13 +874,15 @@ export function Graphs({
   // Builder — a single workflow open on the canvas + node inspector.
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+      {/* `app-drag`: this row is the top of the window while the builder is
+          open — every button in it opts out. */}
+      <div className="app-drag flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         {/* No discard-confirm any more: leaving flushes pending edits
               instead of throwing them away. */}
         <Button
           type="button"
           variant="ghost"
-          className="gap-1.5"
+          className="app-no-drag gap-1.5"
           aria-label="Back to library"
           onClick={() => void leaveToLibrary()}>
           <ArrowLeft className="shrink-0" /> Library
@@ -885,7 +892,7 @@ export function Graphs({
           <Button
             type="button"
             variant="outline"
-            className="gap-1.5"
+            className="app-no-drag gap-1.5"
             onClick={() => void layout()}>
             <Wand2 className="shrink-0" /> Auto-layout
           </Button>
@@ -894,20 +901,21 @@ export function Graphs({
               <Button
                 type="button"
                 variant="outline"
-                className="gap-1.5"
+                className="app-no-drag gap-1.5"
                 onClick={() => void exportWorkflow()}>
                 <Download className="shrink-0" /> Export
               </Button>
               <Button
                 type="button"
                 variant="outline"
+                className="app-no-drag"
                 aria-label="Change workflow"
                 onClick={() => setRenameOpen(true)}>
                 <Pencil className="shrink-0" />
               </Button>
               <ConfirmButton
                 variant="destructive"
-                className="gap-1.5"
+                className="app-no-drag gap-1.5"
                 aria-label="Delete workflow"
                 confirmLabel="Delete?"
                 onConfirm={remove}>

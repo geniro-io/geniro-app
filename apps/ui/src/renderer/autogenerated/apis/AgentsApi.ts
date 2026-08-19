@@ -15,7 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
-  AgentEffortListing,
+  AgentEffortListingDto,
   AgentKind,
   AgentMcpListingDto,
   AgentModelDto,
@@ -63,7 +63,7 @@ export class AgentsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listAgentEffortsRaw(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentEffortListing>> {
+    async listAgentEffortsRaw(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentEffortListingDto>> {
         if (requestParameters['agent'] == null) {
             throw new runtime.RequiredError(
                 'agent',
@@ -107,7 +107,7 @@ export class AgentsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentEffortListing> {
+    async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentEffortListingDto> {
         const response = await this.listAgentEffortsRaw(requestParameters, initOverrides);
         return await response.value();
     }

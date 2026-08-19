@@ -85,9 +85,9 @@ describe('diffRunNotifications', () => {
     ).toEqual([{ runId: 'b', kind: 'turn-end', status: 'completed' }]);
   });
 
-  it('still raises a QUESTION from a run marked housekeeping', () => {
+  it('still raises a QUESTION from a run marked quiet', () => {
     // The marker describes the last SETTLE. A turn parked on the user is not
-    // housekeeping whatever the previous one was, and it is the state that
+    // quiet whatever the previous one was, and it is the state that
     // cannot advance without them.
     expect(
       diffRunNotifications(

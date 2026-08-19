@@ -430,6 +430,13 @@ describe('SubagentBlock', () => {
       '[aria-label="Open Review the diff in a panel"]',
     );
     expect(control).not.toBeNull();
+    // The button IS the hit target — it sits beside the disclosure with no gap,
+    // so nothing around it enlarges the target. It carries the `size-6` box
+    // rather than the `size-5` one, which is the 24px minimum WCAG 2.5.8 asks
+    // for. jsdom loads no stylesheet, so what is asserted is the class the
+    // component emits, not a measured box: an equivalent spelling (`h-6 w-6`)
+    // would fail this while satisfying the guideline.
+    expect(control?.className).toContain('size-6');
 
     act(() =>
       control?.dispatchEvent(new MouseEvent('click', { bubbles: true })),

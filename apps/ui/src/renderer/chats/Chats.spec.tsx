@@ -1367,6 +1367,40 @@ describe('Chats — the system notifications a thread earns', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it('says nothing when a delegate lease hands a settled status BACK', async () => {
+    // A delegate's off-turn rows put the run back to `running` under a lease;
+    // when the lease expires the daemon hands the previous status back. That is
+    // a second non-terminal→terminal crossing for a turn that ended minutes
+    // ago, so announced as an ordinary settle it earns a fresh banner and a
+    // fresh unseen mark for an ending the user has already seen.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The lease takes the badge…
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'running',
+        activity: 'still working',
+      });
+    });
+    notify.mockClear();
+
+    // …and hands it back when the delegate goes quiet.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        restored: true,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('does not word a wordless settle from the PREVIOUS turn’s answer', async () => {
     // The other half of the same report — "нотификация с последним
     // сообщением". The client keeps the last sentence it was given, so a
@@ -6602,8 +6636,61 @@ describe('Chats — the open thread lays its composer out differently', () => {
     });
 
     expect(window.geniro.pullBranch).toHaveBeenCalledWith('/proj');
-    // A pull that worked clears the strip: the branch is current and the work
-    // is back, so the sentence that sent the user here describes nothing.
+    // The pull exists to unblock a SWITCH, so the switch is retried — and this
+    // mock refuses it again, because the pull put the same uncommitted work
+    // back. The strip therefore STAYS.
+    //
+    // Clearing it on a successful pull is what got fixed: the pull
+    // fast-forwards the branch the user is LEAVING, so re-selecting the target
+    // was refused identically while the sentence explaining why had vanished —
+    // which reads as though the switch went through.
+    expect(window.geniro.switchBranch).toHaveBeenCalledTimes(2);
+    const after = container.querySelector('[data-tone]');
+    expect(after?.getAttribute('data-tone')).toBe('warning');
+    expect(after?.textContent).toContain('Uncommitted changes in this folder');
+  });
+
+  it('clears the strip when the pull DOES unblock the switch', async () => {
+    // The other half of the retry, and the case the offer promises: once the
+    // refusal is gone the switch lands, and only then is the sentence that sent
+    // the user here describing nothing.
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: true,
+    });
+    window.geniro.switchBranch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        branch: 'main',
+        error: 'Uncommitted changes in this folder — the branch stays put',
+        dirty: true,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        branch: 'dev',
+        error: null,
+        dirty: false,
+      });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const branch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
+    await pickMenuRow(container, branch, 'dev');
+    expect(container.querySelector('[data-tone]')).not.toBeNull();
+
+    const pull = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Pull latest',
+    );
+    await act(async () => {
+      pull?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.switchBranch).toHaveBeenCalledTimes(2);
     expect(container.querySelector('[data-tone]')).toBeNull();
   });
 

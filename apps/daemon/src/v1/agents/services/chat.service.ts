@@ -45,7 +45,7 @@ import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
-import { writeRunStatus } from '../utils/run-status';
+import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -200,6 +200,46 @@ export class ChatService {
   >();
 
   /**
+   * Runs whose lease is being TAKEN right now — claimed synchronously, before
+   * the read that decides whether to take it.
+   *
+   * The map alone cannot express this. Off-turn events are dispatched
+   * fire-and-forget, so two delegate rows parsed from one stdout chunk run
+   * {@link leaseOnDelegateRow} concurrently: both find the map empty, both
+   * `await` the run, and the second `set` overwrites the first entry —
+   * orphaning a timer nothing can refresh or clear, which then hands the badge
+   * back mid-work five minutes later however many rows kept arriving. Claiming
+   * the key before the first `await` is what makes the second caller see the
+   * lease that is on its way, the same single-flight discipline
+   * `EffortsService`/`SkillsService` use for their reads.
+   *
+   * {@link clearDelegateLease} drops a claim as well as a lease, so a real turn
+   * taking the badge over cancels one that has not landed yet — otherwise the
+   * in-flight caller would install a lease over the top of it.
+   *
+   * A TOKEN per acquisition rather than a bare run id, because presence alone
+   * cannot answer "is this still MY claim". A takeover between one caller's
+   * read and its install drops that claim, and a later row may have claimed the
+   * key again in the meantime — so the resuming caller has to compare identity,
+   * or it reads the newcomer's claim as its own, installs over the turn that
+   * just took the badge, and leaves `offTurnRuns` latched on a run a real turn
+   * owns.
+   */
+  private readonly leaseClaims = new Map<string, symbol>();
+
+  /**
+   * Runs whose off-turn `running` flip is in flight — the same claim, for
+   * {@link restatusAfterOffTurnSignal}.
+   *
+   * Separate from {@link leaseClaims} because the two decide different things:
+   * a delegate's row takes a lease with an expiry, a main-thread delta takes
+   * the latch that a terminal event ends. Sharing one set would let a delta in
+   * flight swallow a delegate row's lease, leaving the latch on with nothing to
+   * take it down.
+   */
+  private readonly offTurnSignalClaims = new Set<string>();
+
+  /**
    * Per run, the delegates the CLI has told us are FINISHED — by launching
    * tool-call id, the same key their block is drawn under.
    *
@@ -336,35 +376,17 @@ export class ChatService {
     em: EntityManager,
     runId: string,
     status: RunStatus,
-    activity: string | null = null,
-    summary: string | null = null,
-    housekeeping = false,
+    announce: RunStatusAnnounce = {},
   ): Promise<void> {
     await writeRunStatus(
       { runDao: this.runDao, bus: this.bus },
       em,
       runId,
       status,
-      activity,
-      summary,
-      housekeeping,
+      announce,
     );
   }
 
-  /**
-   * Announce what a run is DOING, without touching its status.
-   *
-   * "running" alone cannot tell an agent that is working from one parked on a
-   * question nobody has answered — which is the whole of the reported
-   * complaint about the badge.
-   *
-   * `status: null` is what makes "without touching its status" true. This
-   * fires from inside a turn's event stream, on every tool call, and never
-   * reads the run — so the `'running'` it used to send was a guess, and the
-   * client wrote that guess onto the row. One straggler event arriving after a
-   * cancel or a terminal write therefore flipped the badge back to running and
-   * left it there, with nothing announcing again to correct it.
-   */
   private announceActivity(runId: string, activity: string | null): void {
     this.bus.publishRunStatus({ runId, status: null, activity });
   }
@@ -466,7 +488,11 @@ export class ChatService {
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
-    this.assertEffortSupported(input.agentKind, input.effort ?? null);
+    this.assertEffortSupported(
+      input.agentKind,
+      input.effort ?? null,
+      input.model ?? null,
+    );
     // Canonicalized HERE, at the one moment the value is chosen, so the row
     // holds the path that was actually checked — the same contract `cwd` above
     // has. Each turn re-resolves it anyway (a directory can be deleted between
@@ -637,7 +663,14 @@ export class ChatService {
       this.assertApprovalSupported(run.agentKind, patch.approval);
     }
     if (patch.effort !== undefined) {
-      this.assertEffortSupported(run.agentKind, patch.effort);
+      // The model this patch LEAVES the run on — its own if it is changing one,
+      // otherwise the run's. Checking against the old model would refuse a level
+      // that only the incoming one offers.
+      this.assertEffortSupported(
+        run.agentKind,
+        patch.effort,
+        patch.model !== undefined ? patch.model : run.model,
+      );
     }
     const changes = {
       ...(patch.approval !== undefined ? { approval: patch.approval } : {}),
@@ -785,11 +818,18 @@ export class ChatService {
   private assertEffortSupported(
     agentKind: AgentKind | null,
     effort: string | null,
+    /**
+     * The model this run will actually use, when one is named. It is what makes
+     * the refusal exact for a CLI whose levels belong to the model rather than
+     * to the binary — see {@link EffortsService.accepts}, which consults only a
+     * listing already held so this stays off the request's critical path.
+     */
+    model: string | null = null,
   ): void {
     if (effort === null || agentKind === null) {
       return;
     }
-    if (!this.efforts.accepts(agentKind, effort)) {
+    if (!this.efforts.accepts(agentKind, effort, model)) {
       throw new BadRequestException(
         'EFFORT_UNSUPPORTED',
         `${agentKind} does not accept the reasoning effort '${effort}'`,
@@ -1305,7 +1345,9 @@ export class ChatService {
       return;
     }
     this.offTurnRuns.add(runId);
-    await this.setRunStatus(em, runId, 'running', offTurnActivity(event));
+    await this.setRunStatus(em, runId, 'running', {
+      activity: offTurnActivity(event),
+    });
   }
 
   /**
@@ -1340,22 +1382,24 @@ export class ChatService {
     runId: string,
     event: AgentEvent,
   ): Promise<void> {
-    if (this.offTurnRuns.has(runId)) {
+    if (this.offTurnRuns.has(runId) || this.offTurnSignalClaims.has(runId)) {
       return;
     }
-    const run = await this.runDao.getById(runId);
-    // A cancelled run stays cancelled — Stop is final, exactly as it is for an
-    // off-turn row — and a `running` one is somebody else's to describe.
-    if (!run || run.status === 'cancelled' || run.status === 'running') {
-      return;
+    this.offTurnSignalClaims.add(runId);
+    try {
+      const run = await this.runDao.getById(runId);
+      // A cancelled run stays cancelled — Stop is final, exactly as it is for an
+      // off-turn row — and a `running` one is somebody else's to describe.
+      if (!run || run.status === 'cancelled' || run.status === 'running') {
+        return;
+      }
+      this.offTurnRuns.add(runId);
+      await this.setRunStatus(this.em.fork(), runId, 'running', {
+        activity: offTurnActivity(event),
+      });
+    } finally {
+      this.offTurnSignalClaims.delete(runId);
     }
-    this.offTurnRuns.add(runId);
-    await this.setRunStatus(
-      this.em.fork(),
-      runId,
-      'running',
-      offTurnActivity(event),
-    );
   }
 
   /**
@@ -1402,22 +1446,49 @@ export class ChatService {
       held.timer.refresh();
       return;
     }
-    const run = await this.runDao.getById(runId);
-    // Same two exemptions as every other off-turn restate: Stop is final, and a
-    // `running` run is somebody else's to describe — either a real turn owns
-    // it, or the main thread's own continuation already flipped it, and that
-    // one settles itself.
-    if (!run || run.status === 'cancelled' || run.status === 'running') {
+    if (this.leaseClaims.has(runId)) {
+      // A lease for this run is being taken as this row arrives, so the row
+      // that started it covers this one too — and there is no timer to renew
+      // yet. See {@link leaseClaims}.
       return;
     }
-    const restoreTo = run.status;
-    const timer = setTimeout(() => {
-      void this.expireDelegateLease(runId);
-    }, DELEGATE_ROW_LEASE_MS);
-    timer.unref?.();
-    this.delegateLeases.set(runId, { timer, restoreTo });
-    this.offTurnRuns.add(runId);
-    await this.setRunStatus(this.em.fork(), runId, 'running', 'still working');
+    const claim = Symbol('delegate-lease');
+    this.leaseClaims.set(runId, claim);
+    try {
+      const run = await this.runDao.getById(runId);
+      // Same two exemptions as every other off-turn restate: Stop is final, and
+      // a `running` run is somebody else's to describe — either a real turn owns
+      // it, or the main thread's own continuation already flipped it, and that
+      // one settles itself.
+      if (!run || run.status === 'cancelled' || run.status === 'running') {
+        return;
+      }
+      if (this.leaseClaims.get(runId) !== claim) {
+        // Something took the badge over while the run was being read, and said
+        // so by dropping this claim. Installing the lease now would take it
+        // back — and the key may already belong to a later acquisition, which
+        // is why identity is compared rather than presence.
+        return;
+      }
+      const restoreTo = run.status;
+      const timer = setTimeout(() => {
+        void this.expireDelegateLease(runId);
+      }, DELEGATE_ROW_LEASE_MS);
+      timer.unref?.();
+      this.delegateLeases.set(runId, { timer, restoreTo });
+      this.offTurnRuns.add(runId);
+      await this.setRunStatus(this.em.fork(), runId, 'running', {
+        activity: 'still working',
+      });
+    } finally {
+      // Only ever our OWN claim: the read can throw (the caller swallows it),
+      // and a stranded claim would send every later delegate row home at the
+      // guard above — no lease ever taken again, the badge reading `completed`
+      // while sub-agents fill, which is the defect the lease exists to remove.
+      if (this.leaseClaims.get(runId) === claim) {
+        this.leaseClaims.delete(runId);
+      }
+    }
   }
 
   /**
@@ -1442,7 +1513,13 @@ export class ChatService {
       if (run?.status !== 'running') {
         return;
       }
-      await this.setRunStatus(this.em.fork(), runId, held.restoreTo);
+      // A RESTORE, not an ending: this hands back the status the lease took
+      // over. Announced as an ordinary settle it is a second
+      // non-terminal→terminal crossing for a turn that ended minutes ago, which
+      // the client reads as a fresh ending.
+      await this.setRunStatus(this.em.fork(), runId, held.restoreTo, {
+        restored: true,
+      });
     } catch (err: unknown) {
       this.logger.error(
         `run ${runId} delegate-lease expiry failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1457,6 +1534,9 @@ export class ChatService {
       clearTimeout(held.timer);
       this.delegateLeases.delete(runId);
     }
+    // A lease that has not landed yet is taken over too: the claim is dropped
+    // here and its holder compares identity after its read.
+    this.leaseClaims.delete(runId);
   }
 
   /**
@@ -1697,7 +1777,7 @@ export class ChatService {
        * Anything besides the compaction summary — an assistant message, a tool
        * call, a notice of its own — is work and takes the exemption away.
        *
-       * TWIN RULE: `apps/ui/src/renderer/chats/compaction-payload.ts`'s
+       * TWIN PARSER: `apps/ui/src/renderer/chats/compaction-payload.ts`'s
        * `compactionOnlyTurnEnds` decides the same thing from the persisted
        * items, to drop the redundant `✓ done` row under a compaction. The two
        * readings must agree — a turn the transcript treats as pure
@@ -2353,14 +2433,10 @@ export class ChatService {
               // A failure speaks for itself; a completion is summarised by the
               // agent's own closing words, which is the only text that answers
               // "what happened" without opening the thread.
-              await this.setRunStatus(
-                em,
-                runId,
-                status,
-                null,
-                event.type === 'error' ? event.message : lastAgentText,
-                compactionRows > 0 && workRows === 0,
-              );
+              await this.setRunStatus(em, runId, status, {
+                summary: event.type === 'error' ? event.message : lastAgentText,
+                housekeeping: compactionRows > 0 && workRows === 0,
+              });
               // Spent — the tally describes ONE turn, so anything arriving
               // after this ending is counted from zero rather than inheriting
               // a compaction that belonged to the turn before it.

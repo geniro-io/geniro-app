@@ -274,4 +274,28 @@ describe('parseRunStatus — the run_status twin', () => {
       }),
     ).not.toHaveProperty('housekeeping');
   });
+
+  it('reads the restored marker, and only when it is true', () => {
+    // A delegate lease expiring hands an already-settled status back. It has to
+    // arrive distinguishable from a fresh ending, or the client fires a second
+    // `turn ended` banner for a turn that ended minutes ago.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        restored: true,
+      }),
+    ).toMatchObject({ restored: true });
+    // A real settle says nothing here rather than `false`, and a daemon that
+    // predates the field is the same case.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        summary: 'done',
+      }),
+    ).not.toHaveProperty('restored');
+  });
 });

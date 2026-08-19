@@ -535,17 +535,23 @@ export function Chats({
     ReadonlyMap<string, string | null>
   >(new Map());
   /**
-   * The runs whose LAST settle the daemon called housekeeping — a `/compact`
-   * turn and nothing else.
+   * The runs whose LAST settle is not worth interrupting the user for.
+   *
+   * Two daemon flags feed it and they are different statements: `housekeeping`
+   * says the turn produced nothing but the CLI's own compaction, `restored`
+   * says the status is being handed BACK — a delegate lease expiring over a run
+   * that had already settled, which crosses non-terminal→terminal a second time
+   * for a turn that ended minutes ago. Both would otherwise earn a banner and a
+   * sidebar mark for an ending the user has already seen.
    *
    * A set beside the summaries and updated from the same announce, because it
    * describes the same moment: whether that ending was worth interrupting the
    * user for. Both notification surfaces read it, so the banner and the sidebar
    * mark cannot disagree about one turn.
    */
-  const [housekeepingSettles, setHousekeepingSettles] = useState<
-    ReadonlySet<string>
-  >(new Set());
+  const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   // Messages written while the agent was still working — sent automatically,
   // one per settled turn, in order (Claude Code / Cursor-style queueing).
   // Keyed PER RUN and kept for the whole session: switching transcripts or
@@ -1714,8 +1720,8 @@ export function Chats({
       // an activity announce and must leave the reading alone, while a settle
       // that did real work clears the flag its predecessor may have set.
       if (event.status !== null && isSettledRunStatus(event.status)) {
-        const quiet = event.housekeeping === true;
-        setHousekeepingSettles((prev) => {
+        const quiet = event.housekeeping === true || event.restored === true;
+        setQuietSettles((prev) => {
           if (prev.has(event.runId) === quiet) {
             return prev;
           }
@@ -4224,7 +4230,7 @@ export function Chats({
     labelOf: notificationLabel,
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
-    housekeeping: housekeepingSettles,
+    quiet: quietSettles,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
@@ -4234,7 +4240,7 @@ export function Chats({
   const { unseen, markSeen } = useUnseenRuns({
     runs,
     statusOf: sidebarRunStatus,
-    housekeeping: housekeepingSettles,
+    quiet: quietSettles,
     activeRunId,
   });
   // Opening the thread IS the acknowledgement. Keyed on the open chat rather

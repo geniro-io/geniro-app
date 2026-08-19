@@ -107,6 +107,18 @@ export interface RunStatusEvent {
    * are never loaded here, and that is precisely the chat a banner is for.
    */
   housekeeping?: boolean;
+  /**
+   * True when this status is being handed BACK rather than newly reached — the
+   * delegate lease expiring over a run that had already settled. Absent on
+   * every other announce.
+   *
+   * Read alongside `housekeeping` and for the same reason: both mark a settle
+   * that is not news. They stay separate fields because they answer different
+   * questions — that one is about what the turn WAS, this is about whether the
+   * status changed at all. A restore also carries no `summary`, so the sentence
+   * from the real settle is left standing rather than blanked.
+   */
+  restored?: boolean;
 }
 
 /**
@@ -126,6 +138,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     holdingFor,
     summary,
     housekeeping,
+    restored,
   } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
@@ -172,6 +185,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
             typeof summary === 'string' && summary !== '' ? summary : null,
         }),
     ...(housekeeping === true ? { housekeeping: true } : {}),
+    ...(restored === true ? { restored: true } : {}),
   };
 }
 

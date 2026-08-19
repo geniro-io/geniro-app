@@ -1,4 +1,4 @@
-import type { UpdateState } from '../../shared/contracts';
+import { UPDATE_COMMAND, type UpdateState } from '../../shared/contracts';
 
 /**
  * One sentence for an update state, shared by the strip and the Settings row.
@@ -37,7 +37,15 @@ export type FooterUpdate =
   /** Installed and waiting — pressing it restarts into the new bundle. */
   | { kind: 'restart'; label: string; title: string }
   /** An install the user STARTED and which failed; pressing it tries again. */
-  | { kind: 'error'; label: string; title: string };
+  | { kind: 'error'; label: string; title: string }
+  /**
+   * An offer this install CANNOT apply — a Homebrew install, a translocated
+   * quarantine copy. Not pressable: `title` carries the command that DOES
+   * work rather than a button that would fail at the last step. Without this
+   * kind such a copy fell all the way to `none` and lost its only remaining
+   * channel besides opening Settings.
+   */
+  | { kind: 'readout'; label: string; title: string };
 
 export function footerUpdate(
   state: UpdateState | null,
@@ -58,16 +66,22 @@ export function footerUpdate(
     case 'available':
       // `canInstall` is main's answer about THIS install — a read-only volume,
       // another account's copy, a translocated quarantine copy. Where it is
-      // false the update is real but this app cannot apply it, so the row shows
-      // nothing and Settings carries the `brew` sentence instead. An affordance
-      // that cannot work is worse than none in a row this small.
+      // false the update is real but this app cannot apply it, so the row is a
+      // non-pressable readout naming the command that DOES work rather than a
+      // button that would fail at the last step.
       return state.canInstall
         ? {
             kind: 'install',
             label: state.version ?? 'update',
             title: `Update to Geniro ${state.version}`,
           }
-        : { kind: 'none' };
+        : {
+            kind: 'readout',
+            label: state.version ?? 'update',
+            // main's own words when it has them; UPDATE_COMMAND covers the
+            // one case main sent none, so this can never fall back to silence.
+            title: state.message ?? `Update with: ${UPDATE_COMMAND}`,
+          };
     case 'downloading':
       return {
         kind: 'progress',

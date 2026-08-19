@@ -103,6 +103,15 @@ export function compactionDetail(facts: CompactionFacts): string | undefined {
  *
  * Run-level rows only (`nodeId === null`) — a workflow node's own turn end is
  * a different statement, and its rows are not this turn's content.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/services/chat.service.ts` decides the
+ * same thing LIVE, from the events of the turn it is running, as its
+ * `compactionRows`/`workRows` tally behind `RunStatusEvent.housekeeping` — which
+ * is what suppresses the system notification for the same turn. This side reads
+ * the persisted items instead, because a reopened chat has only those. The two
+ * readings must agree: a turn the transcript treats as pure housekeeping while
+ * the sidebar marks it unseen is the app contradicting itself about one turn, so
+ * a change to what counts as work belongs on both sides or neither.
  */
 export function compactionOnlyTurnEnds(
   items: readonly ChatItem[],

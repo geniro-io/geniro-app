@@ -339,7 +339,7 @@ export const SubagentBlock = memo(function SubagentBlock({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-5 shrink-0 text-muted-foreground"
+              className="size-6 shrink-0 text-muted-foreground"
               aria-label={`Open ${title} in a panel`}
               title="Open this sub-agent's conversation"
               onClick={() => openDetail(block)}>

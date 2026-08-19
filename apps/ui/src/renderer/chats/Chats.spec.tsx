@@ -423,7 +423,13 @@ beforeEach(() => {
     }),
     switchBranch: vi
       .fn()
-      .mockResolvedValue({ ok: true, branch: null, error: null }),
+      .mockResolvedValue({ ok: true, branch: null, error: null, dirty: false }),
+    pullBranch: vi.fn().mockResolvedValue({
+      ok: true,
+      branch: 'main',
+      error: null,
+      stashLeft: null,
+    }),
     // Both CLIs present by default; a test opts into a missing one to check
     // that the picker refuses an agent this machine cannot run.
     detectClis: vi.fn().mockResolvedValue([
@@ -483,17 +489,24 @@ beforeEach(() => {
   ]);
   // Likewise the effort rows — claude's probe-verified levels; cursor-agent
   // answers with an empty list, which is what makes its chip disappear.
+  //
+  // A LISTING rather than a bare array, because the levels turned out to be a
+  // property of the MODEL: the reason rides beside them so an empty list can
+  // say which model has no effort axis instead of the chip silently vanishing.
   agentsApi.listAgentEfforts
     .mockReset()
     .mockImplementation(({ agent }: { agent: string }) =>
       Promise.resolve(
         agent === 'claude'
-          ? [
-              { id: 'low', label: 'low' },
-              { id: 'high', label: 'high' },
-              { id: 'ultracode', label: 'ultracode' },
-            ]
-          : [],
+          ? {
+              efforts: [
+                { id: 'low', label: 'low' },
+                { id: 'high', label: 'high' },
+                { id: 'ultracode', label: 'ultracode' },
+              ],
+              unavailableReason: null,
+            }
+          : { efforts: [], unavailableReason: null },
       ),
     );
   workflowApi.listWorkflows.mockReset().mockResolvedValue([]);
@@ -801,13 +814,28 @@ describe('Chats transcript auto-scroll', () => {
       Object.defineProperty(event, 'clipboardData', {
         value: { files: [file] },
       });
+      const before = container.querySelectorAll(
+        'button[aria-label^="Remove "]',
+      ).length;
       await act(async () => {
         textarea.dispatchEvent(event);
       });
-      // The staging reads the file as base64, so the strip appears a tick later.
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
+      // The staging reads the file as base64, so the strip appears LATER —
+      // wait for the strip itself, not for a fixed number of ticks. One
+      // macrotask is how long a FileReader takes on an idle machine and not a
+      // guarantee: under load this test failed once with the row still absent,
+      // and a wait tuned to a quiet machine is a flake waiting for a busy one.
+      for (let tick = 0; tick < 50; tick += 1) {
+        if (
+          container.querySelectorAll('button[aria-label^="Remove "]').length >
+          before
+        ) {
+          break;
+        }
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        });
+      }
     };
     const stagedImages = (): string[] =>
       [...container.querySelectorAll('button[aria-label^="Remove "]')].map(
@@ -1317,6 +1345,71 @@ describe('Chats — the system notifications a thread earns', () => {
 
     // Opening the app must not fire a banner per conversation in the history.
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('says nothing about a background turn that only COMPACTED', async () => {
+    // The reported defect: "когда я делаю компакт, мне отправляется
+    // нотификация с последним сообщением … не нужно нотификации, когда компакт
+    // сработает". `/compact` is an ordinary turn on the wire, so it settled
+    // the run and earned a banner.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: null,
+        housekeeping: true,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('does not word a wordless settle from the PREVIOUS turn’s answer', async () => {
+    // The other half of the same report — "нотификация с последним
+    // сообщением". The client keeps the last sentence it was given, so a
+    // settle that said nothing has to say so out loud: with the null dropped
+    // from the wire, this banner read back the earlier answer as though the
+    // turn that just ended had produced it.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: 'Fixed the parser — 3 tests green.',
+      });
+    });
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'Fixed the parser — 3 tests green.' }),
+    );
+
+    notify.mockClear();
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        summary: null,
+      });
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r2', body: 'The turn finished.' }),
+    );
   });
 
   it('says nothing about a turn the user STOPPED', async () => {
@@ -2118,6 +2211,60 @@ describe('Chats — what the transcript says the agent is doing', () => {
 
     expect(container.textContent).toContain('running Read');
     expect(container.textContent).not.toContain('Working…');
+  });
+});
+
+describe('Chats — an answered question keeps the answer on screen', () => {
+  it('reads the answer back onto the card that asked it', async () => {
+    // "hehe i should also see my answer". The card showed `✓ answered` alone,
+    // and there was no second place to look: a verdict row whose card is in the
+    // loaded window is suppressed on the grounds that the card is showing the
+    // answer — which it was not. So the whole path is what this pins, from the
+    // stored payload through `collectVerdicts` to the card, because the card's
+    // own spec passes with the wiring here deleted.
+    api.listRunItems.mockResolvedValue([
+      {
+        id: 'r1-ask-0',
+        runId: 'r1',
+        nodeId: null,
+        seq: 0,
+        kind: 'approval_request' as const,
+        role: null,
+        payload: {
+          id: 'req-q',
+          toolName: 'AskUserQuestion',
+          input: {
+            questions: [
+              {
+                question: 'Which project do we update?',
+                options: [{ label: 'Linear' }],
+              },
+            ],
+          },
+        },
+        createdAt: 'now',
+      },
+      {
+        id: 'r1-verdict-1',
+        runId: 'r1',
+        nodeId: null,
+        seq: 1,
+        kind: 'approval_verdict' as const,
+        role: null,
+        payload: {
+          id: 'req-q',
+          allow: true,
+          answer: 'Linear — and move MAN-4177 with it',
+        },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.textContent).toContain('✓ answered');
+    expect(container.textContent).toContain('and move MAN-4177 with it');
   });
 });
 
@@ -3121,11 +3268,17 @@ describe('Chats composer memory & suggestions', () => {
       ({ agent }: { agent: string }) =>
         Promise.resolve(
           agent === 'cursor-agent'
-            ? [
-                { id: 'low', label: 'low' },
-                { id: 'xhigh', label: 'xhigh' },
-              ]
-            : [{ id: 'high', label: 'high' }],
+            ? {
+                efforts: [
+                  { id: 'low', label: 'low' },
+                  { id: 'xhigh', label: 'xhigh' },
+                ],
+                unavailableReason: null,
+              }
+            : {
+                efforts: [{ id: 'high', label: 'high' }],
+                unavailableReason: null,
+              },
         ),
     );
     const { client } = makeClient();
@@ -3137,6 +3290,60 @@ describe('Chats composer memory & suggestions', () => {
     expect(trigger).not.toBeUndefined();
     await pickMenuRow(container, trigger!, 'xhigh');
     expect(trigger!.textContent).toContain('xhigh');
+  });
+
+  it('asks for the effort levels of the MODEL that is chosen, and re-asks on a switch', async () => {
+    // The report: "we should not show Max Effort for a model that has no Max —
+    // we need a map, efforts per model". Measured on cursor-agent
+    // 2026.08.11-e8db854: `claude-opus-5` offers `low|medium|high|xhigh|max`
+    // and `grok-4.6` the same minus `max`, so a CLI-wide list is a list some
+    // models refuse. This pins the whole path — the model reaching the query,
+    // and the switch invalidating the cached answer rather than serving the
+    // previous model's levels.
+    agentsApi.listAgentModels.mockResolvedValue([
+      { id: 'grok-4.6', label: 'Cursor Grok 4.6', source: 'cli' },
+      { id: 'claude-opus-5', label: 'Claude Opus 5', source: 'cli' },
+    ]);
+    agentsApi.listAgentEfforts.mockImplementation(
+      ({ model }: { model?: string }) =>
+        Promise.resolve({
+          efforts:
+            model === 'grok-4.6'
+              ? [
+                  { id: 'high', label: 'high' },
+                  { id: 'xhigh', label: 'xhigh' },
+                ]
+              : [
+                  { id: 'high', label: 'high' },
+                  { id: 'xhigh', label: 'xhigh' },
+                  { id: 'max', label: 'max' },
+                ],
+          unavailableReason: null,
+        }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
+
+    await pickMenuRow(container, modelTrigger(container)!, 'Cursor Grok 4.6');
+    // The model rode the query — without it the daemon answers with the union.
+    expect(agentsApi.listAgentEfforts).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'grok-4.6' }),
+    );
+    // …and `max` is not on offer, which is the whole report.
+    expect(await menuRows(container, effortTrigger(container)!)).toEqual([
+      'high',
+      'xhigh',
+      'default effort',
+    ]);
+
+    await pickMenuRow(container, modelTrigger(container)!, 'Claude Opus 5');
+
+    // A different model is a different question: the cached Grok answer must
+    // not be served for it, or the map is only ever one model deep.
+    expect(await menuRows(container, effortTrigger(container)!)).toContain(
+      'max',
+    );
   });
 
   it('lists what the DAEMON reports for whichever CLI is selected', async () => {
@@ -5293,14 +5500,9 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
     await clickRun(container, 'Big team');
 
-    // The header carries NO per-agent chips — only the one generic toggle.
+    // The header carries NO per-agent chips — the panel is the agents
+    // surface, and it stands beside the chat with nothing to press first.
     expect(container.querySelector('button[aria-label^="Agent "]')).toBeNull();
-    const toggle = container.querySelector(
-      'button[aria-label="Open side panel"]',
-    )!;
-    await act(async () => {
-      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
 
     // Two parallel callee turns for Worker A + a settled turn with usage.
     await act(async () => {
@@ -5416,14 +5618,14 @@ describe('Chats sidebar list', () => {
       ),
     ).not.toBeNull();
 
-    // ✕ closes the panel.
-    await act(async () => {
-      panel
-        .querySelector('button[aria-label="Close agents panel"]')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    // And there is no ✕ to close it with: the panel is part of the chat
+    // screen, so a control that could remove it would leave nothing to bring
+    // it back — the header's toggle went with it.
     expect(
-      container.querySelector('aside[aria-label="Run agents"]'),
+      panel.querySelector('button[aria-label="Close agents panel"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Open side panel"]'),
     ).toBeNull();
   });
 
@@ -5866,15 +6068,10 @@ describe('Chats — signing a server in', () => {
     pending: false,
   };
 
-  /** Open the panel, open the MCP list, and unfold the signed-out group. */
+  /** Open the MCP list in the always-present panel, and unfold the signed-out group. */
   async function reachSignIn(
     container: HTMLElement,
   ): Promise<HTMLButtonElement> {
-    await act(async () => {
-      container
-        .querySelector('button[aria-label="Open side panel"]')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
     await act(async () => {
       container
         .querySelector<HTMLButtonElement>(
@@ -5985,12 +6182,6 @@ describe('Chats — signing a server in', () => {
     const container = await mount(client);
     await clickRun(container, 'First chat');
 
-    await act(async () => {
-      container
-        .querySelector('button[aria-label="Open side panel"]')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
     expect(
       [...container.querySelectorAll('button')].some(
         (button) => button.textContent?.trim() === 'Sign in',
@@ -6093,12 +6284,15 @@ describe('Chats — the MCP read waits to be asked, on every chat', () => {
     status: 'completed',
   });
 
-  /** Open the run's Agents panel. */
+  /**
+   * The Agents panel needs no opening — it stands beside every chat. Kept as a
+   * no-op await so the MCP tests below still read as a sequence of steps.
+   */
   async function openAgentsPanel(container: HTMLElement): Promise<void> {
     await act(async () => {
-      container
-        .querySelector('button[aria-label="Open side panel"]')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(
+        container.querySelector('aside[aria-label="Run agents"]'),
+      ).not.toBeNull();
     });
   }
 
@@ -6247,6 +6441,106 @@ describe('Chats — the open thread lays its composer out differently', () => {
     expect(stop, 'stop button').not.toBeNull();
     expect(folder, 'folder chip').toBeDefined();
     expect(order(container, folder)).toBeLessThan(order(container, stop));
+  });
+
+  it('answers a branch switch blocked by uncommitted work with a WARNING and a Pull', async () => {
+    // The reported ask: the guard refusing to move the branch is not a failure,
+    // and the app can do something about it — bring the branch up to date and
+    // keep the work. Red said the opposite, and offered nothing.
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: true,
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error: 'Uncommitted changes in this folder — the branch stays put',
+      dirty: true,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const branch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
+    await pickMenuRow(container, branch, 'dev');
+
+    const strip = container.querySelector('[data-tone]');
+    expect(strip?.getAttribute('data-tone')).toBe('warning');
+    expect(strip?.textContent).toContain('Uncommitted changes in this folder');
+    // The dismiss control names the tone too — "Dismiss error" on a strip that
+    // reports no error is a small lie a screen-reader user cannot check.
+    expect(
+      container.querySelector('button[aria-label="Dismiss warning"]'),
+    ).not.toBeNull();
+    const pull = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Pull latest',
+    );
+    expect(pull).toBeDefined();
+    // A clickable STRING, not a bordered button: the strip is one sentence the
+    // app is saying, and a second bordered control beside the composer's own
+    // reads as competing with it rather than as the rest of that sentence.
+    expect(pull?.className).toContain('underline');
+    // `border border-border bg-card` is the outline variant's whole signature.
+    expect(pull?.className).not.toContain('border-border');
+    expect(pull?.className).not.toContain('bg-card');
+
+    await act(async () => {
+      pull?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(window.geniro.pullBranch).toHaveBeenCalledWith('/proj');
+    // A pull that worked clears the strip: the branch is current and the work
+    // is back, so the sentence that sent the user here describes nothing.
+    expect(container.querySelector('[data-tone]')).toBeNull();
+  });
+
+  it('reports a refused pull as a real error, with no second Pull to press', async () => {
+    // The other half. `--ff-only` refuses a diverged branch, and that IS a dead
+    // end for this button — offering it again would be a control that has just
+    // been shown not to work, and keeping the amber would call a failure a
+    // situation.
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: true,
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error: 'Uncommitted changes in this folder — the branch stays put',
+      dirty: true,
+    });
+    window.geniro.pullBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error: 'fatal: Not possible to fast-forward, aborting.',
+      stashLeft: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const branch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
+    await pickMenuRow(container, branch, 'dev');
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((button) => button.textContent?.trim() === 'Pull latest')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const strip = container.querySelector('[data-tone]');
+    expect(strip?.getAttribute('data-tone')).toBe('error');
+    expect(strip?.textContent).toContain('fast-forward');
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Pull latest',
+      ),
+    ).toBe(false);
   });
 
   it('shows no branch control once a thread is open, even in a real repo', async () => {
@@ -6815,13 +7109,6 @@ describe('Chats — background sub-agents', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    const openPanel = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open side panel"]',
-    );
-    await act(async () => {
-      openPanel?.click();
-    });
-
     const panel = container.querySelector('aside[aria-label="Run agents"]');
     expect(panel).not.toBeNull();
     // The chat's agent now has TWO threads — its own conversation and the
@@ -6857,13 +7144,6 @@ describe('Chats — background sub-agents', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Open side panel"]',
-        )
-        ?.click();
-    });
     const panel = container.querySelector('aside[aria-label="Run agents"]');
     await act(async () => {
       panel
@@ -7594,7 +7874,7 @@ describe('Chats — the pages a thread publishes', () => {
   const panel = (container: HTMLElement): HTMLElement | null =>
     container.querySelector<HTMLElement>('[aria-label="Artifacts"]');
 
-  it('opens the panel on a page published WHILE you are looking', async () => {
+  it('lists a page the moment it is published', async () => {
     const { client, emitItem } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -7612,9 +7892,12 @@ describe('Chats — the pages a thread publishes', () => {
     expect(section!.querySelector('a')?.getAttribute('href')).toBe(URL_A);
   });
 
-  it('does NOT spring open on a chat that already had one', async () => {
-    // A replay carries every past turn's rows, so without a baseline the panel
-    // would open itself every time an old thread is re-opened.
+  it('lists the pages a re-opened thread already had', async () => {
+    // The panel used to SPRING OPEN on a publish, which meant a replay — every
+    // past turn's rows at once — had to be told apart from a page arriving
+    // now. It is always open, so there is nothing to spring and nothing to
+    // tell apart: a thread that published before simply shows what it
+    // published.
     api.listRunItems.mockResolvedValue([
       msg(1, 'user', 'publish it'),
       artifactCall(2),
@@ -7625,7 +7908,9 @@ describe('Chats — the pages a thread publishes', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(panel(container)).toBeNull();
+    const section = panel(container);
+    expect(section).not.toBeNull();
+    expect(section!.textContent).toContain('Coverage Audit');
   });
 });
 

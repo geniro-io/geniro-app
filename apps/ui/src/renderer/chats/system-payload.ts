@@ -53,3 +53,25 @@ export function isInfoNotice(payload: unknown): boolean {
   const row = payload as { severity?: unknown; origin?: unknown };
   return row.severity === 'info' && row.origin !== 'cli';
 }
+
+/**
+ * True when the daemon wrote this row and said it is a DEGRADE — something the
+ * user asked for did not apply, and the turn ran anyway.
+ *
+ * The middle the two readers above leave open, and the one the report asked
+ * for: an `effort=max` the model does not offer is not information (the run is
+ * not doing what was chosen, and only the user can fix that) and it is not a
+ * failure either (the turn ran, and went on running) — so it can be neither
+ * folded into the quiet note nor left in the red panel that got it reported as
+ * "a strange error … and then it carried on working".
+ *
+ * Same `origin` guard as `isInfoNotice`, and for the same reason: relayed agent
+ * prose must not be able to pick its own chrome.
+ */
+export function isWarningNotice(payload: unknown): boolean {
+  if (payload === null || typeof payload !== 'object') {
+    return false;
+  }
+  const row = payload as { severity?: unknown; origin?: unknown };
+  return row.severity === 'warning' && row.origin !== 'cli';
+}

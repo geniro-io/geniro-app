@@ -36,8 +36,6 @@ const baseProps = {
   isWorkflow: true,
   status: 'running' as const,
   lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
-  sidePanelOpen: false,
-  onToggleSidePanel: vi.fn(),
 };
 
 describe('ChatHeader', () => {
@@ -58,26 +56,34 @@ describe('ChatHeader', () => {
     expect(el.querySelector('svg.animate-spin')).toBeNull();
   });
 
-  it('offers ONE generic side-panel toggle — no per-agent chips in the header', () => {
-    const onToggleSidePanel = vi.fn();
+  it('carries no side-panel control at all — the panel stands beside every chat', () => {
     const el = render(
-      <ChatHeader {...baseProps} onToggleSidePanel={onToggleSidePanel} />,
+      <ChatHeader
+        {...baseProps}
+        runningSubagents={2}
+        tasks={{ done: 3, total: 8 }}
+      />,
     );
     // The old agent chips must stay gone — the panel is the agents surface.
     expect(el.querySelector('button[aria-label^="Agent "]')).toBeNull();
-    const toggle = el.querySelector('button[aria-label="Open side panel"]')!;
-    act(() => {
-      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    expect(onToggleSidePanel).toHaveBeenCalledOnce();
-  });
-
-  it('labels the toggle as closing while the panel is open', () => {
-    const el = render(<ChatHeader {...baseProps} sidePanelOpen />);
+    // And so must the toggle that used to open it, in both its labels.
+    expect(el.querySelector('button[aria-label="Open side panel"]')).toBeNull();
     expect(
       el.querySelector('button[aria-label="Close side panel"]'),
-    ).not.toBeNull();
-    expect(el.querySelector('button[aria-label="Open side panel"]')).toBeNull();
+    ).toBeNull();
+    // The counts it used to carry survive it — as a readout, not a button:
+    // there is nothing left for a press to do.
+    const counts = el.querySelector('[data-slot="side-panel-counts"]')!;
+    expect(counts).not.toBeNull();
+    expect(counts.tagName).toBe('SPAN');
+    expect(counts.querySelector('button')).toBeNull();
+    expect(counts.textContent).toContain('2');
+    // The task figure names its DENOMINATOR. A lone "3" left the reader unable
+    // to tell three-of-four from three-of-forty, and it only ever shrinks — the
+    // reported "here we need to show all amount of tasks as well".
+    expect(counts.querySelector('[data-slot="open-tasks"]')?.textContent).toBe(
+      '3/8',
+    );
   });
 });
 

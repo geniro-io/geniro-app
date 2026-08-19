@@ -14,12 +14,13 @@ import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
 import { type AppView, NavRail } from './components/nav-rail';
 import { cn } from './components/ui/utils';
+import { WindowDragStrip } from './components/window-drag-strip';
 import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
 import { Onboarding } from './onboarding/Onboarding';
-import { UpdateBanner, updateBannerVisible } from './updates/update-banner';
+import { footerUpdate } from './updates/update-status';
 import { useUpdateState } from './updates/use-update-state';
 
 // Code-split the conditionally-rendered views: Graphs drags @xyflow/react +
@@ -71,13 +72,14 @@ export function App(): React.JSX.Element {
   const [reconnecting, setReconnecting] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   /**
-   * The offer the user has waved away, and whether they engaged with one.
+   * Whether the user has pressed the rail's update control this launch.
    *
-   * Per-launch and deliberately not persisted: an update declined on Tuesday
-   * should still be offered on Wednesday — the whole point of the strip is that
-   * a version behind is a state worth fixing, not a preference.
+   * The only thing that turns a failed install into something the status row
+   * reports: a background CHECK that could not reach GitHub is not a fault
+   * they asked about. There is no longer a DISMISSED version beside it — the
+   * offer lives in the status row now, at the size of the row, so there is
+   * nothing to wave away and nothing interrupting a view to be waved away from.
    */
-  const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null);
   const [updateEngaged, setUpdateEngaged] = useState(false);
   const update = useUpdateState();
   const clientRef = useRef<DaemonClient | null>(null);
@@ -222,12 +224,24 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Both of these render before the shell exists, so neither has a top row of
+  // its own to drag the window by — see `WindowDragStrip`.
   if (phase === 'loading') {
-    return <EmptyState>Loading…</EmptyState>;
+    return (
+      <>
+        <WindowDragStrip />
+        <EmptyState>Loading…</EmptyState>
+      </>
+    );
   }
 
   if (phase === 'onboarding') {
-    return <Onboarding onDone={handleOnboardingDone} />;
+    return (
+      <>
+        <WindowDragStrip />
+        <Onboarding onDone={handleOnboardingDone} />
+      </>
+    );
   }
 
   return (
@@ -237,18 +251,15 @@ export function App(): React.JSX.Element {
         onNavigate={setView}
         connected={connected}
         // The offer, resolved HERE from main's one state so the rail renders it
-        // rather than deciding it. `canInstall` is main's own answer about this
-        // install (read-only volume, another account, a translocated copy), so
-        // the button only appears where pressing it can work.
-        updateVersion={
-          update.state?.phase === 'available' && update.state.canInstall
-            ? update.state.version
-            : null
-        }
+        // rather than deciding it — including `canInstall`, main's own answer
+        // about this install (read-only volume, another account, a translocated
+        // copy), so the control only appears where pressing it can work.
+        update={footerUpdate(update.state, updateEngaged)}
         onInstallUpdate={() => {
           setUpdateEngaged(true);
           void update.install();
         }}
+        onRelaunchUpdate={() => void update.relaunch()}
         daemonVersion={daemonVersion}
         debugOpen={debugOpen}
         onToggleDebug={() => setDebugOpen((open) => !open)}
@@ -270,25 +281,12 @@ export function App(): React.JSX.Element {
             onRetry={() => void connectDaemon()}
           />
         )}
-        {/* Beside the connection strip and for the same reason — it is about
-            the app, not about whichever view is open — but BELOW it: a daemon
-            that is not answering is the more urgent of the two, and an update
-            offer must not push it off the top of the pane. */}
-        {update.state &&
-        updateBannerVisible(update.state, dismissedUpdate, updateEngaged) ? (
-          <UpdateBanner
-            state={update.state}
-            onInstall={() => {
-              setUpdateEngaged(true);
-              void update.install();
-            }}
-            onRelaunch={() => void update.relaunch()}
-            onDismiss={() => {
-              setUpdateEngaged(false);
-              setDismissedUpdate(update.state?.version ?? null);
-            }}
-          />
-        ) : null}
+        {/* No update strip here. It and the nav rail's version row were two
+            controls for one action in one window; the row is where the running
+            version is already written, so that is the one that stayed. The
+            connection banner above is NOT the same case and keeps its strip: a
+            daemon that is not answering breaks the view under it, while an
+            update is an offer with no deadline. */}
         {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Graphs. */}
         <div className={cn('min-h-0 flex-1', view !== 'chats' && 'hidden')}>

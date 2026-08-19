@@ -48,7 +48,16 @@ describe('mapClaudeMessage', () => {
       ),
     ).toEqual([
       { type: 'session', sessionId: 'sess-1' },
-      { type: 'slash_commands', commands: ['review', 'compact'] },
+      {
+        type: 'slash_commands',
+        // Names and nothing else: the field is an array of plain strings, so
+        // every entry reports a null description and the sentence beside it
+        // in the popup comes from this CLI's disk scan instead.
+        commands: [
+          { name: 'review', description: null },
+          { name: 'compact', description: null },
+        ],
+      },
     ]);
   });
 
@@ -508,6 +517,49 @@ describe('mapClaudeMessage', () => {
       type: 'turn_complete',
       stopReason: 'end_turn',
     });
+  });
+
+  it('drops a no-work result whose text is EMPTY rather than absent', () => {
+    // Reconstructed from the author's own geniro.db + debug log (2026-08-18,
+    // 2.1.234, run 4144f28e, twice in 40 minutes): `status?` was answered with
+    // `✓ done · 0s · $0.0000` and nothing above it, 2.7s after it was sent. The
+    // CLI's own session file shows the turn it ran in that window was a
+    // `<task-notification>` it had queued for itself, not the user's prompt —
+    // so the line was the absence of an answer, and `result: ""` rather than
+    // `result: null` is the only reason it was read as one.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'result',
+          is_error: false,
+          result: '',
+          stop_reason: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          total_cost_usd: 0,
+          duration_ms: 35,
+          duration_api_ms: 0,
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
+  });
+
+  it('keeps a wordless completion that did REAL work', () => {
+    // The other half of the narrowness: a turn can legitimately end with no
+    // sentence — it ran tools and stopped — and that one has token counts. Only
+    // a line reporting nothing at all is discarded.
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        is_error: false,
+        result: '',
+        stop_reason: null,
+        usage: { input_tokens: 1_200, output_tokens: 8 },
+        total_cost_usd: 0.02,
+      },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(event).toMatchObject({ type: 'turn_complete' });
   });
 
   it('maps an error result to an error event', () => {
@@ -1497,6 +1549,55 @@ describe('mapClaudeMessage — what a failed turn reports about itself', () => {
           sessionId: '99691942-8ca6-415d-a4c5-975ed3aa4b73',
           durationMs: 986,
         },
+      },
+    ]);
+  });
+
+  it('tells a turn the CLI ABORTED from one it rejected', () => {
+    // The reported failure, verbatim from the screenshot: no sentence of its
+    // own, so the row read `claude run failed (aborted_streaming)` — machine
+    // noise naming neither what happened nor what to do. The CLI's own source
+    // puts this reason in an abort family it explicitly excludes from its error
+    // family, and its own consumer logs it at ordinary level.
+    const [event] = mapClaudeMessage(
+      {
+        type: 'result',
+        is_error: true,
+        terminal_reason: 'aborted_streaming',
+        session_id: 'a2a059b3-3212-4fe5-b5a8-a08cd117fd0a',
+        duration_ms: 24322,
+        subtype: 'success',
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toMatchObject({ type: 'error' });
+    const message = (event as { message: string }).message;
+    expect(message).not.toContain('claude run failed');
+    expect(message).toContain('stopped this turn before it finished');
+    // The code is NOT dropped — it moves into the facts table, which is where a
+    // bug report reads it from.
+    expect(event).toMatchObject({ detail: { code: 'aborted_streaming' } });
+  });
+
+  it('keeps the CLI’s own sentence even when the turn was aborted', () => {
+    // Same rule as every other failure here: geniro speaks only where the CLI
+    // said nothing.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'result',
+          is_error: true,
+          terminal_reason: 'aborted_tools',
+          result: 'Streaming stopped while a tool was running.',
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'Streaming stopped while a tool was running.',
+        detail: { code: 'aborted_tools' },
       },
     ]);
   });

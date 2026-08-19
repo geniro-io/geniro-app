@@ -47,6 +47,74 @@ describe('seedCursorProfile', () => {
     );
   });
 
+  it('opens the handshake on the model the caller named', () => {
+    // Not a saving but a correctness fix: a `session/new` reply describes the
+    // CURRENT model, so a session opened on the user's default and switched
+    // afterwards describes the model being switched away FROM — and nothing
+    // downstream can then check the effort against the model the turn will
+    // actually run on. Seeded, the first reply already describes it (probed
+    // 2026-08-19 on 2026.08.11-e8db854).
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome(
+      '{"approvalMode":"allowlist","model":{"modelId":"composer-2.5"}}',
+    );
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      model: 'grok-4.6',
+    });
+
+    const written = JSON.parse(
+      readFileSync(join(dir, 'cli-config.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(written.model).toEqual({ modelId: 'grok-4.6' });
+    // …and the SELECTED form too, which is the one the parameterized handshake
+    // resolves. Writing only the first leaves the CLI opening on the other.
+    expect(written.selectedModel).toEqual({
+      modelId: 'grok-4.6',
+      parameters: [],
+    });
+    // Everything else the user set survives — the seed edits two keys, it does
+    // not replace their config.
+    expect(written.approvalMode).toBe('allowlist');
+  });
+
+  it('leaves the config untouched when no model is named', () => {
+    // A turn on "default model" must open on the user's own, which is what the
+    // copy is for. Stamping anything here would take that away.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"model":{"modelId":"composer-2.5"}}');
+
+    const dir = seedCursorProfile({ baseDir: base, homeDir: home });
+
+    expect(readFileSync(join(dir, 'cli-config.json'), 'utf8')).toBe(
+      '{"model":{"modelId":"composer-2.5"}}',
+    );
+  });
+
+  it('still names the model when the user has no config to merge into', () => {
+    // The defensive branch: an absent or unreadable source config must not cost
+    // the turn its model, or a fresh machine silently runs every chat on the
+    // CLI's default while the composer says otherwise.
+    const base = tempDir('cursor-profiles-');
+    const home = tempDir('cursor-home-empty-');
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      model: 'grok-4.6',
+    });
+
+    expect(
+      (
+        JSON.parse(readFileSync(join(dir, 'cli-config.json'), 'utf8')) as {
+          model?: unknown;
+        }
+      ).model,
+    ).toEqual({ modelId: 'grok-4.6' });
+  });
+
   it('never copies mcp.json — a 0600 file holding the user’s own tokens', () => {
     // Measured to be unnecessary: under a directory holding only cli-config.json
     // an ACP session still loads the folder's MCP servers, because the CLI

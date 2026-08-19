@@ -72,6 +72,33 @@ function parsePayload(raw: string): unknown {
 }
 
 /**
+ * How long one row from a DELEGATE keeps a settled run reading `running` — see
+ * {@link ChatService.leaseOnDelegateRow}.
+ *
+ * A lease and not a latch, because a delegate has no terminal event of its own
+ * to take the badge down with: its launching `Task` call returned long ago, and
+ * a delegate that simply stops has nothing left to say. So the claim expires
+ * unless the delegate renews it by producing another row.
+ *
+ * The window is a bet in BOTH directions and the length is where the two costs
+ * balance. Too short and a delegate parked in one slow tool call (a test suite,
+ * a long grep) drops the badge back to `completed` while it is demonstrably
+ * mid-work — the defect this exists to remove. Too long and a delegate that has
+ * genuinely finished leaves `still working` on screen for the rest of the
+ * window, which is the same complaint arriving from the other side ("агент
+ * вроде как закончил работать, а он статуса не изменил"). Five minutes bridges
+ * every delegate tool call observed here while bounding the wrong-direction
+ * claim to something a user can outwait; it is deliberately far short of the
+ * 30-minute silence deadline `spawn-cli` gives a turn, because that deadline
+ * decides whether to ABANDON work and this one only decides a word.
+ *
+ * The happy path never reaches it: a delegate that reports back makes the CLI
+ * open a continuation turn of its own, and that turn's own `result` settles the
+ * run through {@link ChatService.restatusAfterOffTurnEvent}.
+ */
+const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
+
+/**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
  * adapter, and applies **persist-then-emit** — every item is written (allocating
  * its monotonic seq) BEFORE it is published on the bus, so the durable
@@ -155,6 +182,38 @@ export class ChatService {
    * run over.
    */
   private readonly offTurnRuns = new Set<string>();
+
+  /**
+   * Runs whose off-turn `running` is a LEASE on a delegate that is still
+   * producing rows, with the status to hand back when it stops — see
+   * {@link leaseOnDelegateRow}.
+   *
+   * A subset of {@link offTurnRuns} rather than a parallel plane: the badge
+   * belongs to the same off-turn continuation either way, so the CLI's own
+   * continuation turn settles it exactly as it settles a main-thread one. What
+   * this map adds is the only thing that set cannot carry — the expiry, and the
+   * status the run was wearing before the lease took it.
+   */
+  private readonly delegateLeases = new Map<
+    string,
+    { timer: NodeJS.Timeout; restoreTo: RunStatus }
+  >();
+
+  /**
+   * Per run, the delegates the CLI has told us are FINISHED — by launching
+   * tool-call id, the same key their block is drawn under.
+   *
+   * The one fact that separates a delegate's trailing rows from a delegate that
+   * is still working, and neither the row itself nor its timing can supply it:
+   * both are `parentToolUseId` rows arriving after the turn settled. A delegate
+   * the CLI brackets (`task_started` → `task_updated`) reports its own end, and
+   * `spawn-cli` relays that as the `backgroundOpen: false` announcement that
+   * closes the block; one it never brackets reports nothing, which is exactly
+   * the case whose steps go on arriving under a `completed` badge. So a row
+   * from a delegate named here restates nothing, and a row from one that is not
+   * takes a lease — see {@link leaseOnDelegateRow}.
+   */
+  private readonly closedDelegates = new Map<string, Set<string>>();
 
   /**
    * Runs whose turn is HELD for background work, and by how many units.
@@ -279,6 +338,7 @@ export class ChatService {
     status: RunStatus,
     activity: string | null = null,
     summary: string | null = null,
+    housekeeping = false,
   ): Promise<void> {
     await writeRunStatus(
       { runDao: this.runDao, bus: this.bus },
@@ -287,6 +347,7 @@ export class ChatService {
       status,
       activity,
       summary,
+      housekeeping,
     );
   }
 
@@ -1055,12 +1116,14 @@ export class ChatService {
     if (event.type === 'text_delta') {
       if (event.parentToolUseId === undefined) {
         this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
+        await this.restatusAfterOffTurnSignal(runId, event);
       }
       return;
     }
     if (event.type === 'thinking_progress') {
       if (event.parentToolUseId === undefined) {
         this.partials.thinking(runId, SINGLE_AGENT_NODE, null, event.tokens);
+        await this.restatusAfterOffTurnSignal(runId, event);
       }
       return;
     }
@@ -1149,7 +1212,16 @@ export class ChatService {
       // delegate FINISHING is the same "restated the end of work as the start
       // of some" the paragraph above is about, and would latch the spinner on
       // with nothing left to take it down.
-      if (event.parentToolUseId === undefined && !closesADelegate(event)) {
+      //
+      // A delegate's OWN row takes the third path, {@link leaseOnDelegateRow}:
+      // it makes the same "something is being produced" claim, under an expiry
+      // rather than under a terminal event it will never get. Refusing it
+      // outright — which is what this branch used to do — is what left a run
+      // reading `completed` while its sub-agent blocks went on filling up.
+      this.recordDelegateBracket(runId, event);
+      if (event.parentToolUseId !== undefined) {
+        await this.leaseOnDelegateRow(runId, event.parentToolUseId);
+      } else if (!closesADelegate(event)) {
         await this.restatusAfterOffTurnEvent(em, runId, event);
       }
     } catch (err: unknown) {
@@ -1188,6 +1260,10 @@ export class ChatService {
     }
     const settled = terminalStatus(event);
     if (settled) {
+      // The continuation has finished, so nothing is owed to a delegate whose
+      // rows opened this stretch — its lease has just been answered by the very
+      // terminal event it existed for want of.
+      this.clearDelegateLease(runId);
       if (this.offTurnRuns.delete(runId)) {
         await this.setRunStatus(em, runId, settled);
       }
@@ -1201,6 +1277,186 @@ export class ChatService {
     }
     this.offTurnRuns.add(runId);
     await this.setRunStatus(em, runId, 'running', offTurnActivity(event));
+  }
+
+  /**
+   * What a LIVE off-turn signal does to the run's badge.
+   *
+   * Rows are only half of what a continuation produces. An agent that is
+   * THINKING has emitted no row at all — and on a long think it will not for
+   * minutes — and neither has one part-way through a sentence. Both signals
+   * were routed to the live tail and nowhere else, so the transcript grew a
+   * `Thinking… 500 tokens · 6s` line directly under a `✓ done` footer while the
+   * sidebar row still read `completed`. That is the reported "it show as
+   * completed, but its actually thinking", and the claim it needs is the one
+   * {@link restatusAfterOffTurnEvent} already makes about rows: something is
+   * being produced under a run that had settled, so the run is working again.
+   *
+   * Deliberately a separate method rather than another caller of that one, for
+   * two reasons a shared body could not hold:
+   *
+   * - A delta fires many times a second. Once the flip has happened the phrase
+   *   never changes, so {@link offTurnRuns} short-circuits the rest of the
+   *   burst before it reaches the database.
+   * - A run whose `running` belongs to a REAL turn is left entirely alone here,
+   *   instead of having that turn's activity phrase restated as `still
+   *   working`. A row is worth re-announcing for; an unfinished word is not.
+   *
+   * `context_progress` is the third live signal and is deliberately NOT one of
+   * these: it measures the WINDOW rather than asserting that anything is being
+   * produced, and it is also emitted synthetically once a compaction has
+   * FINISHED — the one moment the CLI is demonstrably not working.
+   */
+  private async restatusAfterOffTurnSignal(
+    runId: string,
+    event: AgentEvent,
+  ): Promise<void> {
+    if (this.offTurnRuns.has(runId)) {
+      return;
+    }
+    const run = await this.runDao.getById(runId);
+    // A cancelled run stays cancelled — Stop is final, exactly as it is for an
+    // off-turn row — and a `running` one is somebody else's to describe.
+    if (!run || run.status === 'cancelled' || run.status === 'running') {
+      return;
+    }
+    this.offTurnRuns.add(runId);
+    await this.setRunStatus(
+      this.em.fork(),
+      runId,
+      'running',
+      offTurnActivity(event),
+    );
+  }
+
+  /**
+   * What a DELEGATE's off-turn row does to the run's badge.
+   *
+   * A delegate whose launching `Task` call has already returned goes on working
+   * with nothing holding the turn open for it: `spawn-cli` only holds on
+   * `background_work`, which is the CLI's own `task_started` bracket, and a
+   * delegate it never brackets is invisible to that mechanism. The turn's
+   * `result` therefore settles the run while the delegate's steps keep arriving
+   * — reproduced against the real renderer: two sub-agent blocks climbing from
+   * 0 to 7 tool calls, their rows persisted the whole time, under a header
+   * reading `✓ completed`. That is the reported "выполняются какие-то
+   * внутренние процессы, но он показывается как Completed".
+   *
+   * So a delegate's row makes the same claim a main-thread one does — something
+   * is being produced under a run that had settled — and the two directions
+   * that used to be refused here are both kept:
+   *
+   * - It is still not {@link restatusAfterOffTurnEvent}. That method's `running`
+   *   is ENDED by a terminal event, and a delegate produces none; restating a
+   *   delegate's trailing rows through it is what latched a `still working`
+   *   spinner on at the exact moment the work ended, with nothing able to take
+   *   it down. The lease is that missing off-switch.
+   * - A delegate CLOSING (`closesADelegate`) still restates nothing, and now
+   *   need not be special-cased: a close carries no `parentToolUseId`, so it
+   *   never reaches here at all.
+   *
+   * Renewal is free — a live delegate emits rows continuously, and re-arming a
+   * timer must not cost a write — so only the FIRST row of a quiet stretch
+   * touches the database.
+   */
+  private async leaseOnDelegateRow(
+    runId: string,
+    delegateId: string,
+  ): Promise<void> {
+    if (this.closedDelegates.get(runId)?.has(delegateId)) {
+      // Its trailing rows, not its work — see {@link closedDelegates}. This is
+      // the case the row path refuses outright, and it stays refused.
+      return;
+    }
+    const held = this.delegateLeases.get(runId);
+    if (held) {
+      held.timer.refresh();
+      return;
+    }
+    const run = await this.runDao.getById(runId);
+    // Same two exemptions as every other off-turn restate: Stop is final, and a
+    // `running` run is somebody else's to describe — either a real turn owns
+    // it, or the main thread's own continuation already flipped it, and that
+    // one settles itself.
+    if (!run || run.status === 'cancelled' || run.status === 'running') {
+      return;
+    }
+    const restoreTo = run.status;
+    const timer = setTimeout(() => {
+      void this.expireDelegateLease(runId);
+    }, DELEGATE_ROW_LEASE_MS);
+    timer.unref?.();
+    this.delegateLeases.set(runId, { timer, restoreTo });
+    this.offTurnRuns.add(runId);
+    await this.setRunStatus(this.em.fork(), runId, 'running', 'still working');
+  }
+
+  /**
+   * The delegate has gone quiet for a whole lease, so hand the badge back.
+   *
+   * Re-reads rather than trusting the lease: a real turn may have started in
+   * the meantime (which clears the lease, but the timer may already have been
+   * queued), and only a run still wearing the `running` this lease put there is
+   * this method's to change back.
+   */
+  private async expireDelegateLease(runId: string): Promise<void> {
+    const held = this.delegateLeases.get(runId);
+    if (!held) {
+      return;
+    }
+    this.delegateLeases.delete(runId);
+    if (!this.offTurnRuns.delete(runId) || this.registry.has(runId)) {
+      return;
+    }
+    try {
+      const run = await this.runDao.getById(runId);
+      if (run?.status !== 'running') {
+        return;
+      }
+      await this.setRunStatus(this.em.fork(), runId, held.restoreTo);
+    } catch (err: unknown) {
+      this.logger.error(
+        `run ${runId} delegate-lease expiry failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Drop a run's delegate lease — whoever takes the badge over owns it now. */
+  private clearDelegateLease(runId: string): void {
+    const held = this.delegateLeases.get(runId);
+    if (held) {
+      clearTimeout(held.timer);
+      this.delegateLeases.delete(runId);
+    }
+  }
+
+  /**
+   * Note that the CLI has told us a delegate started or finished.
+   *
+   * Called from BOTH event handlers, because which of them a bracket lands in
+   * is the CLI's timing rather than a fact about the delegate: a turn held open
+   * for its delegates sees every close in-turn, while one that settled first
+   * sees them off-turn. Recording only the off-turn half would leave every
+   * delegate that finished inside its own turn looking un-bracketed to
+   * {@link leaseOnDelegateRow}, so its tail would take a lease.
+   *
+   * A null `backgroundOpen` says nothing either way — the announcement carrying
+   * a delegate's label or duration must not be read as a lifecycle claim.
+   */
+  private recordDelegateBracket(runId: string, event: AgentEvent): void {
+    if (event.type !== 'subagent_info' || event.backgroundOpen === null) {
+      return;
+    }
+    if (event.backgroundOpen) {
+      this.closedDelegates.get(runId)?.delete(event.id);
+      return;
+    }
+    const closed = this.closedDelegates.get(runId);
+    if (closed) {
+      closed.add(event.id);
+      return;
+    }
+    this.closedDelegates.set(runId, new Set([event.id]));
   }
 
   /**
@@ -1374,8 +1630,14 @@ export class ChatService {
         em,
       );
       // A real turn takes the run over, so whatever an off-turn continuation
-      // was still holding is no longer this method's to settle.
+      // was still holding is no longer this method's to settle — including a
+      // delegate lease, whose expiry would otherwise fire mid-turn and try to
+      // hand a badge back that this turn now owns.
       this.offTurnRuns.delete(runId);
+      this.clearDelegateLease(runId);
+      // The previous turn's delegates cannot outlive this one's badge, and the
+      // set is what would otherwise grow for the life of a long chat.
+      this.closedDelegates.delete(runId);
       await this.setRunStatus(em, runId, 'running');
 
       let chain: Promise<void> = Promise.resolve();
@@ -1391,6 +1653,25 @@ export class ChatService {
        * transcript as a user message the moment the turn ends).
        */
       let lastAgentText: string | null = null;
+      /**
+       * What this turn has PRODUCED, split into the CLI's own compaction and
+       * everything else — the two counters behind `RunStatusEvent.housekeeping`.
+       *
+       * Structural, never a match on the text `/compact`: that string is a
+       * thing a user may type as prose, and an AUTOMATIC compaction lands in
+       * the middle of a turn doing real work, which must still announce itself.
+       * Anything besides the compaction summary — an assistant message, a tool
+       * call, a notice of its own — is work and takes the exemption away.
+       *
+       * TWIN RULE: `apps/ui/src/renderer/chats/compaction-payload.ts`'s
+       * `compactionOnlyTurnEnds` decides the same thing from the persisted
+       * items, to drop the redundant `✓ done` row under a compaction. The two
+       * readings must agree — a turn the transcript treats as pure
+       * housekeeping and the sidebar marks unseen is the app contradicting
+       * itself about one turn.
+       */
+      let compactionRows = 0;
+      let workRows = 0;
       let eventHandlingFailed = false;
       /**
        * The token figures the CLI reported for a compaction that just finished,
@@ -1604,6 +1885,22 @@ export class ChatService {
               return;
             }
             if (event.type === 'context_progress') {
+              // BEFORE the figure it scales, so the delta this publishes
+              // already carries both halves: `context` publishes, and a window
+              // remembered after it would not reach the client until the NEXT
+              // reading — which for a CLI reporting one figure per turn is a
+              // whole turn of a ring with a numerator and no denominator.
+              if (
+                event.contextWindowTokens !== undefined &&
+                event.contextWindowTokens !== null
+              ) {
+                this.partials.rememberWindow(
+                  runId,
+                  SINGLE_AGENT_NODE,
+                  event.contextWindowTokens,
+                  event.contextModel ?? null,
+                );
+              }
               // EPHEMERAL, like the deltas above: the durable copy is the
               // turn_complete usage. This is what lets the meter move DURING
               // the turn instead of only when it ends.
@@ -1739,6 +2036,10 @@ export class ChatService {
               this.announceRunHold(runId, event.open, idleActivity());
               return;
             }
+            // Above the row gate for the same reason `turn_held` is: this is
+            // bookkeeping the OFF-turn plane reads later, and a delegate whose
+            // whole life fits inside its turn is bracketed only here.
+            this.recordDelegateBracket(runId, event);
             const mapped = mapEventToItem(event);
             if (!mapped) {
               return;
@@ -1996,6 +2297,22 @@ export class ChatService {
               }
             }
             const status = terminalStatus(event);
+            if (status === null) {
+              // The row this turn just produced, tallied for `housekeeping`.
+              // The compaction summary is identified by the MARKER stamped
+              // above and never by its text: a CLI free to reword "This
+              // session is being continued…" would silently stop matching.
+              if (
+                (mapped.payload as { compaction?: unknown }).compaction !==
+                undefined
+              ) {
+                compactionRows += 1;
+              } else if (mapped.kind !== 'message' || mapped.role !== 'user') {
+                // The prompt that ASKED for the compaction is not work — it is
+                // the user talking. Everything else the agent produced is.
+                workRows += 1;
+              }
+            }
             if (status) {
               // What the settle SAYS, for whoever is not looking at this chat.
               // A failure speaks for itself; a completion is summarised by the
@@ -2007,7 +2324,13 @@ export class ChatService {
                 status,
                 null,
                 event.type === 'error' ? event.message : lastAgentText,
+                compactionRows > 0 && workRows === 0,
               );
+              // Spent — the tally describes ONE turn, so anything arriving
+              // after this ending is counted from zero rather than inheriting
+              // a compaction that belonged to the turn before it.
+              compactionRows = 0;
+              workRows = 0;
               // Set only after the write succeeds: if it throws, the finalizer
               // still writes a synthetic completion rather than leaving 'running'.
               sawTerminal = true;
@@ -2257,28 +2580,15 @@ export class ChatService {
     return this.persist(em, runId, seq, 'message', 'user', {
       text,
       ...(attachments.length > 0 ? { images: attachments } : {}),
-      // TWIN PARSER: read by `apps/ui/src/renderer/chats/message-payload.ts`
-      // (`wasSentMidTurn`). An item payload is `z.unknown()` on the wire BY
-      // DESIGN, so no generated type carries this key — rename it here and that
-      // file must change with it.
-      //
-      // Stamped because the two ways a user message reaches an agent are NOT
-      // the same event, and only this one has a wait built into it. A message
-      // that starts a turn is read at once; this one is written onto the stdin
-      // of a turn already in flight, and the CLI acts on it at its next tool
-      // boundary — so while a long tool runs, nothing happens, and nothing on
-      // screen said why. What the user saw was their message posted, the live
-      // row still naming the tool that was running before they sent it, and an
-      // agent doing nothing: "я его мгновенно отправляю, у меня все еще
-      // пишется, что исполняется предыдущая команда, и он ничего не делает".
-      // Every part of that reading was correct and the conclusion — that the
-      // send did not take — was wrong, which is a gap in what the row SAYS
-      // rather than in what the daemon did.
-      //
-      // A durable flag on the message rather than a live status, because it is
-      // a fact about how this message was SENT: permanently true, needing no
-      // clearing, and still true when the transcript is replayed a week later.
-      midTurn: true,
+      // NOT stamped with how it was sent. A `midTurn: true` flag used to ride
+      // here so the renderer could caption the row ("Sent into the turn already
+      // running — the agent picks this up when its current step finishes"),
+      // explaining why a message written behind a long tool call sits there
+      // while the live row goes on naming the tool that was already running.
+      // The caption was reported as noise under every such message and removed,
+      // and the flag went with it rather than staying as a key nothing reads —
+      // a payload key with no reader is indistinguishable from one whose reader
+      // was lost. Bringing the explanation back means bringing both back.
     });
   }
 

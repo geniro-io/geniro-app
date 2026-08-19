@@ -117,13 +117,21 @@ jobs:
           body_path: CHANGES.md
           generate_release_notes: false
 
-  # Build the ad-hoc macOS app (no Apple Developer ID) and attach the .dmg,
-  # .zip and SHA256SUMS.txt to the release, so it can be installed via Homebrew
-  # or the install script. This is NOT signed/notarized — the cask/install
-  # script strip the quarantine bit so the ad-hoc app launches. The app updates
-  # ITSELF from these assets (download → checksum → swap the bundle → relaunch),
-  # which is why the checksum file is not optional: with no code signature it is
-  # the only integrity check between this build and an executing app.
+  # Build the macOS app and attach the .dmg, .zip and SHA256SUMS.txt to the
+  # release, so it can be installed via Homebrew or the install script.
+  #
+  # Signed with Geniro's own SELF-SIGNED certificate — not an Apple Developer
+  # ID, so it is still not notarized and the cask/install script still strip the
+  # quarantine bit. The certificate is there for a different reason: macOS
+  # records every privacy grant against the app's designated requirement, and
+  # an ad-hoc signature's requirement is the hash of its own bytes — so before
+  # this, every release and every self-update presented itself to macOS as a
+  # brand-new app and re-asked for every permission the user had granted.
+  #
+  # Gatekeeper still validates nothing it will act on, which is why the checksum
+  # file is not optional: it remains the only integrity check between this build
+  # and an executing app, and the app updates ITSELF from these assets
+  # (download → checksum → swap the bundle → relaunch).
   build-app:
     runs-on: macos-14 # arm64 runner — the only published arch
     name: Build & attach macOS app
@@ -167,10 +175,72 @@ jobs:
       - name: Sync the packaged app version to the tag
         run: node scripts/sync-app-version.mjs "${{ steps.tag.outputs.version }}"
 
-      - name: Build macOS app (ad-hoc)
-        # build-mac.mjs always produces an ad-hoc (unsigned) build with no
-        # publish feed — Squirrel.Mac cannot validate an ad-hoc signature, so
-        # the app applies updates itself (see apps/ui/src/main/updater.ts).
+      # Put the release signing certificate on the runner. `codesign` signs only
+      # with identities it considers VALID, and a self-signed certificate is
+      # untrusted until said otherwise — so the import is only half of it, and
+      # without the trust step the identity is present and unusable
+      # (`CSSMERR_TP_NOT_TRUSTED`, `0 valid identities found`).
+      - name: Import the release signing identity
+        env:
+          P12: ${{ secrets.GENIRO_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.GENIRO_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${P12:-}" || -z "${P12_PASSWORD:-}" ]]; then
+            echo "::error::GENIRO_SIGNING_P12 / GENIRO_SIGNING_P12_PASSWORD are not set." \
+                 "Run 'node scripts/make-signing-identity.mjs' and add them as repository" \
+                 "secrets. This fails rather than falling back to an ad-hoc build, because" \
+                 "an ad-hoc release re-asks every user for every macOS permission and is" \
+                 "indistinguishable from a good one until they install it."
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/geniro-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(/usr/bin/openssl rand -base64 24)"
+          P12_FILE="$RUNNER_TEMP/identity.p12"
+          CERT_FILE="$RUNNER_TEMP/cert.pem"
+          printf '%s' "$P12" | base64 --decode > "$P12_FILE"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # PREPEND to the search list rather than replace it: electron-builder
+          # resolves the identity through `security find-identity` over the
+          # default list, and replacing it would drop the runner's login
+          # keychain along with everything else that reads from it.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | tr -d '"')
+          security import "$P12_FILE" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          # Without the partition list the first signature blocks on a keychain
+          # prompt no one is there to answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+
+          # Trust it for the codeSign policy alone — the certificate exists to
+          # sign one app, and vouching for TLS is authority it has no use for.
+          # Admin domain, which needs sudo: the runner is disposable, and there
+          # is no user session to answer a trust dialog.
+          /usr/bin/openssl pkcs12 -in "$P12_FILE" -passin "pass:$P12_PASSWORD" \
+            -nokeys -clcerts -out "$CERT_FILE"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$CERT_FILE"
+          rm -f "$P12_FILE" "$CERT_FILE"
+
+          security find-identity -v -p codesigning
+
+      - name: Build & sign the macOS app
+        # GENIRO_SIGN_IDENTITY names the certificate imported above — the same
+        # common name scripts/make-signing-identity.mjs writes. build-mac.mjs
+        # turns it into electron-builder's identity, adds forceCodeSigning so a
+        # missing identity fails instead of degrading to an unsigned artifact,
+        # and reads the packaged bundle's designated requirement back to prove
+        # the certificate actually reached it.
+        #
+        # There is still no publish feed: Squirrel.Mac validates an update
+        # against the running app's requirement and cannot be pointed at a
+        # non-Apple anchor, so the app applies updates itself (see
+        # apps/ui/src/main/updater.ts).
+        env:
+          GENIRO_SIGN_IDENTITY: Geniro Code Signing
         run: pnpm --filter @geniro/ui build:mac
 
       # The integrity check for a build Gatekeeper validates nothing about.

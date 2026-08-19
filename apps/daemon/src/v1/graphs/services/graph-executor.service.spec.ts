@@ -1172,7 +1172,10 @@ describe('GraphExecutorService', () => {
 
     claude.starts[0]!.emit({
       type: 'slash_commands',
-      commands: ['review', 'compact'],
+      commands: [
+        { name: 'review', description: null },
+        { name: 'compact', description: null },
+      ],
     });
     claude.starts[0]!.finish();
     await drain();
@@ -1180,7 +1183,10 @@ describe('GraphExecutorService', () => {
     expect(skillHarvest.record).toHaveBeenCalledWith(
       'claude',
       realpathSync(dir),
-      ['review', 'compact'],
+      [
+        { name: 'review', description: null },
+        { name: 'compact', description: null },
+      ],
     );
     // The report never becomes a transcript row.
     expect(

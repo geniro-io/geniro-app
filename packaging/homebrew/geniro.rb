@@ -6,8 +6,8 @@
 # This file is the initial content to seed that repo with, and a place to review
 # cask changes in PRs.
 #
-# Install (ad-hoc build). Modern Homebrew (6.x) always quarantines a cask
-# artifact and dropped `--no-quarantine`, so a quarantined ad-hoc app can't
+# Install. Modern Homebrew (6.x) always quarantines a cask artifact and dropped
+# `--no-quarantine`, so a quarantined build that is not notarized can't
 # spawn its bundled daemon (Gatekeeper blocks the child) and hangs on launch —
 # the `postflight` below strips the quarantine bit. Third-party taps also need
 # an explicit `brew trust`:
@@ -31,8 +31,9 @@ cask "geniro" do
 
   app "Geniro.app"
 
-  # Strip com.apple.quarantine so the ad-hoc (unsigned) app can spawn its
-  # bundled daemon subprocess instead of being Gatekeeper-blocked on launch.
+  # Strip com.apple.quarantine so the app — signed, but not notarized — can
+  # spawn its bundled daemon subprocess instead of being Gatekeeper-blocked on
+  # launch.
   # (Homebrew 6.x always quarantines and no longer offers `--no-quarantine`.)
   postflight do
     system_command "/usr/bin/xattr",

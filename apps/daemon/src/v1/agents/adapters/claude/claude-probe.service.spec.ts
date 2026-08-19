@@ -108,6 +108,30 @@ function build(
 }
 
 describe('ClaudeProbeService', () => {
+  it('probes with the user’s MCP servers ISOLATED — argv acceptance needs none of them', async () => {
+    // The probe reads one `system/init` line and cancels on it, so it has no
+    // use for a single MCP server — and starting one is not free. Measured on
+    // the reporter's machine: a stdio server declared as `docker run -i --rm …`
+    // leaves a container RUNNING when its client goes away, because `--rm` is
+    // the docker daemon's AutoRemove and a `-i` container whose attach client
+    // died never exits. A plain `claude -p "reply with exactly: ok"` leaked two
+    // such containers; the same turn under `--strict-mcp-config` with an empty
+    // config leaked none. Two probes per round × one round per binary version
+    // is what this flag stops paying for.
+    //
+    // Asserted on the INPUT rather than on argv, because argv is the claude
+    // adapter's business and it already pins its own end (`--mcp-config {}` +
+    // `--strict-mcp-config` is the one branch that flag takes).
+    const { service, starts } = build(() => 'init');
+
+    await service.ensureVerdict();
+
+    expect(starts).toHaveLength(2);
+    for (const input of starts) {
+      expect(input.isolateMcpServers).toBe(true);
+    }
+  });
+
   it('probes both modes with one turn each, passes on the session line, and cancels the rest of the turn', async () => {
     const { service, starts, cancels, cachePath } = build(() => 'init');
     const verdict = await service.ensureVerdict();

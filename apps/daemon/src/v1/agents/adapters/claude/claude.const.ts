@@ -600,13 +600,29 @@ export const CLAUDE_MCP_LIST_ARGS: readonly string[] = ['mcp', 'list'];
  * warm 11-server folder took ~9s; a cold one is far slower, and 20s here
  * reported "claude did not answer" for a listing that was merely starting up.
  *
- * Bounded ABOVE by the renderer's per-request budget for THIS route
- * (`use-agent-mcp.ts` MCP_LIST_TIMEOUT_MS), which is deliberately longer so the
- * daemon always gives up first and the reason the user reads is the specific
- * one produced here. Raising this past that budget puts the client back in
- * front, and the panel goes back to a bare transport failure.
+ * 45s was the same mistake one size up, and it is what "the MCP server list
+ * very often does not work" turned out to be. Re-measured 2026-08-18 on the
+ * author's own machine against their real 11-server configuration: **18.4s
+ * WARM** — with a single unreachable HTTP server (`n8n`) spending 5s of that
+ * on its own probe timeout before reporting `Failed to connect`. A warm read
+ * eating 40% of the budget leaves a cold one — the `docker run` server pulling
+ * its image, `npx @playwright/mcp@latest` fetching the package, four remote
+ * HTTP servers dialled in sequence — no headroom at all, and the deadline is
+ * indistinguishable downstream from a CLI that refused to answer: `runCommand`
+ * returns null either way, so the panel discards the whole listing and states
+ * {@link CLAUDE_MCP_LIST_FAILED_MESSAGE} about a command that was working.
+ *
+ * The ceiling this used to be bounded by no longer applies to the read the
+ * user is actually watching. The panel's listing is NON-BLOCKING — the service
+ * answers it inside a 400ms first-paint budget with `pending: true` and lets
+ * the dial finish behind the response — so no HTTP request is held for this
+ * duration and no client timeout can arrive in front of it. The one path that
+ * still awaits a listing inside a request is the toggle, and the SERVICE caps
+ * that one itself (`BLOCKING_LIST_TIMEOUT_MS` in `agent-mcp.service.ts`),
+ * which is where a request budget belongs: it is a fact about the HTTP round
+ * trip, not about this CLI.
  */
-export const CLAUDE_MCP_LIST_TIMEOUT_MS = 45_000;
+export const CLAUDE_MCP_LIST_TIMEOUT_MS = 120_000;
 
 /**
  * Row status markers — the WORDING only, deliberately WITHOUT the glyph that
@@ -953,10 +969,60 @@ export const CLAUDE_TASK_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   'timeout',
 ]);
 
+/**
+ * The `terminal_reason` values that mean the turn was STOPPED, not that it
+ * failed — this CLI's own abort family.
+ *
+ * Read off the 2.1.235 binary rather than guessed. It carries two predicates
+ * over `terminal_reason`: one that answers exactly `aborted_streaming ||
+ * aborted_tools`, and a second listing the reasons it calls errors
+ * (`blocking_limit`, `prompt_too_long`, `api_error`, `budget_exhausted`, …)
+ * with both abort values explicitly returning FALSE from it. Its own SDK
+ * consumer then acts on that split: a `result` whose `terminal_reason` is in
+ * this family is logged at ordinary level rather than as an error, is skipped
+ * by the degraded-turn error render, and is re-labelled `terminated` in
+ * telemetry — all while the same line still carries `is_error: true`.
+ *
+ * That flag is why this list exists. geniro reads `is_error` and had no way to
+ * tell the two apart, so an interrupted turn arrived as
+ * `claude run failed (aborted_streaming)` in the red panel — the reported
+ * error, which is a sentence naming neither what happened nor what to do about
+ * it. The turn is still recorded as failed (nobody asked for it to stop, and a
+ * run that quietly read `completed` would be the worse lie); what changes is
+ * that the row now says the stream was interrupted and the conversation
+ * survives it.
+ *
+ * NOT a cause list. `aborted_streaming` is emitted whenever the turn's abort
+ * signal fires mid-stream, and the reasons the binary attaches to that signal
+ * are `user-cancel` / `remote-cancel` / `shutdown` / `interrupt` / `background`
+ * / `recovery-timeout` / a turn teardown — so the row must not name one of
+ * them. Two candidates were ruled out by probe rather than by reading: a
+ * geniro follow-up written into a live turn does NOT abort it (measured on
+ * 2.1.235 — a second `{"type":"user"}` line at 8s of a 132s turn left it
+ * finishing `terminal_reason: completed`, the follow-up simply opening its own
+ * turn afterwards), and a Stop from geniro kills the process instead, settling
+ * through `settleFromTermination` without a `result` line at all.
+ */
+export const CLAUDE_ABORTED_TERMINAL_REASONS: ReadonlySet<string> = new Set([
+  'aborted_streaming',
+  'aborted_tools',
+]);
+
 // ── Messages ──────────────────────────────────────────────────────────────
 
 /** Fallback for an error `result` line that carries no text of its own. */
 export const CLAUDE_RUN_FAILED_MESSAGE = 'claude run failed';
+
+/**
+ * What an {@link CLAUDE_ABORTED_TERMINAL_REASONS} turn says instead, when the
+ * CLI supplied no sentence of its own.
+ *
+ * The code itself is not dropped — it rides on the error's `detail.code` and
+ * shows in the row's facts table — so nothing a bug report needs is lost by
+ * putting a sentence where the raw value used to be.
+ */
+export const CLAUDE_TURN_ABORTED_MESSAGE =
+  'claude stopped this turn before it finished — the stream was interrupted rather than refused. The conversation is intact: send the message again to carry on.';
 
 /** What the CLI is told when the user denies a permission request. */
 export const CLAUDE_DENY_MESSAGE = 'Denied by the user in Geniro';

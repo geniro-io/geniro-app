@@ -192,6 +192,42 @@ describe('WorkingRow', () => {
     expect(container.textContent).not.toContain('Working…');
   });
 
+  it('caps a long phrase to one truncated half-row, clock intact', () => {
+    // The reported defect, twice over: a shell tool's "name" is the WHOLE
+    // command, so `running <command>` filled eight wrapped lines of the
+    // transcript — and even on one line it ran the full width of the column.
+    // The phrase is capped and ellipsized; the clock beside it is not, which is
+    // what a single truncated label could not express.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const command =
+      'running `cd /Users/me/Desktop/Projects/ManifestLab/ManifestOS && git checkout --ours packages/document-pdf/src/limits/render-limits.ts packages/document-pdf/src/images/pdf-safe-image-format.ts`';
+    const container = render(
+      <RunActivityContext.Provider value={command}>
+        <WorkingRow since={Date.parse('2026-08-04T00:00:00Z') - 11_000} />
+      </RunActivityContext.Provider>,
+    );
+
+    const phrase = [...container.querySelectorAll('span')].find(
+      (span) => span.textContent === command,
+    );
+    expect(phrase).toBeDefined();
+    // One line, ellipsized, and never more than half the row.
+    expect(phrase?.className).toContain('truncate');
+    expect(phrase?.className).toContain('max-w-[50%]');
+    // …and that half is half of something: a percentage max-width resolves to
+    // nothing against a shrink-to-fit bubble, so the row itself must be full
+    // width for the cap above to mean anything at all.
+    expect(container.querySelector('[data-role="note"]')?.className).toContain(
+      'w-full',
+    );
+    // Cut on screen, but not LOST — the whole command is still readable.
+    expect(phrase?.getAttribute('title')).toBe(command);
+    // The clock is a SIBLING, so the cap can never eat it: it is the half
+    // nothing can make long, and the half that says the turn is still moving.
+    expect(phrase?.textContent).not.toContain('11s');
+    expect(container.textContent).toContain('11s');
+  });
+
   it('falls back to the bare state when the daemon has said nothing', () => {
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(

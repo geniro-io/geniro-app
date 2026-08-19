@@ -36,6 +36,41 @@ describe('classifyMessage', () => {
     ).toEqual({ kind: 'error', id: 1, message: 'bad params' });
   });
 
+  it('keeps the detail under `data`, which is the only part that names anything', () => {
+    // Measured against cursor-agent 2026.08.11-e8db854: a refused effort answers
+    // `{code:-32602, message:"Invalid params", data:{message:"Invalid value for
+    // effort: max"}}`. The top-level message is the JSON-RPC CATEGORY, spelled
+    // identically for every bad parameter, so reading it alone put the words
+    // `Invalid params` in the transcript and nothing a user could act on.
+    expect(
+      classifyMessage({
+        id: 1,
+        error: {
+          code: -32602,
+          message: 'Invalid params',
+          data: { message: 'Invalid value for effort: max' },
+        },
+      }),
+    ).toEqual({
+      kind: 'error',
+      id: 1,
+      message: 'Invalid params: Invalid value for effort: max',
+    });
+  });
+
+  it('does not say the same thing twice when the detail repeats the category', () => {
+    expect(
+      classifyMessage({
+        id: 1,
+        error: {
+          code: -32602,
+          message: 'bad params',
+          data: { message: 'bad params' },
+        },
+      }),
+    ).toEqual({ kind: 'error', id: 1, message: 'bad params' });
+  });
+
   it('falls back to the code when an error reply carries no message', () => {
     expect(classifyMessage({ id: 1, error: { code: -32000 } })).toEqual({
       kind: 'error',

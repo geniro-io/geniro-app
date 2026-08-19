@@ -538,7 +538,12 @@ describe('AcpTurnDriver session resume', () => {
           availableCommands: [{ name: 'review' }],
         }),
       ),
-    ).toEqual([{ type: 'slash_commands', commands: ['review'] }]);
+    ).toEqual([
+      {
+        type: 'slash_commands',
+        commands: [{ name: 'review', description: null }],
+      },
+    ]);
     h.feed(
       update({
         sessionUpdate: 'usage_update',
@@ -825,6 +830,285 @@ describe('AcpTurnDriver model selection', () => {
       });
     });
 
+    describe('a model parameter the current model does not take', () => {
+      /**
+       * A `session/new` reply shaped like cursor's own: the model option, plus
+       * the model's parameters as their own entries under the agent's
+       * categories. Values measured on cursor-agent 2026.08.11-e8db854 —
+       * `grok-4.6` offers `low|medium|high|xhigh` and no `max`.
+       */
+      function sessionOffering(
+        currentModel: string,
+        effortValues: string[] | null,
+      ): Record<string, unknown> {
+        return {
+          sessionId: 's-1',
+          configOptions: [
+            {
+              id: 'model',
+              category: 'model',
+              currentValue: currentModel,
+              options: [{ value: currentModel, name: currentModel }],
+            },
+            ...(effortValues === null
+              ? []
+              : [
+                  {
+                    id: 'effort',
+                    category: 'thought_level',
+                    currentValue: 'high',
+                    options: effortValues.map((value) => ({
+                      value,
+                      name: value,
+                    })),
+                  },
+                ]),
+          ],
+        };
+      }
+
+      /** A turn already on `grok-4.6`, asking for an effort with it. */
+      function turnOn(
+        model: string,
+        effort: string,
+      ): Partial<AcpDriverOptions> {
+        return {
+          input: { ...BASE_INPUT, model },
+          modelSelection: {
+            model,
+            parameters: [
+              // The shape `cursorModelSelection` really produces — every
+              // spelling of the axis, so the driver can resolve it.
+              {
+                id: 'effort',
+                value: effort,
+                alternateIds: ['effort', 'reasoning'],
+              },
+            ],
+          },
+        };
+      }
+
+      it('says so, and sends nothing, rather than being refused for it', () => {
+        // The report: a cursor chat on Grok with the effort chip left at `max`
+        // opened every turn with a red SYSTEM row reading `agent declined model
+        // setting 'effort=max': Invalid params` — and then worked normally. The
+        // chip is remembered per CLI and `max` is real on `claude-opus-5`, so
+        // pointing that chat at Grok asks for a value that model has never had.
+        const h = harness(turnOn('grok-4.6', 'max'));
+        h.feed(initializeReply(1));
+        const events = h.feed({
+          id: 2,
+          result: sessionOffering('grok-4.6', [
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+          ]),
+        });
+
+        // Not sent at all: the reply on hand describes the model this turn runs
+        // on, so the round-trip could only come back refused.
+        expect(
+          h.sent.filter(
+            (frame) =>
+              frame.method === 'session/set_config_option' &&
+              (frame.params as { configId?: string }).configId === 'effort',
+          ),
+        ).toEqual([]);
+        expect(noticesIn(events)).toEqual([
+          {
+            type: 'notice',
+            severity: 'warning',
+            message:
+              "this model does not offer 'effort=max' — the turn runs at 'high' (it offers low, medium, high, xhigh)",
+          },
+        ]);
+      });
+
+      it('says it plainly when the model has no such setting at all', () => {
+        // `auto-smart` and `composer-2.5` enumerate no `effort` option; the
+        // agent's own words for the frame are `Unknown model config option`.
+        const h = harness(turnOn('auto-smart', 'max'));
+        h.feed(initializeReply(1));
+        const events = h.feed({
+          id: 2,
+          result: sessionOffering('auto-smart', null),
+        });
+
+        expect(noticesIn(events)).toEqual([
+          {
+            type: 'notice',
+            severity: 'warning',
+            message:
+              "this model has no 'effort' setting — the turn runs without it",
+          },
+        ]);
+      });
+
+      it('sends a value the model DOES offer, with no notice', () => {
+        const h = harness(turnOn('grok-4.6', 'xhigh'));
+        h.feed(initializeReply(1));
+        const events = h.feed({
+          id: 2,
+          result: sessionOffering('grok-4.6', [
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+          ]),
+        });
+
+        expect(
+          h.sent.find(
+            (frame) =>
+              frame.method === 'session/set_config_option' &&
+              (frame.params as { configId?: string }).configId === 'effort',
+          )?.params,
+        ).toEqual({ sessionId: 's-1', configId: 'effort', value: 'xhigh' });
+        expect(noticesIn(events)).toEqual([]);
+      });
+
+      it('still ASKS when the turn is switching models', () => {
+        // The reply describes the model being switched away from, so it says
+        // nothing about the one this turn will run on. Deferring the prompt
+        // behind the model reply would make it checkable and was measured to
+        // cost ~1.4s per turn — the agent does not serialize the switch against
+        // the prompt (first session/update at ~1.6s pipelined vs ~3.0s
+        // deferred, cursor-agent 2026.08.11-e8db854).
+        const h = harness(turnOn('claude-opus-5', 'max'));
+        h.feed(initializeReply(1));
+        const events = h.feed({
+          id: 2,
+          result: {
+            sessionId: 's-1',
+            configOptions: [
+              {
+                id: 'model',
+                category: 'model',
+                currentValue: 'grok-4.6',
+                options: [
+                  { value: 'grok-4.6', name: 'grok' },
+                  { value: 'claude-opus-5', name: 'opus' },
+                ],
+              },
+              // Grok's list, which does NOT contain `max` — and must not be
+              // read as the incoming model's.
+              {
+                id: 'effort',
+                category: 'thought_level',
+                currentValue: 'high',
+                options: ['low', 'medium', 'high', 'xhigh'].map((value) => ({
+                  value,
+                  name: value,
+                })),
+              },
+            ],
+          },
+        });
+
+        expect(
+          h.sent.find(
+            (frame) =>
+              frame.method === 'session/set_config_option' &&
+              (frame.params as { configId?: string }).configId === 'effort',
+          )?.params,
+        ).toEqual({ sessionId: 's-1', configId: 'effort', value: 'max' });
+        expect(noticesIn(events)).toEqual([]);
+      });
+
+      it('sends the spelling THIS model uses, not the one it was handed', () => {
+        // One axis, two names, and the model decides which: measured on
+        // cursor-agent 2026.08.11-e8db854, `gpt-5.2` enumerates `reasoning`
+        // where `grok-4.6` enumerates `effort`, and the wrong name is
+        // `-32602 Unknown model config option`. So the OpenAI-family models had
+        // an effort picker that could never have applied anything.
+        const h = harness({
+          input: { ...BASE_INPUT, model: 'gpt-5.2' },
+          modelSelection: {
+            model: 'gpt-5.2',
+            parameters: [
+              {
+                id: 'effort',
+                value: 'high',
+                alternateIds: ['effort', 'reasoning'],
+              },
+            ],
+          },
+        });
+        h.feed(initializeReply(1));
+        const events = h.feed({
+          id: 2,
+          result: {
+            sessionId: 's-1',
+            configOptions: [
+              {
+                id: 'model',
+                category: 'model',
+                currentValue: 'gpt-5.2',
+                options: [{ value: 'gpt-5.2', name: 'GPT-5.2' }],
+              },
+              {
+                id: 'reasoning',
+                category: 'thought_level',
+                currentValue: 'medium',
+                options: ['low', 'medium', 'high', 'extra-high'].map(
+                  (value) => ({ value, name: value }),
+                ),
+              },
+            ],
+          },
+        });
+
+        expect(
+          h.sent.find((frame) => frame.method === 'session/set_config_option')
+            ?.params,
+        ).toEqual({ sessionId: 's-1', configId: 'reasoning', value: 'high' });
+        expect(noticesIn(events)).toEqual([]);
+      });
+
+      it('keeps the id it was handed when the model offers no other spelling', () => {
+        // The ordinary case, and the guard against the resolution above turning
+        // into a guess: `grok-4.6` has `effort`, so `effort` is what goes out.
+        const h = harness(turnOn('grok-4.6', 'xhigh'));
+        h.feed(initializeReply(1));
+        h.feed({
+          id: 2,
+          result: sessionOffering('grok-4.6', [
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+          ]),
+        });
+
+        expect(
+          h.sent.find((frame) => frame.method === 'session/set_config_option')
+            ?.params,
+        ).toEqual({ sessionId: 's-1', configId: 'effort', value: 'xhigh' });
+      });
+
+      it('asks anyway when the agent enumerated no options at all', () => {
+        // Silence is not a refusal — the same contract the model check obeys.
+        // Reading it as one would drop every parameter on a pre-1.0 transport.
+        const h = harness(turnOn('grok-4.6', 'max'));
+        h.feed(initializeReply(1));
+        const events = h.feed({
+          id: 2,
+          result: { sessionId: 's-1', models: { currentModelId: 'grok-4.6' } },
+        });
+
+        expect(
+          h.sent.find(
+            (frame) =>
+              frame.method === 'session/set_config_option' &&
+              (frame.params as { configId?: string }).configId === 'effort',
+          )?.params,
+        ).toEqual({ sessionId: 's-1', configId: 'effort', value: 'max' });
+        expect(noticesIn(events)).toEqual([]);
+      });
+    });
+
     it('reports a refused set_config_option as the same model degrade', () => {
       // The user asked to run on a model; which frame carried that request is
       // not something they should have to learn from the failure line.
@@ -895,7 +1179,14 @@ describe('AcpTurnDriver session modes', () => {
     h.feed(sessionWithModes('agent', ['agent', 'plan']));
     const events = h.feed({ id: 3, error: { code: -32602, message: 'no' } });
     expect(events).toEqual([
-      { type: 'notice', message: "agent declined session mode 'plan': no" },
+      {
+        type: 'notice',
+        // `warning`, not the default: "a degrade, not a failure" is what this
+        // arm's own comment has always said, and the severity is what finally
+        // keeps the renderer from drawing it as a failed turn.
+        severity: 'warning',
+        message: "agent declined session mode 'plan': no",
+      },
     ]);
   });
 });
@@ -1202,13 +1493,26 @@ describe('AcpTurnDriver session updates', () => {
         update({
           sessionUpdate: 'available_commands_update',
           availableCommands: [
-            { name: 'review', description: 'r' },
+            { name: 'review', description: 'Review the diff' },
+            { name: 'shell', description: null },
             { name: '', description: 'skipped' },
             { description: 'no name' },
           ],
         }),
       ),
-    ).toEqual([{ type: 'slash_commands', commands: ['review'] }]);
+    ).toEqual([
+      {
+        type: 'slash_commands',
+        // The DESCRIPTION rides along, because for an ACP agent with no
+        // on-disk convention geniro can scan this frame is the only place it
+        // exists — reading just the name left every row in the composer's `/`
+        // popup a bare word. An entry that reports none stays null.
+        commands: [
+          { name: 'review', description: 'Review the diff' },
+          { name: 'shell', description: null },
+        ],
+      },
+    ]);
   });
 
   it('ignores updates the transcript does not model', () => {
@@ -1352,6 +1656,93 @@ describe('AcpTurnDriver turn completion', () => {
     const h = primed();
     const [event] = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
     expect(event).toMatchObject({ finalText: null });
+  });
+});
+
+describe('AcpTurnDriver off-protocol context reading', () => {
+  const READING = {
+    usedTokens: 101_100,
+    windowTokens: 200_000,
+    model: 'cursor-grok-4.6',
+  };
+  const PROGRESS = {
+    type: 'context_progress',
+    contextTokens: 101_100,
+    contextWindowTokens: 200_000,
+    contextModel: 'cursor-grok-4.6',
+  };
+
+  /** Drive the handshake, returning the events the session reply produced. */
+  function opened(overrides: Partial<AcpDriverOptions>): {
+    h: Harness;
+    onSession: AgentEvent[];
+  } {
+    const h = harness(overrides);
+    h.feed(initializeReply(1));
+    return { h, onSession: h.feed({ id: 2, result: { sessionId: 's' } }) };
+  }
+
+  it('reports the window BEFORE the prompt, so a resumed chat is scaled at once', () => {
+    // ACP carries no context accounting, so an agent whose figures live off
+    // protocol had none until its turn ended: the reported cursor chat showed a
+    // full breakdown in the panel behind a ring that had never been given a
+    // reading. Taken at the session reply — the prompt has not gone out yet.
+    const { onSession } = opened({ readContext: () => READING });
+    expect(onSession).toContainEqual(PROGRESS);
+  });
+
+  it('takes a fresh reading AHEAD of the turn_complete that settles the run', () => {
+    // Order is the assertion: the live plane a reading rides is cleared when the
+    // run settles, so one emitted after `turn_complete` would be published into
+    // a state the client has already been told to drop.
+    const { h } = opened({ readContext: () => READING });
+    const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+    const reading = events.findIndex((e) => e.type === 'context_progress');
+    const complete = events.findIndex((e) => e.type === 'turn_complete');
+    expect(reading).toBeGreaterThanOrEqual(0);
+    expect(reading).toBeLessThan(complete);
+  });
+
+  it('says nothing when the source has no used figure yet', () => {
+    // A session the CLI has not written to — a fresh conversation's first turn.
+    // An empty window is not a reading of zero, and a ring drawn at 0% would be
+    // a claim rather than a silence.
+    const { h, onSession } = opened({
+      readContext: () => ({
+        usedTokens: null,
+        windowTokens: 200_000,
+        model: null,
+      }),
+    });
+    expect(onSession.some((e) => e.type === 'context_progress')).toBe(false);
+    expect(
+      h
+        .feed({ id: 3, result: { stopReason: 'end_turn' } })
+        .some((e) => e.type === 'context_progress'),
+    ).toBe(false);
+  });
+
+  it('survives a source that throws — a meter is not worth a failed turn', () => {
+    const warn = vi.fn();
+    const { h, onSession } = opened({
+      readContext: () => {
+        throw new Error('store is locked');
+      },
+      logger: { warn },
+    });
+    expect(onSession.some((e) => e.type === 'context_progress')).toBe(false);
+    // …and the turn still finishes normally rather than dying on the readout.
+    expect(
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: 'turn_complete',
+        stopReason: 'end_turn',
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('store is locked'),
+    );
   });
 });
 

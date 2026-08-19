@@ -1,6 +1,6 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 
-import type { RunStatus } from '../../runs/runs.types';
+import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
 import type { RunDao } from '../dao/run.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 
@@ -36,9 +36,17 @@ export async function writeRunStatus(
    * fresh as the last list fetch — for a chat nobody has open, that is the
    * user's own message from before the turn started.
    *
-   * Null on every non-terminal write, where there is nothing to summarise.
+   * Null on a settle the agent said nothing on, and on every non-terminal
+   * write. Those two are told apart on the WIRE rather than here — see the
+   * `isTerminalRunStatus` gate below.
    */
   summary: string | null = null,
+  /**
+   * True when this settle's whole turn was the CLI's own context compaction —
+   * see {@link RunStatusEvent.housekeeping}. Never set on a non-terminal write:
+   * a compaction that a working turn ran mid-flight is not what this names.
+   */
+  housekeeping = false,
 ): Promise<void> {
   await deps.runDao.updateById(runId, { status }, em);
   // `awaiting: null` on EVERY status write, which is the one place it can be
@@ -52,11 +60,19 @@ export async function writeRunStatus(
   // and saying so here is what keeps a `needs-input` badge from outliving the
   // turn it belonged to — the card is gone from the screen, and the badge would
   // have gone on claiming the user was the blocker.
+  // A TERMINAL status always carries `summary`, null included; a non-terminal
+  // one never does. The two are different statements and the wire has to keep
+  // them apart: the client holds the last sentence it was given, so omitting a
+  // settle's null left the previous turn's closing words standing and a
+  // wordless turn announced them as its own — see `RunStatusEvent.summary`.
+  const settled = isTerminalRunStatus(status);
   deps.bus.publishRunStatus({
     runId,
     status,
     activity,
     awaiting: null,
-    ...(summary === null ? {} : { summary }),
+    ...(settled ? { summary } : {}),
+    // Only ever said out loud, never as a `false` nobody reads.
+    ...(settled && housekeeping ? { housekeeping } : {}),
   });
 }

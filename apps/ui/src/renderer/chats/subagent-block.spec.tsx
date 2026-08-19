@@ -129,13 +129,14 @@ function disclosure(): HTMLButtonElement | null {
 }
 
 /**
- * The block's status chip — the ONE place the block states its status now that
- * the body's footer no longer repeats it. Matched by the classes
- * `StatusBadge` gives it, since it carries no role or test id of its own.
+ * The block's status PILL — which only two statuses get. `running` and `done`
+ * are a spinner and a check now (the pill on every settled delegate was the
+ * loudest thing in a run of them), so this returning null is itself a fact
+ * some tests assert.
  */
 function badge(): Element | null {
   return container.querySelector(
-    '[data-role="block-shell"] span[class*="rounded"][class*="text-[10px]"]',
+    '[data-role="block-shell"] [data-slot="block-status-badge"]',
   );
 }
 

@@ -2,8 +2,10 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +32,25 @@ export interface CursorProfileSeed {
   sessionStoreDir?: string;
   /** The user's home, for reading their `cli-config.json` (test seam). */
   homeDir?: string;
+  /**
+   * Open the handshake ON this model, by writing it into the copied
+   * `cli-config.json` rather than switching afterwards.
+   *
+   * The CLI resolves its selected model from that file, and a `session/new`
+   * reply describes THE CURRENT MODEL — its config options, and so its effort
+   * vocabulary. Probed 2026-08-19 on 2026.08.11-e8db854: seeding `grok-4.6`
+   * makes one handshake report `effort` as `low|medium|high|xhigh`, seeding
+   * `claude-opus-5` reports the same plus `max`, and `auto-smart` reports no
+   * `effort` option at all. That is the whole mechanism behind the per-model
+   * effort listing, and it costs no extra frame — the alternative,
+   * `session/set_config_option` after the fact, is a second round trip
+   * measured at 2.2–3.0s.
+   *
+   * Only ever set on a PROBE profile. A turn does not use it: switching the
+   * model in-protocol is what the driver already does, and moving that into the
+   * profile would change every turn's path for no gain here.
+   */
+  model?: string;
 }
 
 /**
@@ -94,6 +115,7 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
   // in flight together under graph fan-out, and they must not share a profile —
   // that is the same race, moved one level in.
   const dir = mkdtempSync(join(seed.baseDir, CURSOR_PROFILE_DIR_PREFIX));
+  const configPath = join(dir, CURSOR_SEEDED_CONFIG_FILE);
   try {
     copyFileSync(
       join(
@@ -101,10 +123,13 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
         CURSOR_HOME_DIR_NAME,
         CURSOR_SEEDED_CONFIG_FILE,
       ),
-      join(dir, CURSOR_SEEDED_CONFIG_FILE),
+      configPath,
     );
   } catch {
     // Absent, unreadable, or a directory — the CLI writes its own defaults.
+  }
+  if (seed.model !== undefined && seed.model !== '') {
+    writeSeededModel(configPath, seed.model);
   }
   if (seed.sessionStoreDir !== undefined) {
     // Deliberately NOT swallowed, unlike the config copy above. A missing config
@@ -116,6 +141,50 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
     symlinkSync(seed.sessionStoreDir, join(dir, CURSOR_ACP_SESSIONS_DIR_NAME));
   }
   return dir;
+}
+
+/**
+ * Point a seeded `cli-config.json` at one model.
+ *
+ * The two keys the CLI reads its selection from, and no others: `model.modelId`
+ * is what it opens with, `selectedModel` is the parameterized form the ACP
+ * handshake resolves. `parameters` is emptied deliberately — a probe asks what
+ * the model OFFERS, and carrying the user's stored values for a different model
+ * would have the CLI resolve an axis this one may not have.
+ *
+ * Best-effort on purpose: an unreadable or absent config leaves the profile
+ * exactly as it was, and the handshake then reports the CLI's own default
+ * model. The listing above reads that as "we could not narrow it" and falls
+ * back to the superset, which is the safe direction — a level wrongly hidden is
+ * a control the user cannot reach, while one wrongly offered is refused with a
+ * sentence.
+ */
+function writeSeededModel(configPath: string, model: string): void {
+  let config: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed)
+    ) {
+      config = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // No config to merge into — write one carrying only the model.
+  }
+  try {
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...config,
+        model: { modelId: model },
+        selectedModel: { modelId: model, parameters: [] },
+      }),
+    );
+  } catch {
+    // The profile is still usable; it just opens on the CLI's own model.
+  }
 }
 
 /**

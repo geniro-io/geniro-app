@@ -106,6 +106,23 @@ function createWindow(): void {
     show: false,
     title: 'Geniro',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+    /**
+     * The app draws its own title bar — the shape Chrome and Cursor use.
+     *
+     * `hiddenInset` removes the system's strip while KEEPING the traffic
+     * lights, which is the whole point: the band the OS drew held nothing but
+     * the word "Geniro" directly above a row of ours that already named the
+     * open chat, so the window spent ~28px saying something it said again
+     * underneath. `frame: false` would take the lights with it and leave the
+     * app owing the user three buttons it would have to draw and wire itself.
+     *
+     * The lights are positioned INTO the nav rail's own top row (see
+     * `components/nav-rail.tsx`, which reserves the width) rather than left at
+     * the default inset, because that default assumes a title bar's height and
+     * ours is the rail's. Both values are macOS-only and ignored elsewhere.
+     */
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 10, y: 16 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

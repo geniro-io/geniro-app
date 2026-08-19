@@ -23,6 +23,7 @@ import type {
   AgentCommandOptions,
   AgentContextUsage,
   AgentEffort,
+  AgentEffortListing,
   AgentErrorRecovery,
   AgentEvent,
   AgentMcpFolderFacts,
@@ -32,6 +33,7 @@ import type {
   AgentMcpServersInput,
   AgentModel,
   AgentPlanLimits,
+  AgentReportedCommand,
   AgentSession,
   AgentSessionHistory,
   AgentSessionImportInput,
@@ -837,6 +839,40 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The levels ONE MODEL of this CLI accepts — the narrowing of
+   * {@link listEfforts} that a picker should actually offer.
+   *
+   * Concrete over config, and that default is the right answer for a CLI whose
+   * effort vocabulary belongs to the BINARY: claude's `--effort` takes the same
+   * words whichever model runs, so its per-model list is its CLI-wide list and
+   * asking the binary per model would spend a probe to learn nothing.
+   *
+   * A CLI whose levels belong to the MODEL overrides this. Cursor does: its
+   * levels arrive as a per-model config option in the ACP handshake, so the
+   * superset above can only ever be a union that some models refuse.
+   *
+   * `model` is null when nothing has been chosen yet — answer with the superset
+   * then, never with silence: the picker exists before a model does, and a chip
+   * that renders nothing until a model is picked reads as a broken control.
+   *
+   * MUST NOT throw, like every listing on this base: a CLI that cannot be asked
+   * degrades to the superset, because hiding a level geniro merely failed to
+   * confirm would take away a control that works.
+   */
+  async listModelEfforts(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentEffortListing> {
+    void model;
+    void options;
+    const config = this.getConfig();
+    return {
+      efforts: [...config.efforts],
+      unavailableReason: config.effortsUnavailableReason,
+    };
+  }
+
+  /**
    * The skills / slash commands this CLI can be invoked with in a folder, as
    * found on disk — each CLI keeps them under its own roots
    * (`config.skillRoots`: `.claude/skills`, `.claude/commands`,
@@ -896,7 +932,7 @@ export abstract class AgentAdapter {
    */
   async listReportedCommands(
     options: AgentCommandOptions = {},
-  ): Promise<string[]> {
+  ): Promise<AgentReportedCommand[]> {
     const probe = this.getConfig().reportedCommands;
     if (!probe) {
       return [];
@@ -905,7 +941,7 @@ export abstract class AgentAdapter {
     // and that must degrade to the disk scan like every other probe failure
     // rather than throw out of a listing.
     let cwd = '';
-    let captured: string[] = [];
+    let captured: AgentReportedCommand[] = [];
     try {
       cwd = this.makeProbeRoot('commands');
       let resolveCaptured!: () => void;
@@ -927,9 +963,9 @@ export abstract class AgentAdapter {
           if (event.type === 'slash_commands' && captured.length === 0) {
             captured = event.commands
               .filter(
-                (name) =>
+                (command) =>
                   probe.internalPrefix === null ||
-                  !name.startsWith(probe.internalPrefix),
+                  !command.name.startsWith(probe.internalPrefix),
               )
               .slice(0, probe.maxCommands);
             resolveCaptured();

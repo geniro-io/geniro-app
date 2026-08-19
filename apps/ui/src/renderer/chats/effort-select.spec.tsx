@@ -135,4 +135,50 @@ describe('EffortSelect', () => {
     expect(trigger(el)!.textContent).toContain('legacy-level');
     expect(optionValues(el)).toContain('legacy-level');
   });
+
+  it('DROPS a stored level when the list belongs to one model', () => {
+    // The reported case: an effort chip is remembered per CLI, so a cursor chat
+    // moved onto Grok still carried `max` — which `claude-opus-5` takes and
+    // `grok-4.6` has never had (measured on 2026.08.11-e8db854). The add-back
+    // row above is right for a CLI's own vocabulary drifting and exactly wrong
+    // here: it would re-offer the value the model refuses, on the very control
+    // built to stop offering it.
+    const el = render(
+      <EffortSelect
+        efforts={[
+          { id: 'low', label: 'low' },
+          { id: 'xhigh', label: 'xhigh' },
+        ]}
+        value="max"
+        levelsAreModelSpecific
+        onChange={() => {}}
+      />,
+    );
+
+    expect(optionValues(el)).toEqual(['low', 'xhigh', 'default effort']);
+    // …and the chip reads as the CLI's default, which is what the turn will
+    // actually run at — naming `max` would claim a level it cannot reach.
+    expect(trigger(el)!.textContent).toContain('default effort');
+    expect(trigger(el)!.textContent).not.toContain('max');
+  });
+
+  it('names the MODEL when it is the model that has no effort axis', () => {
+    // `auto-smart` and `composer-2.5` enumerate no `effort` option at all, so
+    // the picker has nothing to offer — and must say which model, since a
+    // control that simply disappears is indistinguishable from a broken one.
+    const el = render(
+      <EffortSelect
+        efforts={[]}
+        value={null}
+        levelsAreModelSpecific
+        unavailableReason="auto-smart has no reasoning-effort setting"
+        onChange={() => {}}
+      />,
+    );
+
+    expect(el.textContent).toContain('no effort control');
+    expect(el.querySelector('[title]')?.getAttribute('title')).toContain(
+      'auto-smart',
+    );
+  });
 });

@@ -12,17 +12,23 @@ your machine, no cloud.
 
 ## Install (macOS, Apple Silicon)
 
-Builds are **ad-hoc signed** (no Apple Developer ID). Both install paths strip
-the macOS quarantine flag so Gatekeeper doesn't block the app — the Homebrew
-cask does it in a `postflight`, the install script via `xattr`. (A DMG opened
-straight from a browser download **would** be blocked — use brew or the script.)
+Builds are signed with Geniro's own certificate but are **not notarized** (no
+Apple Developer ID). Both install paths therefore strip the macOS quarantine
+flag so Gatekeeper doesn't block the app — the Homebrew cask does it in a
+`postflight`, the install script via `xattr`. (A DMG opened straight from a
+browser download **would** be blocked — use brew or the script.)
+
+The certificate is there so macOS can tell one release from the next: every
+privacy permission you grant is recorded against the app's code signature, and
+before the app was signed each new build looked like a different app and asked
+for all of them again.
 
 **Homebrew (recommended):**
 
 ```sh
 brew tap geniro-io/tap
 brew trust geniro-io/tap       # third-party taps need an explicit trust (Homebrew 6+)
-brew install --cask geniro     # ad-hoc/unsigned; the cask strips the quarantine bit post-install
+brew install --cask geniro     # not notarized; the cask strips the quarantine bit post-install
 brew upgrade --cask geniro     # later, to update
 ```
 
@@ -35,15 +41,20 @@ bash /tmp/geniro-install.sh                    # re-run to update
 
 Geniro **notifies** you when a newer release exists (Settings → Check now) but
 does not silently self-update — you update via `brew upgrade` or by re-running
-the script. (The app is ad-hoc/unsigned by design; there is no Apple Developer
-ID, notarization, or in-app silent auto-update.)
+the script. (There is no Apple Developer ID, no notarization, and no in-app
+silent auto-update.)
 
 ## Releasing
 
 Pushing to `main` runs `.github/workflows/release.yaml`: `semantic-release`
 determines the version and tags `v<x.y.z>`, a GitHub Release is cut, then the
-`build-app` job (macOS runner) syncs `apps/ui` to the tag, runs
-`build:mac` (ad-hoc), and attaches `Geniro-<v>-arm64.dmg` + `-arm64-mac.zip`.
+`build-app` job (macOS runner) syncs `apps/ui` to the tag, imports the release
+signing certificate from the `GENIRO_SIGNING_P12` /
+`GENIRO_SIGNING_P12_PASSWORD` repository secrets (generate them once with
+`node scripts/make-signing-identity.mjs`), runs `build:mac`, and attaches
+`Geniro-<v>-arm64.dmg` + `-arm64-mac.zip`. Without those secrets the job fails
+rather than shipping an unsigned build, which would silently reset every user's
+macOS permissions.
 
 **Homebrew tap auto-bump** (optional): the tap repo `geniro-io/homebrew-tap`
 holds the cask ([`packaging/homebrew/geniro.rb`](packaging/homebrew/geniro.rb) is

@@ -294,12 +294,15 @@ function useOneShotVerdict(
 function QuestionCard({
   questions,
   verdict,
+  answer,
   expired,
   onRespond,
 }: {
   /** Already parsed and non-empty. */
   questions: ParsedQuestion[];
   verdict: boolean | null;
+  /** What the user answered, once the transcript recorded it. */
+  answer: string | null;
   expired: boolean;
   /**
    * `images` are NOT part of the answer string — they cannot be. The answer
@@ -785,13 +788,33 @@ function QuestionCard({
           </div>
         </>
       ) : (
-        <p
-          className={cn(
-            'text-xs',
-            verdict ? 'text-success' : 'text-destructive',
-          )}>
-          {verdict ? '✓ answered' : '✗ declined'}
-        </p>
+        <div className="flex flex-col gap-1.5">
+          <p
+            className={cn(
+              'm-0 text-xs',
+              verdict ? 'text-success' : 'text-destructive',
+            )}>
+            {verdict ? '✓ answered' : '✗ declined'}
+          </p>
+          {/* The words the user actually sent, which the card used to swallow:
+              a question was asked, answered, and the answer then existed
+              nowhere on screen — while the AGENT's every sentence stays in the
+              transcript forever. It carries the user bubble's own language
+              (`bg-primary/10` over `border-primary/20`, straight from
+              `message-bubble`'s `user` variant) rather than the muted grey of
+              card chrome, because that is whose sentence it is.
+
+              A multi-question card sends one labelled line per question, so
+              `whitespace-pre-wrap` is what keeps that shape; the height is
+              capped because the answer shares the wire budget with a 32k
+              limit and a settled card must never push the live one off
+              screen. */}
+          {verdict && answer !== null && answer.trim() !== '' ? (
+            <p className="m-0 max-h-40 overflow-auto rounded-md border border-primary/20 bg-primary/10 px-2.5 py-1.5 text-sm break-words whitespace-pre-wrap">
+              {answer}
+            </p>
+          ) : null}
+        </div>
       )}
     </Card>
   );
@@ -908,6 +931,7 @@ export function ApprovalCard({
   toolName,
   input,
   verdict,
+  answer = null,
   expired = false,
   onRespond,
 }: {
@@ -915,6 +939,16 @@ export function ApprovalCard({
   input: unknown;
   /** null while pending; the user's answer once the verdict item arrived. */
   verdict: boolean | null;
+  /**
+   * The words that answer carried, read back from the same verdict item.
+   *
+   * Only the QUESTION body can show one, and only that body can produce one:
+   * the daemon records an answer solely where it folded it into the CLI's own
+   * question tool, and a permission card's verdict is a yes or a no with
+   * nothing said. Defaulted so a caller with nothing to read back — a card
+   * still pending — need not pass it.
+   */
+  answer?: string | null;
   /** The turn ended before an answer — no verdict can apply anymore. */
   expired?: boolean;
   /**
@@ -948,6 +982,7 @@ export function ApprovalCard({
     <QuestionCard
       questions={questions}
       verdict={verdict}
+      answer={answer}
       expired={expired}
       onRespond={onRespond}
     />

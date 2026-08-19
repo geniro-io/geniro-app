@@ -5,7 +5,6 @@ import {
   ListTree,
   Plug,
   Terminal as TerminalIcon,
-  X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
@@ -383,7 +382,6 @@ export function AgentsPanel({
   terminalReasons,
   usageReasons,
   metricsRunId = null,
-  onClose,
 }: {
   agents: AgentDisplay[];
   /**
@@ -521,7 +519,6 @@ export function AgentsPanel({
    * refusal — a turn mid-flight has no figures either.
    */
   usageReasons?: ReadonlyMap<string, string | null>;
-  onClose: () => void;
 }): React.JSX.Element {
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: 'chats.agentsPanelWidth',
@@ -599,21 +596,15 @@ export function AgentsPanel({
         max={maxWidth}
         onResize={resizeTo}
       />
-      <div className="flex items-center justify-between py-1.5 pr-2 pl-3">
+      {/* A heading and nothing else. The panel is part of the chat screen now
+          rather than a thing to summon, so there is no close control here and
+          none in the header that used to open it — see `showAgentsPanel` in
+          `Chats.tsx`. It is still RESIZABLE, which is the control that stays
+          worth having: someone who wants it out of the way drags it narrow,
+          and that width is remembered per install. */}
+      <div className="flex items-center py-1.5 pr-2 pl-3">
         <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Agents
-        </span>
-        <span className="flex items-center gap-0.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            aria-label="Close agents panel"
-            title="Close"
-            onClick={onClose}>
-            <X className="size-4 shrink-0" />
-          </Button>
         </span>
       </div>
       {mcpToggleError !== null && onDismissMcpToggleError ? (

@@ -19,9 +19,10 @@ import type { LatestRelease } from './updater';
  *
  * Two rules the shape of this file exists to enforce:
  *
- * 1. **A missing checksum is a refusal, not a warning.** The app is ad-hoc
- *    signed, so Gatekeeper validates nothing on the way in and the running app
- *    validates nothing on the way out. The published digest is the only link
+ * 1. **A missing checksum is a refusal, not a warning.** The app is signed but
+ *    not notarized, so Gatekeeper validates nothing on the way in and the
+ *    running app validates nothing on the way out. The published digest is the
+ *    only link
  *    between the release that was built and the code about to execute as the
  *    user. `install.sh` degrades to TLS-only with a warning because a human is
  *    watching it; nobody is watching this.
@@ -328,8 +329,8 @@ async function swapBundle(staged: string, bundlePath: string): Promise<void> {
     throw err;
   }
   // The archive was fetched by this process rather than by a browser, so it
-  // carries no quarantine bit — but a future download path might, and an
-  // ad-hoc app has no notarization ticket to clear one with. Failure is
+  // carries no quarantine bit — but a future download path might, and the app
+  // has no notarization ticket to clear one with. Failure is
   // swallowed for the same reason install.sh's is: nothing to strip is the
   // normal case.
   await execFileAsync(XATTR, ['-dr', 'com.apple.quarantine', bundlePath]).catch(

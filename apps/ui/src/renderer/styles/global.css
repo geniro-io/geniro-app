@@ -382,6 +382,30 @@
 }
 
 /*
+ * The window's own title bar, now that the OS one is hidden.
+ *
+ * `titleBarStyle: 'hiddenInset'` (see `main/index.ts`) gives the app the strip
+ * the system used to draw — and takes the drag handle with it, so a window
+ * with no `app-region: drag` anywhere cannot be moved at all. These two say
+ * which parts of the shell ARE the title bar.
+ *
+ * Declared here rather than as arbitrary values because `-webkit-app-region`
+ * is a non-standard property Tailwind has no utility for, and inline styles
+ * would spell the vendor prefix once per call site.
+ *
+ * `.app-no-drag` is not optional decoration: a control inside a drag region is
+ * INERT — the compositor takes the press for the window, and the click never
+ * reaches the DOM. Every button, input and menu trigger inside a `.app-drag`
+ * row carries it.
+ */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/*
  * The indeterminate sweep of `components/ui/progress-bar.tsx`.
  *
  * Declared here rather than as a Tailwind arbitrary value because keyframes

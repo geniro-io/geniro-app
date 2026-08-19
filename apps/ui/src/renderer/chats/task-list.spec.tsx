@@ -73,6 +73,13 @@ function spinning(): boolean {
   return container.querySelector('.animate-spin') !== null;
 }
 
+/** The card's own expand/collapse control. */
+function disclosure(): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>(
+    '[data-slot="task-list-card"] button',
+  )!;
+}
+
 describe('TaskListCard', () => {
   it('lists every task and says how far along the list is', () => {
     render(<TaskListCard entry={card()} />);
@@ -104,6 +111,52 @@ describe('TaskListCard', () => {
   it('renders nothing at all for an empty list', () => {
     render(<TaskListCard entry={card({ tasks: [] })} />);
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe('one list, not one copy of it per step', () => {
+  it('collapses a card the list has already moved past', () => {
+    // "Todo is duplicating. Why?" — an agent that says one sentence between two
+    // announcements got a card on each side of it, and both printed the whole
+    // eight-row list. There is ONE list; the earlier card is where it stood,
+    // not a second copy of it.
+    render(<TaskListCard entry={card({ latest: false })} />);
+    expect(taskTexts()).toEqual([]);
+    // It still says what the list was doing at that point — the whole reason
+    // the row stays in the flow rather than being dropped.
+    expect(container.textContent).toContain('1/3');
+    expect(
+      container.querySelector('[data-slot="task-list-current"]')?.textContent,
+    ).toContain('Editing the file');
+    expect(disclosure().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('opens on a click and closes again', () => {
+    render(<TaskListCard entry={card({ latest: false })} />);
+    act(() => disclosure().click());
+    expect(taskTexts()).toHaveLength(3);
+    act(() => disclosure().click());
+    expect(taskTexts()).toEqual([]);
+  });
+
+  it('folds a card away by ITSELF the moment a newer one lands', () => {
+    // The state is derived from `latest` rather than seeded into `useState`: a
+    // seeded initial value only applies at mount, so the card that was current
+    // when it appeared would stay expanded for good — and the duplication comes
+    // straight back on the next announcement.
+    render(<TaskListCard entry={card()} />);
+    expect(taskTexts()).toHaveLength(3);
+    render(<TaskListCard entry={card({ latest: false })} />);
+    expect(taskTexts()).toEqual([]);
+  });
+
+  it('keeps a card the reader opened open when it is superseded', () => {
+    // Their choice outranks the default, or reading an old list is a race
+    // against the agent's next announcement.
+    render(<TaskListCard entry={card({ latest: false })} />);
+    act(() => disclosure().click());
+    render(<TaskListCard entry={card({ latest: false, seq: 6 })} />);
+    expect(taskTexts()).toHaveLength(3);
   });
 });
 
@@ -150,6 +203,10 @@ describe('a task list nothing is working through', () => {
         <TaskListCard entry={card({ latest: false })} />
       </RunSettledContext.Provider>,
     );
+    // Opened by hand, because a superseded card is collapsed — without this the
+    // assertion would hold for the trivial reason that no row is on screen.
+    act(() => disclosure().click());
+    expect(taskTexts()).toHaveLength(3);
     expect(spinning()).toBe(false);
   });
 

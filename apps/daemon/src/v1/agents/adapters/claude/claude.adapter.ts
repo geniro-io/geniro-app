@@ -241,6 +241,13 @@ export class ClaudeAdapter extends AgentAdapter {
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
       /**
+       * True: this vocabulary belongs to the BINARY, not to a model — the same
+       * words work under every `--model`. So a level outside it is one the CLI
+       * ignores with a warning nobody reads, and refusing it at run creation is
+       * what makes the mistake visible.
+       */
+      effortsAreExhaustive: true,
+      /**
        * The aliases `claude --model` documents: each resolves to the latest
        * model of its tier, so they stay correct across releases without an app
        * update. This is the floor of the list, never the whole of it.

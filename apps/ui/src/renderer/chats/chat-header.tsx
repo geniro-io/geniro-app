@@ -1,13 +1,6 @@
-import {
-  Bot,
-  IdCard,
-  ListTodo,
-  PanelRight,
-  Workflow as WorkflowIcon,
-} from 'lucide-react';
+import { Bot, IdCard, Workflow as WorkflowIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
 import { cn } from '../components/ui/utils';
 import { folderName as configDirName } from './directory-select';
@@ -18,6 +11,7 @@ import {
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
+import { TaskCount, TaskIcon } from './task-list';
 import {
   formatDuration,
   type OpenTurn,
@@ -120,7 +114,9 @@ function WorkedTime({
  * label, live status (spinning while running), last activity. The run's
  * working directory lives in the composer's folder chip below, not here.
  *
- * On the right, only the side-panel toggle. The context meter used to sit here
+ * On the right, only what the agents panel is holding, as a readout. It used to
+ * be that panel's toggle; the panel is always on screen now, so there is nothing
+ * left to open. The context meter used to sit here
  * too and has moved into the composer, beside Send — the question it answers
  * ("how much room is left") is asked while composing the next message, not
  * while reading the header, and the eye leaves this row as soon as the
@@ -138,10 +134,8 @@ export function ChatHeader({
   workedMs = 0,
   turnCount = 0,
   openTurn = null,
-  sidePanelOpen,
-  onToggleSidePanel,
   runningSubagents = 0,
-  openTasks = 0,
+  tasks = null,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -205,15 +199,28 @@ export function ChatHeader({
    * it was computed — the same reason {@link turnStartedAt} is a timestamp.
    */
   openTurn?: OpenTurn | null;
-  sidePanelOpen: boolean;
-  onToggleSidePanel: () => void;
-  /** Delegates working right now — see {@link SidePanelLiveCounts}. */
+  /** Delegates working right now. */
   runningSubagents?: number;
-  /** Tasks on the agents' own lists that are not finished. */
-  openTasks?: number;
+  /**
+   * The agents' own task lists, as DONE OUT OF TOTAL — null when no agent here
+   * keeps one.
+   *
+   * A bare count of what is left was what got reported: `6` alone says nothing
+   * about whether that is six of seven or six of sixty, and it only ever
+   * shrinks, so it reads as a countdown out of an unstated number. The pair is
+   * also the one form the rest of the app already uses for a list's progress
+   * ({@link TaskCount}, in the transcript cards, the panel and the sub-agent
+   * headers), so the header now agrees with every other place the same lists
+   * are summarized instead of speaking its own dialect.
+   */
+  tasks?: { done: number; total: number } | null;
 }): React.JSX.Element {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
+    // `app-drag`: this row is the top of the window now that the OS title bar
+    // is hidden, and it carries no control at all — every child is a readout —
+    // so the whole width is a drag handle with nothing to opt out of it. A
+    // control added here later must carry `app-no-drag`, or it will be inert.
+    <div className="app-drag flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
       <div className="flex min-w-0 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon
@@ -265,19 +272,22 @@ export function ChatHeader({
         />
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
-        {/* What the panel is holding, stated BEFORE its toggle — the toggle
-            alone could not say whether opening it was worth the click. Each
-            counter renders only while it has something to count ("if there
-            is"), so a plain turn keeps the header exactly as it was, and both
-            are part of the SAME control: pressing one opens the list they
-            describe rather than making the user find it. */}
-        {runningSubagents > 0 || openTasks > 0 ? (
-          <button
-            type="button"
-            onClick={onToggleSidePanel}
-            aria-label={`Side panel — ${runningSubagents} running sub-agents, ${openTasks} open tasks`}
-            title={`${runningSubagents} sub-${runningSubagents === 1 ? 'agent' : 'agents'} working · ${openTasks} ${openTasks === 1 ? 'task' : 'tasks'} to go`}
-            className="flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs tabular-nums text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        {/* What the agents panel is holding, at a glance. It used to BE that
+            panel's toggle — "how much work is in here" was the one thing a bare
+            chevron could not say, so the counts and the control were one
+            button. The panel is always on screen now, so there is nothing left
+            to open and this is a readout: same figures, same place, no press.
+            Each counter renders only while it has something to count, so a
+            plain turn keeps the header exactly as it was. */}
+        {runningSubagents > 0 || (tasks !== null && tasks.total > 0) ? (
+          <span
+            data-slot="side-panel-counts"
+            title={`${runningSubagents} sub-${runningSubagents === 1 ? 'agent' : 'agents'} working${
+              tasks !== null && tasks.total > 0
+                ? ` · ${tasks.done} of ${tasks.total} ${tasks.total === 1 ? 'task' : 'tasks'} done`
+                : ''
+            }`}
+            className="flex shrink-0 items-center gap-2 px-1.5 py-1 text-xs tabular-nums text-muted-foreground">
             {runningSubagents > 0 ? (
               <span
                 data-slot="running-subagents"
@@ -286,24 +296,14 @@ export function ChatHeader({
                 {runningSubagents}
               </span>
             ) : null}
-            {openTasks > 0 ? (
+            {tasks !== null && tasks.total > 0 ? (
               <span data-slot="open-tasks" className="flex items-center gap-1">
-                <ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
-                {openTasks}
+                <TaskIcon className="size-3.5" />
+                <TaskCount done={tasks.done} total={tasks.total} />
               </span>
             ) : null}
-          </button>
+          </span>
         ) : null}
-        <Button
-          type="button"
-          variant={sidePanelOpen ? 'secondary' : 'ghost'}
-          size="icon"
-          className={cn('size-7', !sidePanelOpen && 'text-muted-foreground')}
-          aria-label={sidePanelOpen ? 'Close side panel' : 'Open side panel'}
-          title="Side panel"
-          onClick={onToggleSidePanel}>
-          <PanelRight className="size-4 shrink-0" />
-        </Button>
       </div>
     </div>
   );

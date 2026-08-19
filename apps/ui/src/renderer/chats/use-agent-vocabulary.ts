@@ -59,24 +59,43 @@ export function useAgentVocabulary<T>(
   /**
    * Fetches the list for one kind, or null when there is no client yet. Must be
    * referentially stable across renders for a given client — a fresh closure
-   * every render would refetch in a loop.
+   * every render would refetch in a loop. A caller that varies by
+   * {@link variant} closes over it here and declares it below.
    */
   fetchFor: ((kind: CliKind) => Promise<T[]>) | null,
+  /**
+   * A second dimension of the same question, folded into the cache key.
+   *
+   * The effort listing needs it: its levels belong to the MODEL, not only to
+   * the CLI, so two models are two answers and a kind-only key served the
+   * previous model's list from cache forever. Null for a vocabulary that is
+   * genuinely per-kind (the model picker), which keeps its key exactly what it
+   * was.
+   */
+  variant: string | null = null,
 ): AgentVocabularyState<T> {
-  const cacheRef = useRef(new Map<CliKind, T[]>());
-  /** Failed attempts per kind, so a retry loop cannot outrun its own bound. */
-  const attemptsRef = useRef(new Map<CliKind, number>());
+  const cacheRef = useRef(new Map<string, T[]>());
+  /** Failed attempts per key, so a retry loop cannot outrun its own bound. */
+  const attemptsRef = useRef(new Map<string, number>());
+  // `\u0000` because neither a kind nor a model can contain it, so no pair of
+  // (kind, model) can collide with another by concatenation.
+  const key = kind === null ? null : `${kind}\u0000${variant ?? ''}`;
   /** Bumped to re-run the fetch effect after a failure — see the constants. */
   const [retry, setRetry] = useState(0);
   // What the last finished fetch answered, and WHICH kind it answered for.
   // Only ever read when it matches the kind being asked about.
   const [answered, setAnswered] = useState<{
-    kind: CliKind;
+    key: string;
     items: T[];
   } | null>(null);
 
   useEffect(() => {
-    if (kind === null || fetchFor === null || cacheRef.current.has(kind)) {
+    if (
+      kind === null ||
+      key === null ||
+      fetchFor === null ||
+      cacheRef.current.has(key)
+    ) {
       return;
     }
     // An existing answer for the kind we are about to fetch can only be a
@@ -96,14 +115,14 @@ export function useAgentVocabulary<T>(
     // to correct it. The cost of clearing here is one frame of the stale
     // reading before this commits, against the multi-second window the CLI
     // takes to answer.
-    setAnswered((previous) => (previous?.kind === kind ? null : previous));
+    setAnswered((previous) => (previous?.key === key ? null : previous));
     let stale = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     void fetchFor(kind)
       .then((fetched) => {
-        cacheRef.current.set(kind, fetched);
+        cacheRef.current.set(key, fetched);
         if (!stale) {
-          setAnswered({ kind, items: fetched });
+          setAnswered({ key, items: fetched });
         }
       })
       .catch(() => {
@@ -112,12 +131,12 @@ export function useAgentVocabulary<T>(
         if (stale) {
           return;
         }
-        setAnswered({ kind, items: [] });
+        setAnswered({ key, items: [] });
         // ...and ASKING again is what this schedules. Without it "should ask
         // again" was never true: nothing re-runs this effect on its own, so the
         // empty list stood until the user switched agents or restarted.
-        const attempts = (attemptsRef.current.get(kind) ?? 0) + 1;
-        attemptsRef.current.set(kind, attempts);
+        const attempts = (attemptsRef.current.get(key) ?? 0) + 1;
+        attemptsRef.current.set(key, attempts);
         if (attempts < MAX_FETCH_ATTEMPTS) {
           timer = setTimeout(
             () => setRetry((tick) => tick + 1),
@@ -133,7 +152,7 @@ export function useAgentVocabulary<T>(
         clearTimeout(timer);
       }
     };
-  }, [kind, fetchFor, retry]);
+  }, [kind, key, fetchFor, retry]);
 
   // Resolved DURING RENDER, not in an effect, and that is the whole point: the
   // answer must belong to the kind being asked about in THIS commit. An
@@ -147,14 +166,14 @@ export function useAgentVocabulary<T>(
   // transcript recorded "agent does not offer the model 'claude-fable-5'".
   // Holding the previous list is not a flicker either: a cursor model probe
   // spawns a real `cursor-agent acp` and handshakes twice (7.0s cold).
-  if (kind === null || fetchFor === null) {
+  if (kind === null || key === null || fetchFor === null) {
     return { items: NOTHING_YET, loading: false };
   }
-  const cached = cacheRef.current.get(kind);
+  const cached = cacheRef.current.get(key);
   if (cached) {
     return { items: cached, loading: false };
   }
-  if (answered?.kind === kind) {
+  if (answered?.key === key) {
     return { items: answered.items, loading: false };
   }
   return { items: NOTHING_YET, loading: true };

@@ -226,4 +226,52 @@ describe('parseRunStatus — the run_status twin', () => {
       parseRunStatus({ runId: 'r1', status: 'completed', activity: null }),
     ).toEqual({ runId: 'r1', status: 'completed', activity: null });
   });
+
+  it('keeps a settle’s NULL summary, so a wordless turn clears the last one', () => {
+    // Three states, and the middle one is the whole fix: the client holds the
+    // last sentence it was given, so a settle that said nothing has to say so
+    // out loud. Dropped, a `/compact` turn — which produces no assistant
+    // message at all — notified with the answer from the turn before it.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        summary: null,
+      }),
+    ).toEqual({
+      runId: 'r1',
+      status: 'completed',
+      activity: null,
+      summary: null,
+    });
+    // …while an ABSENT one still asserts nothing, which is what lets an
+    // activity announce fire mid-turn without erasing the last settle's words.
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, activity: 'running Bash' }),
+    ).not.toHaveProperty('summary');
+  });
+
+  it('reads the housekeeping marker, and only when it is true', () => {
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        summary: null,
+        housekeeping: true,
+      }),
+    ).toMatchObject({ housekeeping: true });
+    // A settle that did real work says nothing here rather than `false`, and a
+    // daemon that predates the field is the same case — both must read as "not
+    // housekeeping" without the key appearing.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        summary: 'done',
+      }),
+    ).not.toHaveProperty('housekeeping');
+  });
 });

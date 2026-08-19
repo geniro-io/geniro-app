@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
-  AgentEffortWireSchema,
+  AgentEffortListingWireSchema,
   AgentModelWireSchema,
   AgentSessionListingWireSchema,
   AgentSkillWireSchema,
@@ -30,12 +30,26 @@ export class ListModelsQueryDto extends createZodDto(listModelsQuerySchema) {}
 /** One model an agent CLI accepts for `--model`. */
 export class AgentModelDto extends createZodDto(AgentModelWireSchema) {}
 
-/** Query for the effort listing — which agent CLI's levels to report. */
-export const listEffortsQuerySchema = z.object({ agent: AgentKindSchema });
+/**
+ * Query for the effort listing: which CLI, and — the part that makes the answer
+ * exact — which of its MODELS.
+ *
+ * `model` is optional and its absence is a real question rather than a missing
+ * argument: "what does this CLI offer at all" is what the picker asks before a
+ * model has been chosen, and it answers with the CLI-wide superset. Naming a
+ * model narrows it to what that model actually takes, which for cursor is a
+ * different list per model and for claude is the same one.
+ */
+export const listEffortsQuerySchema = z.object({
+  agent: AgentKindSchema,
+  model: z.string().min(1).optional(),
+});
 export class ListEffortsQueryDto extends createZodDto(listEffortsQuerySchema) {}
 
-/** One reasoning-effort level an agent CLI accepts for `--effort`. */
-export class AgentEffortDto extends createZodDto(AgentEffortWireSchema) {}
+/** The levels one model offers, or the reason it offers none. */
+export class AgentEffortListingDto extends createZodDto(
+  AgentEffortListingWireSchema,
+) {}
 
 /**
  * Query for the sessions listing: which CLI to ask, optionally narrowed to one

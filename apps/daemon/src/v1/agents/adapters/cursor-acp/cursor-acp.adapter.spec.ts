@@ -20,7 +20,11 @@ import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
 import type { AcpToolCall } from '../acp/acp.types';
-import type { AgentEvent, AgentTurnInput } from '../adapter.types';
+import type {
+  AdapterConfig,
+  AgentEvent,
+  AgentTurnInput,
+} from '../adapter.types';
 import { CursorAcpAdapter, cursorAutoDecision } from './cursor-acp.adapter';
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
@@ -326,6 +330,108 @@ describe('CursorAcpAdapter spawn', () => {
   });
 });
 
+/**
+ * A child whose `kill` actually ends it. The reported-commands probe cancels
+ * its own turn the moment the report lands, so without this the turn never
+ * settles and the probe waits out its deadline.
+ */
+class KillableAcpChild extends FakeChild {
+  override kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    super.kill(signal);
+    // A real child's `close` lands after the signal, never within it.
+    setTimeout(() => this.emit('close', null, signal), 0);
+    return true;
+  }
+}
+
+describe('CursorAcpAdapter self-reported commands', () => {
+  /**
+   * The probe settings the adapter ACTUALLY SHIPS, read off its config rather
+   * than off a literal next door: config is what `listReportedCommands` reads,
+   * so a value that stopped being wired into it fails here instead of passing
+   * against a name nothing uses.
+   */
+  function shippedProbe(): NonNullable<AdapterConfig['reportedCommands']> {
+    const probe = new CursorAcpAdapter().getConfig().reportedCommands;
+    if (!probe) {
+      throw new Error(
+        'cursor-agent must ship a reportedCommands probe — without it a folder ' +
+          'no turn has run in lists nothing the CLI reports about itself',
+      );
+    }
+    return probe;
+  }
+
+  it('asks the CLI what it offers, off the handshake and before any prompt', async () => {
+    // The defect this closes, measured 2026-08-19 on 2026.08.11-e8db854: the
+    // adapter declared `reportedCommands: null` and deferred to the mid-turn
+    // harvest, which only exists once a turn has run in that folder — so a
+    // fresh chat listed the disk scan alone. The CLI offered 27 commands and
+    // the composer showed 21.
+    shippedProbe();
+    const child = new KillableAcpChild(4242);
+    const { spawn } = fakeSpawn(child);
+    const reported = new CursorAcpAdapter({
+      spawn,
+      probeRootDir: mkdtempSync(join(tmpdir(), 'cursor-probe-root-')),
+    }).listReportedCommands();
+
+    handshake(child);
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [
+          { name: 'review-agent', description: 'Read-only defect review' },
+          { name: 'worktree', description: null },
+        ],
+      }),
+    );
+
+    await expect(reported).resolves.toEqual([
+      { name: 'review-agent', description: 'Read-only defect review' },
+      { name: 'worktree', description: null },
+    ]);
+    // Resolved without the turn ever ending: no `stopReason` reply was emitted,
+    // so this cannot have waited the turn out. The report rides the handshake
+    // rather than the answer, and the turn is cancelled the moment it lands.
+    expect(
+      framesOn(child).some((frame) => frame.method === 'session/prompt'),
+    ).toBe(true);
+    expect(child.kills).toBeGreaterThan(0);
+  });
+
+  it('keeps every name the CLI reports — this one has no internals to strip', async () => {
+    // claude reports `__remote-workflow`-style internals and declares a prefix
+    // for them. Across both readings of cursor-agent (27 entries in a git repo,
+    // 22 in an empty directory) every entry was user-invokable, so the null is
+    // a measurement and this is what fails if a filter is added on a hunch.
+    expect(shippedProbe().internalPrefix).toBeNull();
+
+    const child = new KillableAcpChild(4243);
+    const { spawn } = fakeSpawn(child);
+    const reported = new CursorAcpAdapter({
+      spawn,
+      probeRootDir: mkdtempSync(join(tmpdir(), 'cursor-probe-root-')),
+    }).listReportedCommands();
+
+    handshake(child);
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [
+          { name: '_internal-looking', description: null },
+          { name: 'share', description: null },
+        ],
+      }),
+    );
+
+    await expect(reported).resolves.toEqual([
+      { name: '_internal-looking', description: null },
+      { name: 'share', description: null },
+    ]);
+  });
+});
+
 describe('CursorAcpAdapter serves one turn per process', () => {
   it('refuses a second turn even when the caller asks for a run-scoped session', () => {
     // The observable is that the caller's `runScoped` opt-in does not make the
@@ -505,6 +611,53 @@ describe('CursorAcpAdapter turn shaping', () => {
     expect(dir!.startsWith(profileDir)).toBe(true);
     // And it is NOT the user's own, which is the whole point.
     expect(dir).not.toContain('/.cursor');
+  });
+
+  it('opens the turn’s profile ON the run’s own model', () => {
+    // What makes every later check possible: a `session/new` reply describes
+    // the CURRENT model, so a session opened on the user's default says nothing
+    // about the model this turn will run on — its effort vocabulary included.
+    // Seeded, the first reply describes the right model, and the model frame is
+    // not needed at all.
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    dirs.push(profileDir);
+
+    new CursorAcpAdapter({ spawn, profileDir }).start(
+      { ...BASE, model: 'grok-4.6' },
+      () => {},
+    );
+
+    const config = JSON.parse(
+      readFileSync(
+        join(captured.env!.CURSOR_CONFIG_DIR!, 'cli-config.json'),
+        'utf8',
+      ),
+    ) as { model?: { modelId?: string } };
+    expect(config.model?.modelId).toBe('grok-4.6');
+  });
+
+  it('seeds the BARE name out of a legacy composed id', () => {
+    // Existing chats store `claude-opus-5[thinking=true,…]`, and
+    // `cli-config.json` names a model rather than a variant — writing the
+    // bracketed form is a name the CLI does not know, which falls back to
+    // `auto-smart` and describes the wrong model's options.
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    dirs.push(profileDir);
+
+    new CursorAcpAdapter({ spawn, profileDir }).start(
+      { ...BASE, model: 'claude-opus-5[thinking=true,effort=high]' },
+      () => {},
+    );
+
+    const config = JSON.parse(
+      readFileSync(
+        join(captured.env!.CURSOR_CONFIG_DIR!, 'cli-config.json'),
+        'utf8',
+      ),
+    ) as { model?: { modelId?: string } };
+    expect(config.model?.modelId).toBe('claude-opus-5');
   });
 
   it('links that config dir’s conversation store at one the turn cannot delete', () => {

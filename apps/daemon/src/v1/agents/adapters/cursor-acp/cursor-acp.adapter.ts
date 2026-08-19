@@ -14,6 +14,8 @@ import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
 import {
   acpModelProbeFrames,
   acpModelProbeSettled,
+  acpProbeEnumeratedConfigOptions,
+  readAcpConfigOptionProbe,
   readAcpModelProbe,
 } from '../acp/acp-models';
 import {
@@ -29,6 +31,7 @@ import type {
   AdapterQuestion,
   AgentCommandOptions,
   AgentContextUsage,
+  AgentEffortListing,
   AgentMcpListingResult,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
@@ -50,6 +53,7 @@ import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
+  CURSOR_EFFORT_PARAMETER_IDS,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
@@ -78,7 +82,10 @@ import {
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
-import { cursorModelSelection } from './utils/cursor-model.utils';
+import {
+  cursorModelSelection,
+  splitCursorModelId,
+} from './utils/cursor-model.utils';
 import {
   removeCursorProfile,
   seedCursorProfile,
@@ -280,17 +287,57 @@ export class CursorAcpAdapter extends AgentAdapter {
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
       /**
+       * FALSE: the list above is a union of what SOME models offer, and it
+       * cannot be complete — `gpt-5.2` enumerates `extra-high` on its own
+       * `reasoning` axis (probed 2026-08-19 on 2026.08.11-e8db854), a value no
+       * other model has. Checked exhaustively, the daemon refused that level at
+       * run creation and the chat could not be started at all, on a level the
+       * picker had just offered because the CLI itself listed it.
+       *
+       * Nothing goes unchecked as a result: `listModelEfforts` asks the CLI per
+       * model, and the turn driver refuses a value the model does not offer with
+       * a row naming what it does — per turn, against the live agent, rather
+       * than against a constant that goes stale with the next model.
+       */
+      effortsAreExhaustive: false,
+      /**
        * Empty because {@link CursorAcpAdapter.listModels} answers for real —
        * `builtinModels` is the fallback for a CLI that cannot be asked, and
        * this one can. A hardcoded list would also go stale against an account
        * whose available models change without the binary changing.
        */
       builtinModels: [],
+      /**
+       * Transcribed from the CLI's own slash-command loader
+       * (`src/commands/custom-commands.ts` → `loadCommands` / `loadSkillRoots`
+       * in 2026.08.11-e8db854), which is the function that decides what a
+       * session can be invoked with. This field read `skills: []` with the
+       * note "No skills convention — only claude has one" for two milestones,
+       * and that was already false when it was written: cursor reads FIVE
+       * skill roots under each of the project and the user's home, and it
+       * reads claude's and codex's among them.
+       *
+       * `.cursor/skills-cursor` is the built-in set the CLI syncs into
+       * `~/.cursor` itself, so it is by far the biggest source of rows here —
+       * and it is the only one the loader takes at home scope alone. Scanning
+       * it under the project root too costs a missing directory's `readdir`
+       * and keeps this a flat list; the CLI's own rule discovery does walk it
+       * in the workspace, so a project that had one would not be wrong either.
+       */
       skillRoots: {
-        /** No skills convention — only claude has one. */
-        skills: [],
-        /** `<root>/.cursor/commands/**.md`. */
-        commands: [['.cursor', 'commands']],
+        skills: [
+          ['.cursor', 'skills'],
+          ['.cursor', 'skills-cursor'],
+          ['.agents', 'skills'],
+          // Third-party extensibility, which the loader defaults to ON.
+          ['.claude', 'skills'],
+          ['.codex', 'skills'],
+        ],
+        /** `<root>/.cursor/commands/**.md`, and claude's, which it also loads. */
+        commands: [
+          ['.cursor', 'commands'],
+          ['.claude', 'commands'],
+        ],
       },
       /**
        * ACP streams natively: `session/update` carries `agent_message_chunk`
@@ -298,11 +345,41 @@ export class CursorAcpAdapter extends AgentAdapter {
        */
       liveStream: null,
       /**
-       * Nothing to ask up front. Cursor reports its invokable set MID-TURN as
-       * an `available_commands_update`, which the driver harvests — a separate
-       * probe turn would buy nothing the next real turn does not.
+       * Asked up front, and the reason the earlier `null` was wrong is the
+       * whole point of this probe: the harvest it deferred to only exists AFTER
+       * a turn has run in that folder, so a chat opened in a folder cursor has
+       * never worked in listed the disk scan alone and nothing the CLI reports
+       * about itself. Measured 2026-08-19 on 2026.08.11-e8db854 against this
+       * repo: the CLI offered 27 commands and the composer showed 21, missing
+       * `apply-worktree`, `best-of-n`, `copy-request-id`, `delete-worktree`,
+       * `multi-model-review`, `review-agent`, `simplify` and `worktree`.
+       *
+       * Two facts make the probe cheap, both measured the same day. The
+       * `available_commands_update` rides the HANDSHAKE, not the answer: a
+       * probe that sent `session/new` and no prompt at all still received it,
+       * so the turn is cancelled the moment it lands and the model's reply is
+       * never waited on. And an empty probe cwd still gets the
+       * home-scope set (22 of the 27; the four worktree entries are project
+       * scoped and reach the list through the harvest once a real turn runs
+       * there), INCLUDING under a throwaway `CURSOR_CONFIG_DIR` holding only
+       * `cli-config.json` — this CLI resolves its skills from the user's home
+       * either way, exactly as it does `mcp.json`.
        */
-      reportedCommands: null,
+      reportedCommands: {
+        /** Never reached by the model: the turn is cancelled on the update. */
+        probePrompt: 'Reply with exactly: ok',
+        /** A hung handshake must not wedge the caller forever. */
+        probeTimeoutMs: 30_000,
+        /** Defensive bound — the CLI reports ~27 entries today. */
+        maxCommands: 500,
+        /**
+         * Null: this CLI reports no internal names to strip. Every entry across
+         * both readings (27 in a git repo, 22 in an empty directory) was a
+         * user-invokable command, so a prefix filter here would be a rule with
+         * nothing to match — unlike claude, whose `__remote-workflow` is real.
+         */
+        internalPrefix: null,
+      },
       mcp: {
         /**
          * No trust probe: the endpoint travels in `session/new` as a
@@ -557,14 +634,21 @@ export class CursorAcpAdapter extends AgentAdapter {
          * - Zero occurrences of any token/cost-shaped key anywhere in the
          *   captured frames.
          *
-         * So the reader is correct and there is nothing to read: no context
-         * used, no window, no spend. RE-CHECK by capturing a turn's frames again
-         * — a `usage_update` appearing is all it would take, since the driver
-         * already handles it and the meter would light up with no further change
-         * here.
+         * So the reader is correct and there is nothing to read ON THE WIRE: no
+         * context used, no window, no spend. RE-CHECK by capturing a turn's
+         * frames again — a `usage_update` appearing is all it would take, since
+         * the driver already handles it and the meter would light up with no
+         * further change here.
+         *
+         * The CONTEXT half of that is now answered off-protocol regardless, out
+         * of this CLI's own session store (`readContext` in `createTurnDriver`),
+         * so the sentence below names only what is still genuinely missing.
+         * Saying more than that is what the reported defect was made of: the
+         * reason claimed there was "no context figure to show" while the panel
+         * three pixels away was showing one.
          */
         unavailableReason:
-          'cursor-agent reports no token or cost usage over ACP — it sends no usage_update and its prompt reply carries no usage, so there is no context figure to show',
+          'cursor-agent reports no spend over ACP — it sends no usage_update and its prompt reply carries no usage, so a cost for this conversation cannot be shown',
         /**
          * No breakdown either — RE-MEASURED 2026-08-15 on 2026.08.11-e8db854,
          * because "the CLI shows a percentage, so it must send one" is a
@@ -779,6 +863,125 @@ export class CursorAcpAdapter extends AgentAdapter {
         removeCursorProfile(profile);
       }
     }
+  }
+
+  /**
+   * The effort levels ONE model of this CLI accepts.
+   *
+   * Overridden because for this CLI the vocabulary belongs to the MODEL, not
+   * to the binary — `AdapterConfig.efforts` can only ever be the UNION, and a
+   * union is what offered `max` on a model that refuses it. Measured
+   * 2026-08-19 on 2026.08.11-e8db854, one seeded handshake per model:
+   *
+   * - `claude-opus-5` → `low medium high xhigh max`
+   * - `grok-4.6`      → the same MINUS `max`
+   * - `auto-smart`, `composer-2.5` → no `effort` option at all
+   *
+   * ONE `session/new` answers it, because the reply describes the model the
+   * session opened ON — so the model is seeded into the probe profile's
+   * `cli-config.json` rather than switched afterwards, which would cost a
+   * second round trip (2.2–3.0s measured) for the same answer.
+   *
+   * Every failure degrades to the CLI-wide superset rather than to silence: a
+   * level wrongly hidden is a control the user cannot reach, while one wrongly
+   * offered is refused with a sentence on the turn. Only a reply that
+   * enumerated options AND did not enumerate this one narrows anything.
+   */
+  override async listModelEfforts(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentEffortListing> {
+    const config = this.getConfig();
+    const superset: AgentEffortListing = {
+      efforts: [...config.efforts],
+      unavailableReason: config.effortsUnavailableReason,
+    };
+    // No model chosen yet — the picker still needs rows, and the union is the
+    // honest answer to "what does this CLI offer at all".
+    const wanted = (model ?? '').trim();
+    if (wanted === '') {
+      return superset;
+    }
+    let cwd = '';
+    let profile = '';
+    try {
+      cwd = this.makeProbeRoot('efforts');
+      profile = seedCursorProfile({
+        baseDir: this.profileBaseDir(),
+        homeDir: this.cursorOptions.homeDir,
+        // The whole mechanism — see the seed's own doc block.
+        model: wanted,
+      });
+      const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
+        ...options,
+        cwd,
+        stdinWrites: acpModelProbeFrames({
+          cwd,
+          clientName: CURSOR_ACP_CLIENT_NAME,
+          clientVersion: this.clientVersion,
+          clientMeta: CURSOR_ACP_CLIENT_META,
+        }),
+        settleWhen: acpModelProbeSettled,
+        env: { [CURSOR_CONFIG_DIR_ENV]: profile },
+        timeoutMs: options.timeoutMs ?? CURSOR_MODEL_PROBE_TIMEOUT_MS,
+      });
+      return this.readEffortProbe(stdout, wanted, superset);
+    } catch {
+      return superset;
+    } finally {
+      if (cwd !== '') {
+        this.removeProbeRoot(cwd);
+      }
+      if (profile !== '') {
+        removeCursorProfile(profile);
+      }
+    }
+  }
+
+  /**
+   * Narrow the superset to what one model's handshake enumerated.
+   *
+   * Three answers, and the split is the point:
+   * - the reply named this option → its values, in the agent's own order;
+   * - the reply enumerated options and NOT this one → genuinely none, with the
+   *   model named in the reason, since a picker that silently disappears reads
+   *   as broken;
+   * - anything else (the probe failed, the agent enumerated nothing) → the
+   *   superset. Silence is not a refusal, the rule every reader in this
+   *   transport follows.
+   */
+  private readEffortProbe(
+    stdout: string | null,
+    model: string,
+    superset: AgentEffortListing,
+  ): AgentEffortListing {
+    if (stdout === null) {
+      return superset;
+    }
+    // EVERY spelling, because the axis is named by the model rather than by the
+    // CLI: `gpt-5.2` enumerates `reasoning` where `grok-4.6` enumerates
+    // `effort`. Reading only the first name left the OpenAI family with no
+    // picker at all — and, before the driver learned to resolve the id, with a
+    // control that could not have worked if it had one.
+    for (const id of CURSOR_EFFORT_PARAMETER_IDS) {
+      const option = readAcpConfigOptionProbe(stdout, id);
+      if (option !== null && option.options.length > 0) {
+        return {
+          efforts: option.options.map(({ value, name }) => ({
+            id: value,
+            label: name,
+          })),
+          unavailableReason: null,
+        };
+      }
+    }
+    if (!acpProbeEnumeratedConfigOptions(stdout)) {
+      return superset;
+    }
+    return {
+      efforts: [],
+      unavailableReason: `${model} has no reasoning-effort setting — pick a model that does, or run it at its own default.`,
+    };
   }
 
   private readModelProbe(stdout: string | null): AgentModel[] {
@@ -1005,20 +1208,40 @@ export class CursorAcpAdapter extends AgentAdapter {
   override readContextUsage(
     input: AgentSessionReadInput,
   ): Promise<AgentContextUsage | null> {
-    if (!input.sessionId) {
-      return Promise.resolve(null);
-    }
     return Promise.resolve(
-      readCursorContextUsage(
-        join(
-          this.sessionStoreDir(),
-          input.sessionId,
-          CURSOR_SESSION_STORE_DB_NAME,
-        ),
-        (message: string) => this.options.logger?.warn(message),
-      ),
+      input.sessionId ? this.readSessionContext(input.sessionId) : null,
     );
   }
+
+  /**
+   * One session's breakdown off this CLI's own store — the single place that
+   * knows where that file is.
+   *
+   * TWO readers, which is why it is a method rather than the body of
+   * {@link readContextUsage}: the readout asks it on demand, and the turn
+   * driver asks it per turn to feed the meter's ring (`readContext` in
+   * `createTurnDriver`). Both are the same question about the same file, and a
+   * second copy of the path join is a second thing to get wrong.
+   */
+  private readSessionContext(sessionId: string): AgentContextUsage | null {
+    const path = join(
+      this.sessionStoreDir(),
+      sessionId,
+      CURSOR_SESSION_STORE_DB_NAME,
+    );
+    // A store that does not exist yet is the NORMAL state of a conversation's
+    // first turn — the CLI writes it when it first accounts for the window — so
+    // it is answered here rather than handed to the reader, which would say so
+    // out loud. That warning is worth keeping for a store geniro genuinely
+    // failed to read, and worthless once it fires for every new chat: the turn
+    // driver now takes a reading per turn, and a channel that warns when
+    // nothing is wrong is one people learn to skip.
+    return existsSync(path) ? readCursorContextUsage(path, this.warn) : null;
+  }
+
+  /** The adapter's own warn, as a value the readers above can be handed. */
+  private readonly warn = (message: string): void =>
+    this.options.logger?.warn(message);
 
   /**
    * No one-shot payload — the driver writes the opening `initialize` frame
@@ -1090,6 +1313,26 @@ export class CursorAcpAdapter extends AgentAdapter {
    *
    * The base runs the returned disposer on exactly one settle path, so the
    * directory is removed once however the turn ends.
+   *
+   * It also OPENS the handshake on the turn's own model, and that is a
+   * correctness change rather than a saving. A `session/new` reply describes
+   * the CURRENT model — its config options, and so which reasoning axis it has
+   * and what values that axis takes — so a session opened on the user's default
+   * and switched afterwards describes the model being switched AWAY from, and
+   * the driver can check nothing about the one the turn will actually run on.
+   * Seeded, the reply describes the right model from the first frame, which is
+   * what lets `applyModelParameters` refuse a level locally and resolve an axis
+   * this model spells differently (`gpt-5.2` calls it `reasoning`).
+   *
+   * It is also strictly less work: `readAcpCurrentModelId` then matches, so the
+   * `session/set_config_option` model frame is skipped — a round trip measured
+   * at 2.2–3.0s on every turn that names a model.
+   *
+   * Safe in BOTH failure directions, probed 2026-08-19 on 2026.08.11-e8db854:
+   * a valid model comes back as the reply's `currentValue`, and a name the CLI
+   * does not know does NOT fail the handshake — it answers with `auto-smart`
+   * as current, so the id does not match, the driver sends the model frame, and
+   * the turn behaves exactly as it did before this.
    */
   protected override prepareTurn(
     input: AgentTurnInput,
@@ -1098,6 +1341,11 @@ export class CursorAcpAdapter extends AgentAdapter {
       baseDir: this.profileBaseDir(),
       sessionStoreDir: this.sessionStoreDir(),
       homeDir: this.cursorOptions.homeDir,
+      // The BARE name: a legacy stored id carries its parameters in brackets,
+      // and `cli-config.json` names a model, not a variant.
+      ...(splitCursorModelId(input.model).model
+        ? { model: splitCursorModelId(input.model).model! }
+        : {}),
     });
     this.turnProfiles.set(input, dir);
     return () => {
@@ -1405,6 +1653,22 @@ export class CursorAcpAdapter extends AgentAdapter {
       todos: {
         method: CURSOR_TODOS_METHOD,
         read: parseCursorTodos,
+      },
+      // The SAME store the readout reads, put on the turn's event stream so the
+      // meter's ring is drawn from it too. ACP carries no context accounting at
+      // all, so before this the ring had no reading and rendered hollow while
+      // the panel behind it showed a full breakdown off this very file — the
+      // reported "the number says 51% and the circle is not filled at all".
+      // Two readings of one source cannot disagree; a reading and a blank can.
+      readContext: (sessionId) => {
+        const usage = this.readSessionContext(sessionId);
+        return usage === null
+          ? null
+          : {
+              usedTokens: usage.totalTokens,
+              windowTokens: usage.maxTokens,
+              model: usage.model,
+            };
       },
       logger: this.cursorOptions.logger,
     });

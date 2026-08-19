@@ -146,7 +146,8 @@ export function ThinkingRow({
   useSecondsTick();
   return (
     <LiveRow
-      label={`Thinking… ${formatTokens(tokens)} tokens · ${formatElapsed(Date.now() - since)}`}
+      text={`Thinking… ${formatTokens(tokens)} tokens`}
+      elapsed={formatElapsed(Date.now() - since)}
     />
   );
 }
@@ -191,12 +192,10 @@ export function WorkingRow({
   const nested = useContext(NestedThreadContext);
   const activity = nested ? null : runActivity;
   useSecondsTick();
-  const elapsed = formatElapsed(Date.now() - (since ?? mountedAt));
   return (
     <LiveRow
-      label={
-        activity === null ? `Working… ${elapsed}` : `${activity} · ${elapsed}`
-      }
+      text={activity ?? 'Working…'}
+      elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
     />
   );
 }
@@ -219,16 +218,41 @@ export function WorkingRow({
  * "Thinking… 250 tokens · 12s". Every other bubble needs the caption because
  * its body is the agent's own words and says nothing about what kind of row it
  * is.
+ *
+ * The two halves are SEPARATE spans because only one of them can be truncated.
+ * {@link text} is whatever the daemon says the run is doing, and that phrase is
+ * `running <tool name>` — where a shell tool's "name" is the WHOLE command the
+ * agent is running. Reported verbatim: a `cd … && git checkout --ours <60 paths>`
+ * filled eight wrapped lines of the transcript, and even a one-line one ran the
+ * full width of the column. So the phrase is capped at half the row and
+ * ellipsized (the full text stays on the `title`), while the clock beside it —
+ * the half nothing can make long — is never cut, which is exactly what a single
+ * truncated label could not express.
  */
-function LiveRow({ label }: { label: string }): React.JSX.Element {
+function LiveRow({
+  text,
+  elapsed,
+}: {
+  /** What is happening — arbitrary length, so this is the half that gives way. */
+  text: string;
+  /** The clock, always shown in full. */
+  elapsed: string;
+}): React.JSX.Element {
   return (
-    <MessageBubble variant="note">
+    // `w-full` so the cap below has a definite width to be half OF: the note
+    // bubble is otherwise shrink-to-fit, against which a percentage max-width
+    // resolves to nothing at all. `justify-center` then keeps the row centred,
+    // which is what `self-center` was doing before it.
+    <MessageBubble variant="note" className="w-full">
       {/* No italic: the row it must look like is the plain note beside it
           ("✓ done · $1.3306"), and an italic of its own made it a different
           kind of thing. The spinner is the only difference the state earns. */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex min-w-0 items-center justify-center gap-1.5">
         <Spinner />
-        <span>{label}</span>
+        <span className="max-w-[50%] truncate" title={text}>
+          {text}
+        </span>
+        <span className="shrink-0">· {elapsed}</span>
       </div>
     </MessageBubble>
   );

@@ -145,8 +145,26 @@ describe('cursorModelSelection', () => {
       { id: 'context', value: '300k' },
       { id: 'fast', value: 'false' },
       // Appended LAST, and exactly once — the id's own effort is dropped rather
-      // than left to be overwritten by frame order.
-      { id: 'effort', value: 'xhigh' },
+      // than left to be overwritten by frame order. It carries every OTHER
+      // spelling of the axis too, so the driver can send whichever one the
+      // model this turn runs on actually offers.
+      { id: 'effort', value: 'xhigh', alternateIds: ['effort', 'reasoning'] },
+    ]);
+  });
+
+  it('drops the OTHER spelling of the axis, not only its own', () => {
+    // A legacy id from an OpenAI-family model carries `reasoning=`, and that is
+    // the same axis. Left in beside a fresh `effort=`, the turn would set the
+    // model's reasoning level twice — once to what the user just picked and
+    // once to a value stored months ago, with frame order deciding.
+    const selection = cursorModelSelection(
+      'gpt-5.2[reasoning=medium,fast=false]',
+      'high',
+    );
+
+    expect(selection.parameters).toEqual([
+      { id: 'fast', value: 'false' },
+      { id: 'effort', value: 'high', alternateIds: ['effort', 'reasoning'] },
     ]);
   });
 
@@ -155,7 +173,9 @@ describe('cursorModelSelection', () => {
     // here would make the picker inert for exactly those runs.
     expect(cursorModelSelection(null, 'max')).toEqual({
       model: null,
-      parameters: [{ id: 'effort', value: 'max' }],
+      parameters: [
+        { id: 'effort', value: 'max', alternateIds: ['effort', 'reasoning'] },
+      ],
     });
   });
 

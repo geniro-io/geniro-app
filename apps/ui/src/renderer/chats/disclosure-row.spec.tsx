@@ -243,6 +243,33 @@ describe('the facts under a failure', () => {
     ).not.toBeNull();
   });
 
+  it('puts the copy control BESIDE the message, never in a band of its own', () => {
+    // The reported "strange padding": given its own row the icon reserved a
+    // full band of empty panel under the last line, so a short failure's card
+    // ended in a third of blank fill with one small glyph floating in it.
+    act(() =>
+      root.render(
+        <DisclosureRow
+          caption="error"
+          message="claude run failed (aborted_streaming)"
+          facts={FACTS}
+          copyText="the whole report"
+        />,
+      ),
+    );
+    act(() => {
+      container.querySelector('button')?.click();
+    });
+
+    const body = container.querySelector('pre')!;
+    const copy = container.querySelector(
+      'button[aria-label="Copy the error report"]',
+    )!;
+    expect(copy.parentElement).toBe(body.parentElement);
+    // And nothing is left standing between the message and the card's edge.
+    expect(body.parentElement?.nextElementSibling).toBeNull();
+  });
+
   it('renders exactly as before for a failure that reported none', () => {
     act(() =>
       root.render(<DisclosureRow caption="error" message="it broke" />),

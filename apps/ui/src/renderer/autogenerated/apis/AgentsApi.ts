@@ -15,7 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
-  AgentEffortDto,
+  AgentEffortListing,
   AgentKind,
   AgentMcpListingDto,
   AgentModelDto,
@@ -26,6 +26,7 @@ import type {
 
 export interface AgentsApiListAgentEffortsRequest {
     agent: AgentKind;
+    model?: string;
 }
 
 export interface AgentsApiListAgentMcpServersRequest {
@@ -62,7 +63,7 @@ export class AgentsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listAgentEffortsRaw(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<AgentEffortDto>>> {
+    async listAgentEffortsRaw(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentEffortListing>> {
         if (requestParameters['agent'] == null) {
             throw new runtime.RequiredError(
                 'agent',
@@ -74,6 +75,10 @@ export class AgentsApi extends runtime.BaseAPI {
 
         if (requestParameters['agent'] != null) {
             queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -102,7 +107,7 @@ export class AgentsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentEffortDto>> {
+    async listAgentEfforts(requestParameters: AgentsApiListAgentEffortsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentEffortListing> {
         const response = await this.listAgentEffortsRaw(requestParameters, initOverrides);
         return await response.value();
     }

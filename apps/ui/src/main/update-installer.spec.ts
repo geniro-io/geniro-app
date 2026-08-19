@@ -265,8 +265,9 @@ describe('installUpdate', () => {
       }),
     ).rejects.toThrow(/SHA256SUMS/);
 
-    // The whole reason the refusal exists: an ad-hoc build has no signature,
-    // so an unverifiable download must never reach the bundle.
+    // The whole reason the refusal exists: the build is not notarized, so
+    // nothing on the system vets a download and an unverifiable one must never
+    // reach the bundle.
     expect(await installedVersion()).toBe('installed-1.3.0');
     expect(mocks.ditto).not.toHaveBeenCalled();
   });

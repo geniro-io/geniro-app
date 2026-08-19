@@ -675,9 +675,14 @@ export function Graphs({
   // Same source as the composer's chip, for the same reason the models are:
   // the levels are the CLI's own, so builder and chat cannot offer different
   // ones for the same agent.
+  // …narrowed to the node's OWN model, for the same reason the composer's is:
+  // the levels belong to the model, so a node on a cursor model with no `max`
+  // must not be offered one. A node with no model asks for the CLI-wide union,
+  // which is the honest answer for "whatever the CLI opens with".
   const agentEfforts = useAgentEfforts(
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
+    selected?.kind === 'agent' ? (selected.model ?? null) : null,
   );
 
   // What this node would load regardless of where the run lands: the user's
@@ -1034,7 +1039,7 @@ export function Graphs({
                         unset effort means "let the CLI decide", which is a
                         real answer, so picking the first level on the user's
                         behalf would change how every new node thinks. */}
-                    {agentEfforts.length > 0 ? (
+                    {agentEfforts.efforts.length > 0 ? (
                       <Field
                         label="Reasoning effort"
                         htmlFor="node-effort"
@@ -1042,7 +1047,8 @@ export function Graphs({
                         <EffortSelect
                           variant="default"
                           id="node-effort"
-                          efforts={agentEfforts}
+                          efforts={agentEfforts.efforts}
+                          levelsAreModelSpecific={selected.model !== undefined}
                           value={selected.effort ?? null}
                           onChange={(effort) =>
                             patchSelected({ effort: effort ?? undefined })

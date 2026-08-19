@@ -58,11 +58,51 @@ export function StatusBadge({
 }): React.JSX.Element {
   return (
     <span
+      // A stable hook, because "is this status a PILL or a glyph" is now a
+      // decision the shell makes per status — and a test that answers it by
+      // matching utility classes re-answers it every time one is retuned.
+      data-slot="block-status-badge"
       className={cn(
         'rounded px-1.5 py-0.5 text-[10px] font-medium',
         STATUS_BADGE_CLASS[status],
       )}>
       {status}
+    </span>
+  );
+}
+
+/**
+ * How a block header states its own lifecycle — a glyph where a glyph says it,
+ * a word only where a word is needed.
+ *
+ * A pill on EVERY block was the loudest thing in the transcript: a settled
+ * delegate is the common case, so a green `done` chip sat on every closed card
+ * in a run of them, three times the ink of the check that means the same thing
+ * and in the one place the eye lands first. `running` had a pill AND a spinner
+ * beside it, saying it twice.
+ *
+ * `error` and `stopped` keep the pill, because those two are not
+ * self-evident from a glyph and are exactly the rows a reader is scanning for.
+ */
+function BlockStatusMark({
+  status,
+}: {
+  status: BlockStatus;
+}): React.JSX.Element {
+  if (status === 'error' || status === 'stopped') {
+    return <StatusBadge status={status} />;
+  }
+  return (
+    <span className="flex shrink-0 items-center">
+      {status === 'running' ? (
+        <Spinner className="size-3.5" />
+      ) : (
+        <BlockStatusIcon status={status} className="size-3.5" />
+      )}
+      {/* Both marks are `aria-hidden` glyphs, so the word has to be said
+          somewhere: dropping the pill must not take the status off the page for
+          anyone reading it through a screen reader. */}
+      <span className="sr-only">{status}</span>
     </span>
   );
 }
@@ -257,9 +297,15 @@ export function BlockPendingLine({
 
 /**
  * The nested-work card both agent-call blocks and sub-agent blocks are drawn
- * on: an eyebrow line naming the KIND of aside, then a bordered card whose
- * header carries the block's own identity, a live spinner and a status chip,
- * over a body holding that block's thread.
+ * on: one bordered card whose header carries a glyph for the KIND of aside,
+ * the block's own identity, and its lifecycle mark, over a body holding that
+ * block's thread.
+ *
+ * **One card, no caption above it.** The kind used to be its own line — icon
+ * plus "Sub-agent" — sitting outside the card, and that line is what made a
+ * delegate read as a separate message in the conversation instead of as part
+ * of the block. It is a glyph on the header now, and the header is a third
+ * shorter than it was.
  *
  * Extracted rather than copied. `CallBlock` owned this chrome privately, and
  * the sub-agent block needs the same card one collapse-state away — two
@@ -289,8 +335,12 @@ export function BlockShell({
   headerAction,
   children,
 }: {
-  /** The kind of aside this is — "Agent communication", "Sub-agent". */
+  /**
+   * The kind of aside this is — "Agent communication", "Sub-agent". Carried on
+   * the header for a screen reader; sighted readers get {@link eyebrowIcon}.
+   */
   eyebrow: string;
+  /** The glyph that leads the header and stands for {@link eyebrow}. */
   eyebrowIcon: React.ReactNode;
   /** Identity line inside the card header (avatars, names). */
   header: React.ReactNode;
@@ -324,19 +374,27 @@ export function BlockShell({
           )}
         />
       ) : null}
+      {/* What KIND of aside this is, as a glyph ON the header rather than as a
+          caption above the card.
+          It was its own line — an icon and the word "Sub-agent" — and that line
+          is what made a delegate read as a message of its own in the flow
+          rather than as part of the block: two stacked delegates were two
+          captions and two cards where the reader sees four things. Reported as
+          "sub agent should not be as separate message - it should be part of
+          the block". The word survives for a screen reader, which has no icon
+          to read and does need the category named. */}
+      <span className="flex shrink-0 items-center text-muted-foreground">
+        {eyebrowIcon}
+        <span className="sr-only">{eyebrow}</span>
+      </span>
       {header}
-      {status === 'running' ? <Spinner className="size-3.5" /> : null}
-      <StatusBadge status={status} />
+      <BlockStatusMark status={status} />
     </>
   );
   const headerClass =
-    'flex min-w-0 flex-1 items-center gap-2 px-4 py-2.5 text-left';
+    'flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left';
   return (
     <div data-role="block-shell" className="w-full">
-      <div className="mb-1.5 ml-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-        {eyebrowIcon}
-        <span>{eyebrow}</span>
-      </div>
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {/*
           The hover state belongs to the ROW, not to the disclosure button
@@ -383,7 +441,7 @@ export function BlockShell({
           ) : null}
         </div>
         {open ? (
-          <div className="flex flex-col gap-2.5 p-3">{children}</div>
+          <div className="flex flex-col gap-2 p-2.5">{children}</div>
         ) : null}
       </div>
     </div>

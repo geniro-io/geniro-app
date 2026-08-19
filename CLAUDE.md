@@ -84,8 +84,17 @@ CI is `.github/workflows/ci.yaml`: install → `build:packages` → `build` → 
 
 ### Packaging (macOS)
 ```bash
-pnpm --filter @geniro/ui build:mac   # scripts/build-mac.mjs → DMG + zip into release/dist/
+node scripts/make-signing-identity.mjs   # once, ever: the release signing certificate
+pnpm --filter @geniro/ui build:mac       # scripts/build-mac.mjs → DMG + zip into release/dist/
 ```
+
+`build:mac` signs with the certificate named by **`GENIRO_SIGN_IDENTITY`** and
+is ad-hoc without it. That is not cosmetic: macOS records every privacy grant
+against the app's designated requirement, and an ad-hoc signature's requirement
+is the hash of its own bytes — so an ad-hoc release presents itself as a
+brand-new app and re-asks for every permission the user has granted. The
+release workflow sets it and FAILS if the certificate is missing rather than
+shipping an unsigned artifact. See *macOS packaging* in `apps/ui/CLAUDE.md`.
 
 ### Regenerating the renderer's daemon client
 ```bash

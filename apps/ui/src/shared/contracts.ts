@@ -337,6 +337,33 @@ export interface BranchSwitchResult {
   branch: string | null;
   /** Why the switch was refused or failed; null on success. */
   error: string | null;
+  /**
+   * The switch was REFUSED over uncommitted work, rather than having failed.
+   *
+   * The difference is the whole of how it reads: a failure is something that
+   * went wrong, while this is the guard doing its job on a tree the user is
+   * mid-edit in. It drives a warning tone instead of a red error, and the
+   * offer to pull the branch up to date without losing that work.
+   */
+  dirty: boolean;
+}
+
+/**
+ * Outcome of "bring this branch up to date and keep my changes" — a stash, a
+ * fast-forward, and the stash put back.
+ */
+export interface BranchPullResult {
+  ok: boolean;
+  /** The branch that was pulled, or null when there was none to pull. */
+  branch: string | null;
+  /** git's own first line when it refused; null on success. */
+  error: string | null;
+  /**
+   * The work was stashed and could NOT be put back — the stash is still there,
+   * named here so the user can reach it. Null whenever nothing was stashed or
+   * it went back cleanly.
+   */
+  stashLeft: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -460,6 +487,11 @@ export interface GeniroApi {
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
   /**
+   * Fast-forward the folder's branch to its upstream, keeping uncommitted work:
+   * stash → `git pull --ff-only` → stash pop.
+   */
+  pullBranch(dir: string): Promise<BranchPullResult>;
+  /**
    * Show one of the daemon's own files in Finder — the debug log.
    *
    * Deliberately narrow: it REVEALS (selects in a file manager) rather than
@@ -554,6 +586,7 @@ export const IPC = {
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',
   switchBranch: 'geniro:switchBranch',
+  pullBranch: 'geniro:pullBranch',
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',

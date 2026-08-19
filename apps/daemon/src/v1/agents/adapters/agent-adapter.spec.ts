@@ -77,8 +77,8 @@ function reportedCommandsOf(
 
 /**
  * A CLI that DOES report its own commands but declares no internal-name prefix
- * — the arm neither shipped adapter exercises (claude declares `_`, cursor
- * makes no report at all).
+ * — the arm neither shipped adapter exercises through THIS spec (claude
+ * declares `_`; cursor declares null and pins it in its own adapter spec).
  */
 class NoInternalPrefixAdapter extends ClaudeAdapter {
   override getConfig(): AdapterConfig {
@@ -745,12 +745,26 @@ describe('AgentAdapter question channel', () => {
   });
 });
 
+/**
+ * A CLI that makes NO self-report. Declared here rather than borrowed from a
+ * shipped adapter: cursor-agent used to be the example and stopped being one
+ * the moment it gained a probe, which silently turned the "never spawns" test
+ * into a test of nothing. A fixture that says what it is cannot be outgrown.
+ */
+class NoReportAdapter extends ClaudeAdapter {
+  override getConfig(): AdapterConfig {
+    return { ...super.getConfig(), reportedCommands: null };
+  }
+}
+
 describe('AgentAdapter.listReportedCommands', () => {
   it('answers [] without spawning when the CLI makes no such report', async () => {
-    // cursor-agent's `reportedCommands: null` is the declared fact — it has no
-    // built-in slash commands and no equivalent of claude's `system/init` list.
-    // The base must honour it by never starting a turn: a probe spawn per
-    // autocomplete read, for a CLI that can only answer nothing, is pure cost.
+    // `reportedCommands: null` is a declared fact — this CLI has nothing to be
+    // asked. The base must honour it by never starting a turn: a probe spawn
+    // per autocomplete read, for a CLI that can only answer nothing, is pure
+    // cost. Asserted against a fixture rather than a shipped adapter, because
+    // the shipped one that used to declare null (cursor-agent) now declares a
+    // probe, and this test would have gone on passing while measuring nothing.
     let spawned = 0;
     const spawn: SpawnFn = () => {
       spawned += 1;
@@ -758,7 +772,7 @@ describe('AgentAdapter.listReportedCommands', () => {
     };
     // A usable probe root on purpose: the ONLY thing that may keep this from
     // spawning is the config gate, never a workspace that could not be made.
-    const adapter = new CursorAcpAdapter({ spawn, probeRootDir: tempDir() });
+    const adapter = new NoReportAdapter({ spawn, probeRootDir: tempDir() });
 
     await expect(adapter.listReportedCommands()).resolves.toEqual([]);
     expect(spawned).toBe(0);
@@ -784,7 +798,10 @@ describe('AgentAdapter.listReportedCommands', () => {
       })}\n`,
     );
 
-    await expect(reported).resolves.toEqual(['clear', '_hidden']);
+    await expect(reported).resolves.toEqual([
+      { name: 'clear', description: null },
+      { name: '_hidden', description: null },
+    ]);
   });
 });
 

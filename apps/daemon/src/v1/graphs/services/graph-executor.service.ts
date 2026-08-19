@@ -1091,6 +1091,20 @@ export class GraphExecutorService {
             return;
           }
           if (event.type === 'context_progress') {
+            // BEFORE the figure it scales — `context` publishes, so a window
+            // remembered after it would not reach the client until the next
+            // reading. See the same pair in `ChatService`.
+            if (
+              event.contextWindowTokens !== undefined &&
+              event.contextWindowTokens !== null
+            ) {
+              this.partials.rememberWindow(
+                runId,
+                node.id,
+                event.contextWindowTokens,
+                event.contextModel ?? null,
+              );
+            }
             // EPHEMERAL, like a text delta: the durable copy is the
             // turn_complete usage. This is what lets a NODE's meter move while
             // its turn runs — the owner key is the node, so a fan-out's agents

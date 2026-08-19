@@ -1,12 +1,24 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import type { BranchSwitchResult, GitInfo } from '../shared/contracts';
+import type {
+  BranchPullResult,
+  BranchSwitchResult,
+  GitInfo,
+} from '../shared/contracts';
 
 const execFileAsync = promisify(execFile);
 
 /** No git call may hang the composer's chip render. */
 const GIT_TIMEOUT_MS = 5000;
+
+/**
+ * A pull talks to a remote, so it gets its own budget: five seconds is a
+ * generous limit on reading a local ref and a mean one on a fetch over a slow
+ * link, and a pull cut off mid-transfer for want of a few seconds is a failure
+ * the user reads as a bug.
+ */
+const GIT_PULL_TIMEOUT_MS = 60_000;
 
 const NOT_A_REPO: GitInfo = {
   isRepo: false,
@@ -73,16 +85,25 @@ export async function switchBranch(
 ): Promise<BranchSwitchResult> {
   const info = await readGitInfo(dir);
   if (!info.isRepo) {
-    return { ok: false, branch: null, error: 'Not a git repository' };
+    return {
+      ok: false,
+      branch: null,
+      error: 'Not a git repository',
+      dirty: false,
+    };
   }
   if (info.branch === branch) {
-    return { ok: true, branch, error: null };
+    return { ok: true, branch, error: null, dirty: false };
   }
   if (info.dirty) {
     return {
       ok: false,
       branch: info.branch,
-      error: 'Uncommitted changes — commit or stash them first',
+      // No longer an instruction ("commit or stash them first"): the app can
+      // now do the useful half itself, so the sentence states the situation and
+      // the button beside it offers the way out.
+      error: 'Uncommitted changes in this folder — the branch stays put',
+      dirty: true,
     };
   }
   try {
@@ -105,7 +126,128 @@ export async function switchBranch(
       ok: false,
       branch: info.branch,
       error: stderr === '' ? 'git switch failed' : stderr.split('\n')[0]!,
+      dirty: false,
     };
   }
-  return { ok: true, branch, error: null };
+  return { ok: true, branch, error: null, dirty: false };
+}
+
+/**
+ * The stash this makes, named so the user can find it if it has to be left
+ * behind. `git stash pop` keeps the entry when applying it conflicts, which is
+ * the one path where the message has to point somewhere.
+ */
+const PULL_STASH_MESSAGE = 'geniro: pull';
+
+/** The current stash tip, or null when the repo has no stash at all. */
+async function stashTip(dir: string): Promise<string | null> {
+  return git(dir, ['rev-parse', '-q', '--verify', 'refs/stash']);
+}
+
+/**
+ * Bring the folder's branch up to date WITHOUT losing uncommitted work:
+ * stash → `git pull --ff-only` → put the stash back.
+ *
+ * **`--ff-only`, deliberately.** A fast-forward is the only pull that cannot
+ * leave a repository in a state the user then has to resolve — no merge commit
+ * they did not ask for, no half-finished rebase, no conflict in a tree they were
+ * not looking at. A diverged branch is refused with git's own sentence, which is
+ * the honest answer: what to do about a divergence is not a decision a button in
+ * a chat composer gets to take.
+ *
+ * **The stash is put back on EVERY path, including a failed pull.** Hiding the
+ * user's work and then failing before restoring it is the one outcome this must
+ * never produce — it looks exactly like the edits were destroyed. When the pop
+ * itself conflicts git keeps the entry, and {@link BranchPullResult.stashLeft}
+ * says where it is rather than leaving the user to guess.
+ *
+ * Whether anything was stashed is decided by the stash REF moving, not by
+ * reading git's prose: `git stash push` on a clean tree says "No local changes
+ * to save" and creates nothing, and matching that sentence would break under
+ * any locale or wording change.
+ */
+export async function pullBranch(dir: string): Promise<BranchPullResult> {
+  const info = await readGitInfo(dir);
+  if (!info.isRepo) {
+    return {
+      ok: false,
+      branch: null,
+      error: 'Not a git repository',
+      stashLeft: null,
+    };
+  }
+  if (info.branch === null) {
+    // A detached HEAD has no upstream to pull from, and `git pull` there would
+    // be a question about which ref — one this has no business guessing at.
+    return {
+      ok: false,
+      branch: null,
+      error: 'Detached HEAD — check out a branch first',
+      stashLeft: null,
+    };
+  }
+  const branch = info.branch;
+  const before = await stashTip(dir);
+  if (info.dirty) {
+    // `--include-untracked`, because a new file the user has not added yet is
+    // work in exactly the same sense as an edit to a tracked one, and a pull
+    // that fast-forwards a file into that path fails on it.
+    await git(dir, [
+      'stash',
+      'push',
+      '--include-untracked',
+      '--message',
+      PULL_STASH_MESSAGE,
+    ]);
+  }
+  const stashed = (await stashTip(dir)) !== before;
+  const pull = await runGit(dir, ['pull', '--ff-only']);
+  const restore = stashed ? await runGit(dir, ['stash', 'pop']) : null;
+  const stashLeft = restore !== null && restore !== true ? 'stash@{0}' : null;
+  if (pull !== true) {
+    return {
+      ok: false,
+      branch,
+      error: pull,
+      stashLeft,
+    };
+  }
+  if (stashLeft !== null) {
+    return {
+      ok: false,
+      branch,
+      // The pull SUCCEEDED and the restore did not, which is a different thing
+      // to report: the branch moved, the work is safe, and it is sitting in a
+      // stash the user has to apply by hand.
+      error: `Pulled, but your changes could not be restored — they are kept in ${stashLeft}`,
+      stashLeft,
+    };
+  }
+  return { ok: true, branch, error: null, stashLeft: null };
+}
+
+/**
+ * Run one git command for its OUTCOME: `true`, or git's own first line of
+ * stderr.
+ *
+ * Separate from {@link git}, which answers with stdout and swallows the reason
+ * — right for reading state, useless for an action whose whole value on failure
+ * is git's explanation of what it refused and why.
+ */
+async function runGit(dir: string, args: string[]): Promise<true | string> {
+  try {
+    await execFileAsync('git', args, {
+      cwd: dir,
+      timeout: GIT_PULL_TIMEOUT_MS,
+    });
+    return true;
+  } catch (error) {
+    const stderr =
+      error instanceof Error && 'stderr' in error
+        ? String((error as { stderr: unknown }).stderr).trim()
+        : '';
+    return stderr === ''
+      ? `git ${args[0]} failed`
+      : (stderr.split('\n').find((line) => line.trim() !== '') ?? 'git failed');
+  }
 }

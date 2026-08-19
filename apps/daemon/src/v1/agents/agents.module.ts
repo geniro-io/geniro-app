@@ -123,7 +123,19 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
     CliSessionsService,
-    EffortsService,
+    {
+      // A factory now, and for the same reason `ModelsService` is one: asking a
+      // model's effort axis SPAWNS a CLI handshake, so this gained a version
+      // key, a TTL and a single-flight — and the options bag behind them is a
+      // test seam, not a DI token.
+      provide: EffortsService,
+      useFactory: (
+        adapters: AgentAdapterRegistry,
+        processes: ProcessRegistry,
+        versions: AgentVersionService,
+      ) => new EffortsService(adapters, processes, versions),
+      inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
+    },
     AgentEventBus,
     ApprovalRegistry,
     {

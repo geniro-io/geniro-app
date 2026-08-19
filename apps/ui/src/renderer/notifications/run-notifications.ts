@@ -33,7 +33,7 @@ export interface RunNotificationTrigger {
  * something else would be the two surfaces disagreeing about one run, and the
  * badge is what the user checks when they get there.
  *
- * Three rules, each of which is a defect if dropped:
+ * Four rules, each of which is a defect if dropped:
  *
  * 1. **A run seen for the first time never notifies.** The chat list loads with
  *    every past thread already in its final state, so a first reading that
@@ -45,10 +45,26 @@ export interface RunNotificationTrigger {
  *    off over. `failed` IS announced: nobody asked for it.
  * 3. **A question outranks a settle.** Both can be true of one reading, and the
  *    question is the one that will not advance without the user.
+ * 4. **A turn that did nothing but HOUSEKEEPING is not an ending either.** A
+ *    `/compact` is an ordinary turn on the wire, so it settled the run and
+ *    earned a banner reporting a piece of context management the user asked
+ *    for and can see the result of — reported as "не нужно нотификации, когда
+ *    компакт сработает". The daemon says which settles those were
+ *    (`RunStatusEvent.housekeeping`); a question is still raised, because a
+ *    turn parked on the user is not housekeeping whatever else it did.
  */
 export function diffRunNotifications(
   previous: ReadonlyMap<string, RunStatusKind>,
   current: ReadonlyMap<string, RunStatusKind>,
+  /**
+   * Runs whose most recent settle the daemon called housekeeping — rule 4.
+   *
+   * A set of ids rather than a flag on the status map, because it answers a
+   * different question: the map says what a run IS, this says what the turn
+   * that got it there was. Empty by default, so a caller that has no such
+   * reading behaves exactly as before.
+   */
+  housekeeping: ReadonlySet<string> = new Set(),
 ): RunNotificationTrigger[] {
   const triggers: RunNotificationTrigger[] = [];
   for (const [runId, status] of current) {
@@ -62,9 +78,11 @@ export function diffRunNotifications(
       continue;
     }
     // Rule 2 — `cancelled` is deliberately absent from this condition even
-    // though `isSettledRunStatus` includes it.
+    // though `isSettledRunStatus` includes it. Rule 4 sits beside it as a
+    // second kind of ending nobody asked to hear about.
     if (
       status !== 'cancelled' &&
+      !housekeeping.has(runId) &&
       isSettledRunStatus(status) &&
       !isSettledRunStatus(before)
     ) {

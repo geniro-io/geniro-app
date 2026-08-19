@@ -56,6 +56,34 @@ describe('ErrorBanner', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it('speaks quietly when the strip is a warning, not a failure', () => {
+    // Same strip, same place, same dismiss — a guard that refused to switch
+    // branch over uncommitted work is the app working, and red said the
+    // opposite. The dismiss control follows the tone, since "Dismiss error" on
+    // a strip reporting no error is a lie a screen-reader user cannot check.
+    render({ tone: 'warning', message: 'Uncommitted changes in this folder' });
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.className).toContain('text-warning');
+    expect(alert?.className).not.toContain('text-destructive');
+    expect(
+      container.querySelector('button[aria-label="Dismiss warning"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Dismiss error"]'),
+    ).toBeNull();
+  });
+
+  it('stays a red error by default — every existing caller is untouched', () => {
+    render();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.className).toContain('text-destructive');
+    expect(
+      container.querySelector('button[aria-label="Dismiss error"]'),
+    ).not.toBeNull();
+  });
+
   it('renders a recovery action before the dismiss control', () => {
     // Order is the point: the way out reads first, the close last.
     render({ action: <button type="button">Delete this run</button> });

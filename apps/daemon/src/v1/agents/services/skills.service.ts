@@ -4,7 +4,10 @@ import { homedir } from 'node:os';
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentKind } from '../../runs/runs.types';
-import type { AgentSkillEntry } from '../adapters/adapter.types';
+import type {
+  AgentReportedCommand,
+  AgentSkillEntry,
+} from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentSkillWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
@@ -46,7 +49,7 @@ const SOURCE_RANK: Record<AgentSkillWire['source'], number> = {
 interface CatalogEntry {
   version: string | null;
   fetchedAt: number;
-  commands: string[];
+  commands: AgentReportedCommand[];
 }
 
 /**
@@ -79,7 +82,10 @@ export class SkillsService {
   private readonly now: () => number;
   private readonly resolveVersionFn: AgentVersionService['resolve'];
   private readonly catalog = new Map<AgentKind, CatalogEntry>();
-  private readonly inFlight = new Map<AgentKind, Promise<string[]>>();
+  private readonly inFlight = new Map<
+    AgentKind,
+    Promise<AgentReportedCommand[]>
+  >();
 
   constructor(
     private readonly harvest: SkillHarvestStore,
@@ -115,13 +121,27 @@ export class SkillsService {
       ...(this.harvest.get(agent, projectDir) ?? []),
       ...(await this.reportedCommands(agent)),
     ];
-    for (const name of reported) {
-      if (!byName.has(name)) {
-        byName.set(name, {
-          name,
-          description: null,
+    for (const command of reported) {
+      const known = byName.get(command.name);
+      if (known === undefined) {
+        byName.set(command.name, {
+          name: command.name,
+          description: command.description,
           kind: 'command',
           source: 'cli',
+        });
+        continue;
+      }
+      // First occurrence still wins the ENTRY — a scanned row keeps its `kind`
+      // and its `source`, so the popup's badge stays true. What a later source
+      // may still contribute is a DESCRIPTION the winner does not have: a
+      // command file with no frontmatter scans to a bare name, while the CLI's
+      // own report says what it does, and preferring silence there would throw
+      // away the only sentence anyone has.
+      if (known.description === null && command.description !== null) {
+        byName.set(command.name, {
+          ...known,
+          description: command.description,
         });
       }
     }
@@ -144,7 +164,9 @@ export class SkillsService {
    * that miss is cached like any other answer — a broken install must not
    * re-probe on every autocomplete read.
    */
-  private async reportedCommands(kind: AgentKind): Promise<string[]> {
+  private async reportedCommands(
+    kind: AgentKind,
+  ): Promise<AgentReportedCommand[]> {
     const pending = this.inFlight.get(kind);
     if (pending) {
       return pending;
@@ -175,7 +197,7 @@ export class SkillsService {
         this.logger.warn(
           `listing ${kind} commands failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return [] as string[];
+        return [] as AgentReportedCommand[];
       })
       .then((commands) => {
         this.catalog.set(kind, {

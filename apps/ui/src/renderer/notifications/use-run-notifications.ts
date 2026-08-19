@@ -19,6 +19,7 @@ export function useRunNotifications<TRun extends { id: string }>({
   labelOf,
   awaitingOf,
   summaryOf,
+  housekeeping,
   activeRunId,
 }: {
   runs: readonly TRun[];
@@ -34,6 +35,11 @@ export function useRunNotifications<TRun extends { id: string }>({
    * "the turn finished" sentence, which is what it always said.
    */
   summaryOf?: (run: TRun) => string | null;
+  /**
+   * Runs whose latest settle was housekeeping the user did not ask to be told
+   * about — a `/compact` and nothing else. Rule 4 of {@link diffRunNotifications}.
+   */
+  housekeeping?: ReadonlySet<string>;
   /** The chat on screen — suppressed while the window has focus. */
   activeRunId: string | null;
 }): void {
@@ -45,7 +51,11 @@ export function useRunNotifications<TRun extends { id: string }>({
 
   useEffect(() => {
     const current = new Map(runs.map((run) => [run.id, statusOf(run)]));
-    const triggers = diffRunNotifications(seenRef.current, current);
+    const triggers = diffRunNotifications(
+      seenRef.current,
+      current,
+      housekeeping,
+    );
     // Recorded BEFORE the posts, so a throw from one cannot leave the same
     // transition to fire again on the next reading.
     seenRef.current = current;
@@ -84,5 +94,5 @@ export function useRunNotifications<TRun extends { id: string }>({
     // status and the sentence explaining it arrive in ONE event, so the two
     // land in the same render and the banner is worded from the settle it is
     // about rather than from the previous one.
-  }, [runs, statusOf, labelOf, awaitingOf, summaryOf]);
+  }, [runs, statusOf, labelOf, awaitingOf, summaryOf, housekeeping]);
 }

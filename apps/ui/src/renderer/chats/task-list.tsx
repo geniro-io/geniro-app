@@ -1,11 +1,12 @@
 import {
+  ChevronRight,
   Circle,
   CircleCheck,
   CircleDashed,
   CircleDotDashed,
   ListChecks,
 } from 'lucide-react';
-import { useContext } from 'react';
+import { useContext, useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
@@ -163,6 +164,21 @@ export function TaskIcon({
  * It reads its own liveness rather than taking it as a prop, from the same
  * context `SubagentBlock` reads for the same question: only the LATEST card of a
  * thread can be live, and only while the run has not settled past it.
+ *
+ * **Only the latest card of a thread shows its rows.** An agent that says a
+ * sentence between two announcements gets a card on each side of it, and both
+ * printed the whole list — eight rows, then eight rows again with one more
+ * spinner, one paragraph apart. That is the reported "Todo is duplicating":
+ * there is one list, and the transcript was reprinting it wholesale every time
+ * a single row moved. A superseded card collapses to the line it already had —
+ * the count and the task that was running then — which is the history the
+ * chronological placement is FOR, without the wall of repeated rows.
+ *
+ * The open state is DERIVED from `latest` with a manual override on top, not
+ * seeded into `useState`: an initial value would only apply at mount, so the
+ * card that was latest when it mounted would stay expanded forever and the
+ * duplication would come straight back on the next announcement. Once a reader
+ * has opened or closed one by hand, their choice sticks.
  */
 export function TaskListCard({
   entry,
@@ -170,11 +186,17 @@ export function TaskListCard({
   entry: TaskListEntry;
 }): React.JSX.Element | null {
   const runSettledAt = useContext(RunSettledContext);
+  const [override, setOverride] = useState<boolean | null>(null);
   if (entry.tasks.length === 0) {
     return null;
   }
-  const { done, total } = taskProgress(entry.tasks);
+  const { done, total, current } = taskProgress(entry.tasks);
   const live = taskCardIsLive(entry, runSettledAt);
+  const open = override ?? entry.latest;
+  // What the list was DOING at this point in the conversation — the whole value
+  // of a collapsed card, and the reason it is not simply hidden.
+  const currentLabel =
+    current === null ? null : (current.activeForm ?? current.title);
   return (
     <div
       data-slot="task-list-card"
@@ -183,19 +205,40 @@ export function TaskListCard({
       // test (and anyone with the inspector open) has no other way to see which
       // way it went.
       data-live={live}
+      data-open={open}
       className="min-w-0">
       <SectionLabel>
-        <span className="inline-flex items-center gap-1.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOverride(!open)}
+          className="flex w-full items-center gap-1.5 text-left uppercase transition-colors hover:text-foreground">
+          <ChevronRight
+            aria-hidden="true"
+            className={cn(
+              'size-3 shrink-0 transition-transform',
+              open && 'rotate-90',
+            )}
+          />
           <TaskIcon />
           Task list
-          <span className="text-muted-foreground">
+          <span className="shrink-0">
             · <TaskCount done={done} total={total} />
           </span>
-        </span>
+          {!open && currentLabel !== null ? (
+            <span
+              data-slot="task-list-current"
+              className="min-w-0 truncate normal-case">
+              · {currentLabel}
+            </span>
+          ) : null}
+        </button>
       </SectionLabel>
-      <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5">
-        <TaskRows tasks={entry.tasks} live={live} />
-      </div>
+      {open ? (
+        <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+          <TaskRows tasks={entry.tasks} live={live} />
+        </div>
+      ) : null}
     </div>
   );
 }

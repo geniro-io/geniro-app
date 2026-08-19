@@ -58,6 +58,46 @@ describe('diffRunNotifications', () => {
     ).toEqual([]);
   });
 
+  it('says nothing about a turn that did nothing but COMPACT', () => {
+    // A `/compact` settles the run like any other turn, so it earned a banner
+    // and a sidebar mark for housekeeping the user had just asked for and
+    // could see the result of — reported as "не нужно нотификации, когда
+    // компакт сработает".
+    expect(
+      diffRunNotifications(
+        reading({ a: 'running' }),
+        reading({ a: 'completed' }),
+        new Set(['a']),
+      ),
+    ).toEqual([]);
+  });
+
+  it('still reports the OTHER runs settling in the same reading', () => {
+    // The exemption is per run, not per reading: a compaction finishing in one
+    // thread must not silence a real answer landing in another at the same
+    // moment.
+    expect(
+      diffRunNotifications(
+        reading({ a: 'running', b: 'running' }),
+        reading({ a: 'completed', b: 'completed' }),
+        new Set(['a']),
+      ),
+    ).toEqual([{ runId: 'b', kind: 'turn-end', status: 'completed' }]);
+  });
+
+  it('still raises a QUESTION from a run marked housekeeping', () => {
+    // The marker describes the last SETTLE. A turn parked on the user is not
+    // housekeeping whatever the previous one was, and it is the state that
+    // cannot advance without them.
+    expect(
+      diffRunNotifications(
+        reading({ a: 'running' }),
+        reading({ a: 'needs-input' }),
+        new Set(['a']),
+      ),
+    ).toEqual([{ runId: 'a', kind: 'question', status: 'needs-input' }]);
+  });
+
   it('says nothing when a status has not moved', () => {
     expect(
       diffRunNotifications(

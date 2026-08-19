@@ -360,6 +360,30 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.querySelector('button[aria-expanded]')).toBeNull();
   });
 
+  it('a DEGRADE is neither a note nor a failure', () => {
+    // The report: a cursor turn opened with a red SYSTEM row reading `agent
+    // declined model setting 'effort=max': Invalid params` and then worked
+    // normally — "a strange error … and then it carried on working". The row
+    // has to stay visible (the run is not thinking at the level that was
+    // chosen, and only the user can fix that), so folding it into the quiet
+    // note would be the opposite mistake.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message:
+            "this model does not offer 'effort=max' — the turn runs at 'high'",
+          severity: 'warning',
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain("does not offer 'effort=max'");
+    expect(container.querySelector('[data-role="warning"]')).not.toBeNull();
+    expect(container.querySelector('[data-role="error"]')).toBeNull();
+    expect(container.querySelector('[data-role="note"]')).toBeNull();
+  });
+
   it('keeps the failure chrome for a daemon notice that says nothing about severity', () => {
     // Every historical notice — a withheld capability, a degrade — is an
     // advisory, and absent must go on meaning `warning`. Without this the info
@@ -712,25 +736,26 @@ describe('TranscriptItem — a message sent into a running turn', () => {
     role: 'user',
   });
 
-  it('says the agent picks it up when its current step finishes', () => {
-    // The gap this closes: the two ways a message reaches an agent look
-    // identical in the transcript, and only this one waits. Sent behind a long
-    // tool call, the agent visibly does nothing while the live row goes on
-    // naming the tool that was already running — both true, and read together
-    // as "the send did not take".
+  it('reads exactly like any other message — no caption under it', () => {
+    // The row USED to carry "Sent into the turn already running — the agent
+    // picks this up when its current step finishes", explaining why a message
+    // written behind a long tool call sits there while the live row goes on
+    // naming the tool that was already running. Reported as noise under every
+    // such message and removed, along with the daemon's `midTurn` stamp.
+    //
+    // Pinned against the payload the daemon USED to send, so re-adding either
+    // half fails here: a caption keyed off a flag nobody sets would pass a test
+    // written against a bare message.
     render(<TranscriptItem item={userMessage({ text: 'do this instead' })} />);
-    expect(container.querySelector('[data-role="mid-turn-note"]')).toBeNull();
+    const plain = container.textContent;
 
     render(
       <TranscriptItem
         item={userMessage({ text: 'do this instead', midTurn: true })}
       />,
     );
-    const note = container.querySelector('[data-role="mid-turn-note"]');
-    expect(note).not.toBeNull();
-    expect(note?.textContent).toContain('turn already running');
-    // The message itself is untouched — the caption is an addition to the row,
-    // never a replacement for what the user actually wrote.
+    expect(container.querySelector('[data-role="mid-turn-note"]')).toBeNull();
+    expect(container.textContent).toBe(plain);
     expect(container.textContent).toContain('do this instead');
   });
 });

@@ -127,6 +127,78 @@ export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 /**
+ * Ceiling on the user's global custom instructions, in characters.
+ *
+ * The value reaches a spawned child as argv (claude's `--append-system-prompt`)
+ * and as prompt text (ACP), so it is bounded on both counts. macOS `ARG_MAX` is
+ * 1 MiB and Linux is comparable, and the CLI's own argv carries flags,
+ * a cwd and the composed block's other parts besides — 16k leaves that whole
+ * budget untouched while sitting far above any prose a person types into a
+ * settings box. Beyond argv there is a second reason to bound it at all: every
+ * character here is re-sent to cursor on EVERY turn, since ACP has no
+ * system-prompt slot to say it once.
+ *
+ * Enforced at the daemon edge (`createChatSchema`); the renderer's matching
+ * cap is a courtesy that stops the user composing something that would be
+ * refused, exactly like the attachment caps above.
+ *
+ * TWIN PARSER: `MAX_CUSTOM_INSTRUCTIONS_CHARS` in
+ * `apps/ui/src/shared/contracts.ts`. The generated client carries the field's
+ * type but not its `maxLength`, so the renderer cannot derive this number from
+ * the wire and holds its own copy. This one is the ENFORCING side; change one,
+ * change the other.
+ */
+export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 16_000;
+
+/**
+ * Whether a custom-instructions value carries a control character.
+ *
+ * A SIZE bound is not enough here because the sink is a child process's argv.
+ * Node refuses a NUL outright: passing one to `spawn` throws
+ * `ERR_INVALID_ARG_VALUE` SYNCHRONOUSLY, before any request is made. And the
+ * value is snapshotted onto the run, so that throw would repeat on every turn
+ * of that chat forever — one invisible character pasted into a settings box
+ * would permanently brick every conversation started after it, with nothing on
+ * screen to say why.
+ *
+ * Every C0 code point counts EXCEPT tab, newline and carriage return, which are
+ * ordinary in prose and which a multi-line instruction needs.
+ *
+ * A code-point scan rather than a regex, deliberately. A character class
+ * covering this range is either written with raw bytes — which makes git
+ * classify the whole file as binary, and the `pre-commit` hook refuses it — or
+ * with escapes, which eslint's `no-control-regex` flags either way. The scan
+ * has neither problem and reads as what it is.
+ */
+export function hasControlCharacters(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The ONE validator for a custom-instructions value arriving on the wire.
+ *
+ * Exported as a schema rather than as two constants each route re-composes:
+ * the size bound and the control-character refusal are a single rule about
+ * what may reach a child's argv, and a route spelling only half of it is the
+ * same silent asymmetry that already let the workflow path ship wired to
+ * nothing. Both entry points say `CustomInstructionsSchema.optional()`, so a
+ * later tightening lands on both by construction rather than by memory.
+ */
+export const CustomInstructionsSchema = z
+  .string()
+  .max(MAX_CUSTOM_INSTRUCTIONS_CHARS)
+  .refine(
+    (value) => !hasControlCharacters(value),
+    'must not contain control characters',
+  );
+
+/**
  * The HTTP body ceiling the daemon hands Fastify (`main.ts`), DERIVED from the
  * two limits above rather than chosen.
  *

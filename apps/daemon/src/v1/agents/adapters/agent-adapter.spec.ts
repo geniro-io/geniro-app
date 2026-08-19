@@ -946,6 +946,66 @@ describe('AgentAdapter reports a session that will serve no further turn', () =>
   });
 });
 
+describe('AgentAdapter sessions separate on the custom instructions', () => {
+  /**
+   * Open a session, run its first turn, and SETTLE that turn.
+   *
+   * Settling is load-bearing rather than tidiness: a session with a turn still
+   * in flight refuses the next one for being busy, which looks identical to
+   * refusing it for a mismatched key — so a "refuses on changed instructions"
+   * assertion written against a live turn passes with `sessionKey` reverted.
+   */
+  async function sessionAfterFirstTurn(
+    customInstructions: string,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      customInstructions,
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses to serve a turn whose custom instructions differ from the spawn’s', async () => {
+    // The instructions are baked into the composed block that becomes argv for
+    // claude and the leading prompt text for ACP — so they belong to the
+    // SPAWN, exactly like the role beside them. Without them in `sessionKey`
+    // the kept process takes the second turn silently, and that turn runs
+    // under the first run's instructions while the settings screen and the run
+    // row both read the new ones.
+    const session = await sessionAfterFirstTurn('BE TERSE');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', customInstructions: 'BE VERBOSE' },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('still reuses the process when the instructions are unchanged', async () => {
+    // The control the refusal above needs to mean anything: without it, an
+    // implementation that refused EVERY second turn would pass that test while
+    // costing every chat its kept process — and its MCP servers — per message.
+    const session = await sessionAfterFirstTurn('BE TERSE');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', customInstructions: 'BE TERSE' },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+});
+
 describe('AgentAdapter re-modes a session it can, and refuses one it cannot', () => {
   it('refuses a turn whose mode the running process cannot be told about', async () => {
     // Silently accepting would run the turn under the mode the PREVIOUS one

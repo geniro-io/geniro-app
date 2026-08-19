@@ -20,6 +20,7 @@ import type {
   ChatMetricsDto,
   CreateChatDto,
   DeletedDto,
+  ForgottenInstructionsDto,
   ItemDto,
   LocalImageDto,
   RenameRunDto,
@@ -219,6 +220,43 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async deleteChat(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
         const response = await this.deleteChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async forgetCustomInstructionsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ForgottenInstructionsDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/forget-custom-instructions`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async forgetCustomInstructions(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ForgottenInstructionsDto> {
+        const response = await this.forgetCustomInstructionsRaw(initOverrides);
         return await response.value();
     }
 

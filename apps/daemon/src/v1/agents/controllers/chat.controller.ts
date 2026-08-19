@@ -25,6 +25,7 @@ import {
   ChatMetricsDto,
   CreateChatDto,
   DeletedDto,
+  ForgottenInstructionsDto,
   HistoryQueryDto,
   ItemDto,
   LocalImageDto,
@@ -69,6 +70,19 @@ export class ChatController {
   @ZodResponse({ status: 200, type: [RunDto] })
   listChats(): Promise<RunWire[]> {
     return this.chatService.listChats();
+  }
+
+  /**
+   * Forget the custom instructions every existing run snapshotted.
+   *
+   * Declared BEFORE the `:runId` routes so `forget-custom-instructions` is
+   * never read as a run id — the same ordering `/v1/groups/reorder` needs.
+   */
+  @Post('forget-custom-instructions')
+  @ApiOperation({ operationId: 'forgetCustomInstructions' })
+  @ZodResponse({ status: 200, type: ForgottenInstructionsDto })
+  forgetCustomInstructions(): Promise<{ cleared: number }> {
+    return this.chatService.forgetCustomInstructions();
   }
 
   @Patch(':runId')

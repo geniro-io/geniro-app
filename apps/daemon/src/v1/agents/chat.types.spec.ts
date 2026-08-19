@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AgentMcpListingWireSchema,
+  CustomInstructionsSchema,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   MAX_REQUEST_BODY_BYTES,
 } from './chat.types';
 
@@ -112,5 +114,50 @@ describe('MAX_REQUEST_BODY_BYTES — the transport must accept what the DTO does
     expect(MAX_REQUEST_BODY_BYTES - Buffer.byteLength(body)).toBeGreaterThan(
       512 * 1024,
     );
+  });
+});
+
+describe('custom-instruction bounds — the daemon is the enforcing side', () => {
+  /**
+   * Control characters are built with `String.fromCharCode`, never typed as
+   * literals: a raw C0 byte makes git treat this whole spec as binary, which
+   * the repo's `pre-commit` hook refuses. Same code unit at runtime.
+   */
+  const ctrl = (code: number): string => String.fromCharCode(code);
+
+  const chat = (value: string): boolean =>
+    CustomInstructionsSchema.safeParse(value).success;
+
+  it('accepts prose right up to the ceiling and refuses one character past it', () => {
+    expect(chat('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS))).toBe(true);
+    expect(chat('x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS + 1))).toBe(false);
+  });
+
+  it('refuses a NUL, which would throw out of spawn on every turn of the run', () => {
+    // Not a style rule. The value is snapshotted onto the run and handed to
+    // `spawn` as argv, where node rejects a NUL SYNCHRONOUSLY
+    // (ERR_INVALID_ARG_VALUE) — so without this refusal one invisible pasted
+    // character permanently breaks every chat created after it, on every turn.
+    expect(chat(`BE TERSE${ctrl(0)}tail`)).toBe(false);
+  });
+
+  it('refuses the other C0 controls but keeps tab, newline and carriage return', () => {
+    expect(chat(`a${ctrl(0x1b)}b`)).toBe(false);
+    expect(chat(`a${ctrl(0x07)}b`)).toBe(false);
+    // Ordinary in prose — a multi-line instruction must stay legal, which is
+    // the half a blanket control-character ban would have broken.
+    expect(chat('line one\nline two\twith a tab\r\n')).toBe(true);
+  });
+
+  it('is the single schema both entry points spell', () => {
+    // Parity is held by CONSTRUCTION rather than by a second set of cases: the
+    // chat route and the workflow route both say
+    // `CustomInstructionsSchema.optional()`, so there is one rule to test and
+    // no way for a later tightening to reach only one of them. This asserts
+    // the shared schema is genuinely optional-wrapped rather than duplicated.
+    expect(
+      CustomInstructionsSchema.optional().safeParse(undefined).success,
+    ).toBe(true);
+    expect(CustomInstructionsSchema.safeParse('').success).toBe(true);
   });
 });

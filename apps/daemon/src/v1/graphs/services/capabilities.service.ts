@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
 import type {
   AgentApprovalCapability,
   AgentConfigDirCapability,
@@ -35,6 +36,9 @@ export class CapabilitiesService {
       subagents: this.subagentCapabilities(),
       usage: this.usageCapabilities(),
       modelEfforts: this.modelEffortCapabilities(),
+      // Served verbatim from the one constant the adapters compose, so the
+      // Settings preview cannot describe a preamble the CLIs stopped getting.
+      hostPreamble: GENIRO_UI_PREAMBLE,
     };
   }
 

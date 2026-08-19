@@ -2,7 +2,12 @@ import { isAbsolute } from 'node:path';
 
 import { z } from 'zod';
 
-import { CLI_KINDS, type CliKind } from '../shared/contracts';
+import {
+  CLI_KINDS,
+  type CliKind,
+  hasControlCharacters,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
+} from '../shared/contracts';
 
 /**
  * Runtime validation for IPC payloads. The renderer is the only caller today,
@@ -59,6 +64,24 @@ export const settingsPatchSchema = z.strictObject({
   sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
   claudeBrowserTools: z.boolean().optional(),
+  // The user's own prose — bounded in SIZE because the value ends up in a
+  // spawned CLI's argv (and, on ACP, is re-sent every turn), and screened for
+  // CONTROL CHARACTERS for the same reason: node rejects a NUL in argv
+  // synchronously, and the daemon refuses the whole range at its own edge.
+  //
+  // Both checks are mirrored here rather than left to the daemon because this
+  // is the WRITE the user makes. A value stored here and refused there turns
+  // one invisible pasted character (Word and Notes emit U+000B for a soft line
+  // break) into a 400 on every new chat and workflow run, surfacing in the
+  // composer with nothing pointing back at the settings box holding it.
+  customInstructions: z
+    .string()
+    .max(MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    .refine(
+      (value) => !hasControlCharacters(value),
+      'must not contain control characters',
+    )
+    .optional(),
   // Nullable, not just optional: `null` is the "unchosen, resolve per build"
   // state, and it must be writable so a user can hand the choice back.
   daemonInspect: z.boolean().nullable().optional(),

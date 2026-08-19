@@ -625,6 +625,25 @@ export const CapabilitiesWireSchema = z.object({
     .describe(
       'Per-CLI reasoning-effort picker support, one entry per known agent',
     ),
+  /**
+   * The instruction block geniro prepends to EVERY user-facing turn, verbatim.
+   *
+   * Sent so the Settings screen can show the user what is already being said
+   * on their behalf before their own instructions. It is served rather than
+   * restated in the renderer for the usual reason: a second copy is a copy
+   * that drifts, and this one would drift silently — nothing renders the text
+   * a CLI actually received, so the preview would go on describing an older
+   * preamble indefinitely.
+   *
+   * Not per-agent: both transports carry the same block (claude on
+   * `--append-system-prompt`, ACP as leading prompt text), which is the point
+   * of composing it at one seam.
+   */
+  hostPreamble: z
+    .string()
+    .describe(
+      'The instruction block geniro prepends to every user-facing turn, before the user’s own custom instructions',
+    ),
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 

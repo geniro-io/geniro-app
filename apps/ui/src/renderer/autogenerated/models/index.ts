@@ -588,6 +588,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     modelEfforts: Array<AgentModelEffortCapability>;
+    /**
+     * The instruction block geniro prepends to every user-facing turn, before the user’s own custom instructions
+     * @type {string}
+     * @memberof CapabilitiesDto
+     */
+    hostPreamble: string;
 }
 
 /**
@@ -923,6 +929,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    customInstructions?: string;
     /**
      * 
      * @type {string}
@@ -1334,6 +1346,19 @@ export interface ExportedDto {
      * @memberof ExportedDto
      */
     exported: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface ForgottenInstructionsDto
+ */
+export interface ForgottenInstructionsDto {
+    /**
+     * Runs whose snapshotted custom instructions were cleared
+     * @type {number}
+     * @memberof ForgottenInstructionsDto
+     */
+    cleared: number;
 }
 /**
  * 
@@ -2009,6 +2034,12 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     prompt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWorkflowDto
+     */
+    customInstructions?: string;
 }
 /**
  * 

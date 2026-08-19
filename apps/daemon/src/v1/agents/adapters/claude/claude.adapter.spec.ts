@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
 import { tempDir } from '../../__tests__/temp-dir';
 import type { ClaudeModesCapability } from '../../chat.types';
+import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnFn } from '../../utils/spawn-cli';
 import { spawnAnswering } from '../__tests__/fake-group-child';
 import type {
@@ -535,12 +536,52 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     expect(captured.args).toEqual(
       expect.arrayContaining(['--dangerously-skip-permissions']),
     );
+    // The role now rides BEHIND the host preamble every user-facing turn
+    // carries. Spelled out rather than rebuilt with composeTurnInstructions,
+    // which is the function under test one layer down — asserting against it
+    // here would pass whatever that function did.
     expect(captured.args).toEqual(
       expect.arrayContaining([
         '--append-system-prompt',
-        'You are the reviewer.',
+        `${GENIRO_UI_PREAMBLE}\n\nYou are the reviewer.`,
       ]),
     );
+  });
+
+  it('carries the user’s custom instructions into argv, after the host preamble', () => {
+    // The chat path's whole delivery: the user types prose in Settings, it is
+    // snapshotted onto the run, and it has to reach the CLI. Order matters as
+    // much as presence — the preamble states facts about the host, and the
+    // user's text comes after so it can qualify them.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        customInstructions: 'Always answer in British English.',
+      },
+      () => {},
+    );
+
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.`,
+    );
+  });
+
+  it('sends the preamble alone when the user has typed no instructions', () => {
+    // The default state for every existing chat, and the reason the preamble is
+    // built in rather than seeded into the settings box: an empty box must
+    // still leave the agent knowing where its words land.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'p', cwd: '/proj' },
+      () => {},
+    );
+
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(captured.args![idx + 1]).toBe(GENIRO_UI_PREAMBLE);
   });
 
   it('gives an auto turn the stdio dialogue when it must be able to ask the user', () => {
@@ -1033,7 +1074,9 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
     expect(captured.args!.join(' ')).not.toContain('--mcp-config');
     const idx = captured.args!.indexOf('--append-system-prompt');
-    expect(captured.args![idx + 1]).toBe('You are the router.');
+    expect(captured.args![idx + 1]).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nYou are the router.`,
+    );
   });
 
   it('appends the "May call" block after the role when the endpoint IS delivered', () => {
@@ -1054,7 +1097,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      'You are the router.\n\nMay call (via the call_agent tool):\n- worker',
+      `${GENIRO_UI_PREAMBLE}\n\nYou are the router.\n\nMay call (via the call_agent tool):\n- worker`,
     );
   });
 
@@ -1072,7 +1115,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
     const idx = captured.args!.indexOf('--append-system-prompt');
     expect(captured.args![idx + 1]).toBe(
-      'May call (via the call_agent tool):\n- worker',
+      `${GENIRO_UI_PREAMBLE}\n\nMay call (via the call_agent tool):\n- worker`,
     );
   });
 

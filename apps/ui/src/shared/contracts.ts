@@ -141,6 +141,65 @@ export interface Settings {
    * respawns the daemon, exactly like the CLI paths and the inspector.
    */
   claudeBrowserTools: boolean;
+  /**
+   * Standing instructions handed to EVERY agent, on every provider.
+   *
+   * Free prose, the user's own words. It reaches a CLI through the daemon's
+   * one composition seam (`AgentAdapter.composeSystemPrompt`), so it needs no
+   * per-CLI spelling here — which is also why there is one box rather than one
+   * per agent.
+   *
+   * geniro's OWN preamble is NOT stored here. That text is a daemon constant
+   * prepended ahead of this one and served back for display over
+   * `GET /v1/capabilities`; keeping it out of settings.json is what stops a
+   * user's edit silently deleting the app's correction to the CLI's "you are
+   * writing to a terminal" system prompt.
+   *
+   * SNAPSHOTTED per run at creation, like `configDir` beside it: a run keeps
+   * the text it started with, so editing this changes the next chat rather
+   * than respawning the CLI process of one already open.
+   */
+  customInstructions: string;
+}
+
+/**
+ * Ceiling on {@link Settings.customInstructions}, in characters.
+ *
+ * TWIN PARSER: `MAX_CUSTOM_INSTRUCTIONS_CHARS` in
+ * `apps/daemon/src/v1/agents/chat.types.ts`. The two MUST hold the same number
+ * and neither can import the other — the daemon is a separate process, and the
+ * generated client carries the field's type but not its `maxLength`, so there
+ * is nothing on the wire to derive this from. The daemon's copy is the
+ * ENFORCING one (it validates untrusted input reaching a child's argv); this
+ * copy exists so the user is stopped at the textarea instead of at a chat
+ * create that 400s. Change one, change the other.
+ */
+export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 16_000;
+
+/**
+ * Whether a custom-instructions value carries a control character.
+ *
+ * TWIN PARSER: `hasControlCharacters` in
+ * `apps/daemon/src/v1/agents/chat.types.ts`, which is the ENFORCING side (the
+ * value reaches a child's argv there, where node rejects a NUL synchronously).
+ * This copy exists because STORING a value the daemon will refuse turns one
+ * invisible pasted character into a 400 on every new chat and workflow run,
+ * surfacing in the composer with nothing pointing back at the settings box
+ * holding it. Refusing where the text is typed is what keeps the two honest.
+ * Change one, change the other.
+ *
+ * A code-point scan rather than a regex, for the same two reasons the twin
+ * gives: raw bytes in the source make git treat the file as binary (the
+ * `pre-commit` hook refuses it), and escapes trip eslint's `no-control-regex`.
+ */
+export function hasControlCharacters(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Default settings written on first launch when no settings file exists. */
@@ -160,6 +219,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationsEnabled: true,
   daemonInspect: null,
   claudeBrowserTools: false,
+  customInstructions: '',
 };
 
 /**

@@ -21,6 +21,27 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Forget the snapshotted custom instructions on every run still holding any,
+   * and report how many were cleared.
+   *
+   * EVERY run, not only the unsettled ones. A settled chat is a chat whose last
+   * turn ended, not one that is closed — the user can send it another message
+   * at any time, and that turn would re-send the text they retracted. Limiting
+   * this to in-flight runs would leave the retention it exists to end.
+   *
+   * The cost is deliberate and is the whole reason this is a BUTTON rather
+   * than something clearing the settings box does on its own: it discards the
+   * per-run snapshot, so an old chat continued afterwards runs without the
+   * instructions it started under.
+   */
+  async forgetCustomInstructions(txEm?: EntityManager): Promise<number> {
+    return this.getRepo(txEm).nativeUpdate(
+      { customInstructions: { $ne: null } },
+      { customInstructions: null },
+    );
+  }
+
+  /**
    * Chat runs stuck in a non-terminal `running` state — used by the boot-time
    * reconcile to close runs a crash / SIGKILL / restart left mid-turn.
    */

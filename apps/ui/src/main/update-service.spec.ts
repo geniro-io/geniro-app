@@ -18,14 +18,24 @@ const RELEASE: LatestRelease = {
   checksums: { name: 'SHA256SUMS.txt', url: 'https://example.test/sums' },
 };
 
+interface LogLine {
+  level: string;
+  message: string;
+  context: Record<string, string>;
+}
+
 let broadcasts: UpdateState[];
 let installed: InstallInput[];
 let relaunched: number;
+let swept: { workDir: string; bundlePath: string }[];
+let logged: LogLine[];
 
 function build(overrides: Partial<UpdateServiceDeps> = {}): UpdateService {
   broadcasts = [];
   installed = [];
   relaunched = 0;
+  swept = [];
+  logged = [];
   return new UpdateService({
     currentVersion: () => '1.0.0',
     isPackaged: () => true,
@@ -37,10 +47,15 @@ function build(overrides: Partial<UpdateServiceDeps> = {}): UpdateService {
       installed.push(input);
     },
     canWrite: () => Promise.resolve(true),
+    sweep: (input) => {
+      swept.push(input);
+      return Promise.resolve([]);
+    },
     relaunch: () => {
       relaunched += 1;
     },
     broadcast: (state) => broadcasts.push(state),
+    log: (level, message, context) => logged.push({ level, message, context }),
     ...overrides,
   });
 }
@@ -287,5 +302,261 @@ describe('UpdateService scheduling', () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(fetchLatest).not.toHaveBeenCalled();
+  });
+});
+
+describe('UpdateService deadlines', () => {
+  /**
+   * REPORTED: the app sat on one non-terminal phase and never left it. Main
+   * owns this state and pushes it at every window, so reloading the renderer
+   * only re-read the same wedged value — the only recourse was quitting the
+   * app, which nothing anywhere tells the user. These four pin the escape.
+   */
+  it('gives up on a check that never answers, instead of holding `checking` for the rest of the launch', async () => {
+    vi.useFakeTimers();
+    let hang = true;
+    let answer!: (lookup: ReleaseLookup) => void;
+    const service = build({
+      checkDeadlineMs: 1000,
+      fetchLatest: () =>
+        hang
+          ? new Promise<ReleaseLookup>((resolve) => {
+              answer = resolve;
+            })
+          : Promise.resolve({ ok: true, release: RELEASE }),
+    });
+
+    void service.check();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().phase).toBe('checking');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(service.getState().phase).toBe('error');
+    expect(service.getState().message).toContain('did not finish');
+
+    // The abandoned call answering late must not overwrite the failure the
+    // user has already been shown — and may already have acted on.
+    answer({ ok: true, release: RELEASE });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().phase).toBe('error');
+
+    // …while the latch is free, so the app is usable again without a quit.
+    hang = false;
+    expect((await service.check()).phase).toBe('available');
+  });
+
+  it('re-arms the download budget on every chunk, then gives up once nothing more arrives', async () => {
+    vi.useFakeTimers();
+    let tick!: () => void;
+    const service = build({
+      downloadStallMs: 1000,
+      install: ({ onProgress }) => {
+        // A transfer the server declared no length for: `fraction` stays null
+        // the whole way, so a budget re-armed off the PUBLISHED progress —
+        // which never changes here — would give up on a healthy stream.
+        tick = () =>
+          onProgress?.({ fraction: null, receivedBytes: 1, totalBytes: null });
+        return new Promise<void>(() => {});
+      },
+    });
+    await service.check();
+
+    void service.install();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().phase).toBe('downloading');
+
+    await vi.advanceTimersByTimeAsync(800);
+    tick();
+    await vi.advanceTimersByTimeAsync(800);
+    // 1600ms in on a 1000ms budget, and still going: the chunk moved it.
+    expect(service.getState().phase).toBe('downloading');
+
+    // The SECOND chunk changes no published progress at all — null was already
+    // broadcast by the first — so this is the tick a budget re-armed off the
+    // emitted state would miss, giving up at 1800ms on a live download.
+    tick();
+    await vi.advanceTimersByTimeAsync(800);
+    expect(service.getState().phase).toBe('downloading');
+    expect(
+      broadcasts.filter(
+        (b) => b.phase === 'downloading' && b.progress === null,
+      ),
+    ).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(service.getState()).toMatchObject({
+      phase: 'error',
+      progress: null,
+    });
+    expect(service.getState().message).toContain('made no progress');
+    expect(service.getState().message).toContain(UPDATE_COMMAND);
+  });
+
+  it('hands `installing` a budget of its own — a swap reports no progress to re-arm with', async () => {
+    vi.useFakeTimers();
+    const service = build({
+      downloadStallMs: 1000,
+      installDeadlineMs: 5000,
+      install: ({ onStage }) => {
+        onStage?.('installing');
+        return new Promise<void>(() => {});
+      },
+    });
+    await service.check();
+
+    void service.install();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().phase).toBe('installing');
+
+    // Well past the download's stall budget, which no longer applies.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(service.getState().phase).toBe('installing');
+
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(service.getState().phase).toBe('error');
+    expect(service.getState().message).toContain('installing did not finish');
+  });
+
+  it('CANCELS the attempt it abandons, and refuses the answer it eventually gives', async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    let signal: AbortSignal | undefined;
+    const service = build({
+      downloadStallMs: 1000,
+      install: (input) => {
+        signal = input.signal;
+        return new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      },
+    });
+    await service.check();
+
+    void service.install();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(service.getState().phase).toBe('error');
+    // Ignoring a wedged install is not enough: the user can retry the moment
+    // the app frees up, and a swap still running underneath would be a second
+    // `ditto` writing the same bundle.
+    expect(signal?.aborted).toBe(true);
+
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().phase).toBe('error');
+    expect(relaunched).toBe(0);
+  });
+});
+
+describe('UpdateService retry', () => {
+  it('retries the release the user was offered when the first attempt failed', async () => {
+    let attempts = 0;
+    const service = build({
+      install: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('network down');
+        }
+      },
+    });
+    await service.check();
+    expect((await service.install()).phase).toBe('error');
+
+    // The rail's Retry control IS this call, and by then the phase is `error`.
+    // A guard that accepted `available` alone made that button do nothing but
+    // restate its own refusal.
+    const state = await service.install();
+
+    expect(attempts).toBe(2);
+    expect(state).toMatchObject({ phase: 'ready', currentVersion: '1.4.0' });
+  });
+
+  it('refuses a retry when the failure was a CHECK — there is no release to install', async () => {
+    const service = build({
+      fetchLatest: () => Promise.resolve({ ok: false, error: 'HTTP 503' }),
+    });
+    await service.check();
+    expect(service.getState().phase).toBe('error');
+
+    // Accepting `error` widened the door only for an attempt that had
+    // something to install; a check that failed never held a release, and
+    // "install whatever is latest" is not what the user pressed.
+    expect((await service.install()).message).toBe(
+      'there is no update ready to install',
+    );
+    expect(installed).toHaveLength(0);
+  });
+});
+
+describe('UpdateService.sweepDebris', () => {
+  it('clears what previous updates left on disk, and says where it can be read back', async () => {
+    const service = build({
+      sweep: (input) => {
+        swept.push(input);
+        return Promise.resolve([
+          '/tmp/updates/update-aaa',
+          '/Applications/Geniro.app.old-111',
+        ]);
+      },
+    });
+
+    expect(await service.sweepDebris()).toHaveLength(2);
+    expect(swept).toEqual([
+      { workDir: '/tmp/updates', bundlePath: '/Applications/Geniro.app' },
+    ]);
+    expect(logged.at(-1)?.message).toContain('Geniro.app.old-111');
+  });
+
+  it('sweeps nothing in an unpackaged build, where no bundle was ever replaced', async () => {
+    const service = build({ isPackaged: () => false });
+
+    expect(await service.sweepDebris()).toEqual([]);
+    expect(swept).toEqual([]);
+  });
+
+  it('will not delete the scratch directory a running download is writing into', async () => {
+    const service = build({ install: () => new Promise<void>(() => {}) });
+    await service.check();
+    void service.install();
+
+    expect(await service.sweepDebris()).toEqual([]);
+    expect(swept).toEqual([]);
+  });
+});
+
+describe('UpdateService reporting', () => {
+  it('writes a failed install where the user can actually read it back', async () => {
+    // The gap beside the wedge, and why it could not be diagnosed: a packaged
+    // Finder launch discards main's stdout, so nothing about a failed update
+    // reached any file — the day of the reported failure held no record of it
+    // anywhere on the machine.
+    const service = build({
+      install: () => Promise.reject(new Error('checksum mismatch')),
+    });
+    await service.check();
+    await service.install();
+
+    expect(
+      logged.some((l) => l.context.kind === 'update-install-started'),
+    ).toBe(true);
+    const failure = logged.find(
+      (l) => l.context.kind === 'update-install-failed',
+    );
+    expect(failure?.level).toBe('error');
+    expect(failure?.message).toContain('checksum mismatch');
+  });
+
+  it('writes the check failure the user never sees a banner for', async () => {
+    const service = build({
+      fetchLatest: () => Promise.resolve({ ok: false, error: 'HTTP 503' }),
+    });
+
+    await service.check();
+
+    // A background check failing is deliberately NOT put in the status row —
+    // which leaves the log as the only place it is recorded at all.
+    expect(
+      logged.find((l) => l.context.kind === 'update-check-failed'),
+    ).toMatchObject({ level: 'warn' });
   });
 });

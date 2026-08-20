@@ -58,6 +58,32 @@ const RM_RETRIES = 5;
 const RM_RETRY_DELAY_MS = 100;
 
 /**
+ * The two names an update writes beside the things it is replacing.
+ *
+ * Declared once because they are read by two parties that must agree: the code
+ * that CREATES them ({@link installUpdate}'s `mkdtemp`, {@link swapBundle}'s
+ * backup) and the code that later finds them again to remove them
+ * ({@link sweepUpdateDebris}). A prefix that drifts on one side is a sweeper
+ * that silently stops matching anything — which is exactly how four dead trees
+ * came to sit in a user's Application Support and beside their app.
+ */
+const SCRATCH_PREFIX = 'update-';
+const BACKUP_SUFFIX = '.old-';
+
+/**
+ * The caller's abandon signal and this step's own budget, as one signal.
+ *
+ * Both are real: a download has 15 minutes whatever the caller does, and the
+ * caller can give up sooner (the service's watchdog, when nothing has moved for
+ * long enough). `AbortSignal.any` is what makes the pair a single thing every
+ * `fetch` and `execFile` below can take.
+ */
+function withDeadline(ms: number, signal?: AbortSignal): AbortSignal {
+  const budget = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, budget]) : budget;
+}
+
+/**
  * Delete a tree we own, and never let the deletion be the thing that fails.
  *
  * Every caller here is removing scratch AFTER the outcome is already decided:
@@ -99,6 +125,17 @@ export interface InstallInput {
   bundlePath: string;
   /** A scratch directory the app owns (under userData). */
   workDir: string;
+  /**
+   * Abandon the install.
+   *
+   * The service arms a watchdog over every non-terminal phase, and abandoning
+   * has to mean CANCELLED rather than merely ignored: a caller that stopped
+   * listening while a swap was still running could otherwise be talked into
+   * starting a second one over the top of the first. Aborting mid-swap is safe
+   * for the same reason every other failure there is — `ditto` rejects, and the
+   * backup is renamed back.
+   */
+  signal?: AbortSignal;
   onStage?: (stage: InstallStage) => void;
   onProgress?: (progress: InstallProgress) => void;
 }
@@ -161,10 +198,10 @@ export function parseChecksums(text: string): Map<string, string> {
 }
 
 /** Fetch a text asset (the checksum file). */
-async function fetchText(url: string): Promise<string> {
+async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'geniro-app' },
-    signal: AbortSignal.timeout(60_000),
+    signal: withDeadline(60_000, signal),
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} fetching ${basename(url)}`);
@@ -184,10 +221,11 @@ async function downloadTo(
   url: string,
   dest: string,
   onProgress?: (progress: InstallProgress) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'geniro-app' },
-    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    signal: withDeadline(DOWNLOAD_TIMEOUT_MS, signal),
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} downloading ${basename(url)}`);
@@ -218,19 +256,67 @@ async function downloadTo(
 }
 
 /**
- * Remove scratch directories a previous install left behind.
+ * Scratch directories a previous install left behind.
  *
- * Named-prefix only (`update-`, the `mkdtemp` template below), so this can
- * never reach anything else that shares the work directory. Best-effort by
- * construction: an unreadable work dir is a fresh install's normal state.
+ * Named-prefix only ({@link SCRATCH_PREFIX}, the `mkdtemp` template below), so
+ * this can never reach anything else that shares the work directory.
+ * Best-effort by construction: an unreadable work dir is a fresh install's
+ * normal state.
  */
-async function sweepStaleScratch(workDir: string): Promise<void> {
+async function staleScratch(workDir: string): Promise<string[]> {
   const entries = await readdir(workDir).catch(() => [] as string[]);
-  await Promise.all(
-    entries
-      .filter((name) => name.startsWith('update-'))
-      .map((name) => discard(join(workDir, name))),
-  );
+  return entries
+    .filter((name) => name.startsWith(SCRATCH_PREFIX))
+    .map((name) => join(workDir, name));
+}
+
+/**
+ * Bundle backups a previous swap left beside the app.
+ *
+ * Matched on `<the app's own name>.old-`, so it can only ever name something
+ * this file wrote: `Geniro.app` does not start with `Geniro.app.old-`, and
+ * neither does anything else a user keeps in /Applications.
+ */
+async function staleBackups(bundlePath: string): Promise<string[]> {
+  const parent = dirname(bundlePath);
+  const prefix = `${basename(bundlePath)}${BACKUP_SUFFIX}`;
+  const entries = await readdir(parent).catch(() => [] as string[]);
+  return entries
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => join(parent, name));
+}
+
+/**
+ * Remove everything a previous update left on disk, and say what was removed.
+ *
+ * Both halves of the mess, because a user had all four kinds at once: two
+ * scratch trees under `updates/` and two `Geniro.app.old-*` backups beside the
+ * app, ~224MB of it, from updates that had SUCCEEDED days earlier. Neither is a
+ * leak in the install sequence — the scratch is discarded in a `finally` and
+ * the backup on the way out of {@link swapBundle} — but both removals are
+ * deliberately best-effort ({@link discard} swallows), and macOS holding a
+ * freshly-written bundle open is exactly the case that makes them fail. So the
+ * guarantee cannot live inside the install at all: it is a sweep at LAUNCH,
+ * which is the one moment nothing here is running.
+ *
+ * The returned paths are what the caller logs. A sweep that removes nothing is
+ * the normal case and returns an empty array.
+ */
+export async function sweepUpdateDebris({
+  workDir,
+  bundlePath,
+}: {
+  workDir: string;
+  /** The `.app` being updated — its backups live beside it. */
+  bundlePath: string;
+}): Promise<string[]> {
+  const [scratch, backups] = await Promise.all([
+    staleScratch(workDir),
+    staleBackups(bundlePath),
+  ]);
+  const paths = [...scratch, ...backups];
+  await Promise.all(paths.map(discard));
+  return paths;
 }
 
 /**
@@ -244,6 +330,7 @@ export async function installUpdate({
   release,
   bundlePath,
   workDir,
+  signal,
   onStage,
   onProgress,
 }: InstallInput): Promise<void> {
@@ -261,12 +348,12 @@ export async function installUpdate({
   // failure, which is right — but only because the next install sweeps up
   // after it, or a directory macOS was holding open for a second would sit in
   // Application Support with a release zip in it for good.
-  await sweepStaleScratch(workDir);
-  const scratch = await mkdtemp(join(workDir, 'update-'));
+  await Promise.all((await staleScratch(workDir)).map(discard));
+  const scratch = await mkdtemp(join(workDir, SCRATCH_PREFIX));
   try {
-    const expected = parseChecksums(await fetchText(release.checksums.url)).get(
-      release.zip.name,
-    );
+    const expected = parseChecksums(
+      await fetchText(release.checksums.url, signal),
+    ).get(release.zip.name);
     if (!expected) {
       throw new Error(
         `SHA256SUMS.txt carries no entry for ${release.zip.name}`,
@@ -275,7 +362,12 @@ export async function installUpdate({
 
     const archive = join(scratch, release.zip.name);
     onStage?.('downloading');
-    const actual = await downloadTo(release.zip.url, archive, onProgress);
+    const actual = await downloadTo(
+      release.zip.url,
+      archive,
+      onProgress,
+      signal,
+    );
     if (actual !== expected) {
       throw new Error(
         `checksum mismatch for ${release.zip.name} — the download does not match the published release`,
@@ -286,11 +378,15 @@ export async function installUpdate({
     // `ditto -x -k` is what unpacks a macOS app archive with its symlinks,
     // resource forks and permissions intact; `unzip` flattens some of them.
     const unpacked = join(scratch, 'unpacked');
-    await execFileAsync(DITTO, ['-x', '-k', archive, unpacked]);
+    await execFileAsync(DITTO, ['-x', '-k', archive, unpacked], { signal });
     const staged = join(unpacked, basename(bundlePath));
     await access(staged, constants.F_OK);
 
-    await swapBundle(staged, bundlePath);
+    // The last cheap place to stop. Past this line the app is briefly absent
+    // from its own path, so an abandoned attempt costs a rollback rather than
+    // nothing.
+    signal?.throwIfAborted();
+    await swapBundle(staged, bundlePath, signal);
   } finally {
     await discard(scratch);
   }
@@ -310,8 +406,12 @@ export async function installUpdate({
  * an unlink does not close), so this is safe while the app is still up, but it
  * is also the step with nothing left to protect.
  */
-async function swapBundle(staged: string, bundlePath: string): Promise<void> {
-  const backup = `${bundlePath}.old-${process.pid}`;
+async function swapBundle(
+  staged: string,
+  bundlePath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const backup = `${bundlePath}${BACKUP_SUFFIX}${process.pid}`;
   // This one is BEFORE the commit point, so a failure here is a genuine refusal
   // to start — renaming onto a leftover would be the destructive kind of
   // surprise. It still retries, for the reason `discard` documents.
@@ -323,7 +423,7 @@ async function swapBundle(staged: string, bundlePath: string): Promise<void> {
   });
   await rename(bundlePath, backup);
   try {
-    await execFileAsync(DITTO, [staged, bundlePath]);
+    await execFileAsync(DITTO, [staged, bundlePath], { signal });
   } catch (err) {
     await rename(backup, bundlePath);
     throw err;

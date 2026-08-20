@@ -13,6 +13,7 @@ import {
   type InstallInput,
   installUpdate,
   resolveBundlePath,
+  sweepUpdateDebris,
 } from './update-installer';
 import {
   fetchLatestRelease,
@@ -59,6 +60,69 @@ const CHECK_INTERVAL_MS = 5 * 60_000;
  */
 const LAUNCH_CHECK_DELAY_MS = 8_000;
 
+/**
+ * Deadlines over the phases that are not an ending.
+ *
+ * REPORTED: an install sat on one non-terminal phase and never left it. Nothing
+ * here timed a phase out and nothing reset one, and since main owns the state
+ * and pushes it at every window, reloading the renderer only re-read the same
+ * wedged value — the ONLY recourse was quitting the app, which nothing tells
+ * the user. Every recognised failure already lands in `error`; what was missing
+ * is a bound on the failures nobody recognised, so that a phase which stops
+ * moving becomes one of them.
+ *
+ * The download's is a STALL budget rather than a total: it is re-armed by every
+ * progress callback, so a 150MB transfer over a bad connection can take as long
+ * as it takes while one that never starts still gives up. Three minutes because
+ * the checksum fetch ahead of the first byte carries a 60s budget of its own.
+ *
+ * The other two are flat totals — neither reports progress. `checking` is a
+ * metadata call the feed already bounds at 10s, so 60s here is a backstop for a
+ * promise that never settles AT ALL rather than a slow answer; `installing` is
+ * two `ditto` passes over ~150MB, normally well under a minute.
+ */
+const CHECK_DEADLINE_MS = 60_000;
+const DOWNLOAD_STALL_MS = 3 * 60_000;
+const INSTALL_DEADLINE_MS = 10 * 60_000;
+
+/** `45s` / `3 minutes` — a duration in the words an error line wants. */
+function humanize(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 120 ? `${seconds}s` : `${Math.round(seconds / 60)} minutes`;
+}
+
+function checkTimedOut(ms: number): string {
+  return `the update check did not finish within ${humanize(ms)}`;
+}
+
+function downloadStalled(ms: number): string {
+  return `the update made no progress for ${humanize(ms)} — you can still update with: ${UPDATE_COMMAND}`;
+}
+
+function installTimedOut(ms: number): string {
+  return `installing did not finish within ${humanize(ms)} — you can still update with: ${UPDATE_COMMAND}`;
+}
+
+/**
+ * One line into the daemon's debug log, as the `ui` channel.
+ *
+ * REPORTED alongside the wedge, and the reason it could not be diagnosed at
+ * all: everything this file knows went to `console`, and a packaged Finder
+ * launch discards main's stdout. So the one process that could see the update
+ * fail had no path into the log the user can actually open and paste — across
+ * every log file on the machine, the day of the failure held nothing about it.
+ *
+ * Injected rather than imported, on the same rule as every other dependency
+ * here: the class is driven in specs with no daemon and no network. The levels
+ * are the daemon's own vocabulary, spelled out for the reason
+ * `window-diagnostics.ts` spells them — the Electron side holds no daemon types.
+ */
+export type UpdateLog = (
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  context: Record<string, string>,
+) => void;
+
 export interface UpdateServiceDeps {
   /** The running app's version. */
   currentVersion: () => string;
@@ -73,10 +137,17 @@ export interface UpdateServiceDeps {
   canWrite: (bundlePath: string) => Promise<boolean>;
   /** Quit and come back up on the freshly-swapped bundle. */
   relaunch: () => void;
+  /** Remove what previous updates left on disk; resolves with what it removed. */
+  sweep: (input: { workDir: string; bundlePath: string }) => Promise<string[]>;
   /** Push the new state at every renderer. */
   broadcast: (state: UpdateState) => void;
+  /** Write one line where a user can read it back — see {@link UpdateLog}. */
+  log: UpdateLog;
   intervalMs?: number;
   launchDelayMs?: number;
+  checkDeadlineMs?: number;
+  downloadStallMs?: number;
+  installDeadlineMs?: number;
 }
 
 export class UpdateService {
@@ -93,6 +164,26 @@ export class UpdateService {
   private release: LatestRelease | null = null;
   /** In flight, so a second press does not start a second download. */
   private busy = false;
+  /** The deadline over the phase in flight, if that phase is not an ending. */
+  private watchdog: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Which attempt the in-flight work belongs to.
+   *
+   * Bumped when an attempt STARTS and again when the watchdog abandons one, so
+   * every guard below fails for work that has been given up on. That is the
+   * whole point: a hung call is still pending after the watchdog has moved the
+   * app to `error`, and if it ever settles it must not write `ready` over the
+   * failure the user has already been shown and may already have retried past.
+   */
+  private attempt = 0;
+  /**
+   * Cancels the abandoned attempt for real.
+   *
+   * Ignoring a hung install is not enough on its own. The user can retry the
+   * moment the watchdog frees the app, and an abandoned attempt still inside
+   * the bundle swap would then be a second `ditto` writing the same bundle.
+   */
+  private aborter: AbortController | null = null;
 
   constructor(private readonly deps: UpdateServiceDeps) {
     this.state = {
@@ -155,11 +246,18 @@ export class UpdateService {
     if (this.busy) {
       return this.state;
     }
-    this.busy = true;
+    const deadline = this.deps.checkDeadlineMs ?? CHECK_DEADLINE_MS;
+    const attempt = this.begin(deadline, checkTimedOut(deadline));
     try {
       this.emit({ phase: 'checking', message: null, progress: null });
       const lookup = await this.deps.fetchLatest();
+      if (this.abandoned(attempt)) {
+        return this.state;
+      }
       if (!lookup.ok) {
+        this.deps.log('warn', `the update check failed: ${lookup.error}`, {
+          kind: 'update-check-failed',
+        });
         return this.emit({ phase: 'error', message: lookup.error });
       }
       const { release } = lookup;
@@ -173,6 +271,9 @@ export class UpdateService {
       }
       this.release = release;
       const canInstall = await this.resolveCanInstall();
+      if (this.abandoned(attempt)) {
+        return this.state;
+      }
       return this.emit({
         phase: 'available',
         version: release.version,
@@ -183,7 +284,7 @@ export class UpdateService {
         canInstall,
       });
     } finally {
-      this.busy = false;
+      this.settle(attempt);
     }
   }
 
@@ -204,7 +305,13 @@ export class UpdateService {
       return this.state;
     }
     const release = this.release;
-    if (!release || this.state.phase !== 'available') {
+    // `error` and not `available` alone: the rail's Retry control IS this call,
+    // and an install that failed — or one the watchdog abandoned — leaves the
+    // phase at `error` with the offered release still held. Refusing it here is
+    // what made that button do nothing but restate its own refusal.
+    const offered =
+      this.state.phase === 'available' || this.state.phase === 'error';
+    if (!release || !offered) {
       return this.emit({
         phase: 'error',
         message: 'there is no update ready to install',
@@ -213,7 +320,10 @@ export class UpdateService {
     // Latched SYNCHRONOUSLY, before the first await. Set after it, two presses
     // a few milliseconds apart both pass the check and start their own
     // download of the same release into the same scratch directory.
-    this.busy = true;
+    const stall = this.deps.downloadStallMs ?? DOWNLOAD_STALL_MS;
+    const attempt = this.begin(stall, downloadStalled(stall));
+    const aborter = new AbortController();
+    this.aborter = aborter;
     try {
       const bundlePath = this.deps.bundlePath();
       if (!bundlePath || !(await this.resolveCanInstall())) {
@@ -222,17 +332,38 @@ export class UpdateService {
           message: `this copy of Geniro cannot replace itself — update with: ${UPDATE_COMMAND}`,
         });
       }
+      if (this.abandoned(attempt)) {
+        return this.state;
+      }
+      this.deps.log('info', `downloading Geniro ${release.version}`, {
+        kind: 'update-install-started',
+        version: release.version,
+      });
       this.emit({ phase: 'downloading', progress: 0, message: null });
       await this.deps.install({
         release,
         bundlePath,
         workDir: this.deps.workDir(),
+        signal: aborter.signal,
         onStage: (stage) => {
-          if (stage === 'installing') {
-            this.emit({ phase: 'installing', progress: null });
+          if (this.abandoned(attempt) || stage !== 'installing') {
+            return;
           }
+          // A different budget for a different kind of wait: `ditto` reports
+          // nothing at all, so there is no stall to detect — only a total.
+          const deadline = this.deps.installDeadlineMs ?? INSTALL_DEADLINE_MS;
+          this.armWatchdog(attempt, deadline, installTimedOut(deadline));
+          this.emit({ phase: 'installing', progress: null });
         },
         onProgress: ({ fraction }) => {
+          if (this.abandoned(attempt)) {
+            return;
+          }
+          // Re-armed off the RAW callback rather than off an emitted change: a
+          // server that declares no content-length leaves `fraction` null for
+          // the whole transfer, so a watchdog fed by the published `progress`
+          // would give up on a download that was streaming perfectly.
+          this.armWatchdog(attempt, stall, downloadStalled(stall));
           // Whole percents only: a 150MB download fires thousands of chunk
           // events, and every one of them would be an IPC message and a React
           // render for a bar that cannot show the difference.
@@ -246,18 +377,37 @@ export class UpdateService {
           }
         },
       });
+      if (this.abandoned(attempt)) {
+        return this.state;
+      }
     } catch (err) {
-      return this.emit({
-        phase: 'error',
-        progress: null,
-        message: `${err instanceof Error ? err.message : String(err)} — you can still update with: ${UPDATE_COMMAND}`,
-      });
+      if (this.abandoned(attempt)) {
+        // The abort THIS service raised, surfacing as the rejection it was
+        // meant to cause. The watchdog has already said what happened, in
+        // words about the stall rather than about an AbortError.
+        return this.state;
+      }
+      const message = `${err instanceof Error ? err.message : String(err)} — you can still update with: ${UPDATE_COMMAND}`;
+      this.deps.log(
+        'error',
+        `the update to ${release.version} failed: ${message}`,
+        {
+          kind: 'update-install-failed',
+          version: release.version,
+        },
+      );
+      return this.emit({ phase: 'error', progress: null, message });
     } finally {
-      // Released on EVERY path out of the try, including the two early
-      // returns: leaving it latched would refuse every further check and press
-      // for the rest of the launch.
-      this.busy = false;
+      // Released on EVERY path out of the try, including the early returns:
+      // leaving it latched would refuse every further check and press for the
+      // rest of the launch.
+      this.settle(attempt);
     }
+    this.deps.log(
+      'info',
+      `Geniro ${release.version} is installed — waiting for a restart`,
+      { kind: 'update-installed', version: release.version },
+    );
     // The new bundle is on disk. The app does NOT restart itself here, and that
     // is the user's own ask ("after update there should be a reload button to
     // relaunch app"): a relaunch quits this process, which takes the daemon and
@@ -288,6 +438,115 @@ export class UpdateService {
   }
 
   /**
+   * Remove what previous updates left on disk. At LAUNCH, and nowhere else.
+   *
+   * REPORTED: ~224MB of dead trees — two scratch directories under `updates/`
+   * and two `Geniro.app.old-*` backups beside the app — from updates that had
+   * SUCCEEDED days earlier, each eroded down to a `Contents/Resources` the
+   * cleanup had not finished emptying. Neither is a missing step: the install
+   * discards its scratch in a `finally` and its backup on the way out of the
+   * swap. Both are deliberately best-effort, because a cleanup that throws
+   * turned a completed update into "The update could not be installed" — and a
+   * freshly-written bundle is exactly what macOS holds open behind them.
+   *
+   * So the guarantee cannot live inside the install at all. It lives here, at
+   * the one moment nothing in this file is running, which is also the only
+   * thing that reaches debris from a launch that never updates again.
+   */
+  async sweepDebris(): Promise<string[]> {
+    const bundlePath = this.deps.bundlePath();
+    // `busy` is belt and braces — this runs before anything can have started —
+    // but sweeping `update-*` out from under a live download would delete the
+    // scratch directory that download is writing into.
+    if (!this.deps.isPackaged() || !bundlePath || this.busy) {
+      return [];
+    }
+    const removed = await this.deps.sweep({
+      workDir: this.deps.workDir(),
+      bundlePath,
+    });
+    if (removed.length > 0) {
+      this.deps.log(
+        'info',
+        `removed ${removed.length} leftover update file(s): ${removed.join(', ')}`,
+        { kind: 'update-debris-swept', count: String(removed.length) },
+      );
+    }
+    return removed;
+  }
+
+  /**
+   * Claim the service for one attempt, and arm the deadline it has to beat.
+   *
+   * The latch and the counter move together, because they answer two halves of
+   * one question: `busy` is "may something else start", `attempt` is "is this
+   * still the thing that may finish".
+   */
+  private begin(deadlineMs: number, timedOut: string): number {
+    this.busy = true;
+    this.attempt += 1;
+    this.armWatchdog(this.attempt, deadlineMs, timedOut);
+    return this.attempt;
+  }
+
+  /** Has this attempt been given up on — by the watchdog, or by a later one? */
+  private abandoned(attempt: number): boolean {
+    return attempt !== this.attempt;
+  }
+
+  /**
+   * Release the service — unless this attempt was already abandoned, in which
+   * case a newer one owns the latch and the deadline and neither is ours to
+   * clear.
+   */
+  private settle(attempt: number): void {
+    if (this.abandoned(attempt)) {
+      return;
+    }
+    this.disarmWatchdog();
+    this.aborter = null;
+    this.busy = false;
+  }
+
+  /**
+   * Bound the phase in flight.
+   *
+   * Re-arming is how the download's stall budget works, so this always clears
+   * the previous timer first: two live watchdogs over one attempt would mean
+   * the first one's deadline still firing long after progress resumed.
+   */
+  private armWatchdog(attempt: number, ms: number, timedOut: string): void {
+    this.disarmWatchdog();
+    this.watchdog = setTimeout(() => {
+      this.watchdog = null;
+      if (this.abandoned(attempt)) {
+        return;
+      }
+      // Abandon it — bumping the counter is what makes every guard in the
+      // attempt fail — and CANCEL it, which is the half that matters once the
+      // user can retry over the top of whatever is still running.
+      this.attempt += 1;
+      this.busy = false;
+      this.aborter?.abort(new Error(timedOut));
+      this.aborter = null;
+      this.deps.log('error', timedOut, {
+        kind: 'update-timed-out',
+        phase: this.state.phase,
+      });
+      this.emit({ phase: 'error', progress: null, message: timedOut });
+    }, ms);
+    // Never the reason this process stays alive.
+    this.watchdog.unref?.();
+  }
+
+  private disarmWatchdog(): void {
+    if (this.watchdog) {
+      clearTimeout(this.watchdog);
+      this.watchdog = null;
+    }
+  }
+
+  /**
    * Whether this install can replace itself — asked of the filesystem, not
    * assumed.
    *
@@ -314,7 +573,7 @@ export class UpdateService {
 }
 
 /** The production service, wired to electron and the real network/filesystem. */
-export function createUpdateService(): UpdateService {
+export function createUpdateService(log: UpdateLog): UpdateService {
   return new UpdateService({
     currentVersion: () => app.getVersion(),
     isPackaged: () => app.isPackaged,
@@ -323,6 +582,8 @@ export function createUpdateService(): UpdateService {
     fetchLatest: fetchLatestRelease,
     install: installUpdate,
     canWrite: canWriteBundle,
+    sweep: sweepUpdateDebris,
+    log,
     relaunch: () => {
       // Electron spawns the replacement only after this instance has exited,
       // which is what makes relaunching into a bundle we just swapped safe:

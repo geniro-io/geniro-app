@@ -120,9 +120,9 @@ export function footerUpdate(
         : { kind: 'none' };
     default:
       // `idle` / `checking` / `up-to-date` — nothing to offer. A check in
-      // flight deliberately shows nothing: it happens on launch and every 6h
-      // without being asked, and a spinner appearing in the status row on its
-      // own schedule is motion the user cannot explain.
+      // flight deliberately shows nothing: it happens on launch and every few
+      // minutes without being asked, and a spinner appearing in the status row
+      // on its own schedule is motion the user cannot explain.
       return { kind: 'none' };
   }
 }

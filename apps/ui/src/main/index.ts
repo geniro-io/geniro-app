@@ -39,7 +39,13 @@ const ICON_PATH = join(app.getAppPath(), 'resources', 'icon.png');
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
 
 const supervisor = new DaemonSupervisor();
-const updates = createUpdateService();
+// The update service's own reporting channel. Everything it knew used to go to
+// `console`, and a packaged Finder launch discards main's stdout — so a wedged
+// or failed update left no record anywhere. `reportMainLog` buffers until the
+// daemon exists, which covers the launch sweep below firing before it does.
+const updates = createUpdateService((level, message, context) => {
+  void reportMainLog(supervisor.getHandle(), level, message, context);
+});
 let mainWindow: BrowserWindow | null = null;
 let teardownDone = false;
 
@@ -308,6 +314,10 @@ function main(): void {
     // service — launch is busy enough, and an update banner is worth nothing
     // before the window has painted.
     updates.start(readSettings().checkForUpdates);
+    // Debris from previous updates, cleared at the one moment nothing here is
+    // running. Not gated on the auto-check setting: a user who switched checks
+    // off still has whatever the last update left on their disk.
+    void updates.sweepDebris();
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint

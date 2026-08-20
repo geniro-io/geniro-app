@@ -19,18 +19,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * and a mocked `fs` would pin the calls it makes rather than whether the user's
  * app survives a failed copy.
  */
+type DittoOptions = { signal?: AbortSignal };
+type DittoCallback = (err: Error | null, result?: unknown) => void;
+
 const mocks = vi.hoisted(() => ({
-  ditto: vi.fn<(file: string, args: string[]) => Promise<void>>(),
+  ditto:
+    vi.fn<
+      (
+        file: string,
+        args: string[],
+        options: { signal?: AbortSignal },
+      ) => Promise<void>
+    >(),
 }));
 
 vi.mock('node:child_process', () => ({
+  // `promisify` appends the callback to whatever it was handed, so the swap's
+  // signalled calls put it FOURTH and the quarantine strip still puts it third.
+  // Reading it by position is what keeps both shapes working.
   execFile: (
     file: string,
     args: string[],
-    cb: (err: Error | null, result?: unknown) => void,
+    optionsOrCb: DittoOptions | DittoCallback,
+    maybeCb?: DittoCallback,
   ): void => {
+    const cb = typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb!;
+    const options = typeof optionsOrCb === 'function' ? {} : optionsOrCb;
     void mocks
-      .ditto(file, args)
+      .ditto(file, args, options)
       .then(() => cb(null, { stdout: '', stderr: '' }))
       .catch((err: Error) => cb(err));
   },
@@ -41,6 +57,7 @@ import {
   installUpdate,
   parseChecksums,
   resolveBundlePath,
+  sweepUpdateDebris,
 } from './update-installer';
 import type { LatestRelease } from './updater';
 
@@ -295,11 +312,42 @@ describe('installUpdate', () => {
     expect(await installedVersion()).toBe('installed-1.3.0');
   });
 
+  it('stops before the commit point when the caller has abandoned it', async () => {
+    // The service's watchdog abandons a wedged install, and the user can retry
+    // the moment it does — so abandoning has to CANCEL rather than merely stop
+    // listening, or the retry is a second `ditto` writing the same bundle
+    // underneath the first.
+    const aborter = new AbortController();
+
+    await expect(
+      installUpdate({
+        release: release(),
+        bundlePath,
+        workDir,
+        signal: aborter.signal,
+        onStage: (stage) => {
+          if (stage === 'installing') {
+            aborter.abort(new Error('the update made no progress'));
+          }
+        },
+      }),
+    ).rejects.toThrow(/no progress/);
+
+    // Nothing was renamed aside, so there is nothing to have restored.
+    expect(await installedVersion()).toBe('installed-1.3.0');
+    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+    // And the scratch is gone — the `finally` runs on this path too.
+    expect(await readdir(workDir)).toEqual([]);
+    // The signal reaches `ditto` itself, so a copy already running is killed
+    // rather than left to finish into a bundle nobody is waiting for.
+    expect(mocks.ditto.mock.calls[0]?.[2]?.signal).toBe(aborter.signal);
+  });
+
   it('puts the original bundle back when the copy fails half-way', async () => {
     const unpack = mocks.ditto.getMockImplementation()!;
-    mocks.ditto.mockImplementation(async (file, args) => {
+    mocks.ditto.mockImplementation(async (file, args, options) => {
       if (args[0] === '-x') {
-        return unpack(file, args);
+        return unpack(file, args, options);
       }
       throw new Error('ditto: No space left on device');
     });
@@ -313,5 +361,46 @@ describe('installUpdate', () => {
     // the restore they would be left with no Geniro at all.
     expect(await installedVersion()).toBe('installed-1.3.0');
     expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+  });
+});
+
+describe('sweepUpdateDebris', () => {
+  it('removes leftover scratch AND leftover bundle backups, and names what it removed', async () => {
+    // REPORTED: ~224MB of exactly this, from updates that had SUCCEEDED days
+    // earlier — two scratch trees and two `.old-*` backups, each eroded down to
+    // the `Contents/Resources` the cleanup had not finished emptying. Both
+    // removals are best-effort inside the install (a cleanup that throws
+    // reported a completed update as a failed one), so the guarantee has to
+    // live at launch, where nothing is running.
+    await mkdir(join(workDir, 'update-aaa', 'unpacked'), { recursive: true });
+    await writeFile(join(workDir, 'update-aaa', ZIP_NAME), 'a dead download');
+    await mkdir(`${bundlePath}.old-111`, { recursive: true });
+    await mkdir(`${bundlePath}.old-222`, { recursive: true });
+    // Not ours, and never touched: the match is on the names this file writes.
+    await mkdir(join(workDir, 'something-else'), { recursive: true });
+
+    const removed = await sweepUpdateDebris({ workDir, bundlePath });
+
+    expect(removed.sort()).toEqual(
+      [
+        join(workDir, 'update-aaa'),
+        `${bundlePath}.old-111`,
+        `${bundlePath}.old-222`,
+      ].sort(),
+    );
+    expect(await readdir(workDir)).toEqual(['something-else']);
+    // The app ITSELF survives, which is the whole risk in matching by prefix:
+    // `Geniro.app` does not start with `Geniro.app.old-`.
+    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+    expect(await installedVersion()).toBe('installed-1.3.0');
+  });
+
+  it('answers a clean install with nothing, rather than failing on a work dir that was never created', async () => {
+    expect(
+      await sweepUpdateDebris({
+        workDir: join(root, 'never-downloaded-anything'),
+        bundlePath,
+      }),
+    ).toEqual([]);
   });
 });

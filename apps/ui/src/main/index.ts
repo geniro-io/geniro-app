@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
+import { TRAFFIC_LIGHT_INSET } from '../shared/contracts';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
@@ -126,9 +127,13 @@ function createWindow(): void {
      * `components/nav-rail.tsx`, which reserves the width) rather than left at
      * the default inset, because that default assumes a title bar's height and
      * ours is the rail's. Both values are macOS-only and ignored elsewhere.
+     *
+     * The inset is SHARED with the renderer rather than spelled here, because
+     * placing the buttons and leaving room for them are two halves of one
+     * fact — see `TRAFFIC_LIGHT_INSET` in `shared/contracts.ts`.
      */
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 10, y: 16 },
+    trafficLightPosition: TRAFFIC_LIGHT_INSET,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

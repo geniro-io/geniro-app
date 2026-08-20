@@ -215,11 +215,11 @@ export function ChatHeader({
   tasks?: { done: number; total: number } | null;
 }): React.JSX.Element {
   return (
-    // `app-drag`: this row is the top of the window now that the OS title bar
-    // is hidden, and it carries no control at all — every child is a readout —
-    // so the whole width is a drag handle with nothing to opt out of it. A
-    // control added here later must carry `app-no-drag`, or it will be inert.
-    <div className="app-drag flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
+    // A header for the TRANSCRIPT, not for the window: the shell's title bar is
+    // one band above every column (`components/title-bar.tsx`), and this row no
+    // longer moves the window — dragging a row full of chips was surprising
+    // once a real title bar existed.
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
       <div className="flex min-w-0 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon

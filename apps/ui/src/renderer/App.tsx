@@ -13,7 +13,9 @@ import { Chats } from './chats/Chats';
 import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
 import { type AppView, NavRail } from './components/nav-rail';
+import { TitleBar } from './components/title-bar';
 import { cn } from './components/ui/utils';
+import { useSidebarCollapsed } from './components/use-sidebar-collapsed';
 import { WindowDragStrip } from './components/window-drag-strip';
 import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
@@ -49,6 +51,20 @@ function helloVersion(data: unknown): string | null {
   return null;
 }
 
+/**
+ * What the title bar says for a view that is not a document.
+ *
+ * Only Chats has a name of its own to show (the open thread); the other three
+ * are places rather than things, so the bar states where you are — which is
+ * what the OS strip used to do with the app's name and nothing else.
+ */
+const VIEW_TITLE: Record<AppView, string> = {
+  chats: 'Chats',
+  graphs: 'Graphs',
+  stats: 'Stats',
+  settings: 'Settings',
+};
+
 export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>('loading');
   const [view, setView] = useState<AppView>('chats');
@@ -81,6 +97,15 @@ export function App(): React.JSX.Element {
    * nothing to wave away and nothing interrupting a view to be waved away from.
    */
   const [updateEngaged, setUpdateEngaged] = useState(false);
+  const sidebar = useSidebarCollapsed();
+  /**
+   * What the open chat is called, reported UP by `Chats`.
+   *
+   * The title bar spans the window, above the columns, so the name of the thing
+   * on screen has to reach it from the view that knows it. Null until a chat is
+   * open — the landing view is not a document and says so by name.
+   */
+  const [chatTitle, setChatTitle] = useState<string | null>(null);
   const update = useUpdateState();
   const clientRef = useRef<DaemonClient | null>(null);
   // One set of clients per launch handle. Built here rather than inside the
@@ -245,12 +270,14 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full">
-      <NavRail
-        view={view}
-        onNavigate={setView}
+    <div className="flex h-full flex-col">
+      {/* ONE band across the window, above the columns — see `title-bar.tsx`
+          for why it is not three rows in three columns any more. */}
+      <TitleBar
+        title={view === 'chats' ? (chatTitle ?? 'New chat') : VIEW_TITLE[view]}
         connected={connected}
-        // The offer, resolved HERE from main's one state so the rail renders it
+        daemonVersion={daemonVersion}
+        // The offer, resolved HERE from main's one state so the bar renders it
         // rather than deciding it — including `canInstall`, main's own answer
         // about this install (read-only volume, another account, a translocated
         // copy), so the control only appears where pressing it can work.
@@ -260,83 +287,93 @@ export function App(): React.JSX.Element {
           void update.install();
         }}
         onRelaunchUpdate={() => void update.relaunch()}
-        daemonVersion={daemonVersion}
         debugOpen={debugOpen}
         onToggleDebug={() => setDebugOpen((open) => !open)}
       />
-      {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
+      <div className="flex min-h-0 flex-1">
+        <NavRail
+          view={view}
+          onNavigate={setView}
+          collapsed={sidebar.collapsed}
+          hydrated={sidebar.hydrated}
+          onToggleCollapsed={sidebar.toggle}
+        />
+        {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
           content, so one long unbreakable string (a cwd path) would otherwise
           push the whole layout wider than the window and the transcript
           auto-scroll would then drag the document sideways, clipping the rail. */}
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {/* Above every view, because every view is made of daemon calls: a
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {/* Above every view, because every view is made of daemon calls: a
             failure here explains an empty chat list, a Send that does nothing
             and a builder that cannot save, all at once. Outside the per-view
             wrappers so it survives a nav switch — the connection is app state,
             not any one screen's. */}
-        {connected ? null : (
-          <ConnectionBanner
-            reason={connectionError}
-            retrying={reconnecting}
-            onRetry={() => void connectDaemon()}
-          />
-        )}
-        {/* No update strip here. It and the nav rail's version row were two
+          {connected ? null : (
+            <ConnectionBanner
+              reason={connectionError}
+              retrying={reconnecting}
+              onRetry={() => void connectDaemon()}
+            />
+          )}
+          {/* No update strip here. It and the nav rail's version row were two
             controls for one action in one window; the row is where the running
             version is already written, so that is the one that stayed. The
             connection banner above is NOT the same case and keeps its strip: a
             daemon that is not answering breaks the view under it, while an
             update is an offer with no deadline. */}
-        {/* Chats stays mounted (hidden) across nav switches so its live WS room
+          {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Graphs. */}
-        <div className={cn('min-h-0 flex-1', view !== 'chats' && 'hidden')}>
-          {handle && clientRef.current ? (
-            <Chats
-              client={clientRef.current}
-              handle={handle}
-              active={view === 'chats'}
-            />
-          ) : (
-            <EmptyState>Connecting to the daemon…</EmptyState>
-          )}
-        </div>
-        <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
-          {/* `min-h-0 flex-1`, not `h-full`: `main` is now a flex COLUMN whose
+          <div className={cn('min-h-0 flex-1', view !== 'chats' && 'hidden')}>
+            {handle && clientRef.current ? (
+              <Chats
+                client={clientRef.current}
+                handle={handle}
+                active={view === 'chats'}
+                onTitleChange={setChatTitle}
+              />
+            ) : (
+              <EmptyState>Connecting to the daemon…</EmptyState>
+            )}
+          </div>
+          <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
+            {/* `min-h-0 flex-1`, not `h-full`: `main` is now a flex COLUMN whose
               first child can be the connection strip, so a child claiming the
               full height would push the views past the bottom of the window
               by exactly the strip's height. */}
-          <div className={cn('min-h-0 flex-1', view !== 'graphs' && 'hidden')}>
-            {graphsMounted ? <Graphs handle={handle} /> : null}
-          </div>
-          {/* Unmounted when hidden, like Settings and unlike Chats/Graphs:
+            <div
+              className={cn('min-h-0 flex-1', view !== 'graphs' && 'hidden')}>
+              {graphsMounted ? <Graphs handle={handle} /> : null}
+            </div>
+            {/* Unmounted when hidden, like Settings and unlike Chats/Graphs:
               the page holds no unsaved edit and no live subscription, and a
               fresh mount is how a revisit gets figures that are current
               rather than however stale the last visit left them. */}
-          {view === 'stats' ? (
-            <div className="min-h-0 flex-1">
-              <Stats handle={handle} client={clientRef.current} />
-            </div>
-          ) : null}
-          {view === 'settings' ? (
-            <div className="min-h-0 flex-1">
-              <Settings handle={handle} />
-            </div>
-          ) : null}
-        </Suspense>
-        {/* BELOW the views and inside `main`, so it spans whatever screen is
+            {view === 'stats' ? (
+              <div className="min-h-0 flex-1">
+                <Stats handle={handle} client={clientRef.current} />
+              </div>
+            ) : null}
+            {view === 'settings' ? (
+              <div className="min-h-0 flex-1">
+                <Settings handle={handle} />
+              </div>
+            ) : null}
+          </Suspense>
+          {/* BELOW the views and inside `main`, so it spans whatever screen is
             open rather than belonging to one — the question it answers ("what
             just happened when I did that") is always about the thing still on
             screen above it. Mounted only while open: mounting it hidden would
             keep the daemon streaming every agent-stdio line to a panel nobody
             is looking at. */}
-        {debugOpen && apis && clientRef.current ? (
-          <DebugPanel
-            apis={apis}
-            client={clientRef.current}
-            onClose={() => setDebugOpen(false)}
-          />
-        ) : null}
-      </main>
+          {debugOpen && apis && clientRef.current ? (
+            <DebugPanel
+              apis={apis}
+              client={clientRef.current}
+              onClose={() => setDebugOpen(false)}
+            />
+          ) : null}
+        </main>
+      </div>
     </div>
   );
 }

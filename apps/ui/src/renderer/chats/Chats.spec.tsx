@@ -5538,6 +5538,34 @@ describe('Chats sidebar list', () => {
     expect(container.textContent).toContain('What are we building?');
   });
 
+  it('reports the name of the open thread up to the shell title bar', async () => {
+    // The title bar is ONE band across the window, above the columns, so the
+    // name of what is on screen has to travel up from the only component that
+    // knows it. Null for the landing view, which is not a document: the shell
+    // words that case itself rather than this component guessing at wording it
+    // does not own.
+    const titles: (string | null)[] = [];
+    const { client } = makeClient();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(
+        <Chats
+          client={client}
+          handle={handle}
+          onTitleChange={(t) => titles.push(t)}
+        />,
+      );
+    });
+
+    expect(titles.at(-1)).toBeNull();
+
+    await clickRun(container, 'My chat');
+    expect(titles.at(-1)).toBe('My chat');
+  });
+
   it('a failed delete keeps the confirm up with the reason, and the row alive', async () => {
     api.deleteChat.mockRejectedValue(new Error('daemon DELETE failed'));
     const { client } = makeClient();

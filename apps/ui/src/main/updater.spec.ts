@@ -20,6 +20,24 @@ function asset(name: string): Record<string, string> {
   };
 }
 
+/** One entry of the release list, shaped as GitHub sends it. */
+function release(
+  tag: string,
+  assets: string[],
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { tag_name: tag, assets: assets.map(asset), ...extra };
+}
+
+/** The macOS pair a finished build attaches, for the version in `tag`. */
+function macAssets(version: string): string[] {
+  return [
+    `Geniro-${version}-arm64.dmg`,
+    `Geniro-${version}-arm64-mac.zip`,
+    'SHA256SUMS.txt',
+  ];
+}
+
 function mockFetch(impl: () => Promise<Response> | Response): void {
   vi.stubGlobal('fetch', vi.fn(impl) as unknown as typeof fetch);
 }
@@ -54,16 +72,7 @@ describe('isNewerVersion', () => {
 
 describe('fetchLatestRelease', () => {
   it('resolves the version, the macOS zip and the checksum file', async () => {
-    mockFetch(() =>
-      feedResponse({
-        tag_name: 'v1.4.0',
-        assets: [
-          asset('Geniro-1.4.0-arm64.dmg'),
-          asset('Geniro-1.4.0-arm64-mac.zip'),
-          asset('SHA256SUMS.txt'),
-        ],
-      }),
-    );
+    mockFetch(() => feedResponse([release('v1.4.0', macAssets('1.4.0'))]));
 
     const lookup = await fetchLatestRelease();
 
@@ -85,13 +94,12 @@ describe('fetchLatestRelease', () => {
 
   it('picks the zip over the dmg — the dmg is not what gets swapped in', async () => {
     mockFetch(() =>
-      feedResponse({
-        tag_name: 'v2.0.0',
-        assets: [
-          asset('Geniro-2.0.0-arm64.dmg'),
-          asset('Geniro-2.0.0-arm64-mac.zip'),
-        ],
-      }),
+      feedResponse([
+        release('v2.0.0', [
+          'Geniro-2.0.0-arm64.dmg',
+          'Geniro-2.0.0-arm64-mac.zip',
+        ]),
+      ]),
     );
 
     const lookup = await fetchLatestRelease();
@@ -103,10 +111,7 @@ describe('fetchLatestRelease', () => {
 
   it('reports a release with no checksum file as one, rather than hiding it', async () => {
     mockFetch(() =>
-      feedResponse({
-        tag_name: 'v1.4.0',
-        assets: [asset('Geniro-1.4.0-arm64-mac.zip')],
-      }),
+      feedResponse([release('v1.4.0', ['Geniro-1.4.0-arm64-mac.zip'])]),
     );
 
     const lookup = await fetchLatestRelease();
@@ -117,16 +122,67 @@ describe('fetchLatestRelease', () => {
     expect(lookup.ok && lookup.release.checksums).toBeNull();
   });
 
-  it('fails a release that publishes no macOS archive', async () => {
+  it('offers the newest release that HAS an archive, not the newest release', async () => {
+    // The four-minute window after every release: the tag is cut and the
+    // release published, and the macOS build attaches the archive minutes
+    // later. Reverting to reading only the newest entry fails here — the
+    // lookup goes back to `ok: false` and the user is shown an error about a
+    // release that is merely still building.
     mockFetch(() =>
-      feedResponse({ tag_name: 'v1.4.0', assets: [asset('notes.txt')] }),
+      feedResponse([
+        release('v1.48.4', []),
+        release('v1.48.3', macAssets('1.48.3')),
+      ]),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup.ok && lookup.release.version).toBe('1.48.3');
+  });
+
+  it('skips drafts and pre-releases, which /releases/latest used to filter', async () => {
+    mockFetch(() =>
+      feedResponse([
+        release('v2.0.0', macAssets('2.0.0'), { draft: true }),
+        release('v1.9.0', macAssets('1.9.0'), { prerelease: true }),
+        release('v1.8.0', macAssets('1.8.0')),
+      ]),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup.ok && lookup.release.version).toBe('1.8.0');
+  });
+
+  it('orders by VERSION, not by the feed’s order', async () => {
+    // GitHub lists by tag date, and `1.10.0` sorts before `1.9.0` in any
+    // string comparison — so the newest must be chosen the same numeric way
+    // `isNewerVersion` decides whether to offer it at all.
+    mockFetch(() =>
+      feedResponse([
+        release('v1.9.0', macAssets('1.9.0')),
+        release('v1.10.0', macAssets('1.10.0')),
+      ]),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup.ok && lookup.release.version).toBe('1.10.0');
+  });
+
+  it('fails when NO release publishes a macOS archive', async () => {
+    mockFetch(() =>
+      feedResponse([
+        release('v1.4.0', ['notes.txt']),
+        release('v1.3.0', ['notes.txt']),
+      ]),
     );
 
     const lookup = await fetchLatestRelease();
 
     expect(lookup).toEqual({
       ok: false,
-      error: 'release v1.4.0 publishes no macOS archive',
+      error: 'no published release carries a macOS archive',
     });
   });
 
@@ -137,7 +193,7 @@ describe('fetchLatestRelease', () => {
       vi.fn((_url: string, init?: RequestInit) => {
         sentHeaders = init?.headers as Record<string, string>;
         return Promise.resolve(
-          feedResponse({ tag_name: 'v1.0.0', assets: [] }),
+          feedResponse([release('v1.0.0', macAssets('1.0.0'))]),
         );
       }) as unknown as typeof fetch,
     );
@@ -170,13 +226,30 @@ describe('fetchLatestRelease', () => {
   });
 
   it('maps an unreadable tag to a structured error', async () => {
-    mockFetch(() => feedResponse({ tag_name: 42, assets: [] }));
+    mockFetch(() =>
+      feedResponse([{ tag_name: 42, assets: [asset('Geniro-x-mac.zip')] }]),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    // A release whose version cannot be parsed is one this app cannot compare
+    // against its own, so it is not a candidate however many assets it has.
+    expect(lookup).toEqual({
+      ok: false,
+      error: 'no published release carries a macOS archive',
+    });
+  });
+
+  it('maps a feed that is not a list to a structured error', async () => {
+    // The shape `/releases/latest` returns, in case the endpoint is ever
+    // changed back by hand: a single object is not something to iterate.
+    mockFetch(() => feedResponse({ tag_name: 'v1.4.0', assets: [] }));
 
     const lookup = await fetchLatestRelease();
 
     expect(lookup).toEqual({
       ok: false,
-      error: 'could not read the latest release version',
+      error: 'could not read the release feed',
     });
   });
 });

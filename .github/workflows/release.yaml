@@ -108,7 +108,21 @@ jobs:
           OUTPUT: CHANGES.md
           GITHUB_REPO: ${{ github.repository }}
 
-      - name: Create GitHub Release
+      # Created as a DRAFT, and published by `build-app` once the macOS archive
+      # is attached to it. The release is otherwise visible ~14 seconds into a
+      # run whose build job takes another four minutes, and for those four
+      # minutes it is a release the app cannot install: measured on v1.48.4,
+      # where the running app polled inside the window and reported "release
+      # v1.48.4 publishes no macOS archive" as a hard error to the user.
+      #
+      # A draft is invisible to `/releases/latest`, to the release list the app
+      # reads, to the install script and to Homebrew — so the window closes
+      # rather than being made survivable. It also fails SAFE in the two cases
+      # that used to publish a permanently broken release: a build job that
+      # errors, and a run cancelled by `cancel-in-progress` between these two
+      # jobs. Both now leave a draft for a maintainer to look at instead of an
+      # installable-looking release nobody can install.
+      - name: Create GitHub Release (draft)
         if: steps.tags.outputs.skip != 'true'
         uses: softprops/action-gh-release@v3
         with:
@@ -116,6 +130,7 @@ jobs:
           name: "geniro v${{ steps.tags.outputs.version }}"
           body_path: CHANGES.md
           generate_release_notes: false
+          draft: true
 
   # Build the macOS app and attach the .dmg, .zip and SHA256SUMS.txt to the
   # release, so it can be installed via Homebrew or the install script.
@@ -275,6 +290,22 @@ jobs:
             "release/dist/Geniro-${V}-arm64-mac.zip" \
             "release/dist/SHA256SUMS.txt" \
             --clobber
+
+      # ONLY now does the release exist as far as every consumer is concerned —
+      # the in-app updater, the install script and the cask all read published
+      # releases, and until this step there was nothing for them to find. This
+      # is the last step of the job for that reason: anything that can fail
+      # belongs ahead of it, so a failure leaves a draft rather than a
+      # published release missing the artifact that failed.
+      #
+      # `--latest` explicitly, rather than leaving it to GitHub's own guess:
+      # publishing a draft does not by itself move the `latest` pointer the app
+      # and the install script resolve against.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.tag.outputs.version }}
+        run: gh release edit "v${V}" --draft=false --latest
 
   # Update the Homebrew cask in the tap repo. Opt-in: gated on the repo variable
   # HOMEBREW_TAP_REPO (e.g. "geniro-io/homebrew-tap") ALONE — with it unset the

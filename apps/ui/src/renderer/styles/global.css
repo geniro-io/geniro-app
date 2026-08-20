@@ -201,6 +201,23 @@
   body,
   #root {
     height: 100%;
+    /* The WINDOW never scrolls. This is a desktop shell — every scroll in it
+       belongs to a named box (the transcript, the chat list, a dialog body),
+       and a second scrollbar on the document is always a layout bug rather
+       than a feature: it puts the title bar, the rail and the columns on a
+       surface that can slide, which is how the whole UI came to be screenshot
+       scrolled off the top with a page of empty background under it.
+
+       `clip`, not `hidden`, and the difference is the entire point. `hidden`
+       still makes a SCROLL CONTAINER — it only removes the scrollbar, and
+       `scrollTop` can still be set from script, so `scrollIntoView` (which
+       scrolls every scrollable ancestor it can find, see
+       `scroll-to-bottom.ts`) would go on dragging the window with nothing on
+       screen to show for it. `clip` makes no scroll container at all, so the
+       shell CANNOT be moved, by a user gesture or by code. Overflow that
+       reaches here is cut off, which is the right failure: visible, local, and
+       fixable where it is caused. */
+    overflow: clip;
   }
 
   body {
@@ -256,6 +273,38 @@
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
   }
+}
+
+/*
+ * `sr-only` may not grow the window. THIS is what made the whole app scroll.
+ *
+ * Tailwind's `sr-only` is `position: absolute`, which needs a positioned
+ * ancestor to be contained by — and in a transcript row there is none: every
+ * box from the block header up past `main` is `position: static`, so each of
+ * these 1px screen-reader labels resolved its containing block to the INITIAL
+ * one, the document itself. Measured on a real thread: a label at
+ * `top: 5041.53px`, with siblings at 8475px, planted 1px tall in a window
+ * 825px high. Being absolutely positioned against the document, they also
+ * escape every `overflow: hidden` on the way up — `main`'s included — so
+ * nothing clipped them, and the document's scrollable height simply grew with
+ * the conversation ("какой-то infinite scroll, который растёт и растёт на всё
+ * окно приложения"). The transcript's tail-follow then had a scrollable
+ * document to drag, which is how the entire UI came to slide off the top of
+ * the screen after clicking a long thread.
+ *
+ * `fixed` is the fix rather than a positioned ancestor somewhere: a fixed box
+ * contributes nothing to the document's scrollable overflow, whatever is above
+ * it in the tree, so no future row layout can bring this back. It is
+ * unchanged in every way that matters to the label — still out of flow, still
+ * 1×1, still `clip-path`ed to nothing, still read in DOM order, since assistive
+ * tech follows the tree and not the geometry.
+ *
+ * Unlayered and double-classed for the same reason as the retint below:
+ * `sr-only` is a Tailwind UTILITY, and a rule in `@layer base` would lose to it
+ * on layer order alone.
+ */
+.sr-only.sr-only {
+  position: fixed;
 }
 
 /*

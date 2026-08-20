@@ -95,8 +95,9 @@ async function mount(apis: DaemonApis, client: DaemonClient): Promise<void> {
 }
 
 beforeEach(() => {
-  // jsdom has no scrollIntoView; the panel's tail-follow effect calls it.
-  Element.prototype.scrollIntoView = vi.fn();
+  // jsdom implements no element scrolling; the panel's tail-follow calls
+  // `scrollTo` on its own scroll box (see `scroll-to-bottom.ts`).
+  Element.prototype.scrollTo = vi.fn();
   (
     window as unknown as {
       geniro: { revealPath: unknown; toggleDevTools: unknown };

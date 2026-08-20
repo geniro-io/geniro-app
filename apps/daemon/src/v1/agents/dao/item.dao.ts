@@ -30,11 +30,24 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Text of the latest `message` item per run — the chat list's preview line.
-   * Two bounded queries, never the full transcripts: first the (runId, seq)
-   * pairs of message items (integers + ids only, no payloads), reduced to the
-   * per-run head in memory, then just those head rows' payloads. Runs with no
-   * message items (or a non-text payload) are simply absent from the map.
+   * Text of each run's latest AGENT message — the chat list's preview line.
+   *
+   * The agent's, not simply the newest of either role, and that is the whole
+   * point of the method rather than a detail of it. A preview taken from "the
+   * last message" alternates owner at every turn boundary: it is the user's own
+   * sentence echoed back for as long as the agent is working, then the agent's
+   * reply, then the user's again — reported as the preview flicking between the
+   * two. Neither reading is wrong on its own, which is exactly why the line has
+   * to pick ONE and keep it, and the useful one is what the thread last said to
+   * the user. A run whose agent has not spoken yet falls back to the newest
+   * message of any role, so a brand-new chat still previews the question that
+   * started it rather than showing nothing.
+   *
+   * Two bounded queries, never the full transcripts: first the (runId, seq,
+   * role) triples of message items (integers + ids only, no payloads), reduced
+   * to the per-run head in memory, then just those head rows' payloads. Runs
+   * with no message items (or a non-text payload) are simply absent from the
+   * map.
    */
   async latestMessageTextPerRun(
     runIds: string[],
@@ -46,21 +59,60 @@ export class ItemDao extends BaseDao<Item> {
     const repo = this.getRepo(txEm);
     const heads = await repo.find(
       { runId: { $in: runIds }, kind: 'message' },
-      { fields: ['runId', 'seq'], disableIdentityMap: true },
+      { fields: ['runId', 'seq', 'role'], disableIdentityMap: true },
     );
-    const headSeq = new Map<string, number>();
+    // Two heads per run, resolved to one below: the newest agent message and
+    // the newest message of any role. Tracking only a single "best so far"
+    // cannot express the fallback — a run whose agent HAS spoken must ignore
+    // every later user message, which is undecidable until the whole set is in.
+    const agentSeq = new Map<string, number>();
+    const anySeq = new Map<string, number>();
     for (const head of heads) {
-      const prev = headSeq.get(head.runId);
-      if (prev === undefined || head.seq > prev) {
-        headSeq.set(head.runId, head.seq);
+      const prevAny = anySeq.get(head.runId);
+      if (prevAny === undefined || head.seq > prevAny) {
+        anySeq.set(head.runId, head.seq);
       }
+      // Anything that is not the user is the thread talking back. Read as "not
+      // user" rather than as an allowlist of agent role names, so a CLI that
+      // spells its own role differently still previews instead of falling
+      // silently back to echoing the user.
+      if (head.role !== 'user') {
+        const prevAgent = agentSeq.get(head.runId);
+        if (prevAgent === undefined || head.seq > prevAgent) {
+          agentSeq.set(head.runId, head.seq);
+        }
+      }
+    }
+    const headSeq = new Map<string, number>();
+    for (const [runId, seq] of anySeq) {
+      headSeq.set(runId, agentSeq.get(runId) ?? seq);
     }
     if (headSeq.size === 0) {
       return new Map();
     }
     const rows = await repo.find(
-      { $or: [...headSeq].map(([runId, seq]) => ({ runId, seq })) },
-      { fields: ['runId', 'payload'], disableIdentityMap: true },
+      {
+        // The kind is repeated deliberately. `(runId, seq)` is not a key: a
+        // transcript written before `ItemSeqAllocator` can hold two rows on one
+        // seq, and without this filter a tool row sharing the head's number
+        // comes back too — `messageText` reads null off it, and whichever of
+        // the pair the database returned last decided whether the run had a
+        // preview line at all.
+        kind: 'message',
+        $or: [...headSeq].map(([runId, seq]) => ({ runId, seq })),
+      },
+      {
+        // Same reason, for the case where BOTH rows on that seq are messages:
+        // an unordered read let the two take turns winning across refetches,
+        // which is the sidebar preview flicking between the user's last message
+        // and the agent's. `createdAt` is the tie-break the seq cannot be — the
+        // later message is the later row — with the (random uuid) primary key
+        // behind it only so the answer is total rather than merely usually
+        // decided.
+        orderBy: { seq: 'asc', createdAt: 'asc', id: 'asc' },
+        fields: ['runId', 'payload'],
+        disableIdentityMap: true,
+      },
     );
     const previews = new Map<string, string>();
     for (const row of rows) {

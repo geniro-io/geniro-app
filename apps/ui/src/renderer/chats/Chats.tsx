@@ -59,6 +59,7 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
+import { scrollToBottom } from '../scroll-to-bottom';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import {
@@ -79,6 +80,7 @@ import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
+import { isAgentMessage, previewMessageOf } from './chat-preview';
 import { CliLoginContext } from './cli-login-context';
 import { compactionOnlyTurnEnds } from './compaction-payload';
 import { ComposerCard } from './composer-card';
@@ -121,6 +123,7 @@ import {
   runGroupSections,
   runGroupSummary,
 } from './run-group';
+import { sortRunsForSidebar } from './run-order';
 import {
   displayRunStatus,
   isSettledRunStatus,
@@ -634,35 +637,79 @@ export function Chats({
   }, []);
 
   /**
-   * A replay's one reading of the run's status, taken from the LAST item it
-   * replayed — the only terminal item that can describe the present.
+   * Has the ACTIVE thread's agent ever spoken? — the one thing the preview rule
+   * needs that a single item, or a reconnect delta, cannot see for itself (see
+   * {@link previewMessageOf}). Reset by `activateRun`, since it describes one
+   * thread and would otherwise carry the previous one's answer into a chat
+   * whose agent has said nothing.
+   */
+  const agentSpokeRef = useRef(false);
+
+  /**
+   * A replay's one reading of the sidebar row — the run's status, taken from
+   * the LAST item it replayed (the only terminal item that can describe the
+   * present), and the preview line, taken from the last `message` row in the
+   * same batch.
    *
    * It exists because the alternative (letting each replayed row mirror itself)
    * writes a past turn's ending over a run that is working right now; see the
    * `live` gate in {@link addItem}. Applied only when the row still says
    * `running`, so a replay can settle a stale row but never contradict a
    * fresher `run_status` broadcast that arrived while the fetch was in flight.
+   *
+   * The PREVIEW is here for the same reason and against a symptom of its own:
+   * mirrored per row, every replayed message wrote itself into the sidebar's
+   * one preview line, so the line's final owner was decided by whatever the
+   * batch happened to end on rather than by any rule. It picks by
+   * {@link previewMessageOf} — the same rule the daemon's run list uses, so the
+   * two sources cannot write different owners into one line — takes the WHOLE
+   * batch rather than its tail (which is routinely a `turn_complete`), and
+   * writes nothing at all when the batch holds no message it should preview: a
+   * reconnect delta carrying only tool rows must not blank a preview the run
+   * list already has right.
    */
   const reconcileFromTail = useCallback(
-    (runId: string, lastItem: ChatItem | undefined): void => {
-      // The item must BELONG to the run being reconciled. The two arrive from
-      // different places — the id from the activation, the row from a fetch that
-      // may have been in flight across a run switch — and applying one run's
-      // ending to another's row is the same class of cross-contamination
+    (runId: string, replayed: readonly ChatItem[]): void => {
+      // Every row must BELONG to the run being reconciled. The two arrive from
+      // different places — the id from the activation, the rows from a fetch
+      // that may have been in flight across a run switch — and applying one
+      // run's ending to another's row is the same class of cross-contamination
       // `activateRun`'s own stale-fetch guard exists for.
-      if (lastItem === undefined || lastItem.runId !== runId) {
+      const own = replayed.filter((item) => item.runId === runId);
+      const lastItem = own.at(-1);
+      if (lastItem === undefined) {
         return;
       }
       const settled = settledRunStatus(lastItem);
-      if (settled === null) {
+      const lastMessage = previewMessageOf(own, agentSpokeRef.current);
+      const previewText =
+        lastMessage === undefined
+          ? null
+          : payloadString(lastMessage.payload, 'text');
+      if (settled === null && previewText === null) {
         return;
       }
       setRuns((prev) =>
-        prev.map((run) =>
-          run.id === runId && run.status === 'running'
-            ? { ...run, status: settled, updatedAt: lastItem.createdAt }
-            : run,
-        ),
+        prev.map((run) => {
+          if (run.id !== runId) {
+            return run;
+          }
+          const next = { ...run };
+          if (settled !== null && run.status === 'running') {
+            next.status = settled;
+          }
+          if (previewText !== null) {
+            next.lastMessage = previewText;
+          }
+          // The batch's own newest row, and only ever FORWARD: these rows are
+          // history to the renderer, so a live `run_status` that landed while
+          // the fetch was in flight already carries a fresher time than any of
+          // them and must not be rolled back to it.
+          if (lastItem.createdAt > next.updatedAt) {
+            next.updatedAt = lastItem.createdAt;
+          }
+          return next;
+        }),
       );
     },
     [],
@@ -716,19 +763,46 @@ export function Chats({
     if (item.seq > lastSeqRef.current) {
       lastSeqRef.current = item.seq;
     }
+    // This thread's agent has now spoken — recorded for EVERY message row, live
+    // or replayed, because the preview rule's fallback asks about the whole
+    // conversation rather than about the batch in hand.
+    if (isAgentMessage(item)) {
+      agentSpokeRef.current = true;
+    }
     // Mirror a streamed message into the sidebar row's preview + activity
     // time, so the list stays live without a refetch.
-    if (item.kind === 'message') {
+    //
+    // LIVE items only, for exactly the reason the terminal-item mirror below is
+    // gated: a replay carries EVERY message the thread has ever held, and each
+    // one writing itself here left the line's owner decided by where the batch
+    // ended. A replay takes ONE reading, in `reconcileFromTail`.
+    //
+    // The two fields are written on DIFFERENT conditions, and collapsing them
+    // into one is a bug in each direction. The PREVIEW goes only to a message
+    // the rule would show (`previewMessageOf`): on a thread whose agent has
+    // replied, the user's next message must not take the line back, or it
+    // alternates owner every turn exactly as it did before. `updatedAt` goes to
+    // EVERY message, the user's included — it is the sidebar's "last activity",
+    // which is what orders the list (`sortRunsForSidebar`), so gating it on the
+    // preview rule would leave a thread you just wrote in sitting exactly where
+    // it was.
+    if (live && item.kind === 'message') {
       const text = payloadString(item.payload, 'text');
-      if (text !== null) {
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId
-              ? { ...run, lastMessage: text, updatedAt: item.createdAt }
-              : run,
-          ),
-        );
-      }
+      const preview =
+        text !== null && previewMessageOf([item], agentSpokeRef.current)
+          ? text
+          : null;
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === item.runId
+            ? {
+                ...run,
+                ...(preview === null ? {} : { lastMessage: preview }),
+                updatedAt: item.createdAt,
+              }
+            : run,
+        ),
+      );
     }
     // Only a RUN-level terminal item ends the working state — a workflow's
     // per-node turn_complete/error (nodeId set) must not re-enable the composer
@@ -1539,6 +1613,10 @@ export function Chats({
       lastSeqRef.current = -1;
       sawTerminalRef.current = false;
       sawLiveTerminalRef.current = false;
+      // A NEW thread has its own answer to "has the agent spoken" — carrying
+      // the previous one's forward would withhold the preview from a chat whose
+      // first message is still the only one in it.
+      agentSpokeRef.current = false;
       pendingScrollRef.current = true;
       setActiveRunId(runId);
       setItems([]);
@@ -1570,7 +1648,7 @@ export function Chats({
         // to (see `addItem`). It covers the turn that ended while the user was
         // looking at another chat, where the row they are carrying still says
         // running and nothing else will correct it.
-        reconcileFromTail(runId, last);
+        reconcileFromTail(runId, history);
         if (
           run?.status === 'running' &&
           !sawLiveTerminalRef.current &&
@@ -1680,7 +1758,7 @@ export function Chats({
           // the same reason it is needed there: these rows are historical to the
           // renderer (no individual one may mirror its status) but they are the
           // only sighting of a turn that ended while the socket was down.
-          reconcileFromTail(active, items.at(-1));
+          reconcileFromTail(active, items);
           const run = runsRef.current.find((r) => r.id === active);
           if (
             queueMayDrainAfterReplay(run, items.at(-1)) &&
@@ -1851,19 +1929,22 @@ export function Chats({
     // A freshly opened run jumps to the tail unconditionally — see
     // pendingScrollRef. Instant, not smooth: animating a scroll the user never
     // asked for, through a transcript they have not seen, is just a delay.
+    if (!scroller) {
+      return;
+    }
     if (pendingScrollRef.current) {
       if (items.length === 0) {
         return;
       }
       pendingScrollRef.current = false;
       followingRef.current = true;
-      transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      scrollToBottom(scroller, 'auto');
       return;
     }
-    if (!scroller || !followingRef.current) {
+    if (!followingRef.current) {
       return;
     }
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    scrollToBottom(scroller, 'smooth');
     // `liveText` too, not just `items`: a streaming tail grows the transcript
     // with no new item, and keying on `items` alone let the live text run off
     // the bottom of the viewport mid-turn.
@@ -1922,7 +2003,7 @@ export function Chats({
             if (!followingRef.current) {
               return;
             }
-            transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
+            scrollToBottom(scroller, 'auto');
           });
     const repoint = (): void => {
       observer?.disconnect();
@@ -4281,9 +4362,18 @@ export function Chats({
     [handleActivateRun],
   );
 
+  // Ordered BEFORE the fold, not inside it: `runGroupSections` preserves the
+  // order it is given and `previewSectionRuns` decides what a folded section
+  // shows from that same order, so sorting here is what puts a thread waiting
+  // on an answer both at the top of its group AND above the "Show all" cut.
+  const orderedRuns = useMemo(
+    () => sortRunsForSidebar(runs, { statusOf: sidebarRunStatus, unseen }),
+    [runs, sidebarRunStatus, unseen],
+  );
+
   const sections = useMemo(
-    () => runGroupSections(groups, runs),
-    [groups, runs],
+    () => runGroupSections(groups, orderedRuns),
+    [groups, orderedRuns],
   );
 
   /** Show this section in full, or fold it back to its working set. */

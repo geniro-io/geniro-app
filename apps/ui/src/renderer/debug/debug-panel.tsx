@@ -18,6 +18,7 @@ import { Input } from '../components/ui/input';
 import { cn } from '../components/ui/utils';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient, DebugLogEntry } from '../daemon-client';
+import { scrollToBottom } from '../scroll-to-bottom';
 import { useDebugLog } from './use-debug-log';
 
 /**
@@ -124,8 +125,12 @@ export function DebugPanel({
   // is the exact opposite of what they asked for.
   const tailRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!paused) {
-      tailRef.current?.scrollIntoView({ block: 'end' });
+    // The sentinel's PARENT is the scroll box, and it is what gets moved —
+    // never `scrollIntoView`, which scrolls every scrollable ancestor up to and
+    // including the document. See `scroll-to-bottom.ts` for the whole story.
+    const scroller = tailRef.current?.parentElement;
+    if (!paused && scroller) {
+      scrollToBottom(scroller, 'auto');
     }
   }, [shown.length, paused]);
 

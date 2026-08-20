@@ -113,11 +113,19 @@ export function Dialog({
         tabIndex={-1}
         onKeyDown={trapTab}
         className={cn(
-          'relative z-10 w-full max-w-md rounded-xl border border-border bg-card shadow-panel-md outline-none',
+          // A flex COLUMN capped at the window, so the header stays put and the
+          // body takes exactly the room that is left. It used to be an
+          // auto-height card over a body capped at `70vh`, which is a guess
+          // about the window rather than a measurement of it: a card whose
+          // content wanted more than that got a scrollbar of its own on top of
+          // whatever already scrolled inside it — two bars side by side in the
+          // session picker — while the space between `70vh` and the real window
+          // edge went unused, so the list showed fewer rows than it could.
+          'relative z-10 flex max-h-full w-full max-w-md flex-col rounded-xl border border-border bg-card shadow-panel-md outline-none',
           className,
         )}
         onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3.5">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-5 py-3.5">
           <div className="text-sm font-semibold">{title}</div>
           <Button
             type="button"
@@ -132,9 +140,18 @@ export function Dialog({
         {/* The body SCROLLS, so it clips: a picker inside it whose panel opens
             past an edge is cut, and `overflow-x: visible` cannot be restored on
             a box that scrolls vertically. Declaring it here is what lets every
-            menu inside escape without the dialog's content knowing. */}
+            menu inside escape without the dialog's content knowing.
+
+            `min-h-0 flex-1`, so it is the card's cap that decides the height
+            and this box simply takes what is left. Content that fits still
+            leaves the card its natural size — the body only becomes the
+            scroller once the window is genuinely the constraint. A dialog whose
+            content wants to manage its own scrolling (the session picker, which
+            pins its search field above a scrolling list) makes its ROOT
+            `h-full` and puts `overflow-y-auto` on the part that should move;
+            this box then has nothing left to scroll and shows no second bar. */}
         <MenuAnchorContext.Provider value="viewport">
-          <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {children}
           </div>
         </MenuAnchorContext.Provider>

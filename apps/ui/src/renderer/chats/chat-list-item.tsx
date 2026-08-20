@@ -174,12 +174,19 @@ export const ChatListItem = memo(function ChatListItem({
             whole rather than about what kind of run it is, and the left edge is
             where an eye scanning a list for "what is new" already goes. */}
         {unseen ? (
+          // 6px of caramel on a cream rail was the thing being scanned for and
+          // the easiest thing on the row to miss — at that size it reads as
+          // punctuation in front of the name rather than as a mark on the row.
+          // 10px is the fix, and the plain disc is deliberate: a haloed variant
+          // was tried at three ring weights and each read as a target or a
+          // donut, which is a different symbol, while none of them was more
+          // legible than simply making the dot big enough to see.
           <span
             data-slot="unseen-dot"
             title="Not opened since it last reported"
             aria-label="not seen yet"
             role="img"
-            className="size-1.5 shrink-0 rounded-full bg-primary"
+            className="size-2.5 shrink-0 rounded-full bg-primary"
           />
         ) : null}
         {isWorkflow ? (

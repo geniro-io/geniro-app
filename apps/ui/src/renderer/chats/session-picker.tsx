@@ -81,14 +81,22 @@ export function SessionPicker({
       // identify a project among the several checkouts a machine holds.
       // `max-w-none` is load-bearing — Dialog's own `max-w-md` caps the card at
       // 28rem, so a width alone changed nothing on screen.
-      className="w-[min(60rem,calc(100vw-3rem))] max-w-none">
-      <div className="flex min-h-0 flex-col gap-3">
-        <p className="text-sm text-muted-foreground">
+      className="h-[min(56rem,100%)] w-[min(60rem,calc(100vw-3rem))] max-w-none">
+      {/* `h-full`: this dialog manages its own scrolling — the list moves and
+          everything around it stays put — so it has to fill the body exactly.
+          Short of that the body scrolled too, and the two bars sat side by
+          side. */}
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        {/* `shrink-0` on everything around the list: they are one or two lines
+            each and the list is what the room is for, so a short window has to
+            take it out of the list rather than squeezing the sentence that
+            explains the dialog or the row that filters it. */}
+        <p className="shrink-0 text-sm text-muted-foreground">
           Threads you already have with these CLIs on this machine. Picking one
           opens it here and carries on where it left off.
         </p>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {/*
             Opens DOWNWARD. `Menu`'s default is upward, which is right for the
             composer's chips at the bottom of the window and wrong for a control
@@ -135,19 +143,23 @@ export function SessionPicker({
           // `break-all` on the path: it is one unbroken token with no spaces to
           // wrap at, so without it a real profile path runs straight out
           // through the side of the dialog.
-          <p className="text-xs text-muted-foreground">
+          <p className="shrink-0 text-xs text-muted-foreground">
             From the profile at <code className="break-all">{configDir}</code>.
           </p>
         )}
 
-        {error ? <ErrorText>{error}</ErrorText> : null}
+        {error ? <ErrorText className="shrink-0">{error}</ErrorText> : null}
 
         {/*
-          The LIST scrolls, not the dialog body around it: hundreds of rows
-          otherwise push the search field off the top of the card, so filtering
-          a long list means scrolling back up to reach the control that does it.
+          The LIST scrolls, and it is the ONLY thing here that does: hundreds of
+          rows otherwise push the search field off the top of the card, so
+          filtering a long list means scrolling back up to reach the control
+          that does it. `flex-1` rather than a `52vh` cap — the cap was a guess
+          at the window that always came in under the room actually available,
+          so the list showed fewer sessions than it could AND the leftover
+          content gave the dialog body a second scrollbar beside this one.
         */}
-        <div className="max-h-[52vh] min-h-[16rem] overflow-y-auto rounded-md border border-border">
+        <div className="min-h-[16rem] flex-1 overflow-y-auto rounded-md border border-border">
           {loading ? (
             <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
               <Spinner /> Asking {agent} what it has…
@@ -190,7 +202,7 @@ export function SessionPicker({
           correct list as a broken feature.
         */}
         {listing?.partialReason ? (
-          <NoteBox>{listing.partialReason}</NoteBox>
+          <NoteBox className="shrink-0">{listing.partialReason}</NoteBox>
         ) : null}
       </div>
     </Dialog>

@@ -179,6 +179,71 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.get('run-b')).toBe('fine');
     });
 
+    it('prefers the AGENT’s latest message over a newer USER message', async () => {
+      // The rule this method exists for. With "highest seq wins" the preview is
+      // the user's own sentence echoed back for as long as the agent is
+      // working, then the agent's reply, then the user's again — the line
+      // changing owner every turn, which is what got reported.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'message',
+        role: 'assistant',
+        payload: JSON.stringify({ text: 'agent reply' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 1,
+        kind: 'message',
+        role: 'user',
+        payload: JSON.stringify({ text: 'and now do this' }),
+      });
+
+      const previews = await dao.latestMessageTextPerRun(['run-a']);
+
+      expect(previews.get('run-a')).toBe('agent reply');
+    });
+
+    it('falls back to the user’s message while the agent has not spoken', async () => {
+      // A chat opened moments ago must still preview the question that started
+      // it rather than showing an empty line until the first reply lands.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'message',
+        role: 'user',
+        payload: JSON.stringify({ text: 'first question' }),
+      });
+
+      const previews = await dao.latestMessageTextPerRun(['run-a']);
+
+      expect(previews.get('run-a')).toBe('first question');
+    });
+
+    it('reads an unknown role as the agent rather than as the user', async () => {
+      // Only `user` is geniro's own word; the rest of the vocabulary belongs to
+      // the CLI. An allowlist of agent role names would demote a new spelling
+      // to "the user is talking" and echo their message back instead.
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'message',
+        role: 'model',
+        payload: JSON.stringify({ text: 'from the model' }),
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 1,
+        kind: 'message',
+        role: 'user',
+        payload: JSON.stringify({ text: 'newer, but the user’s' }),
+      });
+
+      const previews = await dao.latestMessageTextPerRun(['run-a']);
+
+      expect(previews.get('run-a')).toBe('from the model');
+    });
+
     it('scopes to the requested runIds; an empty request yields an empty map', async () => {
       await insert('run-a', 0, 'message', JSON.stringify({ text: 'a' }));
       await insert('run-c', 0, 'message', JSON.stringify({ text: 'c' }));

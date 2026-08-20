@@ -400,8 +400,10 @@ async function menuRows(
 const notify = vi.fn();
 
 beforeEach(() => {
-  // jsdom has no scrollIntoView; the transcript auto-scroll effect calls it.
-  Element.prototype.scrollIntoView = vi.fn();
+  // jsdom implements no element scrolling at all; the transcript auto-scroll
+  // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
+  // which would take every scrollable ancestor, the window included, with it.
+  Element.prototype.scrollTo = vi.fn();
   (window as unknown as { geniro: Partial<GeniroApi> }).geniro = {
     getSettings: vi.fn().mockResolvedValue({
       onboardingComplete: true,
@@ -736,14 +738,14 @@ describe('Chats transcript auto-scroll', () => {
       scrollHeight: 4000,
       clientHeight: 400,
     });
-    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
 
     await act(async () => {
       emitItem(msg(1, 'assistant', 'a long reply'));
     });
     // Reading history further up must not be interrupted. This is the defect:
     // the effect used to scroll unconditionally.
-    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
     expect(container.textContent).toContain('a long reply');
   });
 
@@ -767,12 +769,39 @@ describe('Chats transcript auto-scroll', () => {
       scrollHeight: 4000,
       clientHeight: 400,
     });
-    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
 
     // Re-open it: the same empty-then-fill sequence every open performs.
     await clickRun(container, 'My chat');
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
     expect(container.textContent).toContain('the newest reply');
+  });
+
+  it('moves the transcript BOX and never the window', async () => {
+    // The defect this pins: the follow used to be `scrollIntoView` on the tail
+    // sentinel, which is specified to scroll every scrollable ancestor of the
+    // element — the document among them. On a window carrying any overflow at
+    // all, a turn's worth of items and streamed tokens dragged the whole app
+    // off the top of the screen, over and over ("it's just always jumping").
+    // Reverting to `scrollIntoView` fails here on BOTH assertions.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const scroller = [...container.querySelectorAll('div')].find((el) =>
+      el.className.includes('overflow-y-auto'),
+    )!;
+    const boxScroll = vi.spyOn(scroller, 'scrollTo');
+    const anyIntoView = vi.fn();
+    Element.prototype.scrollIntoView = anyIntoView;
+
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a reply'));
+    });
+
+    expect(boxScroll).toHaveBeenCalled();
+    expect(anyIntoView).not.toHaveBeenCalled();
   });
 
   it('keeps an unsent draft with the thread it was written in', async () => {
@@ -870,12 +899,12 @@ describe('Chats transcript auto-scroll', () => {
       scrollHeight: 4000,
       clientHeight: 400,
     });
-    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
 
     await act(async () => {
       emitItem(msg(1, 'assistant', 'a long reply'));
     });
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
   });
 
   it('keeps following after a block GROWS below the fold — the thinking-block defect', async () => {
@@ -903,12 +932,12 @@ describe('Chats transcript auto-scroll', () => {
       value: 9000,
       configurable: true,
     });
-    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
 
     await act(async () => {
       emitItem(msg(1, 'assistant', 'a long reply'));
     });
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
   });
 
   it('follows the STREAMING tail too, which grows with no new item', async () => {
@@ -924,7 +953,7 @@ describe('Chats transcript auto-scroll', () => {
       scrollHeight: 4000,
       clientHeight: 400,
     });
-    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
 
     await act(async () => {
       emitLiveText({
@@ -935,7 +964,7 @@ describe('Chats transcript auto-scroll', () => {
         ...LIVE_DELTA_REST,
       });
     });
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
   });
 });
 

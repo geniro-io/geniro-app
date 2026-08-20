@@ -23,6 +23,7 @@ import type {
   DaemonHandle,
   RunConfig,
 } from '../../shared/contracts';
+import { CHAT_LIST_WIDTH } from '../../shared/contracts';
 import type {
   AgentSession,
   AgentSessionListingDto,
@@ -308,11 +309,20 @@ export function Chats({
   client,
   handle,
   active = true,
+  onTitleChange,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
   /** False while another view is shown (the tab stays mounted, hidden). */
   active?: boolean;
+  /**
+   * Report the open thread's name to the shell's title bar.
+   *
+   * The bar spans the window, ABOVE the columns, so the name of the thing on
+   * screen has to travel up to it — this component is the only one that knows
+   * it. Null for the landing view, which is not a document.
+   */
+  onTitleChange?: (title: string | null) => void;
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const {
@@ -3113,6 +3123,15 @@ export function Chats({
   }, [items]);
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+
+  // Push the open thread's name up to the shell's title bar. An effect rather
+  // than a render-time call because it writes to a parent's state, and it runs
+  // on the LABEL rather than on the run object so a rename re-reports without
+  // waiting for anything else about the run to change.
+  const activeLabel = activeRun ? runLabel(activeRun, workflowNames) : null;
+  useEffect(() => {
+    onTitleChange?.(activeLabel);
+  }, [activeLabel, onTitleChange]);
   /**
    * Is there anything to send? An attached image is a complete message on its
    * own ("what's wrong with this?" is carried by the screenshot), so gating the
@@ -4298,25 +4317,25 @@ export function Chats({
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <MarkdownImageLoaderContext.Provider value={loadMarkdownImage}>
               <div
-                className={cn(
-                  'grid h-full',
-                  showAgentsPanel
-                    ? 'grid-cols-[260px_minmax(0,1fr)_auto]'
-                    : 'grid-cols-[260px_minmax(0,1fr)]',
-                )}>
+                className="grid h-full"
+                // The list's width is shared with the shell: the title bar's
+                // divider is placed from it, so the band above ends exactly on
+                // this column's border rather than near it.
+                style={{
+                  gridTemplateColumns: showAgentsPanel
+                    ? `${CHAT_LIST_WIDTH}px minmax(0,1fr) auto`
+                    : `${CHAT_LIST_WIDTH}px minmax(0,1fr)`,
+                }}>
                 <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
-                  {/* The window's own title bar continues across this column —
-                      the OS strip is hidden (see `main/index.ts`), so every top
-                      row of the shell has to be draggable or the window can
-                      only be moved by the 220px of rail beside it. `h-11`
-                      rather than the padding it had, so the three top rows
-                      share one baseline now that they are the top of the
-                      window rather than the top of a page under a title bar. */}
-                  <div className="app-drag flex h-11 items-center justify-between pr-2 pl-3">
+                  {/* A column heading, NOT part of the window's title bar —
+                      that is one band above every column now (`title-bar.tsx`).
+                      It keeps `h-11` so it still shares a baseline with the
+                      transcript's header beside it. */}
+                  <div className="flex h-11 items-center justify-between pr-2 pl-3">
                     <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                       Chats
                     </span>
-                    <span className="app-no-drag flex items-center gap-0.5">
+                    <span className="flex items-center gap-0.5">
                       <Button
                         type="button"
                         variant="ghost"
@@ -4577,225 +4596,231 @@ export function Chats({
                   // task text on top and, inside the same card, the graph/agent it
                   // targets, the folder it runs in, and the trigger the run starts from
                   // (a run only starts by firing one), with a round send control.
-                  <section className="flex min-h-0 flex-col items-center justify-center overflow-y-auto p-6">
-                    <div className="flex w-full max-w-2xl flex-col gap-5">
-                      <h2 className="text-center text-xl font-semibold tracking-tight">
-                        What are we building?
-                      </h2>
-                      <div className="relative">
-                        {skillMenuOpen ? (
-                          <SkillMenu
-                            skills={skillMatches}
-                            highlightIndex={highlightedIndex}
-                            onSelect={pickSkill}
-                            onHighlight={setSkillHighlight}
-                          />
-                        ) : null}
-                        <ComposerTopRow>
-                          <TargetSelect
-                            value={target}
-                            workflows={workflows}
-                            cliDetections={cliDetections}
-                            onChange={changeTarget}
-                          />
-                          <FolderSelect
-                            folder={folder}
-                            recentFolders={recentFolders}
-                            onChoose={chooseFolder}
-                            onBrowse={() => void pickFolder()}
-                          />
-                          <BranchSelect
-                            info={git.info}
-                            switching={git.switching}
-                            onSwitch={(branch) => void git.switchTo(branch)}
-                          />
-                          {!workflowSlug ? (
-                            // The optional config directory (account / profile)
-                            // this chat's CLI runs as.
-                            // Beside the folder because it is the same kind of
-                            // fact — WHERE the run reads from — and above the text
-                            // because, like the folder, it is fixed the moment the
-                            // chat is created. A workflow's nodes each name their
-                            // own in its YAML, so the chip is a chat's alone.
-                            <ConfigDirSelect
-                              configDir={configDir}
-                              recentConfigDirs={recentConfigDirs}
-                              unavailableReason={
-                                composerConfigDirUnavailableReason
-                              }
-                              onChange={chooseConfigDir}
-                              onBrowse={() => void pickConfigDir()}
+                  <section className="flex min-h-0 flex-col overflow-y-auto">
+                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-6">
+                      <div className="flex w-full max-w-2xl flex-col gap-5">
+                        <h2 className="text-center text-xl font-semibold tracking-tight">
+                          What are we building?
+                        </h2>
+                        <div className="relative">
+                          {skillMenuOpen ? (
+                            <SkillMenu
+                              skills={skillMatches}
+                              highlightIndex={highlightedIndex}
+                              onSelect={pickSkill}
+                              onHighlight={setSkillHighlight}
                             />
                           ) : null}
-                          {workflowSlug && triggers.length > 0 ? (
-                            <Select
-                              variant="ghost"
-                              value={triggerId}
-                              aria-label="Trigger the run starts from"
-                              groups={[
-                                {
-                                  items: triggers.map((entry) => ({
-                                    value: entry.id,
-                                    label: `${entry.name} · ${entry.trigger} trigger`,
-                                    icon: <Zap />,
-                                  })),
-                                },
-                              ]}
-                              onValueChange={setTriggerId}
+                          <ComposerTopRow>
+                            <TargetSelect
+                              value={target}
+                              workflows={workflows}
+                              cliDetections={cliDetections}
+                              onChange={changeTarget}
                             />
-                          ) : null}
-                          {!workflowSlug ? (
-                            // Approval mode of the next chat — graph runs keep their
-                            // per-node modes from the workflow YAML instead.
-                            <ApprovalModeSelect
-                              supportedModes={composerApprovalModes}
-                              // A mode this CLI does not honour shows as the "cli
-                              // default" placeholder rather than a lie — the user
-                              // may have picked it while another agent was selected.
-                              value={
-                                composerApprovalModes?.includes(approvalMode)
-                                  ? approvalMode
-                                  : null
-                              }
-                              planSupported={
-                                capabilities?.claudeModes.plan === 'pass'
-                              }
-                              onChange={changeApprovalMode}
+                            <FolderSelect
+                              folder={folder}
+                              recentFolders={recentFolders}
+                              onChoose={chooseFolder}
+                              onBrowse={() => void pickFolder()}
                             />
-                          ) : null}
-                        </ComposerTopRow>
-                        <ComposerCard>
-                          <AttachmentStrip
-                            attachments={attachments.attachments}
-                            onRemove={attachments.remove}
-                          />
-                          <Textarea
-                            value={input}
-                            rows={4}
-                            aria-label="Task for the new run"
-                            className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
-                            placeholder={
-                              workflowSlug
-                                ? 'Describe the task for the workflow team…'
-                                : 'Message the agent…'
-                            }
-                            onChange={(event) => setInput(event.target.value)}
-                            onPaste={(event) => {
-                              // Only swallow the paste when it actually carried images —
-                              // a normal text paste must keep its default behaviour.
-                              if (
-                                attachments.addFromClipboard(
-                                  event.clipboardData,
-                                )
-                              ) {
-                                event.preventDefault();
-                              }
-                            }}
-                            onKeyDown={(event) => {
-                              if (handleSkillMenuKeys(event)) {
-                                return;
-                              }
-                              if (isComposerSendKey(event)) {
-                                event.preventDefault();
-                                void send();
-                              }
-                            }}
-                          />
-                          <ComposerBottomRow
-                            actions={
-                              <Button
-                                type="button"
-                                size="icon"
-                                className="size-8 shrink-0 rounded-full"
-                                disabled={!hasContent || streaming}
-                                aria-label={workflowSlug ? 'Start run' : 'Send'}
-                                title={workflowSlug ? 'Start run' : 'Send'}
-                                onClick={() => void send()}>
-                                {workflowSlug ? (
-                                  <Zap className="size-4 shrink-0" />
-                                ) : (
-                                  <ArrowUp className="size-4 shrink-0" />
-                                )}
-                              </Button>
-                            }>
+                            <BranchSelect
+                              info={git.info}
+                              switching={git.switching}
+                              onSwitch={(branch) => void git.switchTo(branch)}
+                            />
                             {!workflowSlug ? (
-                              // Only a single-agent run picks a model here — a
-                              // workflow's nodes each name their own in its YAML.
-                              <ModelSelect
-                                agentKind={agentKind}
-                                models={agentModels}
-                                loading={agentModelsLoading}
-                                value={models[agentKind] ?? null}
-                                onChange={(model) =>
-                                  changeModel(agentKind, model)
+                              // The optional config directory (account / profile)
+                              // this chat's CLI runs as.
+                              // Beside the folder because it is the same kind of
+                              // fact — WHERE the run reads from — and above the text
+                              // because, like the folder, it is fixed the moment the
+                              // chat is created. A workflow's nodes each name their
+                              // own in its YAML, so the chip is a chat's alone.
+                              <ConfigDirSelect
+                                configDir={configDir}
+                                recentConfigDirs={recentConfigDirs}
+                                unavailableReason={
+                                  composerConfigDirUnavailableReason
                                 }
+                                onChange={chooseConfigDir}
+                                onBrowse={() => void pickConfigDir()}
+                              />
+                            ) : null}
+                            {workflowSlug && triggers.length > 0 ? (
+                              <Select
+                                variant="ghost"
+                                value={triggerId}
+                                aria-label="Trigger the run starts from"
+                                groups={[
+                                  {
+                                    items: triggers.map((entry) => ({
+                                      value: entry.id,
+                                      label: `${entry.name} · ${entry.trigger} trigger`,
+                                      icon: <Zap />,
+                                    })),
+                                  },
+                                ]}
+                                onValueChange={setTriggerId}
                               />
                             ) : null}
                             {!workflowSlug ? (
-                              <>
-                                <EffortSelect
-                                  efforts={agentEfforts.efforts}
-                                  value={efforts[agentKind] ?? null}
-                                  // The listing's own reason wins where it has
-                                  // one — it can name THIS model, which the
-                                  // per-CLI capability sentence never could.
-                                  unavailableReason={
-                                    agentEfforts.unavailableReason ??
-                                    effortReasons.get(agentKind)
+                              // Approval mode of the next chat — graph runs keep their
+                              // per-node modes from the workflow YAML instead.
+                              <ApprovalModeSelect
+                                supportedModes={composerApprovalModes}
+                                // A mode this CLI does not honour shows as the "cli
+                                // default" placeholder rather than a lie — the user
+                                // may have picked it while another agent was selected.
+                                value={
+                                  composerApprovalModes?.includes(approvalMode)
+                                    ? approvalMode
+                                    : null
+                                }
+                                planSupported={
+                                  capabilities?.claudeModes.plan === 'pass'
+                                }
+                                onChange={changeApprovalMode}
+                              />
+                            ) : null}
+                          </ComposerTopRow>
+                          <ComposerCard>
+                            <AttachmentStrip
+                              attachments={attachments.attachments}
+                              onRemove={attachments.remove}
+                            />
+                            <Textarea
+                              value={input}
+                              rows={4}
+                              aria-label="Task for the new run"
+                              className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                              placeholder={
+                                workflowSlug
+                                  ? 'Describe the task for the workflow team…'
+                                  : 'Message the agent…'
+                              }
+                              onChange={(event) => setInput(event.target.value)}
+                              onPaste={(event) => {
+                                // Only swallow the paste when it actually carried images —
+                                // a normal text paste must keep its default behaviour.
+                                if (
+                                  attachments.addFromClipboard(
+                                    event.clipboardData,
+                                  )
+                                ) {
+                                  event.preventDefault();
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (handleSkillMenuKeys(event)) {
+                                  return;
+                                }
+                                if (isComposerSendKey(event)) {
+                                  event.preventDefault();
+                                  void send();
+                                }
+                              }}
+                            />
+                            <ComposerBottomRow
+                              actions={
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  className="size-8 shrink-0 rounded-full"
+                                  disabled={!hasContent || streaming}
+                                  aria-label={
+                                    workflowSlug ? 'Start run' : 'Send'
                                   }
-                                  levelsAreModelSpecific={effortModel !== null}
-                                  onChange={(effort) =>
-                                    changeEffort(agentKind, effort)
+                                  title={workflowSlug ? 'Start run' : 'Send'}
+                                  onClick={() => void send()}>
+                                  {workflowSlug ? (
+                                    <Zap className="size-4 shrink-0" />
+                                  ) : (
+                                    <ArrowUp className="size-4 shrink-0" />
+                                  )}
+                                </Button>
+                              }>
+                              {!workflowSlug ? (
+                                // Only a single-agent run picks a model here — a
+                                // workflow's nodes each name their own in its YAML.
+                                <ModelSelect
+                                  agentKind={agentKind}
+                                  models={agentModels}
+                                  loading={agentModelsLoading}
+                                  value={models[agentKind] ?? null}
+                                  onChange={(model) =>
+                                    changeModel(agentKind, model)
                                   }
                                 />
-                              </>
-                            ) : null}
-                          </ComposerBottomRow>
-                        </ComposerCard>
-                      </div>
-                      {/* The suggestion-chip row that sat here is gone. Both halves of it
+                              ) : null}
+                              {!workflowSlug ? (
+                                <>
+                                  <EffortSelect
+                                    efforts={agentEfforts.efforts}
+                                    value={efforts[agentKind] ?? null}
+                                    // The listing's own reason wins where it has
+                                    // one — it can name THIS model, which the
+                                    // per-CLI capability sentence never could.
+                                    unavailableReason={
+                                      agentEfforts.unavailableReason ??
+                                      effortReasons.get(agentKind)
+                                    }
+                                    levelsAreModelSpecific={
+                                      effortModel !== null
+                                    }
+                                    onChange={(effort) =>
+                                      changeEffort(agentKind, effort)
+                                    }
+                                  />
+                                </>
+                              ) : null}
+                            </ComposerBottomRow>
+                          </ComposerCard>
+                        </div>
+                        {/* The suggestion-chip row that sat here is gone. Both halves of it
                 are now rows in the composer's own menus — folders in the folder
                 chip, workflows in the target chip, each searchable — so the
                 chips only restated, below the card, choices the card already
                 offered, and were capped at three besides. */}
-                      {workflowSlug && triggers.length > 1 ? (
-                        <p className="text-center text-xs text-muted-foreground">
-                          This graph has {triggers.length} triggers — v1 fires
-                          them all on start.
-                        </p>
-                      ) : null}
-                      {/* A refused branch switch reports here — the guard says WHY
+                        {workflowSlug && triggers.length > 1 ? (
+                          <p className="text-center text-xs text-muted-foreground">
+                            This graph has {triggers.length} triggers — v1 fires
+                            them all on start.
+                          </p>
+                        ) : null}
+                        {/* A refused branch switch reports here — the guard says WHY
                 ("uncommitted changes…"), which is the whole point of it, and
                 offers the one thing the app can do about it. */}
-                      {composerNotice ? (
-                        <ErrorBanner
-                          message={composerNotice.message}
-                          tone={composerNotice.tone}
-                          action={
-                            composerNotice.offerPull ? (
-                              // A clickable STRING, not a bordered button. The
-                              // strip is one sentence the app is saying; a
-                              // button beside it reads as a second control
-                              // competing with the composer's own, where what
-                              // this is is the rest of the sentence — "the
-                              // branch stays put · pull latest". `link` is the
-                              // app's one such look, re-toned to the strip it
-                              // sits in so it cannot read as unrelated caramel.
-                              <Button
-                                type="button"
-                                variant="link"
-                                size="sm"
-                                className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
-                                disabled={git.pulling}
-                                title="Stash your changes, fast-forward this branch, then put the changes back"
-                                onClick={() => void git.pull()}>
-                                {git.pulling ? 'Pulling…' : 'Pull latest'}
-                              </Button>
-                            ) : null
-                          }
-                          onDismiss={dismissError}
-                        />
-                      ) : null}
+                        {composerNotice ? (
+                          <ErrorBanner
+                            message={composerNotice.message}
+                            tone={composerNotice.tone}
+                            action={
+                              composerNotice.offerPull ? (
+                                // A clickable STRING, not a bordered button. The
+                                // strip is one sentence the app is saying; a
+                                // button beside it reads as a second control
+                                // competing with the composer's own, where what
+                                // this is is the rest of the sentence — "the
+                                // branch stays put · pull latest". `link` is the
+                                // app's one such look, re-toned to the strip it
+                                // sits in so it cannot read as unrelated caramel.
+                                <Button
+                                  type="button"
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
+                                  disabled={git.pulling}
+                                  title="Stash your changes, fast-forward this branch, then put the changes back"
+                                  onClick={() => void git.pull()}>
+                                  {git.pulling ? 'Pulling…' : 'Pull latest'}
+                                </Button>
+                              ) : null
+                            }
+                            onDismiss={dismissError}
+                          />
+                        ) : null}
+                      </div>
                     </div>
                   </section>
                 ) : (

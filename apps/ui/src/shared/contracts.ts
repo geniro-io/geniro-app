@@ -369,6 +369,73 @@ export interface UpdateState {
 export const UPDATE_COMMAND = 'brew upgrade --cask geniro';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The window's own title bar (the OS draws none — see main/index.ts and
+// components/nav-rail.tsx)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where macOS puts the window buttons — `trafficLightPosition`.
+ *
+ * `y` is not a free choice: the buttons are 13.5px tall and every top row in
+ * the shell is `h-11`, so (44 - 13.5) / 2 ≈ 15 is what centres them on that
+ * row. Moving one without the other puts the system's buttons off the baseline
+ * the whole strip is aligned to.
+ */
+export const TRAFFIC_LIGHT_INSET = { x: 10, y: 16 } as const;
+
+/**
+ * How wide the three-button group actually is.
+ *
+ * MEASURED, not assumed — assuming is precisely what broke it. This was taken
+ * as 52px, which is what macOS drew for years (12px buttons, 20px apart). On
+ * macOS 26 they are 13.5px and 23px apart, a **59.5px** group, so every
+ * reservation derived from the old figure came up ~8px short and the green
+ * button was drawn over the column beside the rail. Rounded UP from 59.5:
+ * half a pixel of overlap is still overlap.
+ *
+ * Re-measuring is reproducible rather than a matter of opinion: open a
+ * `hiddenInset` window at a known position, `screencapture -R` its bounds, and
+ * find the coloured discs. Do that before editing this number.
+ */
+export const TRAFFIC_LIGHT_WIDTH = 60;
+
+/**
+ * Breathing room between the buttons and the first thing in the title bar.
+ *
+ * Not optional polish. Clearing them by arithmetic alone leaves half a pixel,
+ * which reads exactly as reported — "очень мало отступа между иконкой и
+ * кнопками" — because a control that merely fails to overlap still looks
+ * crammed against them. The rail's own `px-3` for the same reason: a gap the
+ * eye already reads as "a gap" elsewhere in the shell.
+ */
+export const TRAFFIC_LIGHT_GAP = 12;
+
+/**
+ * Where the title bar's own content starts.
+ *
+ * This lives HERE, in the one module main and the renderer share, because the
+ * two own different halves of one fact — main POSITIONS the buttons, the
+ * renderer RESERVES room for them — and a copy on each side is a pair that
+ * drifts in silence: nothing fails, the buttons simply start overlapping again.
+ */
+export const TITLEBAR_CONTENT_INSET =
+  TRAFFIC_LIGHT_INSET.x + TRAFFIC_LIGHT_WIDTH + TRAFFIC_LIGHT_GAP;
+
+/**
+ * The shell's column widths.
+ *
+ * Shared rather than spelled as Tailwind classes because the title bar has to
+ * AGREE with them: it spans the window above the columns and carries a divider
+ * on the boundary between the leading columns and the content pane, with the
+ * title centred over what is to the right of it. A divider that does not land
+ * exactly on the border below it is the thing that was reported — the band has
+ * to read as one piece with the layout under it, not merely near it.
+ */
+export const RAIL_COLLAPSED_WIDTH = 64;
+export const RAIL_EXPANDED_WIDTH = 220;
+export const CHAT_LIST_WIDTH = 260;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // System notifications (a banner outside the app, for a thread nobody is
 // watching — see main/notify.ts)
 // ─────────────────────────────────────────────────────────────────────────────

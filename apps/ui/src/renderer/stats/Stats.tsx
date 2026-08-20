@@ -99,9 +99,7 @@ export function Stats({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <div className="flex flex-col gap-5 p-6">
-        {/* `app-drag`: with no OS title bar, this is the top of the window
-            while Stats is showing — the period control opts out. */}
-        <header className="app-drag flex flex-wrap items-center justify-between gap-3">
+        <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">Stats</h2>
             <p className="text-sm text-muted-foreground">
@@ -118,7 +116,6 @@ export function Stats({
             </p>
           </div>
           <SegmentedControl
-            className="app-no-drag"
             ariaLabel="Period"
             options={STATS_PERIODS}
             value={period}

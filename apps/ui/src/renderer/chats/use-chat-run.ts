@@ -762,7 +762,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // Present only on an announce that really wrote the row, so this cannot
       // run ahead of what the next refetch will say.
       const at = event.at;
-      if (status !== null || parked !== undefined || at !== undefined) {
+      // The title the daemon gave this run once its first turn ended. It rides
+      // the same row update as the status because it is the same kind of fact —
+      // a column of the run the sidebar is already showing — and it arrives
+      // while the user is typically looking somewhere else, which is why it is
+      // a broadcast rather than a message to the run's room.
+      const named = event.title;
+      if (
+        status !== null ||
+        parked !== undefined ||
+        at !== undefined ||
+        named !== undefined
+      ) {
         setRuns((prev) =>
           prev.map((run) =>
             run.id === event.runId
@@ -771,6 +782,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
                   ...(at === undefined ? {} : { updatedAt: at }),
+                  // Applied only to a run that has none: the daemon guards this
+                  // too, but the two decide from different snapshots — a rename
+                  // typed while the naming was in flight is on screen HERE
+                  // first, and it must not be replaced by the title that read
+                  // the row a moment before it.
+                  ...(named !== undefined && run.title === null
+                    ? { title: named }
+                    : {}),
                 }
               : run,
           ),
@@ -805,14 +824,22 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         drainQueueRef.current(event.runId);
       }
       setActivities((prev) => {
+        // An announce carrying no activity key at all says nothing about it —
+        // the naming announce is the first such producer — and must leave the
+        // phrase standing, or it blanks the badge and the transcript's live row
+        // of a turn that is running. A terminal status still clears, since a
+        // stopped run is doing nothing whatever the announce carried.
+        const stopped = status !== null && status !== 'running';
+        if (event.activity === undefined && !stopped) {
+          return prev;
+        }
         const next = new Map(prev);
         // A run that is no longer RUNNING has no current activity, whatever
         // the announce carried. A null activity was the only thing that ever
         // cleared this map, so a terminal status arriving alongside a non-null
         // one left the entry behind — and the badge went on naming a tool that
         // finished, for as long as the row lived.
-        const stopped = status !== null && status !== 'running';
-        if (event.activity === null || stopped) {
+        if (!event.activity || stopped) {
           next.delete(event.runId);
         } else {
           next.set(event.runId, event.activity);

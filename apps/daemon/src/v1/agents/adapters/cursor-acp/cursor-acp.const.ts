@@ -666,3 +666,10 @@ export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
  * and its spec spells it back.
  */
 export const CURSOR_SESSION_STORE_DB_NAME = 'store.db';
+
+/**
+ * The flat JSON header beside that database, carrying the conversation's `cwd`
+ * and the title the AGENT generated for it. Named here for the same reason its
+ * neighbour is — the adapter spells the path and its spec spells it back.
+ */
+export const CURSOR_SESSION_META_NAME = 'meta.json';

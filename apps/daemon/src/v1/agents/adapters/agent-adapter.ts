@@ -1647,6 +1647,28 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The name this CLI gave the conversation itself, or null when it names none.
+   *
+   * The agent's OWN title, never one geniro composed — that is the whole value,
+   * since a model that just read the exchange can say "Fix conflicts worktree"
+   * where the host can only trim the user's opening line. A null is therefore an
+   * ordinary answer rather than a failure: `ChatTitleService` falls back to the
+   * derived title, so nothing about the run depends on a CLI having one.
+   *
+   * Takes the session ID alone, unlike {@link readContextUsage}'s two channels:
+   * a title is written where a conversation is STORED, and neither shipped CLI
+   * has a way to be asked for one over a live process — claude does not write a
+   * title headlessly at all, and cursor holds no process between turns.
+   *
+   * Deliberately NOT paired with an `AdapterConfig` reason field: that field
+   * exists to give a user-visible absence its sentence, and the derived fallback
+   * means this absence never reaches a surface.
+   */
+  readSessionTitle(_sessionId: string): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
    * What the ACCOUNT behind this run is allowed — the plan's rate-limit
    * windows and how much of each is spent — or null when this CLI has no way
    * to say.

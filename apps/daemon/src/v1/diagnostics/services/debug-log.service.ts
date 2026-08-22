@@ -64,9 +64,17 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
       this.record(
         'transcript',
         'info',
-        event.status === null
-          ? `run activity: ${event.activity ?? 'none'}`
-          : `run ${event.status}${event.activity ? ` — ${event.activity}` : ''}`,
+        event.title !== undefined
+          ? `run named: ${event.title}`
+          : event.status === null
+            ? // ABSENT and null are different answers, and `??` collapses them:
+              // an announce that never read the activity would be recorded as
+              // the run doing nothing, which is the assertion the field's third
+              // state exists to avoid making.
+              event.activity === undefined
+              ? 'run status announce'
+              : `run activity: ${event.activity ?? 'none'}`
+            : `run ${event.status}${event.activity ? ` — ${event.activity}` : ''}`,
         {
           runId: event.runId,
           ...(event.status === null ? {} : { status: event.status }),

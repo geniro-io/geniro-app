@@ -306,4 +306,84 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(await dao.turnCompletePayloads('run-a')).toEqual([]);
     });
   });
+
+  describe('firstUserMessageText', () => {
+    /** One message row with an explicit role — what the title read filters on. */
+    async function say(
+      runId: string,
+      seq: number,
+      role: string,
+      text: string,
+    ): Promise<void> {
+      await dao.create({
+        runId,
+        seq,
+        kind: 'message',
+        role,
+        payload: JSON.stringify({ text }),
+      });
+    }
+
+    it('answers with the opening user message, not the newest one', async () => {
+      // Out of insertion order on purpose: the ordering must come from the
+      // query. A title that tracked the LATEST message would rewrite the
+      // sidebar row under the user at every turn, which is the whole reason
+      // this is the mirror image of `latestMessageTextPerRun`.
+      await say('run-a', 2, 'user', 'and one more thing');
+      await say('run-a', 0, 'user', 'add auto chat titles');
+      await say('run-a', 1, 'assistant', 'on it');
+
+      expect(await dao.firstUserMessageText('run-a')).toBe(
+        'add auto chat titles',
+      );
+    });
+
+    it('ignores an assistant message that precedes the user’s', async () => {
+      await say('run-a', 0, 'assistant', 'imported history');
+      await say('run-a', 1, 'user', 'carry on from here');
+
+      expect(await dao.firstUserMessageText('run-a')).toBe(
+        'carry on from here',
+      );
+    });
+
+    it('ignores non-message rows carrying earlier seqs', async () => {
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'system',
+        role: null,
+        payload: JSON.stringify({ text: 'session imported' }),
+      });
+      await say('run-a', 1, 'user', 'the real opening line');
+
+      expect(await dao.firstUserMessageText('run-a')).toBe(
+        'the real opening line',
+      );
+    });
+
+    it('answers null for a run with no user message yet', async () => {
+      await say('run-a', 0, 'assistant', 'nothing was asked');
+
+      expect(await dao.firstUserMessageText('run-a')).toBeNull();
+    });
+
+    it('answers null for a payload carrying no text', async () => {
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'message',
+        role: 'user',
+        payload: JSON.stringify({ images: [{ id: 'i1' }] }),
+      });
+
+      expect(await dao.firstUserMessageText('run-a')).toBeNull();
+    });
+
+    it("never reads another run's opening message", async () => {
+      await say('run-b', 0, 'user', 'a different conversation');
+
+      expect(await dao.firstUserMessageText('run-a')).toBeNull();
+    });
+  });
 });

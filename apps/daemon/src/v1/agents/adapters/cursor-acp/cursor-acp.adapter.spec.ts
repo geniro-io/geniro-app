@@ -1952,3 +1952,100 @@ describe('CursorAcpAdapter misuse', () => {
     });
   });
 });
+
+describe('CursorAcpAdapter session title', () => {
+  /** A session directory in the store, optionally carrying a meta header. */
+  function seedSession(meta: string | null): {
+    sessionStoreDir: string;
+    sessionId: string;
+  } {
+    const sessionStoreDir = mkdtempSync(join(tmpdir(), 'cursor-title-spec-'));
+    dirs.push(sessionStoreDir);
+    const sessionId = 'a1b2c3d4-0000-4000-8000-000000000001';
+    mkdirSync(join(sessionStoreDir, sessionId), { recursive: true });
+    if (meta !== null) {
+      writeFileSync(join(sessionStoreDir, sessionId, 'meta.json'), meta);
+    }
+    return { sessionStoreDir, sessionId };
+  }
+
+  it('answers with the agent’s own title, and spawns nothing to get it', async () => {
+    const { spawn, captured } = fakeSpawn();
+    const { sessionStoreDir, sessionId } = seedSession(
+      '{"schemaVersion":1,"title":"Markdown Display Info"}',
+    );
+
+    const title = await new CursorAcpAdapter({
+      spawn,
+      sessionStoreDir,
+    }).readSessionTitle(sessionId);
+
+    // Both halves, or the name overstates what is asserted: the title really
+    // came back, AND no `cursor-agent acp` process was started to fetch a
+    // string the app's own turns already wrote.
+    expect(title).toBe('Markdown Display Info');
+    expect(captured.args).toBeUndefined();
+  });
+
+  it('answers null before the agent has titled the conversation', async () => {
+    const { sessionStoreDir, sessionId } = seedSession(
+      '{"schemaVersion":1,"cwd":"/w"}',
+    );
+
+    await expect(
+      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle(sessionId),
+    ).resolves.toBeNull();
+  });
+
+  it('answers null for a session with no store on disk yet', async () => {
+    const { sessionStoreDir } = seedSession(null);
+
+    await expect(
+      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle(
+        'a1b2c3d4-0000-4000-8000-00000000dead',
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('refuses a bare .. rather than reading one directory up', async () => {
+    // `basename('..') === '..'`, so the separator check alone admits it — and
+    // this sink joins the id as a DIRECTORY component, which is what turns that
+    // into a real escape. The header is planted exactly where the traversal
+    // lands, so the guard's absence returns it instead of null.
+    const parent = mkdtempSync(join(tmpdir(), 'cursor-title-dotdot-'));
+    dirs.push(parent);
+    const sessionStoreDir = join(parent, 'store');
+    mkdirSync(sessionStoreDir, { recursive: true });
+    writeFileSync(
+      join(parent, 'meta.json'),
+      '{"schemaVersion":1,"title":"One Directory Up"}',
+    );
+
+    await expect(
+      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle('..'),
+    ).resolves.toBeNull();
+  });
+
+  it('refuses a session id carrying a separator rather than joining it', async () => {
+    // The id reaches a PATH here, and it arrives over HTTP — the same guard
+    // `prepareSessionImport` applies for the same reason. The header is planted
+    // where the traversal WOULD land, so dropping the guard makes this case
+    // return that title instead of null: without it the assertion is satisfied
+    // by the file merely being absent, which proves nothing.
+    const parent = mkdtempSync(join(tmpdir(), 'cursor-title-escape-'));
+    dirs.push(parent);
+    const sessionStoreDir = join(parent, 'store');
+    mkdirSync(sessionStoreDir, { recursive: true });
+    mkdirSync(join(parent, 'outside'), { recursive: true });
+    writeFileSync(
+      join(parent, 'outside', 'meta.json'),
+      '{"schemaVersion":1,"title":"Reached By Traversal"}',
+    );
+
+    await expect(
+      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle(
+        join('..', 'outside'),
+      ),
+    ).resolves.toBeNull();
+  });
+});

@@ -424,6 +424,19 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     session.close();
   });
 
+  it('claude names no session of its own, so its title is always derived', async () => {
+    // The measured half of the title feature (see `ClaudeAdapter`'s class doc):
+    // this CLI's TUI writes an `ai-title` record, and a headless `-p` turn —
+    // the only kind geniro runs — writes none, so the base's null is the
+    // adapter's real answer rather than a missing override. An implementation
+    // appearing here without that probe being re-run is what this pins.
+    const { spawn } = fakeSpawn();
+
+    await expect(
+      new ClaudeAdapter({ spawn }).readSessionTitle('sess-1'),
+    ).resolves.toBeNull();
+  });
+
   it('claude declares no plan-limits reason, and cursor declares one', () => {
     // The same two-halves rule as the breakdown above, on the third channel.
     // Not a loop like that one, because the two adapters genuinely differ here:

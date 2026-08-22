@@ -17,6 +17,31 @@ import {
 export const SINGLE_AGENT_NODE = 'agent';
 
 /**
+ * How long an auto-generated chat title may be.
+ *
+ * Well under the 200 the column and `RenameRunDto` allow: this is a sidebar row
+ * and a header, and a title that has to be elided on screen every time was never
+ * doing its job. Applied to a CLI's own title too — the ceiling is the app's,
+ * not the producer's.
+ */
+export const CHAT_TITLE_MAX_CHARS = 60;
+
+/**
+ * How many later turns may re-ask a CLI for the title it has since written.
+ *
+ * A cursor conversation is named by its agent AFTER an exchange, so the first
+ * turn's read routinely finds nothing and the derived title is written instead
+ * — which, named once, would mean the agent-generated title never lands on a
+ * chat started in this app. A few later turns re-ask, and only while the stored
+ * title is still exactly what this app derived.
+ *
+ * Small on purpose: a title the agent has not written by the fifth turn is one
+ * it is not going to write, and every attempt past that is a database read per
+ * turn for the life of the conversation.
+ */
+export const CHAT_TITLE_UPGRADE_TURNS = 5;
+
+/**
  * Chat-level tool-approval modes. `plan` is chat-only by design decision —
  * the graph node schema stops at `acceptEdits` (graphs.types.ts
  * ApprovalModeSchema). A run row whose `approval` is null predates the mode
@@ -879,7 +904,18 @@ export interface RunStatusEvent {
    * sends null and the client leaves the badge alone.
    */
   status: RunStatus | null;
-  activity: string | null;
+  /**
+   * What the run is doing right now, `null` when it is doing nothing — or
+   * ABSENT when this announce says nothing about it.
+   *
+   * Three states, like {@link awaiting} and {@link holdingFor} beside it. The
+   * field was two, and every producer genuinely read the run, so `null` could
+   * safely mean "nothing is happening". A producer that does NOT read it has no
+   * honest value to send: `null` is what CLEARS the client's phrase, so a
+   * naming announce would blank the badge and the transcript's live row of a
+   * turn that is running.
+   */
+  activity?: string | null;
   /**
    * When the run ROW was written — present on exactly the announces that wrote
    * it, absent on every activity-only one.
@@ -968,6 +1004,20 @@ export interface RunStatusEvent {
    * already gave the client standing instead of blanking it.
    */
   restored?: boolean;
+  /**
+   * The title this run has just been given — absent on every announce that did
+   * not name it.
+   *
+   * Two states rather than the three its neighbours draw: the only producer
+   * writes a title into a run that had none, so there is no "cleared" case to
+   * express. A rename by the user travels as the PATCH's own response instead.
+   *
+   * It rides this event rather than a stream of its own because it needs exactly
+   * what this event already provides — a broadcast to every client, reaching the
+   * sidebar rows a user is not looking at, which is where a chat named a second
+   * after its turn ended has to land.
+   */
+  title?: string;
 }
 
 /**

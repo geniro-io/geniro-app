@@ -60,7 +60,15 @@ export interface RunStatusEvent {
    */
   status: RunStatus | null;
   /** What the run is doing right now, or null when it is not doing anything. */
-  activity: string | null;
+  /**
+   * What the run is doing right now, `null` when it is doing nothing — or
+   * absent when this announce says nothing about it.
+   *
+   * Three states like `awaiting` below, and for the same reason: `null` is what
+   * CLEARS the phrase, so an announce that never read the run must be able to
+   * leave it alone rather than blank a running turn's row.
+   */
+  activity?: string | null;
   /**
    * ISO moment the run ROW was written — present on exactly the announces that
    * wrote it, absent on every activity-only one.
@@ -134,6 +142,15 @@ export interface RunStatusEvent {
    * from the real settle is left standing rather than blanked.
    */
   restored?: boolean;
+  /**
+   * The title the daemon has just given this run — absent on every announce
+   * that did not name one.
+   *
+   * Two states rather than the three its neighbours draw: the only producer
+   * names a run that had none, so there is no clearing case. A rename by the
+   * user arrives as the PATCH's own response instead.
+   */
+  title?: string;
 }
 
 /**
@@ -155,6 +172,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     summary,
     housekeeping,
     restored,
+    title,
   } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
@@ -183,7 +201,16 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
   return {
     runId,
     status: known ? null : (status as RunStatus),
-    activity: typeof activity === 'string' && activity ? activity : null,
+    // Absent stays absent, exactly like `awaiting` and `summary`: an announce
+    // that carried no activity key asserts nothing, and reading it as `null`
+    // would clear the phrase of a run that is still working. An explicit null
+    // (or an empty string) still clears.
+    ...(activity === undefined
+      ? {}
+      : {
+          activity:
+            typeof activity === 'string' && activity !== '' ? activity : null,
+        }),
     // Kept only when it is a DATE. The sidebar compares these lexically, so a
     // string that is merely non-empty would not degrade to "no reorder" — it
     // would sort, wrongly, and stay wherever it landed until the next refetch.
@@ -208,6 +235,9 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
         }),
     ...(housekeeping === true ? { housekeeping: true } : {}),
     ...(restored === true ? { restored: true } : {}),
+    // An empty string is dropped rather than applied: a blank title would
+    // relabel the row with nothing, which reads as the chat having lost its name.
+    ...(typeof title === 'string' && title !== '' ? { title } : {}),
   };
 }
 

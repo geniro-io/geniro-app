@@ -1008,6 +1008,108 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     expect(secondRow().textContent).not.toContain('running');
   });
 
+  it('relabels an untitled run when the daemon names it', async () => {
+    // The whole point of auto-titling: an unnamed chat renders its agent kind,
+    // so every 1:1 conversation read `claude` and no two rows were tellable
+    // apart. The naming lands a second or two after the turn ends — routinely
+    // once the user has moved on — so it arrives on the broadcast rather than
+    // in the focused run's room.
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: null, status: 'completed' },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const rows = (): HTMLElement[] => [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ];
+    const untitled = (): HTMLElement =>
+      rows().find((el) => !el.textContent?.includes('My chat'))!;
+    expect(untitled().textContent).toContain('claude');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        activity: null,
+        title: 'Fix Conflicts Worktree',
+      });
+    });
+
+    // The same row, re-queried — asserting on its text rather than on a
+    // find() succeeding, so a regression reads as the label that is actually
+    // there instead of "expected undefined to be defined".
+    expect(untitled().textContent).toContain('Fix Conflicts Worktree');
+    expect(untitled().textContent).not.toContain('claude');
+    // And the sibling row is left alone.
+    expect(
+      rows().find((el) => el.textContent?.includes('My chat')),
+    ).toBeDefined();
+  });
+
+  it('naming a run does not wipe the activity of a turn already underway', async () => {
+    // The naming announce carries `activity: null` because it asserts nothing
+    // about activity — but a null activity is the ONE thing that clears the
+    // map, so it silently blanked the badge and the transcript's live row.
+    // The window is real: the title is resolved asynchronously after
+    // `turn_complete` (a database read, and for cursor a file read), and a user
+    // who sends the next message inside it has a turn running by the time the
+    // name lands.
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: null, status: 'running' },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const rows = (): HTMLElement[] => [
+      ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
+    ];
+    const other = (): HTMLElement =>
+      rows().find((el) => !el.textContent?.includes('My chat'))!;
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, activity: 'running Bash' });
+    });
+    expect(other().textContent).toContain('running Bash');
+
+    await act(async () => {
+      // No `activity` key at all — the shape the daemon actually sends, since
+      // the naming announce never read the run.
+      emitRunStatus({ runId: 'r2', status: null, title: 'Named Mid Turn' });
+    });
+
+    expect(other().textContent).toContain('Named Mid Turn');
+    expect(other().textContent).toContain('running Bash');
+  });
+
+  it('does not rename a run the user has already named', async () => {
+    // The daemon guards this too, but the two decide from different snapshots:
+    // a rename typed while the naming was in flight is on screen here first,
+    // and must not be replaced by a title that read the row a moment earlier.
+    api.listChats.mockResolvedValue([run1]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: null,
+        title: 'Auto Generated Name',
+      });
+    });
+
+    const row = (): HTMLElement =>
+      container.querySelector<HTMLElement>('li[draggable="true"]')!;
+    expect(row().textContent).toContain('My chat');
+    expect(row().textContent).not.toContain('Auto Generated Name');
+  });
+
   it('reopening a STILL-RUNNING chat does not settle its badge from a past turn', async () => {
     // The reported defect, measured on the real app: a chat with a blocked tool
     // call read `running · Working… 3m 39s`, and after switching to another chat

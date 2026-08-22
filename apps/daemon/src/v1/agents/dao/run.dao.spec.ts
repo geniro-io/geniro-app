@@ -115,4 +115,64 @@ describe('RunDao (in-memory sqlite)', () => {
       );
     });
   });
+
+  describe('retitle', () => {
+    // The predicate is the whole no-clobber guarantee, and it lives in SQL —
+    // the service's own read is only an early exit, so a fake cannot stand in
+    // for these.
+    //
+    // Every read-back goes through a FRESH dao: `nativeUpdate` writes past the
+    // identity map, so the entity the writing fork still holds keeps the old
+    // title. That is the DAO's documented caveat, and reading it back through
+    // the same fork would assert the cache rather than the row.
+    const stored = async (id: string): Promise<string | null> =>
+      (await new RunDao(orm.em.fork()).getById(id))?.title ?? null;
+    it('names a run whose title is still null', async () => {
+      const run = await dao.create({});
+
+      await expect(
+        dao.retitle(run.id, 'Fix Conflicts Worktree', null),
+      ).resolves.toBe(true);
+      expect(await stored(run.id)).toBe('Fix Conflicts Worktree');
+    });
+
+    it('refuses to name a run that has since been renamed', async () => {
+      // The race the service cannot close by reading first: resolving a title
+      // takes several reads, and a PATCH landing inside that window must win.
+      const run = await dao.create({ title: 'My own name for this' });
+
+      await expect(dao.retitle(run.id, 'Auto Generated', null)).resolves.toBe(
+        false,
+      );
+      expect(await stored(run.id)).toBe('My own name for this');
+    });
+
+    it('replaces one title with another only while the old one is still there', async () => {
+      const run = await dao.create({ title: 'look at the merge conflicts' });
+
+      await expect(
+        dao.retitle(
+          run.id,
+          'Fix Conflicts Worktree',
+          'look at the merge conflicts',
+        ),
+      ).resolves.toBe(true);
+      expect(await stored(run.id)).toBe('Fix Conflicts Worktree');
+
+      // The same upgrade replayed against the title it no longer holds.
+      await expect(
+        dao.retitle(run.id, 'Something Else', 'look at the merge conflicts'),
+      ).resolves.toBe(false);
+      expect(await stored(run.id)).toBe('Fix Conflicts Worktree');
+    });
+
+    it('never touches another run', async () => {
+      const mine = await dao.create({});
+      const theirs = await dao.create({});
+
+      await dao.retitle(mine.id, 'Mine', null);
+
+      expect(await stored(theirs.id)).toBeNull();
+    });
+  });
 });

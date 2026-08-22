@@ -125,6 +125,40 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Text of the run's FIRST user message — what a chat is named after when its
+   * CLI offers no title of its own.
+   *
+   * The opening message rather than the newest, and the opposite choice from
+   * {@link latestMessageTextPerRun} for the opposite reason: a preview line
+   * tracks where a conversation has got to, while a title names what it was
+   * ever about, and a title that followed the newest message would rewrite the
+   * sidebar under the user as they worked.
+   *
+   * One bounded query — the oldest user-role message row alone, projected to its
+   * payload. `null` for a run with no user message yet, or one whose payload
+   * carries no text; `ChatTitleService` leaves such a run unnamed rather than
+   * titling it with a placeholder.
+   */
+  async firstUserMessageText(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    const [row] = await this.getRepo(txEm).find(
+      { runId, kind: 'message', role: 'user' },
+      {
+        // The same total ordering `latestMessageTextPerRun` needs, for the same
+        // reason: a transcript written before `ItemSeqAllocator` can hold two
+        // rows on one seq, so seq alone does not decide which is first.
+        orderBy: { seq: 'asc', createdAt: 'asc', id: 'asc' },
+        fields: ['payload'],
+        limit: 1,
+        disableIdentityMap: true,
+      },
+    );
+    return row ? messageText(row.payload) : null;
+  }
+
+  /**
    * Every `turn_complete` payload of a run, oldest first — what the thread's
    * spend is summed from.
    *

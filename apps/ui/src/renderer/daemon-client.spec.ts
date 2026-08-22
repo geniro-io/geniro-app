@@ -298,4 +298,58 @@ describe('parseRunStatus — the run_status twin', () => {
       }),
     ).not.toHaveProperty('restored');
   });
+
+  it('leaves activity ABSENT when the announce carried none', () => {
+    // The middle link of the naming-does-not-wipe-activity chain: the renderer
+    // test asserts on a hand-built event, so without this the parser is free to
+    // fold an absent key back into `null` and restore the bug.
+    const parsed = parseRunStatus({ runId: 'r1', status: null, title: 'X' });
+
+    expect(parsed).not.toHaveProperty('activity');
+  });
+
+  it('still clears on an explicit null activity', () => {
+    // The other arm: a producer that DID read the run and found it idle has to
+    // be able to say so.
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, activity: null }),
+    ).toMatchObject({ activity: null });
+  });
+
+  it('reads the title a naming announce carries', () => {
+    // `ChatTitleService` names a chat once its first turn ends, and sends it as
+    // an activity-only announce — a null status, so the badge is left alone.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: null,
+        title: 'Fix Conflicts Worktree',
+      }),
+    ).toEqual({
+      runId: 'r1',
+      status: null,
+      activity: null,
+      title: 'Fix Conflicts Worktree',
+    });
+  });
+
+  it('says nothing about the title on every other announce', () => {
+    // Absent stays absent, like `awaiting` and `summary` beside it: an ordinary
+    // settle must not be read as renaming the run to undefined.
+    expect(
+      parseRunStatus({ runId: 'r1', status: 'completed', activity: null }),
+    ).not.toHaveProperty('title');
+  });
+
+  it('drops a blank or non-string title rather than clearing the name', () => {
+    // A run is never UNnamed by this event, so an empty string is a skew to
+    // ignore — applied, it would blank the sidebar row.
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, activity: null, title: '' }),
+    ).not.toHaveProperty('title');
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, activity: null, title: 42 }),
+    ).not.toHaveProperty('title');
+  });
 });
